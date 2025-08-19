@@ -9,25 +9,26 @@
 .poster-card {
     border-radius: 6px;
     transition: all 200ms ease-in-out;
-    width: 120px;
-    height: 180px;
+    width: 130px;
+    height: 195px;
 }
 
 .poster-card:hover {
-    transform: scale(1.03);
+    transform: scale(1.04);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
 }
 
 /* Poster overlay container */
 .poster-overlay {
     border-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25),
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25),
                 0 1px 3px rgba(0, 0, 0, 0.15);
     background: linear-gradient(to bottom, 
                 rgba(255, 255, 255, 0.03) 0%,
                 rgba(255, 255, 255, 0) 50%,
-                rgba(0, 0, 0, 0.1) 100%);
-    width: 120px;
-    height: 180px;
+                rgba(0, 0, 0, 0.05) 100%);
+    width: 130px;
+    height: 195px;
 }
 
 /* Rounded poster image */
@@ -35,15 +36,17 @@
     border-radius: 6px;
 }
 
-/* Info gradient at bottom of poster */
+/* Info gradient at bottom of poster - full width overlay */
 .poster-info-gradient {
     background: linear-gradient(to top,
-                rgba(0, 0, 0, 0.85) 0%,
-                rgba(0, 0, 0, 0.6) 50%,
+                rgba(0, 0, 0, 0.95) 0%,
+                rgba(0, 0, 0, 0.7) 50%,
                 rgba(0, 0, 0, 0) 100%);
-    padding: 6px;
+    padding: 6px 8px;  /* Vertical and horizontal padding */
+    padding-bottom: 8px;  /* Ensure text doesn't touch bottom */
     border-bottom-left-radius: 6px;
     border-bottom-right-radius: 6px;
+    min-height: 50px;  /* Ensure minimum height for text */
 }
 
 /* Text styling on poster */
@@ -74,8 +77,8 @@
 
 /* Flow box child sizing */
 flowboxchild {
-    width: 120px;
-    height: 180px;
+    width: 130px;
+    height: 195px;
 }
 
 /* Badge styles */

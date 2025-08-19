@@ -21,7 +21,6 @@ static IMAGE_LOADER: Lazy<OptimizedImageLoader> = Lazy::new(|| {
 mod imp {
     use super::*;
     
-    #[derive(Debug, Default)]
     pub struct LibraryView {
         pub scrolled_window: RefCell<Option<gtk4::ScrolledWindow>>,
         pub flow_box: RefCell<Option<gtk4::FlowBox>>,
@@ -32,6 +31,42 @@ mod imp {
         pub state: RefCell<Option<Arc<AppState>>>,
         pub library: RefCell<Option<Library>>,
         pub backend_id: RefCell<Option<String>>,
+        pub current_view_size: RefCell<ImageSize>,
+        pub on_media_selected: RefCell<Option<Box<dyn Fn(&MediaItem)>>>,
+    }
+    
+    impl std::fmt::Debug for LibraryView {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("LibraryView")
+                .field("scrolled_window", &self.scrolled_window)
+                .field("flow_box", &self.flow_box)
+                .field("loading_spinner", &self.loading_spinner)
+                .field("empty_state", &self.empty_state)
+                .field("stack", &self.stack)
+                .field("state", &"Arc<AppState>")
+                .field("library", &self.library)
+                .field("backend_id", &self.backend_id)
+                .field("current_view_size", &self.current_view_size)
+                .field("on_media_selected", &"Option<Callback>")
+                .finish()
+        }
+    }
+    
+    impl Default for LibraryView {
+        fn default() -> Self {
+            Self {
+                scrolled_window: RefCell::new(None),
+                flow_box: RefCell::new(None),
+                loading_spinner: RefCell::new(None),
+                empty_state: RefCell::new(None),
+                stack: RefCell::new(None),
+                state: RefCell::new(None),
+                library: RefCell::new(None),
+                backend_id: RefCell::new(None),
+                current_view_size: RefCell::new(ImageSize::Medium),
+                on_media_selected: RefCell::new(None),
+            }
+        }
     }
     
     #[glib::object_subclass]
@@ -66,7 +101,15 @@ impl LibraryView {
             .build();
         
         view.imp().state.replace(Some(state));
+        view.imp().current_view_size.replace(ImageSize::Medium);
         view
+    }
+    
+    pub fn set_on_media_selected<F>(&self, callback: F)
+    where
+        F: Fn(&MediaItem) + 'static,
+    {
+        self.imp().on_media_selected.replace(Some(Box::new(callback)));
     }
     
     fn setup_ui(&self) {
@@ -105,24 +148,47 @@ impl LibraryView {
             .build();
         
         let flow_box = gtk4::FlowBox::builder()
-            .column_spacing(12)  // Gap between posters
-            .row_spacing(16)     // Space between rows
-            .homogeneous(false)  // Allow dynamic sizing
-            .min_children_per_line(2)  // Minimum 2 posters per row
-            .max_children_per_line(30) // Allow many columns for ultra-wide screens
+            .column_spacing(16)  // Tighter spacing for better density
+            .row_spacing(20)     // Good vertical spacing
+            .homogeneous(true)
+            .min_children_per_line(4)  // More items per row with smaller sizes
+            .max_children_per_line(12) // Allow more on wide screens
             .selection_mode(gtk4::SelectionMode::None)
-            .margin_top(12)
-            .margin_bottom(12)
-            .margin_start(12)
-            .margin_end(12)
+            .margin_top(16)
+            .margin_bottom(16)
+            .margin_start(16)
+            .margin_end(16)
             .valign(gtk4::Align::Start)
             .build();
         
+        // Adapt columns based on window width
+        let weak_self = self.downgrade();
+        flow_box.connect_map(move |fb| {
+            if let Some(view) = weak_self.upgrade() {
+                if let Some(window) = view.root().and_then(|r| r.downcast::<gtk4::Window>().ok()) {
+                    let flow_box_weak = fb.downgrade();
+                    window.connect_default_width_notify(move |window| {
+                        if let Some(flow_box) = flow_box_weak.upgrade() {
+                            let width = window.default_width();
+                            
+                            // Adjust image size and columns based on window width
+                            let (_, min_cols, max_cols) = if width < 800 {
+                                (ImageSize::Small, 3, 6)
+                            } else if width < 1200 {
+                                (ImageSize::Medium, 4, 8)
+                            } else {
+                                (ImageSize::Medium, 5, 12)
+                            };
+                            
+                            flow_box.set_min_children_per_line(min_cols);
+                            flow_box.set_max_children_per_line(max_cols);
+                        }
+                    });
+                }
+            }
+        });
+        
         scrolled_window.set_child(Some(&flow_box));
-        
-        // Remove the responsive code that was setting min/max to same value
-        // The FlowBox will handle responsiveness automatically with its min/max settings
-        
         stack.add_named(&scrolled_window, Some("content"));
         
         // Empty state
@@ -134,7 +200,7 @@ impl LibraryView {
         
         stack.add_named(&empty_state, Some("empty"));
         
-        // Add stack directly to the view (no header bar)
+        // Add stack directly to the view
         self.append(&stack);
         
         // Store references
@@ -144,19 +210,7 @@ impl LibraryView {
         imp.empty_state.replace(Some(empty_state));
         imp.stack.replace(Some(stack));
         
-        // Store the flow box reference before connecting signals
-        let _flow_box_clone = flow_box.clone();
-        
-        // Connect flow box child activation
-        flow_box.connect_child_activated(glib::clone!(@weak self as view => move |_, child| {
-            if let Some(flow_child) = child.downcast_ref::<gtk4::FlowBoxChild>() {
-                if let Some(card) = flow_child.child().and_then(|w| w.downcast::<MediaCard>().ok()) {
-                    let media_item = card.media_item();
-                    info!("Media item selected: {}", media_item.title());
-                    // TODO: Navigate to media detail view
-                }
-            }
-        }));
+        // We'll connect button clicks directly on cards instead of flow box activation
     }
     
     pub async fn load_library(&self, backend_id: String, library: Library) {
@@ -206,8 +260,29 @@ impl LibraryView {
             }
         };
         
+        // Preload first batch of images for smoother experience
+        self.preload_initial_images(&media_items).await;
+        
         // Update UI with media items
         self.display_media_items(media_items);
+    }
+    
+    async fn preload_initial_images(&self, items: &[MediaItem]) {
+        let size = *self.imp().current_view_size.borrow();
+        let urls_to_preload: Vec<(String, ImageSize)> = items
+            .iter()
+            .take(30) // Preload first 30 items
+            .filter_map(|item| {
+                let url = match item {
+                    MediaItem::Movie(m) => m.poster_url.as_ref(),
+                    MediaItem::Show(s) => s.poster_url.as_ref(),
+                    _ => None,
+                }?;
+                Some((url.clone(), size))
+            })
+            .collect();
+        
+        IMAGE_LOADER.preload_images(urls_to_preload).await;
     }
     
     fn display_media_items(&self, items: Vec<MediaItem>) {
@@ -216,6 +291,7 @@ impl LibraryView {
         let flow_box = imp.flow_box.borrow().clone();
         let scrolled_window = imp.scrolled_window.borrow().clone();
         let stack = imp.stack.borrow().clone();
+        let current_size = *imp.current_view_size.borrow();
         
         if let Some(flow_box) = flow_box {
             // Clear existing items
@@ -229,10 +305,24 @@ impl LibraryView {
                     stack.set_visible_child_name("empty");
                 }
             } else {
-                // Add media cards
+                // Add media cards with size hint
                 let mut cards = Vec::new();
+                
                 for item in items {
-                    let card = MediaCard::new(item);
+                    let card = MediaCard::new(item, current_size);
+                    
+                    // Connect click handler to each card
+                    let weak_self = self.downgrade();
+                    let item_clone = card.media_item();
+                    card.connect_clicked(move |_| {
+                        if let Some(view) = weak_self.upgrade() {
+                            info!("Media item selected: {}", item_clone.title());
+                            if let Some(callback) = view.imp().on_media_selected.borrow().as_ref() {
+                                callback(&item_clone);
+                            }
+                        }
+                    });
+                    
                     let child = gtk4::FlowBoxChild::new();
                     child.set_child(Some(&card));
                     flow_box.append(&child);
@@ -244,58 +334,59 @@ impl LibraryView {
                     stack.set_visible_child_name("content");
                 }
                 
-                // Set up lazy loading for the scrolled window
+                // Set up progressive loading
                 if let Some(scrolled_window) = scrolled_window {
-                    self.setup_lazy_loading(scrolled_window, flow_box.clone());
+                    self.setup_progressive_loading(scrolled_window, flow_box.clone());
                 }
                 
-                // Initially load first visible items
+                // Initially load first visible batch
                 let flow_box_clone = flow_box.clone();
                 glib::idle_add_local_once(move || {
-                    Self::load_visible_cards(&flow_box_clone, 30); // Load first 30 items for smoother initial experience
+                    Self::load_visible_cards(&flow_box_clone, 40); // Load more initially
                 });
             }
         }
     }
     
-    fn setup_lazy_loading(&self, scrolled_window: gtk4::ScrolledWindow, flow_box: gtk4::FlowBox) {
+    fn setup_progressive_loading(&self, scrolled_window: gtk4::ScrolledWindow, flow_box: gtk4::FlowBox) {
         let adjustment = scrolled_window.vadjustment();
-        
-        // Use a counter instead of trying to remove sources
         let update_counter: Rc<RefCell<u32>> = Rc::new(RefCell::new(0));
         
         adjustment.connect_value_changed(move |adj| {
             let flow_box = flow_box.clone();
             let counter = update_counter.clone();
             
-            // Get values we need from adjustment
             let viewport_top = adj.value();
             let viewport_height = adj.page_size();
             
-            // Increment counter to invalidate any pending updates
             let current_count = {
                 let mut c = counter.borrow_mut();
                 *c += 1;
                 *c
             };
             
-            // Set new timer with shorter delay for more responsive loading
+            // Shorter delay for more responsive loading
             let counter_inner = counter.clone();
-            glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-                // Check if this timer is still valid
+            glib::timeout_add_local(std::time::Duration::from_millis(30), move || {
                 if *counter_inner.borrow() != current_count {
-                    // A newer timer was scheduled, skip this one
                     return glib::ControlFlow::Break;
                 }
                 
                 let viewport_bottom = viewport_top + viewport_height;
                 
-                // Calculate visible range with larger prefetch margin for smoother scrolling
-                let prefetch_margin = viewport_height * 2.0; // Prefetch 2 screens ahead and behind
-                let visible_top = (viewport_top - prefetch_margin).max(0.0);
-                let visible_bottom = viewport_bottom + prefetch_margin;
+                // Progressive loading with multiple zones
+                let immediate_margin = viewport_height * 0.5; // Load visible + 50% buffer immediately
+                let prefetch_margin = viewport_height * 2.0;  // Prefetch 2 screens ahead
                 
-                Self::load_cards_in_range(&flow_box, visible_top, visible_bottom);
+                let immediate_top = (viewport_top - immediate_margin).max(0.0);
+                let immediate_bottom = viewport_bottom + immediate_margin;
+                
+                let prefetch_top = (viewport_top - prefetch_margin).max(0.0);
+                let prefetch_bottom = viewport_bottom + prefetch_margin;
+                
+                // Load in two passes: immediate first, then prefetch
+                Self::load_cards_in_range(&flow_box, immediate_top, immediate_bottom, ImageSize::Medium);
+                Self::load_cards_in_range(&flow_box, prefetch_top, prefetch_bottom, ImageSize::Small);
                 
                 glib::ControlFlow::Break
             });
@@ -313,7 +404,7 @@ impl LibraryView {
             
             if let Some(fc) = flow_child.downcast_ref::<gtk4::FlowBoxChild>() {
                 if let Some(card) = fc.child().and_then(|w| w.downcast::<MediaCard>().ok()) {
-                    card.trigger_load();
+                    card.trigger_load(ImageSize::Medium);
                     loaded += 1;
                 }
             }
@@ -322,23 +413,25 @@ impl LibraryView {
         }
     }
     
-    fn load_cards_in_range(flow_box: &gtk4::FlowBox, visible_top: f64, visible_bottom: f64) {
+    fn load_cards_in_range(flow_box: &gtk4::FlowBox, visible_top: f64, visible_bottom: f64, size: ImageSize) {
         let mut child = flow_box.first_child();
         let mut cards_to_load = Vec::new();
         
         while let Some(flow_child) = child {
             if let Some(fc) = flow_child.downcast_ref::<gtk4::FlowBoxChild>() {
-                // Get the child's position
-                let allocation = fc.allocation();
-                let child_top = allocation.y() as f64;
-                let child_bottom = child_top + allocation.height() as f64;
+                // Use natural size for visibility calculations
+                let (_, natural) = fc.preferred_size();
+                let child_height = natural.height() as f64;
                 
-                // Check if child is in or near visible range (start loading before fully visible)
-                // Add extra margin so items start loading before they come into view
-                let load_margin = 100.0; // Start loading 100 pixels before visible
-                if child_bottom >= (visible_top - load_margin) && child_top <= (visible_bottom + load_margin) {
+                // Approximate position based on index
+                let index = fc.index() as f64;
+                let approx_row = (index / 6.0).floor(); // Estimate based on typical columns
+                let child_top = approx_row * (child_height + 20.0); // Include row spacing
+                let child_bottom = child_top + child_height;
+                
+                if child_bottom >= visible_top && child_top <= visible_bottom {
                     if let Some(card) = fc.child().and_then(|w| w.downcast::<MediaCard>().ok()) {
-                        cards_to_load.push(card);
+                        cards_to_load.push((card, size));
                     }
                 }
             }
@@ -346,21 +439,18 @@ impl LibraryView {
             child = flow_child.next_sibling();
         }
         
-        // Trigger all loads at once - the semaphore will handle concurrency limiting
-        // This ensures maximum parallelism for faster loading
-        for card in cards_to_load {
-            card.trigger_load();
+        // Batch load for efficiency
+        for (card, size) in cards_to_load {
+            card.trigger_load(size);
         }
     }
     
     pub fn navigate_back(&self) {
         info!("Navigating back to libraries");
-        // Find the parent window and switch back to libraries view
         let mut widget: Option<gtk4::Widget> = self.parent();
         while let Some(w) = widget {
-            if w.type_() == crate::ui::window_blueprint::ReelMainWindow::static_type() {
-                // We found the main window
-                if let Some(window) = w.downcast_ref::<crate::ui::window_blueprint::ReelMainWindow>() {
+            if w.type_() == crate::ui::main_window::ReelMainWindow::static_type() {
+                if let Some(window) = w.downcast_ref::<crate::ui::main_window::ReelMainWindow>() {
                     window.show_libraries_view();
                 }
                 break;
@@ -370,12 +460,12 @@ impl LibraryView {
     }
 }
 
-// Generic Media Card Widget
+// Optimized Media Card Widget
 mod imp_card {
     use super::*;
     use glib::source::SourceId;
     
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     pub struct MediaCard {
         pub overlay: RefCell<Option<gtk4::Overlay>>,
         pub image: RefCell<Option<gtk4::Picture>>,
@@ -387,6 +477,27 @@ mod imp_card {
         pub image_loaded: RefCell<bool>,
         pub image_loading: RefCell<bool>,
         pub load_handle: RefCell<Option<SourceId>>,
+        pub current_size: RefCell<ImageSize>,
+        pub default_size: RefCell<ImageSize>,
+    }
+    
+    impl Default for MediaCard {
+        fn default() -> Self {
+            Self {
+                overlay: RefCell::new(None),
+                image: RefCell::new(None),
+                info_box: RefCell::new(None),
+                title_label: RefCell::new(None),
+                subtitle_label: RefCell::new(None),
+                media_item: RefCell::new(None),
+                loading_spinner: RefCell::new(None),
+                image_loaded: RefCell::new(false),
+                image_loading: RefCell::new(false),
+                load_handle: RefCell::new(None),
+                current_size: RefCell::new(ImageSize::Medium),
+                default_size: RefCell::new(ImageSize::Medium),
+            }
+        }
     }
     
     #[glib::object_subclass]
@@ -414,11 +525,13 @@ glib::wrapper! {
 }
 
 impl MediaCard {
-    pub fn new(media_item: MediaItem) -> Self {
+    pub fn new(media_item: MediaItem, default_size: ImageSize) -> Self {
         let card: Self = glib::Object::builder()
             .build();
         
         card.imp().media_item.replace(Some(media_item.clone()));
+        card.imp().default_size.replace(default_size);
+        card.imp().current_size.replace(default_size);
         card.update_content(media_item);
         card
     }
@@ -426,31 +539,30 @@ impl MediaCard {
     fn setup_card_ui(&self) {
         let imp = self.imp();
         
-        // Remove button styling and add card styling
         self.add_css_class("flat");
         self.add_css_class("media-card");
         self.add_css_class("poster-card");
         
-        // Create overlay for poster and info
         let overlay = gtk4::Overlay::new();
         overlay.add_css_class("poster-overlay");
         
-        // Create picture for poster/thumbnail with proper movie poster aspect ratio (2:3)
+        // Dynamic sizing based on current size setting
+        let size = *imp.default_size.borrow();
+        let (width, height) = size.dimensions_for_poster();
+        
         let image = gtk4::Picture::builder()
-            .width_request(120)   // Smaller width for poster
-            .height_request(180)  // Height maintains 2:3 aspect ratio
+            .width_request(width as i32)
+            .height_request(height as i32)
             .content_fit(gtk4::ContentFit::Cover)
             .build();
         
-        // Add rounded corners to the image
         image.add_css_class("rounded-poster");
         
-        // Set placeholder image
         self.set_placeholder_image(&image);
         
         overlay.set_child(Some(&image));
         
-        // Add loading spinner overlay
+        // Loading spinner overlay
         let spinner_box = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Vertical)
             .halign(gtk4::Align::Center)
@@ -459,31 +571,44 @@ impl MediaCard {
         
         let loading_spinner = gtk4::Spinner::builder()
             .spinning(false)
-            .width_request(32)
-            .height_request(32)
+            .width_request(24)
+            .height_request(24)
             .build();
         
         spinner_box.append(&loading_spinner);
         overlay.add_overlay(&spinner_box);
         
-        // Create info box at the bottom with gradient background
-        let info_box = gtk4::Box::builder()
+        // Info box with gradient background
+        let info_wrapper = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Vertical)
-            .spacing(4)
-            .margin_bottom(12)
-            .margin_start(12)
-            .margin_end(12)
             .valign(gtk4::Align::End)
             .build();
         
+        info_wrapper.add_css_class("poster-info-gradient");
+        
+        // Inner box with padding for text
+        let info_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(2)
+            .margin_bottom(8)
+            .margin_start(8)
+            .margin_end(8)
+            .margin_top(8)
+            .build();
+        
         info_box.add_css_class("media-card-info");
-        info_box.add_css_class("poster-info-gradient");
+        
+        let title_classes = if size == ImageSize::Small {
+            vec!["caption", "bold"]
+        } else {
+            vec!["title-4"]
+        };
         
         let title_label = gtk4::Label::builder()
             .xalign(0.0)
             .single_line_mode(true)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
-            .css_classes(vec!["title-4"])
+            .css_classes(title_classes)
             .build();
         
         let subtitle_label = gtk4::Label::builder()
@@ -491,12 +616,14 @@ impl MediaCard {
             .single_line_mode(true)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
             .css_classes(vec!["subtitle"])
+            .visible(size != ImageSize::Small) // Hide subtitle on small cards
             .build();
         
         info_box.append(&title_label);
         info_box.append(&subtitle_label);
         
-        overlay.add_overlay(&info_box);
+        info_wrapper.append(&info_box);
+        overlay.add_overlay(&info_wrapper);
         
         self.set_child(Some(&overlay));
         
@@ -510,12 +637,11 @@ impl MediaCard {
     }
     
     fn set_placeholder_image(&self, picture: &gtk4::Picture) {
-        // Use theme icon as placeholder
         let icon_theme = gtk4::IconTheme::for_display(&self.display());
         let icon = icon_theme.lookup_icon(
             "video-x-generic-symbolic",
             &[],
-            128,
+            64,
             1,
             gtk4::TextDirection::Ltr,
             gtk4::IconLookupFlags::empty()
@@ -526,7 +652,6 @@ impl MediaCard {
     fn update_content(&self, media_item: MediaItem) {
         let imp = self.imp();
         
-        // Update labels based on media type
         if let Some(title_label) = imp.title_label.borrow().as_ref() {
             title_label.set_text(media_item.title());
         }
@@ -552,29 +677,34 @@ impl MediaCard {
             };
             subtitle_label.set_text(&subtitle);
         }
-        
-        // Don't load image immediately - wait for visibility check
-        // The image will be loaded when the card becomes visible
     }
     
-    pub fn trigger_load(&self) {
+    pub fn trigger_load(&self, size: ImageSize) {
         let imp = self.imp();
         
-        // Check if already loaded or loading
-        if *imp.image_loaded.borrow() || *imp.image_loading.borrow() {
+        // Update requested size if different
+        let current_size = *imp.current_size.borrow();
+        if current_size != size {
+            imp.current_size.replace(size);
+        }
+        
+        // Check if already loaded at this size or loading
+        if *imp.image_loaded.borrow() && current_size == size {
             return;
         }
         
-        // Mark as loading
+        if *imp.image_loading.borrow() {
+            return;
+        }
+        
         *imp.image_loading.borrow_mut() = true;
         
-        // Get the media item
         if let Some(media_item) = imp.media_item.borrow().as_ref() {
-            self.load_poster_image(media_item);
+            self.load_poster_image(media_item, size);
         }
     }
     
-    fn load_poster_image(&self, media_item: &MediaItem) {
+    fn load_poster_image(&self, media_item: &MediaItem, size: ImageSize) {
         let poster_url = match media_item {
             MediaItem::Movie(movie) => movie.poster_url.clone(),
             MediaItem::Show(show) => show.poster_url.clone(),
@@ -584,37 +714,39 @@ impl MediaCard {
         if let Some(url) = poster_url {
             let imp = self.imp();
             
-            // Show loading spinner
             if let Some(spinner) = imp.loading_spinner.borrow().as_ref() {
                 spinner.set_spinning(true);
                 spinner.set_visible(true);
             }
             
-            // Clone references for async closure
             let image_ref = imp.image.borrow().as_ref().unwrap().clone();
             let spinner_ref = imp.loading_spinner.borrow().as_ref().unwrap().clone();
             let weak_self = self.downgrade();
             
-            // Load image asynchronously using glib spawn for GTK compatibility
-            // Use Medium size for poster thumbnails in the grid view
+            // Load with specified size for optimization
             glib::spawn_future_local(async move {
-                match IMAGE_LOADER.load_image(&url, ImageSize::Medium).await {
+                match IMAGE_LOADER.load_image(&url, size).await {
                     Ok(texture) => {
                         let image_ref = image_ref.clone();
                         let spinner_ref = spinner_ref.clone();
                         let weak_self = weak_self.clone();
+                        
                         glib::idle_add_local_once(move || {
                             if let Some(card) = weak_self.upgrade() {
                                 image_ref.set_paintable(Some(&texture));
                                 spinner_ref.set_spinning(false);
                                 spinner_ref.set_visible(false);
                                 
-                                // Mark as loaded
                                 let imp = card.imp();
                                 *imp.image_loaded.borrow_mut() = true;
                                 *imp.image_loading.borrow_mut() = false;
                                 
-                                debug!("Successfully loaded poster image");
+                                debug!("Loaded {} image", match size {
+                                    ImageSize::Small => "small",
+                                    ImageSize::Medium => "medium",
+                                    ImageSize::Large => "large",
+                                    ImageSize::Original => "original",
+                                });
                             }
                         });
                     }
@@ -622,16 +754,14 @@ impl MediaCard {
                         let image_ref = image_ref.clone();
                         let spinner_ref = spinner_ref.clone();
                         let weak_self = weak_self.clone();
+                        
                         glib::idle_add_local_once(move || {
-                            error!("Failed to load poster image: {}", e);
+                            error!("Failed to load poster: {}", e);
                             spinner_ref.set_spinning(false);
                             spinner_ref.set_visible(false);
                             
-                            // Keep placeholder image on error  
                             if let Some(card) = weak_self.upgrade() {
                                 card.set_placeholder_image(&image_ref);
-                                
-                                // Mark as not loading anymore
                                 let imp = card.imp();
                                 *imp.image_loading.borrow_mut() = false;
                             }

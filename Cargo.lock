@@ -2939,6 +2939,7 @@ dependencies = [
  "dirs",
  "futures",
  "gdk-pixbuf",
+ "gdk4",
  "gettext-rs",
  "glib-build-tools",
  "gstreamer",

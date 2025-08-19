@@ -44,6 +44,8 @@ mod imp {
         pub config: RefCell<Option<Arc<Config>>>,
         pub content_stack: RefCell<Option<gtk4::Stack>>,
         pub library_view: RefCell<Option<crate::ui::pages::LibraryView>>,
+        pub player_page: RefCell<Option<crate::ui::pages::PlayerPage>>,
+        pub show_details_page: RefCell<Option<crate::ui::pages::ShowDetailsPage>>,
         pub back_button: RefCell<Option<gtk4::Button>>,
     }
     
@@ -830,6 +832,166 @@ impl ReelMainWindow {
         });
     }
     
+    async fn show_show_details(&self, show: crate::models::Show, state: Arc<AppState>) {
+        let imp = self.imp();
+        
+        // Get or create content stack
+        let content_stack = if imp.content_stack.borrow().is_none() {
+            let stack = gtk4::Stack::builder()
+                .transition_type(gtk4::StackTransitionType::SlideLeftRight)
+                .transition_duration(300)
+                .build();
+            
+            // Set the stack as content
+            imp.content_toolbar.set_content(Some(&stack));
+            imp.content_stack.replace(Some(stack.clone()));
+            
+            stack
+        } else {
+            imp.content_stack.borrow().as_ref().unwrap().clone()
+        };
+        
+        // Create or get show details page
+        let show_details_page = {
+            let existing_page = imp.show_details_page.borrow();
+            existing_page.as_ref().cloned()
+        }.unwrap_or_else(|| {
+            let page = crate::ui::pages::ShowDetailsPage::new(state.clone());
+            
+            // Set callback for when episode is selected
+            let window_weak = self.downgrade();
+            let state_clone = state.clone();
+            page.set_on_episode_selected(move |episode| {
+                if let Some(window) = window_weak.upgrade() {
+                    let episode_item = crate::models::MediaItem::Episode(episode.clone());
+                    let state = state_clone.clone();
+                    glib::spawn_future_local(async move {
+                        window.show_player(&episode_item, state).await;
+                    });
+                }
+            });
+            
+            imp.show_details_page.replace(Some(page.clone()));
+            
+            // Add to content stack
+            content_stack.add_named(page.widget(), Some("show_details"));
+            
+            page
+        });
+        
+        // Load the show
+        show_details_page.load_show(show.clone()).await;
+        
+        // Update the content page title
+        imp.content_page.set_title(&show.title);
+        
+        // Remove any existing back button
+        if let Some(old_button) = imp.back_button.borrow().as_ref() {
+            imp.content_header.remove(old_button);
+        }
+        
+        // Create a new back button for the header bar
+        let back_button = gtk4::Button::builder()
+            .icon_name("go-previous-symbolic")
+            .tooltip_text("Back to Library")
+            .build();
+        
+        let window_weak = self.downgrade();
+        back_button.connect_clicked(move |_| {
+            if let Some(window) = window_weak.upgrade() {
+                // Go back to library view
+                if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
+                    stack.set_visible_child_name("library");
+                }
+            }
+        });
+        
+        // Add the back button to the header bar (pack_start)
+        imp.content_header.pack_start(&back_button);
+        imp.back_button.replace(Some(back_button));
+        
+        // Show the show details page
+        content_stack.set_visible_child_name("show_details");
+    }
+    
+    async fn show_player(&self, media_item: &crate::models::MediaItem, state: Arc<AppState>) {
+        let imp = self.imp();
+        
+        // Get or create content stack
+        let content_stack = if imp.content_stack.borrow().is_none() {
+            let stack = gtk4::Stack::builder()
+                .transition_type(gtk4::StackTransitionType::SlideLeftRight)
+                .transition_duration(300)
+                .build();
+            
+            // Set the stack as content
+            imp.content_toolbar.set_content(Some(&stack));
+            imp.content_stack.replace(Some(stack.clone()));
+            
+            stack
+        } else {
+            imp.content_stack.borrow().as_ref().unwrap().clone()
+        };
+        
+        // Create or get player page
+        let player_page = {
+            let existing_page = imp.player_page.borrow();
+            existing_page.as_ref().cloned()
+        }.unwrap_or_else(|| {
+            let page = crate::ui::pages::PlayerPage::new(state.clone());
+            imp.player_page.replace(Some(page.clone()));
+            
+            // Add to content stack
+            content_stack.add_named(page.widget(), Some("player"));
+            
+            page
+        });
+        
+        // Update the content page title first
+        imp.content_page.set_title(media_item.title());
+        
+        // Load the media (but don't block navigation on failure)
+        if let Err(e) = player_page.load_media(media_item, state).await {
+            error!("Failed to load media: {}", e);
+            // Show error dialog but still navigate to player page
+            let dialog = adw::AlertDialog::new(
+                Some("Failed to Load Media"),
+                Some(&format!("Error: {}", e))
+            );
+            dialog.add_response("ok", "OK");
+            dialog.set_default_response(Some("ok"));
+            dialog.present(Some(self));
+        }
+        
+        // Remove any existing back button
+        if let Some(old_button) = imp.back_button.borrow().as_ref() {
+            imp.content_header.remove(old_button);
+        }
+        
+        // Create a new back button for the header bar
+        let back_button = gtk4::Button::builder()
+            .icon_name("go-previous-symbolic")
+            .tooltip_text("Back to Library")
+            .build();
+        
+        let window_weak = self.downgrade();
+        back_button.connect_clicked(move |_| {
+            if let Some(window) = window_weak.upgrade() {
+                // Go back to library view
+                if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
+                    stack.set_visible_child_name("library");
+                }
+            }
+        });
+        
+        // Add the back button to the header bar (pack_start)
+        imp.content_header.pack_start(&back_button);
+        imp.back_button.replace(Some(back_button));
+        
+        // Show the player page
+        content_stack.set_visible_child_name("player");
+    }
+    
     async fn show_library_view(&self, backend_id: String, library: crate::models::Library) {
         let imp = self.imp();
         
@@ -858,7 +1020,35 @@ impl ReelMainWindow {
             existing_view.as_ref().cloned()
         }.unwrap_or_else(|| {
             let state = imp.state.borrow().as_ref().unwrap().clone();
-            let view = crate::ui::pages::LibraryView::new(state);
+            let view = crate::ui::pages::LibraryView::new(state.clone());
+            
+            // Set the media selected callback to handle different media types
+            let window_weak = self.downgrade();
+            let state_clone = state.clone();
+            view.set_on_media_selected(move |media_item| {
+                if let Some(window) = window_weak.upgrade() {
+                    let media_item = media_item.clone();
+                    let state = state_clone.clone();
+                    glib::spawn_future_local(async move {
+                        use crate::models::MediaItem;
+                        match &media_item {
+                            MediaItem::Movie(_) => {
+                                // Movies go directly to player
+                                window.show_player(&media_item, state).await;
+                            }
+                            MediaItem::Show(show) => {
+                                // Shows go to episode selection
+                                window.show_show_details(show.clone(), state).await;
+                            }
+                            _ => {
+                                // Other media types could be handled here
+                                info!("Unsupported media type selected");
+                            }
+                        }
+                    });
+                }
+            });
+            
             imp.library_view.replace(Some(view.clone()));
             
             // Add to content stack
