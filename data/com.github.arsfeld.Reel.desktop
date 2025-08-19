@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Reel
+Comment=A modern GTK4 media player for GNOME
+Icon=com.github.arsfeld.Reel
+Exec=reel
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;Player;GTK;
+Keywords=plex;jellyfin;media;player;video;movies;shows;
+StartupNotify=true

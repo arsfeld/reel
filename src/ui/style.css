@@ -5,6 +5,79 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
+/* Movie poster card styling */
+.poster-card {
+    border-radius: 6px;
+    transition: all 200ms ease-in-out;
+    width: 120px;
+    height: 180px;
+}
+
+.poster-card:hover {
+    transform: scale(1.03);
+}
+
+/* Poster overlay container */
+.poster-overlay {
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25),
+                0 1px 3px rgba(0, 0, 0, 0.15);
+    background: linear-gradient(to bottom, 
+                rgba(255, 255, 255, 0.03) 0%,
+                rgba(255, 255, 255, 0) 50%,
+                rgba(0, 0, 0, 0.1) 100%);
+    width: 120px;
+    height: 180px;
+}
+
+/* Rounded poster image */
+.rounded-poster {
+    border-radius: 6px;
+}
+
+/* Info gradient at bottom of poster */
+.poster-info-gradient {
+    background: linear-gradient(to top,
+                rgba(0, 0, 0, 0.85) 0%,
+                rgba(0, 0, 0, 0.6) 50%,
+                rgba(0, 0, 0, 0) 100%);
+    padding: 6px;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+}
+
+/* Text styling on poster */
+.poster-info-gradient label.title-4 {
+    color: white;
+    font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+    font-size: 0.85em;
+}
+
+.poster-info-gradient label.subtitle {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 0.75em;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+
+/* Loading spinner styling */
+.poster-card spinner {
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 50%;
+    padding: 6px;
+}
+
+/* Ensure proper aspect ratio is maintained */
+.poster-card picture {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+}
+
+/* Flow box child sizing */
+flowboxchild {
+    width: 120px;
+    height: 180px;
+}
+
 /* Badge styles */
 .badge {
   background-color: alpha(@accent_color, 0.8);

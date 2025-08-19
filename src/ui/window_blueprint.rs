@@ -33,9 +33,18 @@ mod imp {
         pub sync_spinner: TemplateChild<gtk4::Spinner>,
         #[template_child]
         pub empty_state: TemplateChild<adw::StatusPage>,
+        #[template_child]
+        pub content_page: TemplateChild<adw::NavigationPage>,
+        #[template_child]
+        pub content_toolbar: TemplateChild<adw::ToolbarView>,
+        #[template_child]
+        pub content_header: TemplateChild<adw::HeaderBar>,
         
         pub state: RefCell<Option<Arc<AppState>>>,
         pub config: RefCell<Option<Arc<Config>>>,
+        pub content_stack: RefCell<Option<gtk4::Stack>>,
+        pub library_view: RefCell<Option<crate::ui::pages::LibraryView>>,
+        pub back_button: RefCell<Option<gtk4::Button>>,
     }
     
     #[glib::object_subclass]
@@ -99,7 +108,12 @@ mod imp {
                 glib::clone!(@weak obj => move |_, row| {
                     if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
                         info!("Library selected: {}", action_row.title());
-                        // TODO: Navigate to library view
+                        
+                        // Get library ID from the row's widget name
+                        let library_id = action_row.widget_name().to_string();
+                        
+                        // Navigate to library view
+                        obj.navigate_to_library(&library_id);
                     }
                 })
             );
@@ -248,22 +262,38 @@ impl ReelMainWindow {
             let plex_backend = {
                 let mut backend_manager = state.backend_manager.write().await;
                 
-                // Try to initialize Plex backend
-                let plex_backend = Arc::new(crate::backends::plex::PlexBackend::new());
-                
                 // Import the trait to access the initialize method
                 use crate::backends::MediaBackend;
                 
-                // Generate a unique backend ID based on backend type and existing backends
-                let existing_backends = state.config.get_configured_backends();
-                let mut backend_id = "plex".to_string();
-                let mut counter = 1;
+                // First check if we have a last active backend that we should reuse
+                let config = state.config.clone();
+                let last_active = config.get_last_active_backend();
                 
-                // Find a unique ID
-                while existing_backends.contains(&backend_id) {
-                    backend_id = format!("plex_{}", counter);
-                    counter += 1;
-                }
+                // Check if the last active backend was a plex backend
+                let backend_id = if let Some(ref last_id) = last_active {
+                    if last_id.starts_with("plex") {
+                        // Reuse the last active backend ID
+                        info!("Reusing existing backend ID: {}", last_id);
+                        last_id.clone()
+                    } else {
+                        // Last active was not plex, find an appropriate ID
+                        let existing_backends = state.config.get_configured_backends();
+                        let mut new_id = "plex".to_string();
+                        let mut counter = 1;
+                        
+                        while existing_backends.contains(&new_id) {
+                            new_id = format!("plex_{}", counter);
+                            counter += 1;
+                        }
+                        new_id
+                    }
+                } else {
+                    // No last active backend, use "plex" as the ID
+                    "plex".to_string()
+                };
+                
+                // Try to initialize Plex backend
+                let plex_backend = Arc::new(crate::backends::plex::PlexBackend::new());
                 
                 match plex_backend.initialize().await {
                     Ok(Some(user)) => {
@@ -276,9 +306,11 @@ impl ReelMainWindow {
                         // Set the user
                         state.set_user(user.clone()).await;
                         
-                        // Save this backend as the last active
-                        let mut config = state.config.as_ref().clone();
-                        let _ = config.set_last_active_backend(&backend_id);
+                        // Save this backend as the last active (only if it changed)
+                        if last_active.as_ref() != Some(&backend_id) {
+                            let mut config = state.config.as_ref().clone();
+                            let _ = config.set_last_active_backend(&backend_id);
+                        }
                         
                         // Cache the server name for next startup
                         let cache = state.cache_manager.clone();
@@ -552,7 +584,10 @@ impl ReelMainWindow {
     
     fn show_preferences(&self) {
         info!("Showing preferences");
-        // TODO: Implement preferences dialog
+        
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+        let prefs_window = crate::ui::PreferencesWindow::new(self, state);
+        prefs_window.present();
     }
     
     fn show_about(&self) {
@@ -758,6 +793,152 @@ impl ReelMainWindow {
             }
             Err(e) => {
                 error!("Sync failed: {}", e);
+            }
+        }
+    }
+    
+    pub fn navigate_to_library(&self, library_id: &str) {
+        info!("Navigating to library: {}", library_id);
+        
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+        let library_id = library_id.to_string();
+        let window_weak = self.downgrade();
+        
+        glib::spawn_future_local(async move {
+            if let Some(window) = window_weak.upgrade() {
+                // Get backend ID and sync manager
+                if let Some(backend_id) = state.get_active_backend_id().await {
+                    let sync_manager = state.sync_manager.clone();
+                    
+                    // Get the library from cache
+                    match sync_manager.get_cached_libraries(&backend_id).await {
+                        Ok(libraries) => {
+                            if let Some(library) = libraries.iter().find(|l| l.id == library_id) {
+                                window.show_library_view(backend_id, library.clone()).await;
+                            } else {
+                                error!("Library not found: {}", library_id);
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to get libraries: {}", e);
+                        }
+                    }
+                } else {
+                    error!("No active backend");
+                }
+            }
+        });
+    }
+    
+    async fn show_library_view(&self, backend_id: String, library: crate::models::Library) {
+        let imp = self.imp();
+        
+        // Get or create content stack
+        let content_stack = if imp.content_stack.borrow().is_none() {
+            let stack = gtk4::Stack::builder()
+                .transition_type(gtk4::StackTransitionType::SlideLeftRight)
+                .transition_duration(300)
+                .build();
+            
+            // Add the empty state as the default page
+            stack.add_named(&*imp.empty_state, Some("empty"));
+            
+            // Set the stack as content of the toolbar view
+            imp.content_toolbar.set_content(Some(&stack));
+            
+            imp.content_stack.replace(Some(stack.clone()));
+            stack
+        } else {
+            imp.content_stack.borrow().as_ref().unwrap().clone()
+        };
+        
+        // Create or get library view
+        let library_view = {
+            let existing_view = imp.library_view.borrow();
+            existing_view.as_ref().cloned()
+        }.unwrap_or_else(|| {
+            let state = imp.state.borrow().as_ref().unwrap().clone();
+            let view = crate::ui::pages::LibraryView::new(state);
+            imp.library_view.replace(Some(view.clone()));
+            
+            // Add to content stack
+            content_stack.add_named(&view, Some("library"));
+            
+            view
+        });
+        
+        // Update the content page title
+        imp.content_page.set_title(&library.title);
+        
+        // Remove any existing back button
+        if let Some(old_button) = imp.back_button.borrow().as_ref() {
+            imp.content_header.remove(old_button);
+        }
+        
+        // Create a new back button for the header bar
+        let back_button = gtk4::Button::builder()
+            .icon_name("go-previous-symbolic")
+            .tooltip_text("Back to Libraries")
+            .build();
+        
+        let window_weak = self.downgrade();
+        back_button.connect_clicked(move |_| {
+            if let Some(window) = window_weak.upgrade() {
+                window.show_libraries_view();
+            }
+        });
+        
+        // Add the back button to the header bar
+        imp.content_header.pack_start(&back_button);
+        imp.back_button.replace(Some(back_button));
+        
+        // Update header bar title
+        imp.content_header.set_title_widget(Some(&gtk4::Label::builder()
+            .label(&library.title)
+            .single_line_mode(true)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .build()));
+        
+        // Load the library
+        library_view.load_library(backend_id, library).await;
+        
+        // Switch to library view in the content area
+        content_stack.set_visible_child_name("library");
+        
+        // Get the split view from the window content and show content pane on mobile
+        if let Some(content) = self.content() {
+            if let Some(split_view) = content.downcast_ref::<adw::NavigationSplitView>() {
+                split_view.set_show_content(true);
+            }
+        }
+    }
+    
+    pub fn show_libraries_view(&self) {
+        info!("Navigating back to libraries");
+        
+        let imp = self.imp();
+        
+        // Show empty state in content area
+        if let Some(stack) = imp.content_stack.borrow().as_ref() {
+            stack.set_visible_child_name("empty");
+        }
+        
+        // Reset content page title
+        imp.content_page.set_title("Content");
+        
+        // Remove back button if it exists
+        if let Some(back_button) = imp.back_button.borrow().as_ref() {
+            imp.content_header.remove(back_button);
+        }
+        imp.back_button.replace(None);
+        
+        // Reset header bar title
+        imp.content_header.set_title_widget(gtk4::Widget::NONE);
+        
+        // Show sidebar in mobile view
+        if let Some(content) = self.content() {
+            if let Some(split_view) = content.downcast_ref::<adw::NavigationSplitView>() {
+                split_view.set_show_content(false);
             }
         }
     }

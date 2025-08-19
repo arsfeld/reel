@@ -336,15 +336,16 @@ impl ReelAuthDialog {
         imp.retry_button.set_visible(true);
     }
     
-    fn connect_manual(&self, url: String, token: String) {
+    fn connect_manual(&self, url: String, _token: String) {
         info!("Connecting manually to {}", url);
         
-        if let Some(state) = self.imp().state.borrow().as_ref() {
-            let state_clone = state.clone();
+        let state = self.imp().state.borrow().as_ref().map(|s| s.clone());
+        
+        if let Some(state) = state {
             let dialog_weak = self.downgrade();
             
             glib::spawn_future_local(async move {
-                let mut backend_manager = state_clone.backend_manager.write().await;
+                let mut backend_manager = state.backend_manager.write().await;
                 
                 // Create a new Plex backend
                 let plex_backend = Arc::new(crate::backends::plex::PlexBackend::new());
@@ -380,9 +381,29 @@ impl ReelAuthDialog {
                 ).await {
                     error!("Failed to connect to server: {}", e);
                 } else {
+                    // Get or reuse backend ID
+                    let config = state.config.clone();
+                    let last_active = config.get_last_active_backend();
+                    
+                    let backend_id = if let Some(ref last_id) = last_active {
+                        if last_id.starts_with("plex") {
+                            // Reuse the last active backend ID
+                            info!("Reusing existing backend ID for manual connection: {}", last_id);
+                            last_id.clone()
+                        } else {
+                            "plex".to_string()
+                        }
+                    } else {
+                        "plex".to_string()
+                    };
+                    
                     // Register the backend
-                    backend_manager.register_backend("plex".to_string(), plex_backend.clone());
-                    backend_manager.set_active("plex").ok();
+                    backend_manager.register_backend(backend_id.clone(), plex_backend.clone());
+                    backend_manager.set_active(&backend_id).ok();
+                    
+                    // Save as last active backend
+                    let mut config = state.config.as_ref().clone();
+                    let _ = config.set_last_active_backend(&backend_id);
                     
                     // Start sync
                     if let Some(dialog) = dialog_weak.upgrade() {

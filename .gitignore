@@ -1,3 +1,32 @@
-/target
+# Rust
+/target/
+**/*.rs.bk
 
+# Nix
 .direnv
+
+# Flatpak
+build-dir/
+.flatpak-builder/
+cargo-sources.json
+flatpak-cargo-generator.py
+*.flatpak
+repo/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.gresource
+build/
+
+# Cache and config
+data/cache/
+data/config/

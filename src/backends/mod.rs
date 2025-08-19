@@ -91,6 +91,41 @@ impl BackendManager {
             })
             .collect()
     }
+    
+    pub fn list_backends(&self) -> Vec<(String, traits::BackendInfo)> {
+        // This is synchronous for now - ideally we'd make this async
+        // But for the preferences UI, we can use cached info
+        self.backends
+            .iter()
+            .map(|(id, backend)| {
+                // Create a default BackendInfo - this should be cached/stored
+                let info = traits::BackendInfo {
+                    name: id.clone(),
+                    display_name: format!("{} Backend", id),
+                    backend_type: if id.starts_with("plex") {
+                        traits::BackendType::Plex
+                    } else if id.starts_with("jellyfin") {
+                        traits::BackendType::Jellyfin
+                    } else {
+                        traits::BackendType::Local
+                    },
+                    server_name: None,
+                    server_version: None,
+                    connection_type: traits::ConnectionType::Unknown,
+                    is_local: false,
+                    is_relay: false,
+                };
+                (id.clone(), info)
+            })
+            .collect()
+    }
+    
+    pub fn unregister_backend(&mut self, name: &str) {
+        self.backends.remove(name);
+        if self.active_backend.as_ref() == Some(&name.to_string()) {
+            self.active_backend = None;
+        }
+    }
 }
 
 #[derive(Debug)]

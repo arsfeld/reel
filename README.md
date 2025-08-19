@@ -1,6 +1,10 @@
-# 🎬 Reel
-
-A modern GTK4 media player for GNOME, built with Rust for performance and reliability.
+<div align="center">
+  <img src="logo.svg" alt="Reel Logo" width="128" height="128">
+  
+  # 🎬 Reel
+  
+  **A modern GTK4 media player for GNOME, built with Rust for performance and reliability.**
+</div>
 
 > **⚠️ Early Development**: Reel is actively being developed. Expect rough edges, missing features, and breaking changes as we work toward a stable release.
 

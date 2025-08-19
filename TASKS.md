@@ -30,24 +30,30 @@
 - [x] **Movies Library Implementation**
   - [x] Fetch movies from library endpoint
   - [x] Parse movie metadata (title, year, rating, poster)
-  - [ ] Create movie grid view component
-  - [ ] Implement lazy loading for large libraries
+  - [x] Create movie grid view component
+  - [x] Implement lazy loading for large libraries
   - [ ] Add movie detail view
 
 - [x] **TV Shows Library Implementation**
   - [x] Fetch shows from library endpoint
   - [x] Parse show/season/episode structure
-  - [ ] Create show grid view component
+  - [x] Create show grid view component
   - [ ] Implement season/episode navigation
   - [ ] Add episode list view
 
 ### 🖼️ Media & Metadata
-- [ ] **Image Loading & Caching**
-  - [ ] Implement poster/thumb URL construction
-  - [ ] Create image download service
-  - [ ] Implement disk-based image cache
-  - [ ] Add placeholder images
-  - [ ] Handle image loading errors
+- [x] **Image Loading & Caching** (Partially Working - Performance Issues)
+  - [x] Implement poster/thumb URL construction
+  - [x] Create async image download service with throttling
+  - [x] Implement disk-based image cache (~/.cache/reel/images/)
+  - [x] Add placeholder images for unloaded content
+  - [x] Handle image loading errors with fallback
+  - [x] Viewport-based lazy loading for performance
+  - [x] Concurrent download limiting (increased to 50 simultaneous)
+  - [x] Memory cache for instant access
+  - [x] Pre-fetch 2 screens ahead for smoother scrolling
+  - [x] Reduced debounce delay to 50ms
+  - [ ] **Performance still needs improvement** - images load too slowly
 
 - [ ] **Metadata Display**
   - [ ] Create media info cards
@@ -241,30 +247,65 @@ window.sync_and_update_libraries(backend_id, backend)
    - [x] Show sync progress spinner
    - [x] Auto-sync on authentication
 
-### 🔧 In Progress
-1. [ ] **Library Navigation**
-   - [ ] Navigate to library views when clicked
-   - [ ] Create media grid view component (generic for all types)
-   - [ ] Implement type-specific views (movies, shows, music, photos)
+### ✅ Recently Completed
+1. [x] **Library Navigation**
+   - [x] Navigate to library views when clicked
+   - [x] Create media grid view component (generic for all types)
+   - [x] Implement movie and TV show views
+   - [x] Fix AdwApplicationWindow navigation issues
+   - [x] Create MediaCard widget for grid display
+   - [x] Add back navigation from library view
+
+2. [x] **Backend Management System**
+   - [x] Create preferences window with AdwPreferencesWindow
+   - [x] Implement backend list view with add/remove functionality
+   - [x] Add backend removal with confirmation dialog
+   - [x] Fix backend ID generation to reuse existing IDs
+   - [x] Add clear cache functionality for removed backends
+   - [x] Create add backend flow with type selection
+   - [x] Integrate with existing auth dialog for Plex
 
 ### 📋 Next Steps
-1. [ ] **Generic Media Library View**
-   - [ ] Create unified grid view for all media types
-   - [ ] Implement lazy loading for large libraries
-   - [ ] Add media detail view with type-specific layouts
-   - [ ] Show metadata based on media type
 
-2. [ ] **Type-Specific Features**
-   - [ ] Movie view: rating, year, duration, cast
-   - [ ] TV show view: seasons, episodes, air dates
-   - [ ] Music view: albums, artists, tracks
-   - [ ] Photo view: gallery, date organization
+1. [x] **Image Loading & Display** (COMPLETED)
+   - [x] Implement poster/thumb URL construction for Plex
+   - [x] Create async image download service
+   - [x] Add disk-based image cache
+   - [x] Load and display poster images in MediaCard
+   - [x] Add loading spinner while images load
+   - [x] Handle image loading errors gracefully
+   - [x] Viewport-based lazy loading to prevent UI freezing
+   - [x] Concurrent download throttling
 
-3. [ ] **Image Loading**
-   - [ ] Implement poster/thumb URL construction
-   - [ ] Create image download service
-   - [ ] Add disk-based image cache
-   - [ ] Display placeholder images while loading
+2. [ ] **Media Detail Views**
+   - [ ] Create media detail page layout
+   - [ ] Implement movie detail view with full metadata
+   - [ ] Add TV show detail view with seasons/episodes
+   - [ ] Display cast, crew, and synopsis
+   - [ ] Add play button to start playback
+
+3. [ ] **Library Enhancements**
+   - [x] Implement lazy loading for large libraries
+   - [ ] Add search within library
+   - [ ] Implement sorting options (title, year, rating)
+   - [ ] Add filter by genre, year, etc.
+   - [ ] Create list/grid view toggle
+
+4. [ ] **Performance Optimizations** (High Priority)
+   - [ ] Request smaller thumbnail sizes from Plex API (150x225 instead of full posters)
+   - [ ] Implement progressive image loading (low-res placeholder → full image)
+   - [ ] Use WebP format if Plex supports it for smaller file sizes
+   - [ ] Pre-cache next library's images when idle
+   - [ ] Consider using native GTK async image loading APIs
+   - [ ] Investigate GdkPixbuf loader performance
+   - [ ] Profile actual bottlenecks (network vs decoding vs rendering)
+
+5. [ ] **Playback Foundation**
+   - [ ] Initialize GStreamer player component
+   - [ ] Generate stream URLs from Plex
+   - [ ] Implement basic video playback
+   - [ ] Add playback controls overlay
+   - [ ] Track playback progress
 
 ## Testing Checklist
 - [ ] Test with local Plex server
@@ -277,6 +318,16 @@ window.sync_and_update_libraries(backend_id, backend)
 
 ## Known Issues & Troubleshooting
 
+### Current Issues
+- [ ] **Music/Photo Libraries**: Views not yet implemented
+- [ ] **Jellyfin Backend**: Integration pending implementation
+- [ ] **Local Files Backend**: File browser not yet implemented
+- [ ] **Image Loading Performance**: Still slow despite optimizations - needs further work
+  - Loading takes 100-500ms per image even with parallel downloads
+  - UI still feels sluggish when scrolling through large libraries
+  - May need to implement thumbnail generation or smaller image variants
+  - Consider pre-caching images in background after library load
+
 ### Resolved Issues
 - ✅ **GTK Template Loading Error**: Fixed by correcting Blueprint syntax
 - ✅ **Plex PIN Authentication**: Fixed by removing "strong" parameter
@@ -285,7 +336,13 @@ window.sync_and_update_libraries(backend_id, backend)
 - ✅ **UI Server Status Display**: Fixed RwLock deadlock and added server info display with connection type icons
 - ✅ **Backend-Specific Hard-coding**: Completely refactored to backend-agnostic architecture
 - ✅ **Slow Startup**: Cache now loads instantly before authentication
-- ✅ **Backend ID Management**: Dynamic IDs with persistent storage
+- ✅ **Backend ID Management**: Fixed to reuse existing IDs instead of creating new ones
+- ✅ **AdwApplicationWindow Navigation**: Fixed set_child error by using set_content
+- ✅ **RefCell Borrow Panic**: Fixed multiple borrow issue in library navigation
+- ✅ **Widget Parent Issues**: Resolved GTK widget parent conflicts when switching views
+- ✅ **Poster Images Not Loading**: Implemented async image loader with disk/memory caching
+- ✅ **UI Freezing with Large Libraries**: Added viewport-based lazy loading with throttling
+- ✅ **Source ID Removal Panic**: Fixed with counter-based debouncing approach
 
 ## Documentation
 - [ ] API documentation

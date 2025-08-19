@@ -1,0 +1,231 @@
+/* Performance-optimized styles for media library */
+
+/* Use GPU acceleration for transforms */
+.media-card {
+  will-change: transform;
+  transform: translateZ(0);
+  transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+}
+
+.media-card:hover {
+  transform: translateZ(0) scale(1.05);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+/* Optimize image rendering */
+.rounded-poster {
+  image-rendering: optimizeQuality;
+  border-radius: 8px;
+  /* Use GPU for rendering */
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* Reduce repaints with containment */
+.poster-card {
+  contain: layout style paint;
+}
+
+/* Optimize scrolling performance */
+scrolledwindow {
+  /* Enable momentum scrolling */
+  kinetic-scrolling: 1;
+}
+
+scrolledwindow viewport {
+  /* Reduce overdraw */
+  background: transparent;
+}
+
+flowbox {
+  /* Optimize layout calculations */
+  contain: layout;
+}
+
+flowboxchild {
+  /* Isolate repaints to individual items */
+  contain: paint;
+}
+
+/* Lazy loading placeholders */
+.media-card.loading picture {
+  background: linear-gradient(90deg, #2a2a2a 0%, #3a3a3a 50%, #2a2a2a 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Optimize info overlay */
+.poster-info-gradient {
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.9) 0%,
+    rgba(0, 0, 0, 0.7) 30%,
+    rgba(0, 0, 0, 0.3) 60%,
+    transparent 100%
+  );
+  /* Use GPU for gradient rendering */
+  transform: translateZ(0);
+}
+
+/* Reduce text rendering overhead */
+.media-card-info label {
+  /* Cache text rendering */
+  text-rendering: optimizeLegibility;
+  /* Reduce subpixel calculations */
+  font-smoothing: antialiased;
+}
+
+/* Small card optimizations */
+.media-card.size-small {
+  min-width: 120px;
+  min-height: 180px;
+}
+
+.media-card.size-small .media-card-info {
+  padding: 4px 6px;
+}
+
+.media-card.size-small .title-4 {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Medium card optimizations */
+.media-card.size-medium {
+  min-width: 180px;
+  min-height: 270px;
+}
+
+/* Large card optimizations */
+.media-card.size-large {
+  min-width: 240px;
+  min-height: 360px;
+}
+
+/* Loading spinner optimization */
+spinner {
+  /* Reduce CPU usage for animation */
+  animation-timing-function: steps(8);
+}
+
+/* Virtual scrolling optimization */
+.flowbox-virtual {
+  /* Reserve space for off-screen items */
+  min-height: 5000px;
+}
+
+/* Memory optimization for large libraries */
+.media-card:not(.visible) picture {
+  /* Free memory for off-screen images */
+  content-visibility: auto;
+}
+
+/* Progressive image loading */
+.media-card picture {
+  /* Start with low quality */
+  image-rendering: pixelated;
+  transition: filter 0.3s ease-out;
+}
+
+.media-card picture.loaded {
+  /* Switch to high quality when loaded */
+  image-rendering: optimizeQuality;
+  filter: none;
+}
+
+.media-card picture.loading {
+  /* Blur while loading for better perceived performance */
+  filter: blur(5px);
+}
+
+/* Dark theme optimizations */
+@media (prefers-color-scheme: dark) {
+  .media-card {
+    /* Reduce contrast for less eye strain */
+    background: #1a1a1a;
+  }
+  
+  .media-card:hover {
+    background: #2a2a2a;
+  }
+}
+
+/* Responsive optimizations */
+@media (max-width: 768px) {
+  flowbox {
+    /* Fewer columns on mobile */
+    min-children-per-line: 3;
+    max-children-per-line: 4;
+  }
+}
+
+@media (min-width: 1920px) {
+  flowbox {
+    /* More columns on large screens */
+    min-children-per-line: 6;
+    max-children-per-line: 12;
+  }
+}
+
+/* Hardware acceleration hints */
+.accelerated {
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* Reduce reflows during resize */
+window {
+  contain: layout;
+}
+
+/* Optimize hover states */
+.media-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.1);
+  opacity: 0;
+  transition: opacity 0.2s ease-out;
+  pointer-events: none;
+  transform: translateZ(0);
+}
+
+.media-card:hover::before {
+  opacity: 1;
+}
+
+/* Batch DOM updates */
+.updating flowbox {
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Optimize focus states */
+.media-card:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+/* Reduce paint areas */
+.media-card > * {
+  pointer-events: none;
+}
+
+.media-card {
+  pointer-events: auto;
+  cursor: pointer;
+}

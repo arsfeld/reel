@@ -1,0 +1,170 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Multiple gradients for depth -->
+    <radialGradient id="primaryRadial" cx="40%" cy="30%">
+      <stop offset="0%" style="stop-color:#5FA4F0;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#4A90E2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2E5C8A;stop-opacity:1" />
+    </radialGradient>
+    
+    <radialGradient id="holeGradient" cx="30%" cy="30%">
+      <stop offset="0%" style="stop-color:#1a3d5c;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0d1f2d;stop-opacity:1" />
+    </radialGradient>
+    
+    <linearGradient id="centerGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7CB342;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#558B2F;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Enhanced shadow filter -->
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4"/>
+      <feOffset dx="0" dy="4" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.3"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    
+    <!-- Inner shadow for holes -->
+    <filter id="innerShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
+      <feOffset dx="0" dy="2" result="offsetblur"/>
+      <feFlood flood-color="#000000" flood-opacity="0.5"/>
+      <feComposite in2="offsetblur" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Main reel circle with enhanced depth -->
+  <circle cx="128" cy="128" r="120" fill="url(#primaryRadial)" filter="url(#shadow)"/>
+  
+  <!-- Outer ring details -->
+  <circle cx="128" cy="128" r="118" fill="none" stroke="#1a3d5c" stroke-width="2" opacity="0.3"/>
+  <circle cx="128" cy="128" r="110" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.2"/>
+  
+  <!-- Film perforations around the outer edge in a circle -->
+  <g transform="translate(128, 128)">
+    <g id="perforation">
+      <rect x="-6" y="-106" width="12" height="8" rx="2" fill="#1a3d5c" opacity="0.7"/>
+    </g>
+    <use href="#perforation" transform="rotate(20)"/>
+    <use href="#perforation" transform="rotate(40)"/>
+    <use href="#perforation" transform="rotate(60)"/>
+    <use href="#perforation" transform="rotate(80)"/>
+    <use href="#perforation" transform="rotate(100)"/>
+    <use href="#perforation" transform="rotate(120)"/>
+    <use href="#perforation" transform="rotate(140)"/>
+    <use href="#perforation" transform="rotate(160)"/>
+    <use href="#perforation" transform="rotate(180)"/>
+    <use href="#perforation" transform="rotate(200)"/>
+    <use href="#perforation" transform="rotate(220)"/>
+    <use href="#perforation" transform="rotate(240)"/>
+    <use href="#perforation" transform="rotate(260)"/>
+    <use href="#perforation" transform="rotate(280)"/>
+    <use href="#perforation" transform="rotate(300)"/>
+    <use href="#perforation" transform="rotate(320)"/>
+    <use href="#perforation" transform="rotate(340)"/>
+  </g>
+  
+  <!-- Top hole -->
+  <g filter="url(#innerShadow)">
+    <circle cx="128" cy="58" r="20" fill="url(#holeGradient)"/>
+    <circle cx="128" cy="58" r="18" fill="#0a1520"/>
+    <circle cx="128" cy="58" r="16" fill="none" stroke="#1a3d5c" stroke-width="1" opacity="0.5"/>
+    <!-- Small center detail -->
+    <circle cx="128" cy="58" r="6" fill="#2a4158"/>
+    <circle cx="128" cy="58" r="4" fill="#3a5978"/>
+  </g>
+  
+  <!-- Top-right hole -->
+  <g filter="url(#innerShadow)">
+    <circle cx="177" cy="79" r="20" fill="url(#holeGradient)"/>
+    <circle cx="177" cy="79" r="18" fill="#0a1520"/>
+    <circle cx="177" cy="79" r="16" fill="none" stroke="#1a3d5c" stroke-width="1" opacity="0.5"/>
+    <circle cx="177" cy="79" r="6" fill="#2a4158"/>
+    <circle cx="177" cy="79" r="4" fill="#3a5978"/>
+  </g>
+  
+  <!-- Right hole -->
+  <g filter="url(#innerShadow)">
+    <circle cx="198" cy="128" r="20" fill="url(#holeGradient)"/>
+    <circle cx="198" cy="128" r="18" fill="#0a1520"/>
+    <circle cx="198" cy="128" r="16" fill="none" stroke="#1a3d5c" stroke-width="1" opacity="0.5"/>
+    <circle cx="198" cy="128" r="6" fill="#2a4158"/>
+    <circle cx="198" cy="128" r="4" fill="#3a5978"/>
+  </g>
+  
+  <!-- Bottom-right hole -->
+  <g filter="url(#innerShadow)">
+    <circle cx="177" cy="177" r="20" fill="url(#holeGradient)"/>
+    <circle cx="177" cy="177" r="18" fill="#0a1520"/>
+    <circle cx="177" cy="177" r="16" fill="none" stroke="#1a3d5c" stroke-width="1" opacity="0.5"/>
+    <circle cx="177" cy="177" r="6" fill="#2a4158"/>
+    <circle cx="177" cy="177" r="4" fill="#3a5978"/>
+  </g>
+  
+  <!-- Bottom hole -->
+  <g filter="url(#innerShadow)">
+    <circle cx="128" cy="198" r="20" fill="url(#holeGradient)"/>
+    <circle cx="128" cy="198" r="18" fill="#0a1520"/>
+    <circle cx="128" cy="198" r="16" fill="none" stroke="#1a3d5c" stroke-width="1" opacity="0.5"/>
+    <circle cx="128" cy="198" r="6" fill="#2a4158"/>
+    <circle cx="128" cy="198" r="4" fill="#3a5978"/>
+  </g>
+  
+  <!-- Bottom-left hole -->
+  <g filter="url(#innerShadow)">
+    <circle cx="79" cy="177" r="20" fill="url(#holeGradient)"/>
+    <circle cx="79" cy="177" r="18" fill="#0a1520"/>
+    <circle cx="79" cy="177" r="16" fill="none" stroke="#1a3d5c" stroke-width="1" opacity="0.5"/>
+    <circle cx="79" cy="177" r="6" fill="#2a4158"/>
+    <circle cx="79" cy="177" r="4" fill="#3a5978"/>
+  </g>
+  
+  <!-- Left hole -->
+  <g filter="url(#innerShadow)">
+    <circle cx="58" cy="128" r="20" fill="url(#holeGradient)"/>
+    <circle cx="58" cy="128" r="18" fill="#0a1520"/>
+    <circle cx="58" cy="128" r="16" fill="none" stroke="#1a3d5c" stroke-width="1" opacity="0.5"/>
+    <circle cx="58" cy="128" r="6" fill="#2a4158"/>
+    <circle cx="58" cy="128" r="4" fill="#3a5978"/>
+  </g>
+  
+  <!-- Top-left hole -->
+  <g filter="url(#innerShadow)">
+    <circle cx="79" cy="79" r="20" fill="url(#holeGradient)"/>
+    <circle cx="79" cy="79" r="18" fill="#0a1520"/>
+    <circle cx="79" cy="79" r="16" fill="none" stroke="#1a3d5c" stroke-width="1" opacity="0.5"/>
+    <circle cx="79" cy="79" r="6" fill="#2a4158"/>
+    <circle cx="79" cy="79" r="4" fill="#3a5978"/>
+  </g>
+  
+  <!-- Center hub - larger and more prominent with accent color -->
+  <g filter="url(#innerShadow)">
+    <circle cx="128" cy="128" r="32" fill="url(#holeGradient)"/>
+    <circle cx="128" cy="128" r="30" fill="#0a1520"/>
+    <circle cx="128" cy="128" r="28" fill="none" stroke="#1a3d5c" stroke-width="1" opacity="0.5"/>
+    
+    <!-- Accent colored center -->
+    <circle cx="128" cy="128" r="20" fill="url(#centerGradient)"/>
+    <circle cx="128" cy="128" r="18" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.3"/>
+    
+    <!-- Center mechanical details -->
+    <circle cx="128" cy="128" r="12" fill="none" stroke="#4a7125" stroke-width="2" opacity="0.5"/>
+    <circle cx="128" cy="128" r="5" fill="#3d5e20"/>
+  </g>
+  
+  <!-- Subtle highlight for 3D effect -->
+  <path d="M 58 68 A 100 100 0 0 1 198 68" fill="none" stroke="#ffffff" stroke-width="2" opacity="0.15"/>
+  
+  <!-- Additional inner ring detail -->
+  <circle cx="128" cy="128" r="85" fill="none" stroke="#2a5080" stroke-width="1" opacity="0.2"/>
+</svg>

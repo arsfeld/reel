@@ -1,0 +1,65 @@
+{
+    "app-id": "com.github.arsfeld.Reel",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "47",
+    "sdk": "org.gnome.Sdk",
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.rust-stable"
+    ],
+    "command": "reel",
+    "finish-args": [
+        "--share=network",
+        "--share=ipc",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--socket=pulseaudio",
+        "--device=dri",
+        "--filesystem=xdg-videos:ro",
+        "--filesystem=xdg-music:ro",
+        "--filesystem=xdg-pictures:ro",
+        "--talk-name=org.freedesktop.secrets",
+        "--talk-name=org.freedesktop.Notifications",
+        "--talk-name=org.gnome.Settings",
+        "--system-talk-name=org.freedesktop.Avahi",
+        "--own-name=org.mpris.MediaPlayer2.Reel"
+    ],
+    "build-options": {
+        "append-path": "/usr/lib/sdk/rust-stable/bin",
+        "env": {
+            "CARGO_HOME": "/run/build/reel/cargo",
+            "RUST_BACKTRACE": "1"
+        }
+    },
+    "cleanup": [
+        "/include",
+        "/lib/pkgconfig",
+        "/man",
+        "/share/doc",
+        "/share/gtk-doc",
+        "/share/man",
+        "/share/pkgconfig",
+        "*.la",
+        "*.a"
+    ],
+    "modules": [
+        {
+            "name": "reel",
+            "buildsystem": "simple",
+            "build-commands": [
+                "cargo --offline fetch --manifest-path Cargo.toml --verbose",
+                "cargo --offline build --release --verbose",
+                "install -Dm755 target/release/reel /app/bin/reel",
+                "install -Dm644 data/com.github.arsfeld.Reel.desktop /app/share/applications/com.github.arsfeld.Reel.desktop",
+                "install -Dm644 data/com.github.arsfeld.Reel.metainfo.xml /app/share/metainfo/com.github.arsfeld.Reel.metainfo.xml",
+                "install -Dm644 data/icons/hicolor/scalable/apps/com.github.arsfeld.Reel.svg /app/share/icons/hicolor/scalable/apps/com.github.arsfeld.Reel.svg"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "."
+                },
+                "cargo-sources.json"
+            ]
+        }
+    ]
+}

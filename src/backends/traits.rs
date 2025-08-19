@@ -176,6 +176,17 @@ pub enum BackendType {
     Generic,
 }
 
+impl std::fmt::Display for BackendType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BackendType::Plex => write!(f, "Plex"),
+            BackendType::Jellyfin => write!(f, "Jellyfin"),
+            BackendType::Local => write!(f, "Local Files"),
+            BackendType::Generic => write!(f, "Generic"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ConnectionType {
     Local,

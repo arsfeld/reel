@@ -1,0 +1,14 @@
+# Flatpak Builder configuration
+# This file helps with building and testing the Flatpak
+
+# To build:
+# flatpak-builder --user --install --force-clean build-dir com.github.arsfeld.Reel.json
+
+# To generate cargo-sources.json:
+# flatpak-cargo-generator.py ./Cargo.lock -o cargo-sources.json
+
+# To run after building:
+# flatpak run com.github.arsfeld.Reel
+
+# To create a bundle:
+# flatpak build-bundle repo reel.flatpak com.github.arsfeld.Reel

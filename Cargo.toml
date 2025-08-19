@@ -12,6 +12,7 @@ categories = ["multimedia", "gui"]
 [dependencies]
 # GTK and UI
 gtk4 = { version = "0.9", features = ["v4_12"] }
+gdk-pixbuf = "0.20"
 libadwaita = { version = "0.7", features = ["v1_5"] }
 
 # Media playback
@@ -26,7 +27,7 @@ async-trait = "0.1"
 futures = "0.3"
 
 # HTTP and networking
-reqwest = { version = "0.12", features = ["json", "stream", "cookies"] }
+reqwest = { version = "0.12", features = ["json", "stream", "cookies", "native-tls"] }
 url = "2.5"
 
 # Serialization
@@ -51,6 +52,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "5.0"
 keyring = { version = "3.0", features = ["linux-native"] }
 image = "0.25"
+webp = "0.3"
 base64 = "0.22"
 uuid = { version = "1.10", features = ["v4", "serde"] }
 

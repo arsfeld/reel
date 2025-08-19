@@ -3,6 +3,7 @@ using Adw 1;
 
 template ReelMainWindow : Adw.ApplicationWindow {
   title: "Reel";
+  icon-name: "com.github.arsfeld.Reel";
   default-width: 1200;
   default-height: 800;
   
@@ -90,14 +91,14 @@ template ReelMainWindow : Adw.ApplicationWindow {
       };
     };
     
-    content: Adw.NavigationPage {
+    content: Adw.NavigationPage content_page {
       tag: "content";
       title: _("Content");
       
-      child: Adw.ToolbarView {
+      child: Adw.ToolbarView content_toolbar {
         [top]
-        Adw.HeaderBar {
-          show-title: false;
+        Adw.HeaderBar content_header {
+          show-title: true;
         }
         
         content: Adw.StatusPage empty_state {

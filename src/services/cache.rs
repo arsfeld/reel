@@ -172,6 +172,16 @@ impl CacheManager {
         Ok(())
     }
     
+    pub async fn clear_backend_cache(&self, backend_id: &str) -> Result<()> {
+        // Delete all entries for this backend
+        sqlx::query("DELETE FROM media_cache WHERE id LIKE ?")
+            .bind(format!("{}:%", backend_id))
+            .execute(self.db.as_ref())
+            .await?;
+        
+        Ok(())
+    }
+    
     fn db_path() -> Result<PathBuf> {
         let cache_dir = dirs::cache_dir()
             .context("Failed to get cache directory")?;

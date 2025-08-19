@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.github.arsfeld.Reel</id>
+  
+  <name>Reel</name>
+  <summary>A modern media player for GNOME</summary>
+  
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  
+  <description>
+    <p>
+      Reel is a native Linux media player that brings your Plex and Jellyfin libraries to the GNOME desktop. 
+      Built with Rust and GTK4, it delivers a fast, reliable media experience without the overhead of web technologies.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Native GTK4/libadwaita interface that integrates seamlessly with GNOME</li>
+      <li>Support for multiple media backends (Plex, with Jellyfin planned)</li>
+      <li>Offline-first design with SQLite caching</li>
+      <li>Hardware-accelerated video playback via GStreamer</li>
+      <li>Fast and memory-safe, written entirely in Rust</li>
+      <li>Background synchronization that doesn't block the UI</li>
+    </ul>
+  </description>
+  
+  <launchable type="desktop-id">com.github.arsfeld.Reel.desktop</launchable>
+  
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main window showing media library</caption>
+      <image>https://raw.githubusercontent.com/arsfeld/reel/main/screenshots/main-window.png</image>
+    </screenshot>
+  </screenshots>
+  
+  <url type="homepage">https://github.com/arsfeld/reel</url>
+  <url type="bugtracker">https://github.com/arsfeld/reel/issues</url>
+  <url type="vcs-browser">https://github.com/arsfeld/reel</url>
+  
+  <developer id="com.github.arsfeld">
+    <name>arsfeld</name>
+  </developer>
+  
+  <provides>
+    <binary>reel</binary>
+  </provides>
+  
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </recommends>
+  
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-info">mild</content_attribute>
+  </content_rating>
+  
+  <releases>
+    <release version="0.1.0" date="2024-01-01">
+      <description>
+        <p>Initial release with basic Plex support:</p>
+        <ul>
+          <li>Plex OAuth authentication</li>
+          <li>Server discovery and connection</li>
+          <li>Library browsing with metadata</li>
+          <li>Offline caching with SQLite</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+  
+  <kudos>
+    <kudo>HiDpiIcon</kudo>
+    <kudo>ModernToolkit</kudo>
+  </kudos>
+</component>
