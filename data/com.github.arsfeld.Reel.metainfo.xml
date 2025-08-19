@@ -31,6 +31,10 @@
       <caption>Main window showing media library</caption>
       <image>https://raw.githubusercontent.com/arsfeld/reel/main/screenshots/main-window.png</image>
     </screenshot>
+    <screenshot>
+      <caption>TV show details with episode list</caption>
+      <image>https://raw.githubusercontent.com/arsfeld/reel/main/screenshots/show-details.png</image>
+    </screenshot>
   </screenshots>
   
   <url type="homepage">https://github.com/arsfeld/reel</url>

@@ -12,6 +12,9 @@
 
 Reel is a native Linux media player that brings your Plex (and soon Jellyfin) libraries to the GNOME desktop. Written entirely in Rust, it leverages the language's performance and memory safety to deliver a fast, reliable media experience without the overhead of web technologies.
 
+![Reel Screenshot - Movies Library](screenshots/main-window.png)
+![Reel Screenshot - Show Details](screenshots/show-details.png)
+
 ### ✨ Key Features
 
 - **🦀 Pure Rust Implementation**: Fast, memory-safe, and concurrent by design
