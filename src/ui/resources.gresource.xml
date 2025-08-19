@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/com/github/arsfeld/Reel">
+    <file preprocess="xml-stripblanks">blueprints/window.blp</file>
+    <file preprocess="xml-stripblanks">blueprints/auth_dialog.blp</file>
+    <file preprocess="xml-stripblanks">blueprints/library_view.blp</file>
+    <file preprocess="xml-stripblanks">blueprints/media_card.blp</file>
+    <file>style.css</file>
+  </gresource>
+</gresources>

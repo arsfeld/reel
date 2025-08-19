@@ -1,0 +1,77 @@
+[package]
+name = "reel"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <you@example.com>"]
+license = "GPL-3.0-or-later"
+description = "A modern, native media player for the GNOME desktop"
+repository = "https://github.com/arsfeld/reel"
+keywords = ["media", "player", "plex", "jellyfin", "gnome"]
+categories = ["multimedia", "gui"]
+
+[dependencies]
+# GTK and UI
+gtk4 = { version = "0.9", features = ["v4_12"] }
+libadwaita = { version = "0.7", features = ["v1_5"] }
+
+# Media playback
+gstreamer = "0.23"
+gstreamer-video = "0.23"
+gstreamer-player = "0.23"
+gstreamer-pbutils = "0.23"
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# HTTP and networking
+reqwest = { version = "0.12", features = ["json", "stream", "cookies"] }
+url = "2.5"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Database and caching
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+once_cell = "1.19"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5.0"
+keyring = { version = "3.0", features = ["linux-native"] }
+image = "0.25"
+base64 = "0.22"
+uuid = { version = "1.10", features = ["v4", "serde"] }
+
+# Localization
+gettext-rs = { version = "0.7", features = ["gettext-system"] }
+
+[dev-dependencies]
+mockito = "1.5"
+tempfile = "3.12"
+criterion = "0.5"
+
+[build-dependencies]
+glib-build-tools = "0.20"
+
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true

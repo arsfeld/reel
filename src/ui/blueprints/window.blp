@@ -1,0 +1,127 @@
+using Gtk 4.0;
+using Adw 1;
+
+template ReelMainWindow : Adw.ApplicationWindow {
+  title: "Reel";
+  default-width: 1200;
+  default-height: 800;
+  
+  content: Adw.NavigationSplitView {
+    sidebar: Adw.NavigationPage {
+      title: _("Reel");
+      child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar header_bar {
+          [end]
+          Gtk.MenuButton {
+            icon-name: "open-menu-symbolic";
+            menu-model: primary_menu;
+          }
+        }
+        
+        content: Gtk.ScrolledWindow {
+          hscrollbar-policy: never;
+          vscrollbar-policy: automatic;
+          
+          Gtk.Box {
+            orientation: vertical;
+            margin-top: 12;
+            margin-bottom: 12;
+            margin-start: 12;
+            margin-end: 12;
+            spacing: 12;
+            
+            Adw.StatusPage welcome_page {
+              icon-name: "applications-multimedia-symbolic";
+              title: _("Welcome to Reel");
+              description: _("Connect to your media server to get started");
+              
+              Gtk.Box {
+                orientation: vertical;
+                spacing: 12;
+                halign: center;
+                
+                Gtk.Button connect_button {
+                  label: _("Connect to Plex");
+                  halign: center;
+                  styles ["pill", "suggested-action"]
+                }
+              }
+            }
+            
+            Adw.PreferencesGroup libraries_group {
+              title: _("Libraries");
+              visible: false;
+              
+              [header-suffix]
+              Gtk.Button refresh_button {
+                icon-name: "view-refresh-symbolic";
+                valign: center;
+                tooltip-text: _("Refresh Libraries");
+                styles ["flat"]
+              }
+              
+              Gtk.ListBox libraries_list {
+                selection-mode: none;
+                styles ["boxed-list"]
+              }
+            }
+            
+            Adw.PreferencesGroup status_group {
+              title: _("Server Status");
+              
+              Adw.ActionRow status_row {
+                title: _("Not Connected");
+                subtitle: _("No server configured");
+                
+                [prefix]
+                Gtk.Image status_icon {
+                  icon-name: "network-offline-symbolic";
+                }
+                
+                [suffix]
+                Gtk.Spinner sync_spinner {
+                  visible: false;
+                }
+              }
+            }
+          }
+        };
+      };
+    };
+    
+    content: Adw.NavigationPage {
+      tag: "content";
+      title: _("Content");
+      
+      child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar {
+          show-title: false;
+        }
+        
+        content: Adw.StatusPage empty_state {
+          icon-name: "folder-symbolic";
+          title: _("Select a Library");
+          description: _("Choose a library from the sidebar to browse your media");
+        };
+      };
+    };
+  };
+}
+
+menu primary_menu {
+  section {
+    item {
+      label: _("Preferences");
+      action: "app.preferences";
+    }
+  }
+  
+  section {
+    item {
+      label: _("About Reel");
+      action: "app.about";
+    }
+  }
+}
