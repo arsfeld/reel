@@ -299,6 +299,44 @@ impl GStreamerPlayer {
         self.video_widget.borrow().clone()
     }
     
+    pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
+        if let Some(playbin) = self.playbin.borrow().as_ref() {
+            // Get video sink's pad
+            if let Some(video_sink) = playbin.property::<Option<gst::Element>>("video-sink") {
+                if let Some(sink_pad) = video_sink.static_pad("sink") {
+                    if let Some(caps) = sink_pad.current_caps() {
+                        if let Some(structure) = caps.structure(0) {
+                            let width = structure.get::<i32>("width").ok();
+                            let height = structure.get::<i32>("height").ok();
+                            if let (Some(w), Some(h)) = (width, height) {
+                                return Some((w, h));
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Alternative: try to get from stream info
+            let n_video = playbin.property::<i32>("n-video");
+            if n_video > 0 {
+                if let Some(pad) = playbin.emit_by_name::<Option<gst::Pad>>("get-video-pad", &[&0i32]) {
+                    if let Some(caps) = pad.current_caps() {
+                        if let Some(structure) = caps.structure(0) {
+                            let width = structure.get::<i32>("width").ok();
+                            let height = structure.get::<i32>("height").ok();
+                            if let (Some(w), Some(h)) = (width, height) {
+                                return Some((w, h));
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        } else {
+            None
+        }
+    }
+    
     async fn handle_bus_message(msg: &gst::Message, state: Arc<RwLock<PlayerState>>) {
         use gst::MessageView;
         

@@ -1,5 +1,7 @@
 use gtk4::{self, prelude::*, glib};
 use libadwaita as adw;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -57,7 +59,40 @@ impl PlayerPage {
         let controls = PlayerControls::new(player.clone());
         controls.widget.set_valign(gtk4::Align::End);
         controls.widget.set_margin_bottom(20);
+        // Hide controls by default - they'll show on mouse movement
+        controls.widget.set_visible(false);
         overlay.add_overlay(&controls.widget);
+        
+        // Set up hover detection for showing/hiding controls
+        let controls_widget = controls.widget.clone();
+        let hide_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+        let hover_controller = gtk4::EventControllerMotion::new();
+        
+        let hide_timer_clone = hide_timer.clone();
+        hover_controller.connect_motion(move |_, _, _| {
+            // Show controls
+            controls_widget.set_visible(true);
+            controls_widget.add_css_class("osd");
+            
+            // Cancel previous timer if exists
+            if let Some(timer_id) = hide_timer_clone.borrow_mut().take() {
+                timer_id.remove();
+            }
+            
+            // Hide again after 3 seconds of no movement
+            let controls_widget_inner = controls_widget.clone();
+            let hide_timer_inner = hide_timer_clone.clone();
+            let timer_id = glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
+                controls_widget_inner.set_visible(false);
+                // Clear the timer reference since it's done
+                hide_timer_inner.borrow_mut().take();
+                glib::ControlFlow::Break
+            });
+            hide_timer_clone.borrow_mut().replace(timer_id);
+        });
+        
+        // Add controller to the overlay (covers the whole video area)
+        overlay.add_controller(hover_controller);
         
         widget.append(&overlay);
         
@@ -106,6 +141,18 @@ impl PlayerPage {
     
     pub fn widget(&self) -> &gtk4::Box {
         &self.widget
+    }
+    
+    pub async fn stop(&self) {
+        let player = self.player.read().await;
+        if let Err(e) = player.stop().await {
+            error!("Failed to stop player: {}", e);
+        }
+    }
+    
+    pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
+        let player = self.player.read().await;
+        player.get_video_dimensions().await
     }
 }
 

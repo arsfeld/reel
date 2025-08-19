@@ -2,6 +2,7 @@ use gtk4::{gio, glib, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use tracing::{info, error, warn};
 
@@ -47,6 +48,7 @@ mod imp {
         pub player_page: RefCell<Option<crate::ui::pages::PlayerPage>>,
         pub show_details_page: RefCell<Option<crate::ui::pages::ShowDetailsPage>>,
         pub back_button: RefCell<Option<gtk4::Button>>,
+        pub saved_window_size: RefCell<(i32, i32)>,
     }
     
     #[glib::object_subclass]
@@ -963,20 +965,104 @@ impl ReelMainWindow {
             dialog.present(Some(self));
         }
         
-        // Remove any existing back button
+        // Clear any existing back buttons from the main header before hiding it
         if let Some(old_button) = imp.back_button.borrow().as_ref() {
             imp.content_header.remove(old_button);
         }
+        imp.back_button.replace(None);
         
-        // Create a new back button for the header bar
+        // Hide the main header bar completely for player mode
+        imp.content_header.set_visible(false);
+        
+        // Create a custom overlay header bar for the player
+        let player_header = adw::HeaderBar::new();
+        player_header.add_css_class("osd");
+        player_header.add_css_class("overlay-header");
+        player_header.set_show_title(false);
+        player_header.set_show_end_title_buttons(true);  // Keep close button visible
+        
+        // Create a simple back button for the overlay header
         let back_button = gtk4::Button::builder()
             .icon_name("go-previous-symbolic")
             .tooltip_text("Back to Library")
             .build();
+        back_button.add_css_class("osd");
+        
+        player_header.pack_start(&back_button);
+        
+        // Add the overlay header to the player page's overlay
+        // The player page widget is a Box, and its first child is the Overlay
+        let player_widget = player_page.widget();
+        if let Some(first_child) = player_widget.first_child() {
+            if let Some(overlay) = first_child.downcast_ref::<gtk4::Overlay>() {
+                // Position the header at the top
+                let header_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+                header_box.set_valign(gtk4::Align::Start);
+                header_box.append(&player_header);
+                overlay.add_overlay(&header_box);
+                
+                // Initially hide the overlay header
+                header_box.set_visible(false);
+                
+                // Set up hover detection for the overlay header
+                let header_box_weak = header_box.downgrade();
+                let hide_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+                let hover_controller = gtk4::EventControllerMotion::new();
+                
+                let hide_timer_clone = hide_timer.clone();
+                hover_controller.connect_motion(move |_, _, _| {
+                    if let Some(header) = header_box_weak.upgrade() {
+                        header.set_visible(true);
+                        
+                        // Cancel previous timer if exists
+                        if let Some(timer_id) = hide_timer_clone.borrow_mut().take() {
+                            timer_id.remove();
+                        }
+                        
+                        // Hide again after 3 seconds of no movement
+                        let header_weak_inner = header_box_weak.clone();
+                        let hide_timer_inner = hide_timer_clone.clone();
+                        let timer_id = glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
+                            if let Some(header) = header_weak_inner.upgrade() {
+                                header.set_visible(false);
+                            }
+                            hide_timer_inner.borrow_mut().take();
+                            glib::ControlFlow::Break
+                        });
+                        hide_timer_clone.borrow_mut().replace(timer_id);
+                    }
+                });
+                
+                // Apply controller to the entire overlay
+                overlay.add_controller(hover_controller);
+            }
+        }
         
         let window_weak = self.downgrade();
         back_button.connect_clicked(move |_| {
             if let Some(window) = window_weak.upgrade() {
+                // Stop the player before going back
+                if let Some(player_page) = window.imp().player_page.borrow().as_ref() {
+                    let player_page = player_page.clone();
+                    glib::spawn_future_local(async move {
+                        player_page.stop().await;
+                    });
+                }
+                
+                // Show the main header bar again
+                window.imp().content_header.set_visible(true);
+                
+                // Show the sidebar again
+                if let Some(content) = window.content() {
+                    if let Some(split_view) = content.downcast_ref::<adw::NavigationSplitView>() {
+                        split_view.set_collapsed(false);
+                    }
+                }
+                
+                // Restore saved window size
+                let (width, height) = *window.imp().saved_window_size.borrow();
+                window.set_default_size(width, height);
+                
                 // Go back to library view
                 if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
                     stack.set_visible_child_name("library");
@@ -984,12 +1070,49 @@ impl ReelMainWindow {
             }
         });
         
-        // Add the back button to the header bar (pack_start)
-        imp.content_header.pack_start(&back_button);
-        imp.back_button.replace(Some(back_button));
+        // Save current window size before changing it
+        let (current_width, current_height) = self.default_size();
+        imp.saved_window_size.replace((current_width, current_height));
         
         // Show the player page
         content_stack.set_visible_child_name("player");
+        
+        // Hide the sidebar and header bar for immersive playback
+        if let Some(content) = self.content() {
+            if let Some(split_view) = content.downcast_ref::<adw::NavigationSplitView>() {
+                split_view.set_collapsed(true);
+            }
+        }
+        
+        
+        // Try to resize window to match video aspect ratio after a short delay
+        // (to give GStreamer time to negotiate the video format)
+        let window_weak = self.downgrade();
+        let player_page_clone = player_page.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+            let window_weak = window_weak.clone();
+            let player_page = player_page_clone.clone();
+            glib::spawn_future_local(async move {
+                if let Some(window) = window_weak.upgrade() {
+                    if let Some((width, height)) = player_page.get_video_dimensions().await {
+                        // Calculate aspect ratio
+                        let aspect_ratio = width as f64 / height as f64;
+                        
+                        // Calculate new width based on aspect ratio
+                        // Use a reasonable height (e.g., 720p)
+                        let target_height = 720.min(height).max(480);
+                        let target_width = (target_height as f64 * aspect_ratio) as i32;
+                        
+                        // Set the new window size
+                        window.set_default_size(target_width, target_height);
+                        
+                        info!("Resized window to {}x{} (aspect ratio: {:.2})", 
+                              target_width, target_height, aspect_ratio);
+                    }
+                }
+            });
+            glib::ControlFlow::Break
+        });
     }
     
     async fn show_library_view(&self, backend_id: String, library: crate::models::Library) {

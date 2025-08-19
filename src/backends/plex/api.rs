@@ -165,7 +165,7 @@ impl PlexApi {
     }
     
     /// Get seasons for a TV show
-    async fn get_seasons(&self, show_id: &str) -> Result<Vec<Season>> {
+    pub async fn get_seasons(&self, show_id: &str) -> Result<Vec<Season>> {
         let url = format!("{}/library/metadata/{}/children", self.base_url, show_id);
         
         let response = self.client

@@ -335,11 +335,19 @@ impl MediaBackend for PlexBackend {
         api.get_shows(library_id).await
     }
     
-    async fn get_episodes(&self, show_id: &str, season: u32) -> Result<Vec<Episode>> {
+    async fn get_episodes(&self, show_id: &str, season_number: u32) -> Result<Vec<Episode>> {
         let api = self.get_api().await?;
-        // For Plex, we need to get the season ID first
-        // This is a simplified version - in reality we'd need to find the right season
-        api.get_episodes(show_id).await
+        
+        // First, get the seasons for this show to find the correct season ID
+        let seasons = api.get_seasons(show_id).await?;
+        
+        // Find the season with the matching season number
+        let season = seasons.iter()
+            .find(|s| s.season_number == season_number)
+            .ok_or_else(|| anyhow!("Season {} not found for show {}", season_number, show_id))?;
+        
+        // Now get the episodes for the correct season
+        api.get_episodes(&season.id).await
     }
     
     async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo> {

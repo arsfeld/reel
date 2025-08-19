@@ -102,19 +102,24 @@
   - [ ] Add offline mode banner
 
 ### 🎬 Basic Playback
-- [ ] **Stream URL Generation**
-  - [ ] Construct direct play URLs
+- [x] **Stream URL Generation**
+  - [x] Construct direct play URLs
   - [ ] Handle transcoding decisions
   - [ ] Implement quality selection
   - [ ] Add subtitle/audio track selection
   - [ ] Create playback decision engine
 
-- [ ] **Player Integration**
-  - [ ] Initialize GStreamer player
-  - [ ] Load and play video streams
-  - [ ] Implement basic controls (play/pause/seek)
-  - [ ] Add fullscreen support
-  - [ ] Handle playback errors
+- [x] **Player Integration** (Completed!)
+  - [x] Initialize GStreamer player
+  - [x] Load and play video streams
+  - [x] Implement basic controls (play/pause/seek)
+  - [x] Add immersive playback mode with auto-hiding controls
+  - [x] Handle playback errors with user-friendly dialogs
+  - [x] Fix seek loop issue in progress bar
+  - [x] Implement hover-based UI controls (header and player controls)
+  - [x] Add window resizing to match video aspect ratio
+  - [x] Create overlay header bar that doesn't affect video layout
+  - [ ] Add fullscreen support (partial - button exists but needs implementation)
 
 ## Phase 2: Enhanced Features (Future)
 
@@ -300,12 +305,12 @@ window.sync_and_update_libraries(backend_id, backend)
    - [ ] Investigate GdkPixbuf loader performance
    - [ ] Profile actual bottlenecks (network vs decoding vs rendering)
 
-5. [ ] **Playback Foundation**
-   - [ ] Initialize GStreamer player component
-   - [ ] Generate stream URLs from Plex
-   - [ ] Implement basic video playback
-   - [ ] Add playback controls overlay
-   - [ ] Track playback progress
+5. [x] **Playback Foundation** (COMPLETED!)
+   - [x] Initialize GStreamer player component
+   - [x] Generate stream URLs from Plex
+   - [x] Implement basic video playback
+   - [x] Add playback controls overlay
+   - [ ] Track playback progress (partially done - position tracking works, needs to save to server)
 
 ## Testing Checklist
 - [ ] Test with local Plex server
@@ -327,6 +332,9 @@ window.sync_and_update_libraries(backend_id, backend)
   - UI still feels sluggish when scrolling through large libraries
   - May need to implement thumbnail generation or smaller image variants
   - Consider pre-caching images in background after library load
+- [ ] **Minor Player UI Issues**: 
+  - Occasional duplicate back button in player overlay (mostly fixed)
+  - Fullscreen button exists but not fully implemented
 
 ### Resolved Issues
 - ✅ **GTK Template Loading Error**: Fixed by correcting Blueprint syntax
@@ -343,6 +351,12 @@ window.sync_and_update_libraries(backend_id, backend)
 - ✅ **Poster Images Not Loading**: Implemented async image loader with disk/memory caching
 - ✅ **UI Freezing with Large Libraries**: Added viewport-based lazy loading with throttling
 - ✅ **Source ID Removal Panic**: Fixed with counter-based debouncing approach
+- ✅ **GStreamer Playback Issues**: Fixed missing typefind element, playbin creation, and video sink setup
+- ✅ **Player Navigation**: Fixed page not changing when clicking movies
+- ✅ **Seek Loop Bug**: Fixed infinite seeking caused by progress bar updates
+- ✅ **Immersive Player Mode**: Implemented auto-hiding controls with overlay header bar
+- ✅ **Window Aspect Ratio**: Window now resizes to match video aspect ratio
+- ✅ **Player Controls Layout**: Header bar now overlays video instead of pushing it down
 
 ## Documentation
 - [ ] API documentation
