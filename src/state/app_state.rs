@@ -1,11 +1,12 @@
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 use std::fmt;
 
 use crate::backends::BackendManager;
 use crate::config::Config;
-use crate::models::{Library, User};
+use crate::models::{Library, User, MediaItem};
 use crate::services::{CacheManager, SyncManager};
 
 #[derive(Debug, Clone)]
@@ -21,6 +22,8 @@ pub struct AppState {
     pub backend_manager: Arc<RwLock<BackendManager>>,
     pub current_user: Arc<RwLock<Option<User>>>,
     pub current_library: Arc<RwLock<Option<Library>>>,
+    pub libraries: Arc<RwLock<HashMap<String, Vec<Library>>>>,  // backend_id -> libraries
+    pub library_items: Arc<RwLock<HashMap<String, Vec<MediaItem>>>>,  // library_id -> items
     pub cache_manager: Arc<CacheManager>,
     pub sync_manager: Arc<SyncManager>,
     pub playback_state: Arc<RwLock<PlaybackState>>,
@@ -37,6 +40,8 @@ impl AppState {
             backend_manager,
             current_user: Arc::new(RwLock::new(None)),
             current_library: Arc::new(RwLock::new(None)),
+            libraries: Arc::new(RwLock::new(HashMap::new())),
+            library_items: Arc::new(RwLock::new(HashMap::new())),
             cache_manager,
             sync_manager,
             playback_state: Arc::new(RwLock::new(PlaybackState::Idle)),
@@ -95,6 +100,48 @@ impl AppState {
         } else {
             Ok(Vec::new())
         }
+    }
+    
+    /// Get libraries for a specific backend from state cache
+    pub async fn get_libraries_for_backend(&self, backend_id: &str) -> Vec<Library> {
+        let libraries = self.libraries.read().await;
+        libraries.get(backend_id).cloned().unwrap_or_default()
+    }
+    
+    /// Get libraries for the active backend
+    pub async fn get_active_backend_libraries(&self) -> Vec<Library> {
+        let backend_manager = self.backend_manager.read().await;
+        
+        if let Some((backend_id, _)) = backend_manager.get_active_backend() {
+            drop(backend_manager);  // Release the lock before calling async method
+            self.get_libraries_for_backend(&backend_id).await
+        } else {
+            Vec::new()
+        }
+    }
+    
+    /// Update libraries for a backend
+    pub async fn set_libraries_for_backend(&self, backend_id: String, libraries: Vec<Library>) {
+        let mut lib_map = self.libraries.write().await;
+        lib_map.insert(backend_id, libraries);
+    }
+    
+    /// Get items for a specific library
+    pub async fn get_library_items(&self, library_id: &str) -> Vec<MediaItem> {
+        let items = self.library_items.read().await;
+        items.get(library_id).cloned().unwrap_or_default()
+    }
+    
+    /// Set items for a specific library
+    pub async fn set_library_items(&self, library_id: String, items: Vec<MediaItem>) {
+        let mut items_map = self.library_items.write().await;
+        items_map.insert(library_id, items);
+    }
+    
+    /// Get the currently active backend ID
+    pub async fn get_active_backend_id(&self) -> Option<String> {
+        let backend_manager = self.backend_manager.read().await;
+        backend_manager.get_active_backend().map(|(id, _)| id)
     }
 }
 

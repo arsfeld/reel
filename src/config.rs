@@ -18,6 +18,9 @@ pub struct Config {
     
     #[serde(default)]
     pub backends: BackendsConfig,
+    
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +83,21 @@ pub struct JellyfinConfig {
     pub server_url: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeConfig {
+    /// The ID of the last active backend
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_active_backend: Option<String>,
+    
+    /// List of all configured backend IDs
+    #[serde(default)]
+    pub configured_backends: Vec<String>,
+    
+    /// Last sync timestamp for each backend
+    #[serde(default)]
+    pub last_sync_times: std::collections::HashMap<String, String>,
+}
+
 impl Config {
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path()?;
@@ -124,6 +142,25 @@ impl Config {
         self.save()
     }
     
+    pub fn set_last_active_backend(&mut self, backend_id: &str) -> Result<()> {
+        self.runtime.last_active_backend = Some(backend_id.to_string());
+        
+        // Add to configured backends if not already there
+        if !self.runtime.configured_backends.contains(&backend_id.to_string()) {
+            self.runtime.configured_backends.push(backend_id.to_string());
+        }
+        
+        self.save()
+    }
+    
+    pub fn get_last_active_backend(&self) -> Option<String> {
+        self.runtime.last_active_backend.clone()
+    }
+    
+    pub fn get_configured_backends(&self) -> Vec<String> {
+        self.runtime.configured_backends.clone()
+    }
+    
     fn config_path() -> Result<PathBuf> {
         let config_dir = dirs::config_dir()
             .context("Failed to get config directory")?;
@@ -138,6 +175,7 @@ impl Default for Config {
             playback: PlaybackConfig::default(),
             network: NetworkConfig::default(),
             backends: BackendsConfig::default(),
+            runtime: RuntimeConfig::default(),
         }
     }
 }

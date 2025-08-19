@@ -40,21 +40,7 @@ pub struct ServerInfo {
 
 impl PlexBackend {
     pub fn new() -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
-        
-        Self {
-            client,
-            base_url: Arc::new(RwLock::new(None)),
-            auth_token: Arc::new(RwLock::new(None)),
-            backend_id: "plex_default".to_string(),
-            last_sync_time: Arc::new(RwLock::new(None)),
-            api: Arc::new(RwLock::new(None)),
-            server_name: Arc::new(RwLock::new(None)),
-            server_info: Arc::new(RwLock::new(None)),
-        }
+        Self::with_id("plex".to_string())
     }
     
     pub fn with_id(id: String) -> Self {
@@ -369,6 +355,41 @@ impl MediaBackend for PlexBackend {
     async fn search(&self, _query: &str) -> Result<SearchResults> {
         // TODO: Implement Plex search
         todo!("Search not yet implemented")
+    }
+    
+    async fn get_backend_info(&self) -> super::traits::BackendInfo {
+        let server_info = self.server_info.read().await;
+        let server_name = self.server_name.read().await;
+        
+        if let Some(info) = server_info.as_ref() {
+            super::traits::BackendInfo {
+                name: self.backend_id.clone(),
+                display_name: format!("Plex ({})", info.name),
+                backend_type: super::traits::BackendType::Plex,
+                server_name: Some(info.name.clone()),
+                server_version: None, // Could fetch this from API if needed
+                connection_type: if info.is_local {
+                    super::traits::ConnectionType::Local
+                } else if info.is_relay {
+                    super::traits::ConnectionType::Relay
+                } else {
+                    super::traits::ConnectionType::Remote
+                },
+                is_local: info.is_local,
+                is_relay: info.is_relay,
+            }
+        } else {
+            super::traits::BackendInfo {
+                name: self.backend_id.clone(),
+                display_name: "Plex".to_string(),
+                backend_type: super::traits::BackendType::Plex,
+                server_name: server_name.clone(),
+                server_version: None,
+                connection_type: super::traits::ConnectionType::Unknown,
+                is_local: false,
+                is_relay: false,
+            }
+        }
     }
     
     async fn get_backend_id(&self) -> String {

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 use crate::models::{
-    Credentials, Episode, Library, Movie, Show, StreamInfo, User,
+    Credentials, Episode, Library, Movie, Show, StreamInfo, User, MediaItem, MusicAlbum, MusicTrack, Photo,
 };
 
 #[async_trait]
@@ -34,6 +34,69 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     async fn update_progress(&self, media_id: &str, position: Duration) -> Result<()>;
     
     async fn search(&self, query: &str) -> Result<SearchResults>;
+    
+    // Generic media item fetching for all library types
+    async fn get_library_items(&self, library_id: &str) -> Result<Vec<MediaItem>> {
+        // Default implementation that only handles movies and shows
+        // Backends can override this to support all types
+        let library = self.get_libraries().await?
+            .into_iter()
+            .find(|l| l.id == library_id)
+            .ok_or_else(|| anyhow::anyhow!("Library not found"))?;
+        
+        use crate::models::LibraryType;
+        match library.library_type {
+            LibraryType::Movies => {
+                let movies = self.get_movies(library_id).await?;
+                Ok(movies.into_iter().map(MediaItem::Movie).collect())
+            }
+            LibraryType::Shows => {
+                let shows = self.get_shows(library_id).await?;
+                Ok(shows.into_iter().map(MediaItem::Show).collect())
+            }
+            LibraryType::Music => {
+                // Backend should override this method to support music
+                Ok(Vec::new())
+            }
+            LibraryType::Photos => {
+                // Backend should override this method to support photos
+                Ok(Vec::new())
+            }
+            LibraryType::Mixed => {
+                // Backend should override this method to support mixed content
+                Ok(Vec::new())
+            }
+        }
+    }
+    
+    // Optional: Get music albums for music libraries
+    async fn get_music_albums(&self, _library_id: &str) -> Result<Vec<MusicAlbum>> {
+        Ok(Vec::new())
+    }
+    
+    // Optional: Get music tracks for an album
+    async fn get_music_tracks(&self, _album_id: &str) -> Result<Vec<MusicTrack>> {
+        Ok(Vec::new())
+    }
+    
+    // Optional: Get photos for photo libraries
+    async fn get_photos(&self, _library_id: &str) -> Result<Vec<Photo>> {
+        Ok(Vec::new())
+    }
+    
+    // Backend information
+    async fn get_backend_info(&self) -> BackendInfo {
+        BackendInfo {
+            name: self.get_backend_id().await,
+            display_name: self.get_backend_id().await,
+            backend_type: BackendType::Generic,
+            server_name: None,
+            server_version: None,
+            connection_type: ConnectionType::Unknown,
+            is_local: false,
+            is_relay: false,
+        }
+    }
     
     // Sync support methods
     async fn get_backend_id(&self) -> String;
@@ -103,4 +166,32 @@ pub struct OfflineStatus {
     pub used_size_mb: u64,
     pub items_count: usize,
     pub backends: std::collections::HashMap<String, BackendOfflineInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub enum BackendType {
+    Plex,
+    Jellyfin,
+    Local,
+    Generic,
+}
+
+#[derive(Debug, Clone)]
+pub enum ConnectionType {
+    Local,
+    Remote,
+    Relay,
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+pub struct BackendInfo {
+    pub name: String,
+    pub display_name: String,
+    pub backend_type: BackendType,
+    pub server_name: Option<String>,
+    pub server_version: Option<String>,
+    pub connection_type: ConnectionType,
+    pub is_local: bool,
+    pub is_relay: bool,
 }

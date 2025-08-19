@@ -105,6 +105,73 @@ pub struct Resolution {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MusicAlbum {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub year: Option<u32>,
+    pub track_count: u32,
+    pub duration: Duration,
+    pub cover_url: Option<String>,
+    pub genres: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MusicTrack {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub track_number: Option<u32>,
+    pub duration: Duration,
+    pub cover_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Photo {
+    pub id: String,
+    pub title: String,
+    pub date_taken: Option<DateTime<Utc>>,
+    pub thumbnail_url: Option<String>,
+    pub full_url: Option<String>,
+}
+
+/// Generic media item that can hold any type of media
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MediaItem {
+    Movie(Movie),
+    Show(Show),
+    Episode(Episode),
+    MusicAlbum(MusicAlbum),
+    MusicTrack(MusicTrack),
+    Photo(Photo),
+}
+
+impl MediaItem {
+    pub fn id(&self) -> &str {
+        match self {
+            MediaItem::Movie(m) => &m.id,
+            MediaItem::Show(s) => &s.id,
+            MediaItem::Episode(e) => &e.id,
+            MediaItem::MusicAlbum(a) => &a.id,
+            MediaItem::MusicTrack(t) => &t.id,
+            MediaItem::Photo(p) => &p.id,
+        }
+    }
+    
+    pub fn title(&self) -> &str {
+        match self {
+            MediaItem::Movie(m) => &m.title,
+            MediaItem::Show(s) => &s.title,
+            MediaItem::Episode(e) => &e.title,
+            MediaItem::MusicAlbum(a) => &a.title,
+            MediaItem::MusicTrack(t) => &t.title,
+            MediaItem::Photo(p) => &p.title,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Credentials {
     UsernamePassword {

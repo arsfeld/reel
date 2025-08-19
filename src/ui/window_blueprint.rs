@@ -134,8 +134,11 @@ impl ReelMainWindow {
         // Apply theme
         window.apply_theme();
         
-        // Check for existing Plex token and load it
-        window.check_and_load_plex_token(state);
+        // FIRST: Try to load any cached data immediately (before authentication)
+        window.load_cached_data_on_startup(state.clone());
+        
+        // THEN: Check for existing backends and load them
+        window.check_and_load_backends(state);
         
         // Subscribe to user changes
         window.setup_state_subscriptions();
@@ -176,7 +179,68 @@ impl ReelMainWindow {
         }
     }
     
-    fn check_and_load_plex_token(&self, state: Arc<AppState>) {
+    fn load_cached_data_on_startup(&self, state: Arc<AppState>) {
+        let window_weak = self.downgrade();
+        
+        // Immediately try to load cached data without waiting for authentication
+        glib::spawn_future_local(async move {
+            if let Some(window) = window_weak.upgrade() {
+                info!("Checking for cached data on startup...");
+                
+                // Get the last active backend ID from config
+                let config = state.config.clone();
+                let backend_id = config.get_last_active_backend();
+                
+                // If no last active backend, skip cache loading
+                if backend_id.is_none() {
+                    info!("No last active backend found, skipping cache load");
+                    return;
+                }
+                
+                let backend_id = backend_id.unwrap();
+                info!("Loading cached data for last active backend: {}", backend_id);
+                
+                // Use the sync manager from AppState instead of creating a new one
+                let sync_manager = state.sync_manager.clone();
+                let cache = state.cache_manager.clone();
+                
+                // Try to get cached libraries
+                match sync_manager.get_cached_libraries(&backend_id).await {
+                    Ok(libraries) if !libraries.is_empty() => {
+                        info!("Found {} cached libraries on startup, showing immediately", libraries.len());
+                        
+                        // Hide welcome page and show libraries immediately
+                        window.imp().welcome_page.set_visible(false);
+                        window.imp().libraries_group.set_visible(true);
+                        
+                        // Load and display the cached libraries
+                        window.load_cached_libraries_for_backend(&backend_id).await;
+                        
+                        // Update status to show we're using cached data
+                        // Try to load cached server name if available
+                        let cache_key = format!("{}:server_name", backend_id);
+                        let title = if let Ok(Some(server_name)) = cache.get_media::<String>(&cache_key).await {
+                            server_name
+                        } else {
+                            "Cached Libraries".to_string()
+                        };
+                        
+                        window.imp().status_row.set_title(&title);
+                        window.imp().status_row.set_subtitle("Loading from cache...");
+                        window.imp().status_icon.set_icon_name(Some("view-refresh-symbolic"));
+                    }
+                    Ok(_) => {
+                        info!("No cached libraries found on startup");
+                    }
+                    Err(e) => {
+                        info!("Could not load cached libraries on startup: {}", e);
+                    }
+                }
+            }
+        });
+    }
+    
+    fn check_and_load_backends(&self, state: Arc<AppState>) {
         let window_weak = self.downgrade();
         
         glib::spawn_future_local(async move {
@@ -190,32 +254,58 @@ impl ReelMainWindow {
                 // Import the trait to access the initialize method
                 use crate::backends::MediaBackend;
                 
+                // Generate a unique backend ID based on backend type and existing backends
+                let existing_backends = state.config.get_configured_backends();
+                let mut backend_id = "plex".to_string();
+                let mut counter = 1;
+                
+                // Find a unique ID
+                while existing_backends.contains(&backend_id) {
+                    backend_id = format!("plex_{}", counter);
+                    counter += 1;
+                }
+                
                 match plex_backend.initialize().await {
                     Ok(Some(user)) => {
-                        info!("Successfully initialized Plex backend for user: {}", user.username);
+                        info!("Successfully initialized backend {} for user: {}", backend_id, user.username);
                         
-                        // Register the backend
-                        backend_manager.register_backend("plex".to_string(), plex_backend.clone());
-                        backend_manager.set_active("plex").ok();
+                        // Register the backend with its ID
+                        backend_manager.register_backend(backend_id.clone(), plex_backend.clone());
+                        backend_manager.set_active(&backend_id).ok();
                         
                         // Set the user
-                        state.set_user(user).await;
+                        state.set_user(user.clone()).await;
                         
-                        Some(plex_backend)
+                        // Save this backend as the last active
+                        let mut config = state.config.as_ref().clone();
+                        let _ = config.set_last_active_backend(&backend_id);
+                        
+                        // Cache the server name for next startup
+                        let cache = state.cache_manager.clone();
+                        // Get server info and cache it
+                        let backend_info = plex_backend.get_backend_info().await;
+                        if let Some(server_name) = backend_info.server_name {
+                            let cache_key = format!("{}:server_name", backend_id);
+                            let _ = cache.set_media(&cache_key, "server_name", &server_name).await;
+                        }
+                        let user_cache_key = format!("{}:last_user", backend_id);
+                        let _ = cache.set_media(&user_cache_key, "user", &user.username).await;
+                        
+                        Some((backend_id, plex_backend))
                     }
                     Ok(None) => {
-                        info!("No Plex credentials found");
+                        info!("No credentials found for backend");
                         None
                     }
                     Err(e) => {
-                        error!("Failed to initialize Plex backend: {}", e);
+                        error!("Failed to initialize backend: {}", e);
                         None
                     }
                 }
             }; // Write lock is dropped here
             
             // If we have a backend, load cached data and update UI immediately
-            if let Some(backend) = plex_backend {
+            if let Some((backend_id, backend)) = plex_backend {
                 // Now update UI with a read lock
                 if let Some(window) = window_weak.upgrade() {
                     info!("Updating UI after successful Plex initialization");
@@ -233,9 +323,10 @@ impl ReelMainWindow {
                         info!("No current user found in state");
                     }
                     
-                    // FIRST: Load cached data immediately
-                    info!("Loading cached libraries for instant display...");
-                    window.load_cached_libraries().await;
+                    // Refresh the cached data with the authenticated backend
+                    // (this will update with any new data, but cache was already shown)
+                    info!("Refreshing libraries with authenticated backend...");
+                    window.load_cached_libraries_for_backend(&backend_id).await;
                     
                     // THEN: Start background sync (without blocking)
                     let backend_clone = backend.clone();
@@ -247,8 +338,8 @@ impl ReelMainWindow {
                             // Show sync is starting
                             window.show_sync_progress(true);
                             
-                            // Start sync
-                            window.sync_and_update_libraries(backend_clone, state_clone).await;
+                            // Start sync with backend ID
+                            window.sync_and_update_libraries(&backend_id, backend_clone, state_clone).await;
                             
                             // Hide sync indicator
                             window.show_sync_progress(false);
@@ -294,46 +385,32 @@ impl ReelMainWindow {
             if let Some(backend) = backend_manager.get_active() {
                 info!("Active backend found, is_initialized: {}", backend.is_initialized().await);
                 if backend.is_initialized().await {
-                    // Try to get server info from Plex backend
-                    let any_backend = backend.as_any();
-                    info!("Attempting to downcast to PlexBackend");
-                    if let Some(plex_backend) = any_backend.downcast_ref::<crate::backends::plex::PlexBackend>() {
-                        info!("Successfully downcast to PlexBackend, getting server info...");
-                        if let Some(server_info) = plex_backend.get_server_info().await {
-                            info!("Updating UI with server info: {:?}", server_info);
-                            // Update title with server name
-                            imp.status_row.set_title(&server_info.name);
-                            
-                            // Create detailed subtitle
-                            let connection_type = if server_info.is_local {
-                                "Local"
-                            } else if server_info.is_relay {
-                                "Relay"
-                            } else {
-                                "Remote"
-                            };
-                            imp.status_row.set_subtitle(&format!("{} - {} connection", user.username, connection_type));
-                            
-                            // Update icon based on connection type
-                            let icon_name = if server_info.is_local {
-                                "network-wired-symbolic"  // Local connection
-                            } else if server_info.is_relay {
-                                "network-cellular-symbolic"  // Relay connection
-                            } else {
-                                "network-wireless-symbolic"  // Remote direct connection
-                            };
-                            imp.status_icon.set_icon_name(Some(icon_name));
-                        } else {
-                            info!("No server info available from Plex backend");
-                            imp.status_row.set_title("Plex Server");
-                            imp.status_row.set_subtitle(&format!("{} - Connected", user.username));
-                            imp.status_icon.set_icon_name(Some("network-transmit-receive-symbolic"));
-                        }
-                    } else {
-                        imp.status_row.set_title("Media Server");
-                        imp.status_row.set_subtitle(&format!("{} - Connected", user.username));
-                        imp.status_icon.set_icon_name(Some("network-transmit-receive-symbolic"));
-                    }
+                    // Get backend info using the trait method
+                    let backend_info = backend.get_backend_info().await;
+                    info!("Got backend info: {:?}", backend_info);
+                    
+                    // Update title with server name or backend display name
+                    let title = backend_info.server_name.unwrap_or(backend_info.display_name);
+                    imp.status_row.set_title(&title);
+                    
+                    // Create detailed subtitle based on connection type
+                    use crate::backends::traits::ConnectionType;
+                    let connection_type_str = match backend_info.connection_type {
+                        ConnectionType::Local => "Local",
+                        ConnectionType::Remote => "Remote",
+                        ConnectionType::Relay => "Relay",
+                        ConnectionType::Unknown => "Connected",
+                    };
+                    imp.status_row.set_subtitle(&format!("{} - {} connection", user.username, connection_type_str));
+                    
+                    // Update icon based on connection type
+                    let icon_name = match backend_info.connection_type {
+                        ConnectionType::Local => "network-wired-symbolic",
+                        ConnectionType::Relay => "network-cellular-symbolic",
+                        ConnectionType::Remote => "network-wireless-symbolic",
+                        ConnectionType::Unknown => "network-transmit-receive-symbolic",
+                    };
+                    imp.status_icon.set_icon_name(Some(icon_name));
                 } else {
                     imp.status_row.set_title("Authenticated");
                     imp.status_row.set_subtitle(&format!("{} - Not connected to server", user.username));
@@ -361,42 +438,31 @@ impl ReelMainWindow {
             
             if let Some(backend) = backend_manager.get_active() {
                 if backend.is_initialized().await {
-                    // Try to get server info from Plex backend
-                    let any_backend = backend.as_any();
-                    if let Some(plex_backend) = any_backend.downcast_ref::<crate::backends::plex::PlexBackend>() {
-                        if let Some(server_info) = plex_backend.get_server_info().await {
-                            // Update title with server name
-                            imp.status_row.set_title(&server_info.name);
-                            
-                            // Create detailed subtitle
-                            let connection_type = if server_info.is_local {
-                                "Local"
-                            } else if server_info.is_relay {
-                                "Relay"
-                            } else {
-                                "Remote"
-                            };
-                            imp.status_row.set_subtitle(&format!("{} - {} connection", user.username, connection_type));
-                            
-                            // Update icon based on connection type
-                            let icon_name = if server_info.is_local {
-                                "network-wired-symbolic"  // Local connection
-                            } else if server_info.is_relay {
-                                "network-cellular-symbolic"  // Relay connection
-                            } else {
-                                "network-wireless-symbolic"  // Remote direct connection
-                            };
-                            imp.status_icon.set_icon_name(Some(icon_name));
-                        } else {
-                            imp.status_row.set_title("Plex Server");
-                            imp.status_row.set_subtitle(&format!("{} - Connected", user.username));
-                            imp.status_icon.set_icon_name(Some("network-transmit-receive-symbolic"));
-                        }
-                    } else {
-                        imp.status_row.set_title("Media Server");
-                        imp.status_row.set_subtitle(&format!("{} - Connected", user.username));
-                        imp.status_icon.set_icon_name(Some("network-transmit-receive-symbolic"));
-                    }
+                    // Get backend info using the trait method
+                    let backend_info = backend.get_backend_info().await;
+                    
+                    // Update title with server name or backend display name
+                    let title = backend_info.server_name.unwrap_or(backend_info.display_name);
+                    imp.status_row.set_title(&title);
+                    
+                    // Create detailed subtitle based on connection type
+                    use crate::backends::traits::ConnectionType;
+                    let connection_type_str = match backend_info.connection_type {
+                        ConnectionType::Local => "Local",
+                        ConnectionType::Remote => "Remote",
+                        ConnectionType::Relay => "Relay",
+                        ConnectionType::Unknown => "Connected",
+                    };
+                    imp.status_row.set_subtitle(&format!("{} - {} connection", user.username, connection_type_str));
+                    
+                    // Update icon based on connection type
+                    let icon_name = match backend_info.connection_type {
+                        ConnectionType::Local => "network-wired-symbolic",
+                        ConnectionType::Relay => "network-cellular-symbolic",
+                        ConnectionType::Remote => "network-wireless-symbolic",
+                        ConnectionType::Unknown => "network-transmit-receive-symbolic",
+                    };
+                    imp.status_icon.set_icon_name(Some(icon_name));
                 } else {
                     imp.status_row.set_title("Authenticated");
                     imp.status_row.set_subtitle(&format!("{} - Not connected to server", user.username));
@@ -449,8 +515,14 @@ impl ReelMainWindow {
                             }
                             
                             // FIRST: Load cached data immediately
-                            info!("Loading cached libraries for instant display...");
-                            window.load_cached_libraries().await;
+                            if let Some(backend_id) = state_for_async.get_active_backend_id().await {
+                                info!("Loading cached libraries for instant display...");
+                                window.load_cached_libraries_for_backend(&backend_id).await;
+                                
+                                // Save this backend as the last active
+                                let mut config = state_for_async.config.as_ref().clone();
+                                let _ = config.set_last_active_backend(&backend_id);
+                            }
                             
                             // THEN: Start background sync
                             let backend_clone = backend.clone();
@@ -462,8 +534,10 @@ impl ReelMainWindow {
                                     // Show sync progress
                                     window.show_sync_progress(true);
                                     
-                                    // Start sync
-                                    window.sync_and_update_libraries(backend_clone, state_clone).await;
+                                    // Start sync with backend ID
+                                    if let Some(backend_id) = state_clone.get_active_backend_id().await {
+                                        window.sync_and_update_libraries(&backend_id, backend_clone, state_clone).await;
+                                    }
                                     
                                     // Hide sync progress
                                     window.show_sync_progress(false);
@@ -541,23 +615,15 @@ impl ReelMainWindow {
         self.imp().sync_spinner.set_spinning(syncing);
     }
     
-    pub async fn load_cached_libraries(&self) {
+    pub async fn load_cached_libraries_for_backend(&self, backend_id: &str) {
         info!("Loading libraries from cache...");
         
-        // Create a cache manager to read from cache
-        let cache = match crate::services::cache::CacheManager::new() {
-            Ok(cache) => Arc::new(cache),
-            Err(e) => {
-                error!("Failed to create cache manager: {}", e);
-                return;
-            }
-        };
-        
-        // Create sync manager just for reading cache
-        let sync_manager = crate::services::sync::SyncManager::new(cache.clone());
+        // Get sync manager from AppState
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+        let sync_manager = state.sync_manager.clone();
         
         // Get cached libraries and update UI
-        match sync_manager.get_cached_libraries("plex").await {
+        match sync_manager.get_cached_libraries(backend_id).await {
             Ok(libraries) => {
                 if libraries.is_empty() {
                     info!("No cached libraries found");
@@ -574,14 +640,14 @@ impl ReelMainWindow {
                     let item_count = match library.library_type {
                         LibraryType::Movies => {
                             // Get movie count for this library
-                            match sync_manager.get_cached_movies("plex", &library.id).await {
+                            match sync_manager.get_cached_movies(backend_id, &library.id).await {
                                 Ok(movies) => movies.len(),
                                 Err(_) => 0,
                             }
                         }
                         LibraryType::Shows => {
                             // Get show count for this library
-                            match sync_manager.get_cached_shows("plex", &library.id).await {
+                            match sync_manager.get_cached_shows(backend_id, &library.id).await {
                                 Ok(shows) => shows.len(),
                                 Err(_) => 0,
                             }
@@ -617,8 +683,10 @@ impl ReelMainWindow {
                 // Show sync progress
                 self.show_sync_progress(true);
                 
-                // Start sync
-                self.sync_and_update_libraries(backend, state.clone()).await;
+                // Start sync with backend ID
+                if let Some(backend_id) = state.get_active_backend_id().await {
+                    self.sync_and_update_libraries(&backend_id, backend, state.clone()).await;
+                }
                 
                 // Hide sync progress
                 self.show_sync_progress(false);
@@ -630,28 +698,19 @@ impl ReelMainWindow {
         }
     }
     
-    pub async fn sync_and_update_libraries(&self, backend: Arc<dyn crate::backends::MediaBackend>, state: Arc<AppState>) {
+    pub async fn sync_and_update_libraries(&self, backend_id: &str, backend: Arc<dyn crate::backends::MediaBackend>, state: Arc<AppState>) {
         info!("Starting library sync...");
         
-        // Create a cache manager
-        let cache = match crate::services::cache::CacheManager::new() {
-            Ok(cache) => Arc::new(cache),
-            Err(e) => {
-                error!("Failed to create cache manager: {}", e);
-                return;
-            }
-        };
-        
-        // Create sync manager
-        let sync_manager = crate::services::sync::SyncManager::new(cache.clone());
+        // Get sync manager from state
+        let sync_manager = state.sync_manager.clone();
         
         // Perform sync
-        match sync_manager.sync_backend("plex", backend).await {
+        match sync_manager.sync_backend(backend_id, backend).await {
             Ok(result) => {
                 info!("Sync completed: {} items synced", result.items_synced);
                 
                 // Get cached libraries and update UI
-                match sync_manager.get_cached_libraries("plex").await {
+                match sync_manager.get_cached_libraries(backend_id).await {
                     Ok(libraries) => {
                         info!("Found {} libraries in cache", libraries.len());
                         
@@ -663,14 +722,14 @@ impl ReelMainWindow {
                             let item_count = match library.library_type {
                                 LibraryType::Movies => {
                                     // Get movie count for this library
-                                    match sync_manager.get_cached_movies("plex", &library.id).await {
+                                    match sync_manager.get_cached_movies(backend_id, &library.id).await {
                                         Ok(movies) => movies.len(),
                                         Err(_) => 0,
                                     }
                                 }
                                 LibraryType::Shows => {
                                     // Get show count for this library
-                                    match sync_manager.get_cached_shows("plex", &library.id).await {
+                                    match sync_manager.get_cached_shows(backend_id, &library.id).await {
                                         Ok(shows) => shows.len(),
                                         Err(_) => 0,
                                     }

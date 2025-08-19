@@ -132,41 +132,61 @@
 - [ ] Smart storage management
 - [ ] Network-aware sync
 
-## 🚨 CRITICAL - Architecture Refactoring
+## ✅ COMPLETED - Architecture Refactoring
 
-### **Remove Backend-Specific Hard-coding** (HIGHEST PRIORITY)
-The current implementation has Plex-specific code hard-coded throughout the UI layer. This violates the backend-agnostic architecture principle. The UI should NEVER know whether data comes from Plex, Jellyfin, or local files.
+### **Backend-Agnostic Architecture** (COMPLETED)
+Successfully refactored the entire codebase to remove all backend-specific hard-coding. The UI layer is now completely agnostic and works with any backend type.
 
-**Issues to Fix:**
-- [ ] Remove all "plex" string literals from UI code
-- [ ] Remove hard-coded movie/TV show assumptions from UI
-- [ ] Make cache manager backend-agnostic (use active backend ID)
-- [ ] Store libraries in AppState with backend ID association
-- [ ] Make sync manager work with any backend generically
-- [ ] Update all UI components to work with generic library data
-- [ ] Remove hard-coded library type filtering in sync
+**Completed Fixes:**
+- [x] Removed all "plex" string literals from UI code
+- [x] Removed hard-coded movie/TV show assumptions from UI
+- [x] Made cache manager backend-agnostic (uses dynamic backend IDs)
+- [x] Store libraries in AppState with backend ID association
+- [x] Made sync manager work with any backend generically
+- [x] Updated all UI components to work with generic library data
+- [x] Removed hard-coded library type filtering in sync
+- [x] Store and load last active backend ID persistently
+- [x] Support multiple backends of same type with unique IDs
 
-**Refactoring Tasks:**
-1. [ ] **AppState Refactoring**
-   - [ ] Add `libraries: HashMap<String, Vec<Library>>` to AppState
-   - [ ] Add `library_items: HashMap<String, Vec<MediaItem>>` for cached items
-   - [ ] Add methods to get libraries for active backend
-   - [ ] Add methods to get items for a specific library
+**Completed Refactoring Tasks:**
+1. [x] **AppState Refactoring**
+   - [x] Added `libraries: HashMap<String, Vec<Library>>` to AppState
+   - [x] Added `library_items: HashMap<String, Vec<MediaItem>>` for cached items
+   - [x] Added methods to get libraries for active backend
+   - [x] Added methods to get items for a specific library
+   - [x] Added method to get active backend ID
 
-2. [ ] **Cache Manager Refactoring**
-   - [ ] Use backend IDs dynamically instead of hard-coded "plex"
-   - [ ] Create generic cache keys: `{backend_id}:{type}:{id}`
-   - [ ] Support multiple backends in same cache
+2. [x] **Cache Manager Refactoring**
+   - [x] Uses backend IDs dynamically instead of hard-coded "plex"
+   - [x] Created generic cache keys: `{backend_id}:{type}:{id}`
+   - [x] Supports multiple backends in same cache
 
-3. [ ] **Sync Manager Refactoring**
-   - [ ] Remove hard-coded "plex" references
-   - [ ] Use active backend from AppState
-   - [ ] Support syncing any library type (not just movies/shows)
+3. [x] **Sync Manager Refactoring**
+   - [x] Removed all hard-coded "plex" references
+   - [x] Uses active backend from AppState
+   - [x] Supports syncing any library type (Movies, Shows, Music, Photos)
+   - [x] Generic `sync_library_items` method for all media types
 
-4. [ ] **UI Components Refactoring**
-   - [ ] Make library list completely generic
-   - [ ] Display ALL library types from backend
-   - [ ] Use library type from backend data, not hard-coded
+4. [x] **UI Components Refactoring**
+   - [x] Library list is completely generic
+   - [x] Displays ALL library types from backend
+   - [x] Uses library type from backend data, not hard-coded
+   - [x] Removed PlexBackend downcasting - uses generic backend info
+
+5. [x] **Backend Info System**
+   - [x] Added `BackendInfo` struct with server details
+   - [x] Added `get_backend_info()` to MediaBackend trait
+   - [x] UI uses generic backend info instead of type-specific methods
+
+6. [x] **Persistent Backend Management**
+   - [x] Added RuntimeConfig to store last active backend
+   - [x] Automatically loads last used backend on startup
+   - [x] Generates unique backend IDs (plex, plex_1, plex_2, etc.)
+
+7. [x] **Instant Cache Loading**
+   - [x] Cache loads immediately on app startup
+   - [x] Welcome UI hidden as soon as cached data is available
+   - [x] Authentication happens in background without blocking UI
 
 ### **Architecture Principles to Enforce:**
 1. **Backend Agnostic UI**: The UI layer should NEVER import or reference specific backend implementations
@@ -224,21 +244,21 @@ window.sync_and_update_libraries(backend_id, backend)
 ### 🔧 In Progress
 1. [ ] **Library Navigation**
    - [ ] Navigate to library views when clicked
-   - [ ] Create movie grid view component
-   - [ ] Create TV show grid view component
+   - [ ] Create media grid view component (generic for all types)
+   - [ ] Implement type-specific views (movies, shows, music, photos)
 
 ### 📋 Next Steps
-1. [ ] **Movie Library View**
-   - [ ] Create movie grid with poster display
+1. [ ] **Generic Media Library View**
+   - [ ] Create unified grid view for all media types
    - [ ] Implement lazy loading for large libraries
-   - [ ] Add movie detail view on click
-   - [ ] Show movie metadata (rating, year, duration)
+   - [ ] Add media detail view with type-specific layouts
+   - [ ] Show metadata based on media type
 
-2. [ ] **TV Show Library View**
-   - [ ] Create show grid with poster display
-   - [ ] Implement season/episode navigation
-   - [ ] Add episode list view
-   - [ ] Show episode metadata
+2. [ ] **Type-Specific Features**
+   - [ ] Movie view: rating, year, duration, cast
+   - [ ] TV show view: seasons, episodes, air dates
+   - [ ] Music view: albums, artists, tracks
+   - [ ] Photo view: gallery, date organization
 
 3. [ ] **Image Loading**
    - [ ] Implement poster/thumb URL construction
@@ -263,6 +283,9 @@ window.sync_and_update_libraries(backend_id, backend)
 - ✅ **Server Discovery Parsing**: Fixed by handling array response format
 - ✅ **Connection Selection**: Implemented parallel testing for best server
 - ✅ **UI Server Status Display**: Fixed RwLock deadlock and added server info display with connection type icons
+- ✅ **Backend-Specific Hard-coding**: Completely refactored to backend-agnostic architecture
+- ✅ **Slow Startup**: Cache now loads instantly before authentication
+- ✅ **Backend ID Management**: Dynamic IDs with persistent storage
 
 ## Documentation
 - [ ] API documentation
