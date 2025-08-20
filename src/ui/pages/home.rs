@@ -195,11 +195,66 @@ impl HomePage {
                 .spacing(12)
                 .build();
             
-            // Add media cards for each item (show max 20 items per section)
-            for item in section.items.iter().take(20) {
+            // Add media cards and trigger loading for visible ones
+            let items_to_show = section.items.iter().take(20).collect::<Vec<_>>();
+            let mut cards = Vec::new();
+            
+            for item in items_to_show.iter() {
                 let card = self.create_media_card(item);
+                cards.push(card.clone());
                 items_box.append(&card);
             }
+            
+            // Load first 8 images per section immediately (visible viewport)
+            for (i, card) in cards.iter().enumerate() {
+                if i < 8 {
+                    if let Some(media_card) = card.downcast_ref::<MediaCard>() {
+                        media_card.trigger_load(ImageSize::Small);
+                    }
+                }
+            }
+            
+            // Setup scroll handler to load more as needed - using value-changed signal instead
+            let cards_rc = Rc::new(RefCell::new(cards));
+            let cards_for_scroll = cards_rc.clone();
+            scrolled.hadjustment().connect_value_changed(move |h_adj| {
+                let cards = cards_for_scroll.borrow();
+                let value = h_adj.value();
+                let page_size = h_adj.page_size();
+                
+                // Calculate which cards are visible (approximate)
+                let card_width = 144.0; // Small card width + spacing (132 + 12)
+                let start_idx = (value / card_width).floor() as usize;
+                let end_idx = ((value + page_size) / card_width).ceil() as usize + 3; // +3 for buffer
+                
+                debug!("Homepage scroll: value={:.1}, page_size={:.1}, loading cards {}-{}", 
+                       value, page_size, start_idx, end_idx.min(cards.len()));
+                
+                // Load visible cards
+                for i in start_idx..end_idx.min(cards.len()) {
+                    if let Some(card) = cards.get(i) {
+                        if let Some(media_card) = card.downcast_ref::<super::library::MediaCard>() {
+                            media_card.trigger_load(ImageSize::Small);
+                        }
+                    }
+                }
+            });
+            
+            // Also trigger loading when the scrolled window is first mapped
+            let cards_for_map = cards_rc.clone();
+            scrolled.connect_map(move |scrolled_window| {
+                let cards = cards_for_map.borrow();
+                debug!("Homepage scrolled window mapped, triggering initial load for {} cards", cards.len());
+                
+                // Load first visible batch when first shown
+                for (i, card) in cards.iter().enumerate() {
+                    if i < 10 { // Load a few more on initial map
+                        if let Some(media_card) = card.downcast_ref::<super::library::MediaCard>() {
+                            media_card.trigger_load(ImageSize::Small);
+                        }
+                    }
+                }
+            });
             
             scrolled.set_child(Some(&items_box));
             section_box.append(&scrolled);
@@ -209,10 +264,10 @@ impl HomePage {
     }
     
     fn create_media_card(&self, item: &MediaItem) -> gtk4::Widget {
-        // Use medium size for homepage cards
-        let card = MediaCard::new(item.clone(), ImageSize::Medium);
-        // Trigger image loading immediately for homepage cards
-        card.trigger_load(ImageSize::Medium);
+        // Use small size for homepage cards for faster loading
+        let card = MediaCard::new(item.clone(), ImageSize::Small);
+        // Don't trigger load immediately - let viewport detection handle it
+        // card.trigger_load(ImageSize::Small); // Removed for lazy loading
         
         // Connect click handler
         let item_clone = item.clone();

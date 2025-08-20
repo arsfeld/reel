@@ -165,3 +165,128 @@ statuspage > box {
 preferencesgroup {
   margin: 0;
 }
+
+/* Movie Details Page Styles */
+
+/* Movie poster with raised effect */
+.movie-poster-container {
+  filter: drop-shadow(0 8px 32px rgba(0, 0, 0, 0.5))
+          drop-shadow(0 2px 8px rgba(0, 0, 0, 0.3));
+}
+
+.movie-poster-frame {
+  border-radius: 12px;
+  background: linear-gradient(135deg, 
+              rgba(255, 255, 255, 0.1) 0%, 
+              transparent 50%,
+              rgba(0, 0, 0, 0.1) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.movie-poster {
+  border-radius: 12px;
+}
+
+.movie-poster-placeholder {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-radius: 12px;
+}
+
+/* Backdrop gradient overlay */
+.movie-backdrop-gradient {
+  background: linear-gradient(to bottom,
+              transparent 0%,
+              transparent 30%,
+              rgba(0, 0, 0, 0.4) 60%,
+              rgba(0, 0, 0, 0.8) 85%,
+              @window_bg_color 100%);
+}
+
+/* Enhanced text on backdrop */
+.header_section label.title-1 {
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8),
+               0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* Stream info list styling */
+.boxed-list.stream_info_list {
+  border-radius: 8px;
+  background: alpha(@card_bg_color, 0.95);
+}
+
+/* Action buttons with glass effect */
+.pill.suggested-action {
+  background: linear-gradient(135deg, @accent_color, shade(@accent_color, 0.9));
+  box-shadow: 0 4px 12px alpha(@accent_color, 0.3),
+              inset 0 1px 0 alpha(white, 0.2);
+  transition: all 200ms ease-in-out;
+}
+
+.pill.suggested-action:hover {
+  box-shadow: 0 6px 20px alpha(@accent_color, 0.4),
+              inset 0 1px 0 alpha(white, 0.3);
+  transform: translateY(-1px);
+}
+
+.pill:not(.suggested-action) {
+  background: @card_bg_color;
+  border: 1px solid alpha(@borders, 0.3);
+  transition: all 200ms ease-in-out;
+}
+
+.pill:not(.suggested-action):hover {
+  background: shade(@card_bg_color, 1.1);
+  transform: translateY(-1px);
+}
+
+/* Episode Card Styles */
+
+.episode-card {
+  border-radius: 8px;
+  background: @card_bg_color;
+  transition: all 200ms ease-in-out;
+  overflow: hidden;
+}
+
+.episode-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.episode-thumbnail {
+  border-radius: 0;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  overflow: hidden;
+}
+
+.episode-badge {
+  background: rgba(0, 0, 0, 0.8);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-weight: bold;
+  font-size: 0.9em;
+}
+
+.episode-progress {
+  min-height: 3px;
+  background: alpha(@accent_color, 0.8);
+}
+
+.episode-play-overlay {
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 50%;
+  padding: 16px;
+  opacity: 0;
+  transition: opacity 200ms ease-in-out;
+}
+
+.episode-card:hover .episode-play-overlay {
+  opacity: 1;
+}
+
+/* Enhanced scrolled window for episodes */
+.episodes_carousel {
+  border-radius: 8px;
+  background: alpha(@view_bg_color, 0.5);
+}

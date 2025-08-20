@@ -10,6 +10,7 @@ use tracing::{info, error, warn, debug};
 use crate::config::Config;
 use crate::state::AppState;
 use crate::ui::filters::{WatchStatus, SortOrder};
+use crate::ui::pages;
 
 mod imp {
     use super::*;
@@ -17,7 +18,7 @@ mod imp {
     use gtk4::CompositeTemplate;
     
     #[derive(Debug, Default, CompositeTemplate)]
-    #[template(resource = "/com/github/arsfeld/Reel/window.ui")]
+    #[template(resource = "/dev/arsfeld/Reel/window.ui")]
     pub struct ReelMainWindow {
         #[template_child]
         pub welcome_page: TemplateChild<adw::StatusPage>,
@@ -57,6 +58,7 @@ mod imp {
         pub library_view: RefCell<Option<crate::ui::pages::LibraryView>>,
         pub player_page: RefCell<Option<crate::ui::pages::PlayerPage>>,
         pub show_details_page: RefCell<Option<crate::ui::pages::ShowDetailsPage>>,
+        pub movie_details_page: RefCell<Option<crate::ui::pages::MovieDetailsPage>>,
         pub back_button: RefCell<Option<gtk4::Button>>,
         pub saved_window_size: RefCell<(i32, i32)>,
         pub filter_controls: RefCell<Option<gtk4::Box>>,
@@ -107,6 +109,17 @@ mod imp {
             self.connect_button.connect_clicked(
                 clone!(#[weak] obj, move |_| {
                     obj.show_auth_dialog();
+                })
+            );
+            
+            // Make status row clickable when authentication is needed
+            self.status_row.set_activatable(true);
+            self.status_row.connect_activated(
+                clone!(#[weak] obj, move |row| {
+                    // Only open auth dialog if we need authentication
+                    if row.subtitle().map(|s| s.contains("Sign in") || s.contains("Authentication")).unwrap_or(false) {
+                        obj.show_auth_dialog();
+                    }
                 })
             );
             
@@ -275,8 +288,8 @@ impl ReelMainWindow {
                         };
                         
                         window.imp().status_row.set_title(&title);
-                        window.imp().status_row.set_subtitle("Loading from cache...");
-                        window.imp().status_icon.set_icon_name(Some("view-refresh-symbolic"));
+                        window.imp().status_row.set_subtitle("Authentication needed - Using cached data");
+                        window.imp().status_icon.set_icon_name(Some("dialog-password-symbolic"));
                     }
                     Ok(_) => {
                         info!("No cached libraries found on startup");
@@ -327,12 +340,27 @@ impl ReelMainWindow {
                     "plex".to_string()
                 };
                 
-                // Try to initialize Plex backend
-                let plex_backend = Arc::new(crate::backends::plex::PlexBackend::new());
+                // Try to initialize Plex backend with the correct ID
+                let plex_backend = Arc::new(crate::backends::plex::PlexBackend::with_id(backend_id.clone()));
                 
                 match plex_backend.initialize().await {
-                    Ok(Some(user)) => {
-                        info!("Successfully initialized backend {} for user: {}", backend_id, user.username);
+                    Ok(Some(mut user)) => {
+                        // Check if we're in offline mode
+                        let cache = state.cache_manager.clone();
+                        if user.username == "Offline Mode" {
+                            info!("Backend {} initialized in offline mode", backend_id);
+                            // Try to load cached username
+                            let user_cache_key = format!("{}:last_user", backend_id);
+                            if let Ok(Some(cached_username)) = cache.get_media::<String>(&user_cache_key).await {
+                                user.username = cached_username;
+                                info!("Loaded cached username: {}", user.username);
+                            }
+                        } else {
+                            info!("Successfully initialized backend {} for user: {}", backend_id, user.username);
+                            // Cache the username for offline use
+                            let user_cache_key = format!("{}:last_user", backend_id);
+                            let _ = cache.set_media(&user_cache_key, "user", &user.username).await;
+                        }
                         
                         // Register the backend with its ID
                         backend_manager.register_backend(backend_id.clone(), plex_backend.clone());
@@ -347,21 +375,36 @@ impl ReelMainWindow {
                             let _ = config.set_last_active_backend(&backend_id);
                         }
                         
-                        // Cache the server name for next startup
-                        let cache = state.cache_manager.clone();
-                        // Get server info and cache it
+                        // Get and cache server info if available
                         let backend_info = plex_backend.get_backend_info().await;
                         if let Some(server_name) = backend_info.server_name {
                             let cache_key = format!("{}:server_name", backend_id);
                             let _ = cache.set_media(&cache_key, "server_name", &server_name).await;
                         }
-                        let user_cache_key = format!("{}:last_user", backend_id);
-                        let _ = cache.set_media(&user_cache_key, "user", &user.username).await;
                         
                         Some((backend_id, plex_backend))
                     }
                     Ok(None) => {
-                        info!("No credentials found for backend");
+                        info!("No credentials found for backend {}, need to re-authenticate", backend_id);
+                        // Backend is configured but has no valid token
+                        // We should prompt for re-authentication
+                        if let Some(window) = window_weak.upgrade() {
+                            // Show that we need authentication
+                            window.imp().welcome_page.set_visible(false);
+                            window.imp().libraries_group.set_visible(true);
+                            window.imp().status_row.set_title("Authentication Required");
+                            window.imp().status_row.set_subtitle("Please sign in to your Plex account");
+                            window.imp().status_icon.set_icon_name(Some("dialog-password-symbolic"));
+                            
+                            // Auto-show the auth dialog after a short delay
+                            let window_weak2 = window.downgrade();
+                            glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+                                if let Some(window) = window_weak2.upgrade() {
+                                    window.show_auth_dialog();
+                                }
+                                glib::ControlFlow::Break
+                            });
+                        }
                         None
                     }
                     Err(e) => {
@@ -371,10 +414,10 @@ impl ReelMainWindow {
                 }
             }; // Write lock is dropped here
             
-            // If we have a backend, load cached data and update UI immediately
-            if let Some((backend_id, backend)) = plex_backend {
-                // Now update UI with a read lock
-                if let Some(window) = window_weak.upgrade() {
+            // Handle the result of backend initialization
+            if let Some(window) = window_weak.upgrade() {
+                if let Some((backend_id, backend)) = plex_backend {
+                    // Backend successfully initialized
                     info!("Updating UI after successful Plex initialization");
                     window.update_connection_status(true).await;
                     
@@ -413,8 +456,28 @@ impl ReelMainWindow {
                         }
                     });
                 } else {
-                    error!("Failed to upgrade window weak reference");
+                    // No backend was initialized but we might have a configured backend ID
+                    info!("No backend initialized, checking if we have cached data");
+                    
+                    // Check if we have a last active backend configured
+                    let config = state.config.clone();
+                    if let Some(backend_id) = config.get_last_active_backend() {
+                        info!("Found configured backend {} but no valid credentials", backend_id);
+                        
+                        // We have a backend configured but no valid token
+                        // Show cached data if available, but indicate auth is needed
+                        window.load_cached_libraries_for_backend(&backend_id).await;
+                        
+                        // Update status to show authentication is needed
+                        window.imp().status_row.set_title("Authentication Required");
+                        window.imp().status_row.set_subtitle("Sign in to sync and play media");
+                        window.imp().status_icon.set_icon_name(Some("dialog-password-symbolic"));
+                        
+                        // Don't auto-show dialog here since we already do it in the Ok(None) case above
+                    }
                 }
+            } else {
+                error!("Failed to upgrade window weak reference");
             }
             
             // TODO: Initialize other backends (Jellyfin, Local)
@@ -458,28 +521,35 @@ impl ReelMainWindow {
                     let backend_info = backend.get_backend_info().await;
                     info!("Got backend info: {:?}", backend_info);
                     
-                    // Update title with server name or backend display name
-                    let title = backend_info.server_name.unwrap_or(backend_info.display_name);
-                    imp.status_row.set_title(&title);
-                    
-                    // Create detailed subtitle based on connection type
-                    use crate::backends::traits::ConnectionType;
-                    let connection_type_str = match backend_info.connection_type {
-                        ConnectionType::Local => "Local",
-                        ConnectionType::Remote => "Remote",
-                        ConnectionType::Relay => "Relay",
-                        ConnectionType::Unknown => "Connected",
-                    };
-                    imp.status_row.set_subtitle(&format!("{} - {} connection", user.username, connection_type_str));
-                    
-                    // Update icon based on connection type
-                    let icon_name = match backend_info.connection_type {
-                        ConnectionType::Local => "network-wired-symbolic",
-                        ConnectionType::Relay => "network-cellular-symbolic",
-                        ConnectionType::Remote => "network-wireless-symbolic",
-                        ConnectionType::Unknown => "network-transmit-receive-symbolic",
-                    };
-                    imp.status_icon.set_icon_name(Some(icon_name));
+                    // Check if we're in offline mode
+                    if user.id == "offline" && backend_info.connection_type == crate::backends::traits::ConnectionType::Unknown {
+                        // We have cached credentials but can't connect
+                        imp.status_row.set_title("Offline Mode");
+                        imp.status_row.set_subtitle(&format!("{} - Using cached data", user.username));
+                        imp.status_icon.set_icon_name(Some("network-offline-symbolic"));
+                    } else {
+                        // Update title with server name or backend display name
+                        let title = backend_info.server_name.unwrap_or(backend_info.display_name);
+                        imp.status_row.set_title(&title);
+                        
+                        // Create detailed subtitle based on connection type
+                        use crate::backends::traits::ConnectionType;
+                        let (connection_type_str, icon_name) = match backend_info.connection_type {
+                            ConnectionType::Local => ("Local", "network-wired-symbolic"),
+                            ConnectionType::Remote => ("Remote", "network-wireless-symbolic"),
+                            ConnectionType::Relay => ("Relay", "network-cellular-symbolic"),
+                            ConnectionType::Offline => ("Offline - Using cached data", "network-offline-symbolic"),
+                            ConnectionType::Unknown => ("Connected", "network-transmit-receive-symbolic"),
+                        };
+                        
+                        if backend_info.connection_type == ConnectionType::Offline {
+                            imp.status_row.set_subtitle(&format!("{} - {}", user.username, connection_type_str));
+                        } else {
+                            imp.status_row.set_subtitle(&format!("{} - {} connection", user.username, connection_type_str));
+                        }
+                        
+                        imp.status_icon.set_icon_name(Some(icon_name));
+                    }
                 } else {
                     imp.status_row.set_title("Authenticated");
                     imp.status_row.set_subtitle(&format!("{} - Not connected to server", user.username));
@@ -516,21 +586,20 @@ impl ReelMainWindow {
                     
                     // Create detailed subtitle based on connection type
                     use crate::backends::traits::ConnectionType;
-                    let connection_type_str = match backend_info.connection_type {
-                        ConnectionType::Local => "Local",
-                        ConnectionType::Remote => "Remote",
-                        ConnectionType::Relay => "Relay",
-                        ConnectionType::Unknown => "Connected",
+                    let (connection_type_str, icon_name) = match backend_info.connection_type {
+                        ConnectionType::Local => ("Local", "network-wired-symbolic"),
+                        ConnectionType::Remote => ("Remote", "network-wireless-symbolic"),
+                        ConnectionType::Relay => ("Relay", "network-cellular-symbolic"),
+                        ConnectionType::Offline => ("Offline - Using cached data", "network-offline-symbolic"),
+                        ConnectionType::Unknown => ("Connected", "network-transmit-receive-symbolic"),
                     };
-                    imp.status_row.set_subtitle(&format!("{} - {} connection", user.username, connection_type_str));
                     
-                    // Update icon based on connection type
-                    let icon_name = match backend_info.connection_type {
-                        ConnectionType::Local => "network-wired-symbolic",
-                        ConnectionType::Relay => "network-cellular-symbolic",
-                        ConnectionType::Remote => "network-wireless-symbolic",
-                        ConnectionType::Unknown => "network-transmit-receive-symbolic",
-                    };
+                    if backend_info.connection_type == ConnectionType::Offline {
+                        imp.status_row.set_subtitle(&format!("{} - {}", user.username, connection_type_str));
+                    } else {
+                        imp.status_row.set_subtitle(&format!("{} - {} connection", user.username, connection_type_str));
+                    }
+                    
                     imp.status_icon.set_icon_name(Some(icon_name));
                 } else {
                     imp.status_row.set_title("Authenticated");
@@ -770,7 +839,7 @@ impl ReelMainWindow {
         // Create home page if it doesn't exist
         if content_stack.child_by_name("home").is_none() {
             if let Some(state) = &*imp.state.borrow() {
-                let home_page = crate::ui::pages::HomePage::new(state.clone());
+                let home_page = pages::HomePage::new(state.clone());
                 
                 // Set up media selected callback - same as library view
                 let window_weak = self.downgrade();
@@ -783,9 +852,9 @@ impl ReelMainWindow {
                         glib::spawn_future_local(async move {
                             use crate::models::MediaItem;
                             match &media_item {
-                                MediaItem::Movie(_) => {
-                                    info!("HomePage - Navigating to movie player");
-                                    window.show_player(&media_item, state).await;
+                                MediaItem::Movie(movie) => {
+                                    info!("HomePage - Navigating to movie details");
+                                    window.show_movie_details(movie.clone(), state).await;
                                 }
                                 MediaItem::Episode(_) => {
                                     info!("HomePage - Navigating to episode player");
@@ -893,9 +962,34 @@ impl ReelMainWindow {
                         info!("Updating UI with {} libraries", library_info.len());
                         self.update_libraries(library_info);
                         
-                        // Show home page if we have libraries
-                        if !libraries.is_empty() {
+                        // Check if we should navigate to home page
+                        let imp = self.imp();
+                        let should_show_home = if let Some(stack) = imp.content_stack.borrow().as_ref() {
+                            // Check if we have any actual content pages
+                            let has_content = stack.child_by_name("library").is_some()
+                                || stack.child_by_name("movie_details").is_some()
+                                || stack.child_by_name("show_details").is_some()
+                                || stack.child_by_name("player").is_some();
+                            
+                            if has_content {
+                                // User has navigated somewhere, don't interrupt
+                                false
+                            } else {
+                                // We only have home/welcome, safe to show home
+                                true
+                            }
+                        } else {
+                            // No content stack yet, this is initial load
+                            true
+                        };
+                        
+                        if should_show_home && !libraries.is_empty() {
                             self.show_home_page();
+                        } else if !should_show_home {
+                            // Just refresh the home page data if it exists, don't navigate
+                            if let Some(home_page) = &*imp.home_page.borrow() {
+                                home_page.refresh();
+                            }
                         }
                     }
                     Err(e) => {
@@ -942,7 +1036,105 @@ impl ReelMainWindow {
         });
     }
     
-    async fn show_show_details(&self, show: crate::models::Show, state: Arc<AppState>) {
+    pub async fn show_movie_details(&self, movie: crate::models::Movie, state: Arc<AppState>) {
+        let imp = self.imp();
+        
+        // Get or create content stack
+        let content_stack = if imp.content_stack.borrow().is_none() {
+            let stack = gtk4::Stack::builder()
+                .transition_type(gtk4::StackTransitionType::SlideLeftRight)
+                .transition_duration(300)
+                .build();
+            
+            // Set the stack as content
+            imp.content_toolbar.set_content(Some(&stack));
+            imp.content_stack.replace(Some(stack.clone()));
+            
+            stack
+        } else {
+            imp.content_stack.borrow().as_ref().unwrap().clone()
+        };
+        
+        // Create or get movie details page
+        let movie_details_page = {
+            // Check if page exists (drop borrow immediately)
+            let page_exists = imp.movie_details_page.borrow().is_some();
+            
+            if page_exists {
+                // Get the page with a fresh borrow
+                let page = imp.movie_details_page.borrow().as_ref().unwrap().clone();
+                
+                // Page exists, make sure it's in the stack
+                if content_stack.child_by_name("movie_details").is_none() {
+                    content_stack.add_named(&page, Some("movie_details"));
+                }
+                page
+            } else {
+                // Create new page
+                let page = crate::ui::pages::MovieDetailsPage::new(state.clone());
+                
+                // Set callback for when play is clicked
+                let window_weak = self.downgrade();
+                let state_clone = state.clone();
+                page.set_on_play_clicked(move |movie| {
+                    if let Some(window) = window_weak.upgrade() {
+                        let movie_item = crate::models::MediaItem::Movie(movie.clone());
+                        let state = state_clone.clone();
+                        glib::spawn_future_local(async move {
+                            window.show_player(&movie_item, state).await;
+                        });
+                    }
+                });
+                
+                // Store the page
+                imp.movie_details_page.replace(Some(page.clone()));
+                
+                // Add to content stack
+                content_stack.add_named(&page, Some("movie_details"));
+                
+                page
+            }
+        };
+        
+        // Update the content page title immediately
+        imp.content_page.set_title(&movie.title);
+        
+        // Load the movie (non-blocking)
+        movie_details_page.load_movie(movie.clone());
+        
+        // Remove any existing back button
+        if let Some(old_button) = imp.back_button.borrow().as_ref() {
+            imp.content_header.remove(old_button);
+        }
+        
+        // Create a new back button for the header bar
+        let back_button = gtk4::Button::builder()
+            .icon_name("go-previous-symbolic")
+            .tooltip_text("Back to Library")
+            .build();
+        
+        let window_weak = self.downgrade();
+        back_button.connect_clicked(move |_| {
+            if let Some(window) = window_weak.upgrade() {
+                // Go back to library view or home
+                if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
+                    if stack.child_by_name("library").is_some() {
+                        stack.set_visible_child_name("library");
+                    } else if stack.child_by_name("home").is_some() {
+                        stack.set_visible_child_name("home");
+                    }
+                }
+            }
+        });
+        
+        imp.content_header.pack_start(&back_button);
+        imp.back_button.replace(Some(back_button));
+        
+        // Show the movie details page
+        content_stack.set_visible_child_name("movie_details");
+    }
+    
+    pub async fn show_show_details(&self, show: crate::models::Show, state: Arc<AppState>) {
         let imp = self.imp();
         
         // Get or create content stack
@@ -963,37 +1155,50 @@ impl ReelMainWindow {
         
         // Create or get show details page
         let show_details_page = {
-            let existing_page = imp.show_details_page.borrow();
-            existing_page.as_ref().cloned()
-        }.unwrap_or_else(|| {
-            let page = crate::ui::pages::ShowDetailsPage::new(state.clone());
+            // Check if page exists (drop borrow immediately)
+            let page_exists = imp.show_details_page.borrow().is_some();
             
-            // Set callback for when episode is selected
-            let window_weak = self.downgrade();
-            let state_clone = state.clone();
-            page.set_on_episode_selected(move |episode| {
-                if let Some(window) = window_weak.upgrade() {
-                    let episode_item = crate::models::MediaItem::Episode(episode.clone());
-                    let state = state_clone.clone();
-                    glib::spawn_future_local(async move {
-                        window.show_player(&episode_item, state).await;
-                    });
+            if page_exists {
+                // Get the page with a fresh borrow
+                let page = imp.show_details_page.borrow().as_ref().unwrap().clone();
+                
+                // Page exists, make sure it's in the stack
+                if content_stack.child_by_name("show_details").is_none() {
+                    content_stack.add_named(page.widget(), Some("show_details"));
                 }
-            });
-            
-            imp.show_details_page.replace(Some(page.clone()));
-            
-            // Add to content stack
-            content_stack.add_named(page.widget(), Some("show_details"));
-            
-            page
-        });
+                page
+            } else {
+                // Create new page
+                let page = crate::ui::pages::ShowDetailsPage::new(state.clone());
+                
+                // Set callback for when episode is selected
+                let window_weak = self.downgrade();
+                let state_clone = state.clone();
+                page.set_on_episode_selected(move |episode| {
+                    if let Some(window) = window_weak.upgrade() {
+                        let episode_item = crate::models::MediaItem::Episode(episode.clone());
+                        let state = state_clone.clone();
+                        glib::spawn_future_local(async move {
+                            window.show_player(&episode_item, state).await;
+                        });
+                    }
+                });
+                
+                // Store the page
+                imp.show_details_page.replace(Some(page.clone()));
+                
+                // Add to content stack
+                content_stack.add_named(page.widget(), Some("show_details"));
+                
+                page
+            }
+        };
         
-        // Load the show
-        show_details_page.load_show(show.clone()).await;
-        
-        // Update the content page title
+        // Update the content page title immediately
         imp.content_page.set_title(&show.title);
+        
+        // Load the show (non-blocking)
+        show_details_page.load_show(show.clone());
         
         // Remove any existing back button
         if let Some(old_button) = imp.back_button.borrow().as_ref() {
@@ -1024,7 +1229,7 @@ impl ReelMainWindow {
         content_stack.set_visible_child_name("show_details");
     }
     
-    async fn show_player(&self, media_item: &crate::models::MediaItem, state: Arc<AppState>) {
+    pub async fn show_player(&self, media_item: &crate::models::MediaItem, state: Arc<AppState>) {
         info!("MainWindow::show_player() - Called for media: {}", media_item.title());
         debug!("MainWindow::show_player() - Media type: {:?}, ID: {}", 
             std::mem::discriminant(media_item), media_item.id());
@@ -1312,10 +1517,10 @@ impl ReelMainWindow {
                         use crate::models::MediaItem;
                         info!("MainWindow - Processing media selection: {}", media_item.title());
                         match &media_item {
-                            MediaItem::Movie(_) => {
-                                // Movies go directly to player
-                                info!("MainWindow - Movie selected, navigating to player");
-                                window.show_player(&media_item, state).await;
+                            MediaItem::Movie(movie) => {
+                                // Movies go to movie details page
+                                info!("MainWindow - Movie selected, navigating to movie details");
+                                window.show_movie_details(movie.clone(), state).await;
                             }
                             MediaItem::Show(show) => {
                                 // Shows go to episode selection

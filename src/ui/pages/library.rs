@@ -9,12 +9,12 @@ use once_cell::sync::Lazy;
 
 use crate::models::{Library, LibraryType, MediaItem};
 use crate::state::AppState;
-use crate::utils::{OptimizedImageLoader, ImageSize};
+use crate::utils::{ImageLoader, ImageSize};
 use crate::ui::filters::{FilterManager, WatchStatus, SortOrder};
 
-// Global optimized image loader instance
-static IMAGE_LOADER: Lazy<OptimizedImageLoader> = Lazy::new(|| {
-    OptimizedImageLoader::new().expect("Failed to create OptimizedImageLoader")
+// Global image loader instance
+static IMAGE_LOADER: Lazy<ImageLoader> = Lazy::new(|| {
+    ImageLoader::new().expect("Failed to create ImageLoader")
 });
 
 mod imp {
@@ -727,44 +727,66 @@ impl MediaCard {
     fn update_content(&self, media_item: MediaItem) {
         let imp = self.imp();
         
-        if let Some(title_label) = imp.title_label.borrow().as_ref() {
-            title_label.set_text(media_item.title());
-        }
-        
-        if let Some(subtitle_label) = imp.subtitle_label.borrow().as_ref() {
-            let subtitle = match &media_item {
-                MediaItem::Movie(movie) => {
-                    if let Some(year) = movie.year {
-                        format!("{}", year)
-                    } else {
-                        String::new()
-                    }
+        // For episodes, show the show name as title and episode info as subtitle
+        if let MediaItem::Episode(ref episode) = media_item {
+            if let Some(title_label) = imp.title_label.borrow().as_ref() {
+                // Use show title if available, otherwise fall back to episode title
+                if let Some(ref show_title) = episode.show_title {
+                    title_label.set_text(show_title);
+                } else {
+                    title_label.set_text(&episode.title);
                 }
-                MediaItem::Show(show) => {
-                    // If seasons aren't loaded yet (homepage), use episode count if available
-                    if show.seasons.is_empty() {
-                        if show.total_episode_count > 0 {
-                            let episodes = show.total_episode_count;
-                            if episodes == 1 {
-                                "1 episode".to_string()
+            }
+            
+            if let Some(subtitle_label) = imp.subtitle_label.borrow().as_ref() {
+                // Format: "S1E5 • Episode Title"
+                let subtitle = format!("S{}E{} • {}", 
+                    episode.season_number, 
+                    episode.episode_number,
+                    episode.title);
+                subtitle_label.set_text(&subtitle);
+            }
+        } else {
+            // For non-episodes, use the regular title
+            if let Some(title_label) = imp.title_label.borrow().as_ref() {
+                title_label.set_text(media_item.title());
+            }
+            
+            if let Some(subtitle_label) = imp.subtitle_label.borrow().as_ref() {
+                let subtitle = match &media_item {
+                    MediaItem::Movie(movie) => {
+                        if let Some(year) = movie.year {
+                            format!("{}", year)
+                        } else {
+                            String::new()
+                        }
+                    }
+                    MediaItem::Show(show) => {
+                        // If seasons aren't loaded yet (homepage), use episode count if available
+                        if show.seasons.is_empty() {
+                            if show.total_episode_count > 0 {
+                                let episodes = show.total_episode_count;
+                                if episodes == 1 {
+                                    "1 episode".to_string()
+                                } else {
+                                    format!("{} episodes", episodes)
+                                }
                             } else {
-                                format!("{} episodes", episodes)
+                                "TV Series".to_string()  // Fallback when no info available
                             }
                         } else {
-                            "TV Series".to_string()  // Fallback when no info available
-                        }
-                    } else {
-                        let season_count = show.seasons.len();
-                        if season_count == 1 {
-                            "1 season".to_string()
-                        } else {
-                            format!("{} seasons", season_count)
+                            let season_count = show.seasons.len();
+                            if season_count == 1 {
+                                "1 season".to_string()
+                            } else {
+                                format!("{} seasons", season_count)
+                            }
                         }
                     }
-                }
-                _ => String::new(),
-            };
-            subtitle_label.set_text(&subtitle);
+                    _ => String::new(),
+                };
+                subtitle_label.set_text(&subtitle);
+            }
         }
         
         // Update unwatched indicator - show for unwatched items
@@ -817,6 +839,10 @@ impl MediaCard {
         let poster_url = match media_item {
             MediaItem::Movie(movie) => movie.poster_url.clone(),
             MediaItem::Show(show) => show.poster_url.clone(),
+            MediaItem::Episode(episode) => {
+                // Use show poster if available, otherwise fall back to episode thumbnail
+                episode.show_poster_url.clone().or(episode.thumbnail_url.clone())
+            },
             _ => None,
         };
         
@@ -850,12 +876,17 @@ impl MediaCard {
                                 *imp.image_loaded.borrow_mut() = true;
                                 *imp.image_loading.borrow_mut() = false;
                                 
-                                debug!("Loaded {} image", match size {
-                                    ImageSize::Small => "small",
-                                    ImageSize::Medium => "medium",
-                                    ImageSize::Large => "large",
-                                    ImageSize::Original => "original",
-                                });
+                                debug!("Loaded {} image for '{}' ({}x{} px)", 
+                                    match size {
+                                        ImageSize::Small => "small",
+                                        ImageSize::Medium => "medium",
+                                        ImageSize::Large => "large",
+                                        ImageSize::Original => "original",
+                                    },
+                                    card.imp().media_item.borrow().as_ref().map(|m| m.title()).unwrap_or("unknown"),
+                                    texture.width(),
+                                    texture.height()
+                                );
                             }
                         });
                     }
