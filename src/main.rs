@@ -17,7 +17,7 @@ mod utils;
 
 use app::ReelApp;
 
-const APP_ID: &str = "com.github.arsfeld.Reel";
+const APP_ID: &str = "dev.arsfeld.Reel";
 
 fn main() -> Result<()> {
     // Initialize tracing

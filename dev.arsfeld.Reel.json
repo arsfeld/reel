@@ -1,5 +1,5 @@
 {
-    "app-id": "com.github.arsfeld.Reel",
+    "app-id": "dev.arsfeld.Reel",
     "runtime": "org.gnome.Platform",
     "runtime-version": "47",
     "sdk": "org.gnome.Sdk",
@@ -43,15 +43,27 @@
     ],
     "modules": [
         {
+            "name": "blueprint-compiler",
+            "buildsystem": "meson",
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://gitlab.gnome.org/jwestman/blueprint-compiler.git",
+                    "tag": "v0.14.0"
+                }
+            ]
+        },
+        {
             "name": "reel",
             "buildsystem": "simple",
             "build-commands": [
-                "cargo --offline fetch --manifest-path Cargo.toml --verbose",
+                "mkdir -p .cargo",
+                "cp cargo/config .cargo/config",
                 "cargo --offline build --release --verbose",
                 "install -Dm755 target/release/reel /app/bin/reel",
-                "install -Dm644 data/com.github.arsfeld.Reel.desktop /app/share/applications/com.github.arsfeld.Reel.desktop",
-                "install -Dm644 data/com.github.arsfeld.Reel.metainfo.xml /app/share/metainfo/com.github.arsfeld.Reel.metainfo.xml",
-                "install -Dm644 data/icons/hicolor/scalable/apps/com.github.arsfeld.Reel.svg /app/share/icons/hicolor/scalable/apps/com.github.arsfeld.Reel.svg"
+                "install -Dm644 data/dev.arsfeld.Reel.desktop /app/share/applications/dev.arsfeld.Reel.desktop",
+                "install -Dm644 data/dev.arsfeld.Reel.metainfo.xml /app/share/metainfo/dev.arsfeld.Reel.metainfo.xml",
+                "install -Dm644 data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg /app/share/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg"
             ],
             "sources": [
                 {

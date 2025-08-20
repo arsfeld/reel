@@ -630,7 +630,7 @@ impl ReelMainWindow {
     fn show_about(&self) {
         let about = adw::AboutWindow::builder()
             .application_name("Reel")
-            .application_icon("com.github.arsfeld.Reel")
+            .application_icon("dev.arsfeld.Reel")
             .developer_name("Alexandre Rosenfeld")
             .version("0.1.0")
             .license_type(gtk4::License::Gpl30)

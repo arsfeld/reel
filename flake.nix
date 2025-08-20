@@ -68,6 +68,47 @@
           librsvg
         ];
 
+        pythonWithPkgs = pkgs.python3.withPackages (ps: with ps; [
+          aiohttp
+          toml
+          tomlkit
+        ]);
+
+        flatpakUpdateSources = pkgs.writeShellScriptBin "flatpak-update-sources" ''
+          echo "Updating cargo-sources.json..."
+          ${pythonWithPkgs}/bin/python3 flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+          echo "cargo-sources.json updated!"
+        '';
+
+        flatpakBuild = pkgs.writeShellScriptBin "flatpak-build" ''
+          if [ ! -f cargo-sources.json ]; then
+            echo "cargo-sources.json not found, generating it..."
+            ${pythonWithPkgs}/bin/python3 flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+          fi
+          echo "Building flatpak..."
+          ${pkgs.flatpak-builder}/bin/flatpak-builder --force-clean build-dir dev.arsfeld.Reel.json
+        '';
+
+        flatpakBuildInstall = pkgs.writeShellScriptBin "flatpak-build-install" ''
+          if [ ! -f cargo-sources.json ]; then
+            echo "cargo-sources.json not found, generating it..."
+            ${pythonWithPkgs}/bin/python3 flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+          fi
+          echo "Building and installing flatpak..."
+          ${pkgs.flatpak-builder}/bin/flatpak-builder --user --install --force-clean build-dir dev.arsfeld.Reel.json
+        '';
+
+        flatpakLint = pkgs.writeShellScriptBin "flatpak-lint" ''
+          echo "Linting flatpak manifest..."
+          if command -v flatpak-builder-lint &> /dev/null; then
+            flatpak-builder-lint manifest dev.arsfeld.Reel.json
+          else
+            echo "flatpak-builder-lint not found. You can install it via:"
+            echo "  flatpak install flathub org.flatpak.Builder"
+            echo "  flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest dev.arsfeld.Reel.json"
+          fi
+        '';
+
         devTools = with pkgs; [
           # Development tools
           cargo-watch
@@ -82,6 +123,7 @@
           # Code quality
           rustfmt
           clippy
+          pre-commit
           
           # Debugging
           gdb
@@ -89,6 +131,10 @@
           
           # Documentation
           mdbook
+          
+          # Flatpak tools
+          flatpak-builder
+          pythonWithPkgs
         ];
 
       in
@@ -96,7 +142,12 @@
         devShells.default = pkgs.mkShell {
           inherit buildInputs nativeBuildInputs;
           
-          packages = devTools;
+          packages = devTools ++ [
+            flatpakUpdateSources
+            flatpakBuild
+            flatpakBuildInstall
+            flatpakLint
+          ];
 
           shellHook = ''
             echo "Gnome Reel Development Environment"
@@ -113,6 +164,20 @@
             echo "  cargo fmt      - Format code"
             echo "  cargo clippy   - Run linter"
             echo ""
+            echo "Flatpak commands:"
+            echo "  flatpak-update-sources - Update cargo-sources.json"
+            echo "  flatpak-build         - Build the flatpak"
+            echo "  flatpak-build-install - Build and install the flatpak"
+            echo "  flatpak-lint          - Lint the flatpak manifest"
+            echo ""
+            
+            # Initialize pre-commit hooks if not already done
+            if [ ! -f .git/hooks/pre-commit ]; then
+              echo "Installing pre-commit hooks..."
+              pre-commit install
+              echo "Pre-commit hooks installed!"
+              echo ""
+            fi
             
             # Set up GStreamer plugin paths - include core gstreamer plugins
             export GST_PLUGIN_SYSTEM_PATH_1_0="${pkgs.gst_all_1.gstreamer.out}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-ugly}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-libav}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-rs}/lib/gstreamer-1.0"

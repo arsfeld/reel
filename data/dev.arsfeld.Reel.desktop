@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Reel
 Comment=A modern GTK4 media player for GNOME
-Icon=com.github.arsfeld.Reel
+Icon=dev.arsfeld.Reel
 Exec=reel
 Terminal=false
 Type=Application

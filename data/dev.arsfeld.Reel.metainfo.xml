@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>com.github.arsfeld.Reel</id>
+  <id>dev.arsfeld.Reel</id>
   
   <name>Reel</name>
   <summary>A modern media player for GNOME</summary>
@@ -24,7 +24,7 @@
     </ul>
   </description>
   
-  <launchable type="desktop-id">com.github.arsfeld.Reel.desktop</launchable>
+  <launchable type="desktop-id">dev.arsfeld.Reel.desktop</launchable>
   
   <screenshots>
     <screenshot type="default">
@@ -41,7 +41,7 @@
   <url type="bugtracker">https://github.com/arsfeld/reel/issues</url>
   <url type="vcs-browser">https://github.com/arsfeld/reel</url>
   
-  <developer id="com.github.arsfeld">
+  <developer id="dev.arsfeld">
     <name>arsfeld</name>
   </developer>
   

@@ -29,7 +29,7 @@ python3 flatpak-cargo-generator.py ./Cargo.lock -o cargo-sources.json
 
 # Build the Flatpak
 echo "Building Flatpak..."
-flatpak-builder --user --install --force-clean build-dir com.github.arsfeld.Reel.json
+flatpak-builder --user --install --force-clean build-dir dev.arsfeld.Reel.json
 
 echo "Build complete! You can run the app with:"
-echo "  flatpak run com.github.arsfeld.Reel"
+echo "  flatpak run dev.arsfeld.Reel"
