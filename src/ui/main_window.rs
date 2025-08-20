@@ -2,6 +2,7 @@ use gtk4::{gio, glib, glib::clone, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use tracing::{info, error, warn, debug};
@@ -31,6 +32,8 @@ mod imp {
         #[template_child]
         pub libraries_list: TemplateChild<gtk4::ListBox>,
         #[template_child]
+        pub edit_libraries_button: TemplateChild<gtk4::Button>,
+        #[template_child]
         pub refresh_button: TemplateChild<gtk4::Button>,
         #[template_child]
         pub status_row: TemplateChild<adw::ActionRow>,
@@ -57,6 +60,9 @@ mod imp {
         pub back_button: RefCell<Option<gtk4::Button>>,
         pub saved_window_size: RefCell<(i32, i32)>,
         pub filter_controls: RefCell<Option<gtk4::Box>>,
+        pub edit_mode: RefCell<bool>,
+        pub library_visibility: RefCell<std::collections::HashMap<String, bool>>,
+        pub all_libraries: RefCell<Vec<(crate::models::Library, usize)>>,
     }
     
     #[glib::object_subclass]
@@ -112,6 +118,12 @@ mod imp {
                             obj.trigger_sync(state).await;
                         });
                     }
+                })
+            );
+            
+            self.edit_libraries_button.connect_clicked(
+                clone!(#[weak] obj, move |button| {
+                    obj.toggle_edit_mode(button);
                 })
             );
             
@@ -634,9 +646,12 @@ impl ReelMainWindow {
     pub fn update_libraries(&self, libraries: Vec<(crate::models::Library, usize)>) {
         let imp = self.imp();
         
-        // Clear existing library rows
-        while let Some(child) = imp.libraries_list.first_child() {
-            imp.libraries_list.remove(&child);
+        // Store all libraries for edit mode
+        imp.all_libraries.replace(libraries.clone());
+        
+        // Load visibility settings if not already loaded
+        if imp.library_visibility.borrow().is_empty() && !libraries.is_empty() {
+            self.load_library_visibility();
         }
         
         // Clear existing home rows
@@ -665,35 +680,8 @@ impl ReelMainWindow {
         // Show home group
         imp.home_group.set_visible(true);
         
-        // Add a row for each library
-        for (library, item_count) in libraries {
-            let row = adw::ActionRow::builder()
-                .title(&library.title)
-                .subtitle(&format!("{} items", item_count))
-                .activatable(true)
-                .build();
-            
-            // Add icon based on library type
-            let icon_name = match library.library_type {
-                crate::models::LibraryType::Movies => "video-x-generic-symbolic",
-                crate::models::LibraryType::Shows => "video-display-symbolic",
-                crate::models::LibraryType::Music => "audio-x-generic-symbolic",
-                crate::models::LibraryType::Photos => "image-x-generic-symbolic",
-                _ => "folder-symbolic",
-            };
-            
-            let prefix_icon = gtk4::Image::from_icon_name(icon_name);
-            row.add_prefix(&prefix_icon);
-            
-            // Add navigation arrow
-            let suffix_icon = gtk4::Image::from_icon_name("go-next-symbolic");
-            row.add_suffix(&suffix_icon);
-            
-            // Store library ID in the row's name for later retrieval
-            row.set_widget_name(&library.id);
-            
-            imp.libraries_list.append(&row);
-        }
+        // Update the library display
+        self.update_libraries_display(libraries);
     }
     
     pub fn show_sync_progress(&self, syncing: bool) {
@@ -783,6 +771,38 @@ impl ReelMainWindow {
         if content_stack.child_by_name("home").is_none() {
             if let Some(state) = &*imp.state.borrow() {
                 let home_page = crate::ui::pages::HomePage::new(state.clone());
+                
+                // Set up media selected callback - same as library view
+                let window_weak = self.downgrade();
+                let state_clone = state.clone();
+                home_page.set_on_media_selected(move |media_item| {
+                    info!("HomePage - Media selected: {}", media_item.title());
+                    if let Some(window) = window_weak.upgrade() {
+                        let media_item = media_item.clone();
+                        let state = state_clone.clone();
+                        glib::spawn_future_local(async move {
+                            use crate::models::MediaItem;
+                            match &media_item {
+                                MediaItem::Movie(_) => {
+                                    info!("HomePage - Navigating to movie player");
+                                    window.show_player(&media_item, state).await;
+                                }
+                                MediaItem::Episode(_) => {
+                                    info!("HomePage - Navigating to episode player");
+                                    window.show_player(&media_item, state).await;
+                                }
+                                MediaItem::Show(show) => {
+                                    info!("HomePage - Navigating to show details");
+                                    window.show_show_details(show.clone(), state).await;
+                                }
+                                _ => {
+                                    info!("HomePage - Unsupported media type");
+                                }
+                            }
+                        });
+                    }
+                });
+                
                 content_stack.add_named(&home_page, Some("home"));
                 imp.home_page.replace(Some(home_page));
             }
@@ -1522,5 +1542,128 @@ impl ReelMainWindow {
         // controls_box.append(&filter_button);
         
         controls_box
+    }
+    
+    fn toggle_edit_mode(&self, button: &gtk4::Button) {
+        let imp = self.imp();
+        let current_mode = *imp.edit_mode.borrow();
+        let new_mode = !current_mode;
+        
+        imp.edit_mode.replace(new_mode);
+        
+        if new_mode {
+            button.set_icon_name("object-select-symbolic");
+            button.set_tooltip_text(Some("Done Editing"));
+            
+            // Show all libraries in edit mode
+            let all_libraries = imp.all_libraries.borrow().clone();
+            self.update_libraries_display(all_libraries);
+        } else {
+            button.set_icon_name("document-edit-symbolic");
+            button.set_tooltip_text(Some("Edit Libraries"));
+            
+            // Save the visibility settings
+            self.save_library_visibility();
+            
+            // Refresh display with visibility applied
+            let all_libraries = imp.all_libraries.borrow().clone();
+            self.update_libraries_display(all_libraries);
+        }
+    }
+    
+    fn update_libraries_display(&self, libraries: Vec<(crate::models::Library, usize)>) {
+        let imp = self.imp();
+        
+        // Clear existing library rows
+        while let Some(child) = imp.libraries_list.first_child() {
+            imp.libraries_list.remove(&child);
+        }
+        
+        let is_edit_mode = *imp.edit_mode.borrow();
+        let visibility_map = imp.library_visibility.borrow();
+        
+        // Add a row for each library
+        for (library, item_count) in libraries {
+            // Check if library should be shown
+            let is_visible = visibility_map.get(&library.id).copied().unwrap_or(true);
+            
+            if is_edit_mode || is_visible {
+                let row = adw::ActionRow::builder()
+                    .title(&library.title)
+                    .subtitle(&format!("{} items", item_count))
+                    .activatable(!is_edit_mode)  // Only activatable when not in edit mode
+                    .build();
+                
+                // Add icon based on library type
+                let icon_name = match library.library_type {
+                    crate::models::LibraryType::Movies => "video-x-generic-symbolic",
+                    crate::models::LibraryType::Shows => "video-display-symbolic",
+                    crate::models::LibraryType::Music => "audio-x-generic-symbolic",
+                    crate::models::LibraryType::Photos => "image-x-generic-symbolic",
+                    _ => "folder-symbolic",
+                };
+                
+                let prefix_icon = gtk4::Image::from_icon_name(icon_name);
+                row.add_prefix(&prefix_icon);
+                
+                // In edit mode, add checkbox; otherwise add navigation arrow
+                if is_edit_mode {
+                    let check_button = gtk4::CheckButton::builder()
+                        .active(is_visible)
+                        .build();
+                    
+                    let library_id = library.id.clone();
+                    let window_weak = self.downgrade();
+                    check_button.connect_toggled(move |button| {
+                        if let Some(window) = window_weak.upgrade() {
+                            window.imp().library_visibility.borrow_mut()
+                                .insert(library_id.clone(), button.is_active());
+                        }
+                    });
+                    
+                    row.add_suffix(&check_button);
+                } else {
+                    let arrow = gtk4::Image::from_icon_name("go-next-symbolic");
+                    row.add_suffix(&arrow);
+                }
+                
+                // Store the library ID in the widget name
+                row.set_widget_name(&library.id);
+                
+                imp.libraries_list.append(&row);
+            }
+        }
+    }
+    
+    fn load_library_visibility(&self) {
+        // Load from existing config
+        if let Some(config) = self.imp().config.borrow().as_ref() {
+            let visibility = config.get_all_library_visibility();
+            *self.imp().library_visibility.borrow_mut() = visibility;
+        }
+    }
+    
+    fn save_library_visibility(&self) {
+        // Save to config using proper methods
+        let visibility = self.imp().library_visibility.borrow().clone();
+        
+        // Clone the config, update it, and save
+        let config_clone = {
+            let config_ref = self.imp().config.borrow();
+            if let Some(config) = config_ref.as_ref() {
+                Some(config.as_ref().clone())
+            } else {
+                None
+            }
+        }; // Drop the borrow here
+        
+        if let Some(mut config) = config_clone {
+            if let Err(e) = config.set_all_library_visibility(visibility) {
+                error!("Failed to save library visibility: {}", e);
+            } else {
+                // Update the stored config
+                self.imp().config.replace(Some(Arc::new(config)));
+            }
+        }
     }
 }

@@ -96,6 +96,10 @@ pub struct RuntimeConfig {
     /// Last sync timestamp for each backend
     #[serde(default)]
     pub last_sync_times: std::collections::HashMap<String, String>,
+    
+    /// Library visibility settings (library_id -> is_visible)
+    #[serde(default)]
+    pub library_visibility: std::collections::HashMap<String, bool>,
 }
 
 impl Config {
@@ -159,6 +163,24 @@ impl Config {
     
     pub fn get_configured_backends(&self) -> Vec<String> {
         self.runtime.configured_backends.clone()
+    }
+    
+    pub fn set_library_visibility(&mut self, library_id: &str, visible: bool) -> Result<()> {
+        self.runtime.library_visibility.insert(library_id.to_string(), visible);
+        self.save()
+    }
+    
+    pub fn get_library_visibility(&self, library_id: &str) -> bool {
+        self.runtime.library_visibility.get(library_id).copied().unwrap_or(true)
+    }
+    
+    pub fn get_all_library_visibility(&self) -> std::collections::HashMap<String, bool> {
+        self.runtime.library_visibility.clone()
+    }
+    
+    pub fn set_all_library_visibility(&mut self, visibility: std::collections::HashMap<String, bool>) -> Result<()> {
+        self.runtime.library_visibility = visibility;
+        self.save()
     }
     
     fn config_path() -> Result<PathBuf> {

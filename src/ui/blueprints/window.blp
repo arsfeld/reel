@@ -64,11 +64,23 @@ template ReelMainWindow : Adw.ApplicationWindow {
               visible: false;
               
               [header-suffix]
-              Gtk.Button refresh_button {
-                icon-name: "view-refresh-symbolic";
-                valign: center;
-                tooltip-text: _("Refresh Libraries");
-                styles ["flat"]
+              Gtk.Box library_header_buttons {
+                orientation: horizontal;
+                spacing: 6;
+                
+                Gtk.Button edit_libraries_button {
+                  icon-name: "document-edit-symbolic";
+                  valign: center;
+                  tooltip-text: _("Edit Libraries");
+                  styles ["flat"]
+                }
+                
+                Gtk.Button refresh_button {
+                  icon-name: "view-refresh-symbolic";
+                  valign: center;
+                  tooltip-text: _("Refresh Libraries");
+                  styles ["flat"]
+                }
               }
               
               Gtk.ListBox libraries_list {

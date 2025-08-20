@@ -13,12 +13,25 @@ use super::library::MediaCard;
 mod imp {
     use super::*;
 
-    #[derive(Debug, Default)]
+    #[derive(Default)]
     pub struct HomePage {
         pub scrolled_window: gtk4::ScrolledWindow,
         pub main_box: gtk4::Box,
         pub sections: RefCell<Vec<HomeSection>>,
         pub state: RefCell<Option<Arc<AppState>>>,
+        pub on_media_selected: RefCell<Option<Box<dyn Fn(&MediaItem)>>>,
+    }
+    
+    impl std::fmt::Debug for HomePage {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("HomePage")
+                .field("scrolled_window", &self.scrolled_window)
+                .field("main_box", &self.main_box)
+                .field("sections", &self.sections)
+                .field("state", &"Arc<AppState>")
+                .field("on_media_selected", &"Option<Callback>")
+                .finish()
+        }
     }
 
     #[glib::object_subclass]
@@ -74,6 +87,13 @@ impl HomePage {
         page.load_homepage();
         
         page
+    }
+    
+    pub fn set_on_media_selected<F>(&self, callback: F)
+    where
+        F: Fn(&MediaItem) + 'static,
+    {
+        self.imp().on_media_selected.replace(Some(Box::new(callback)));
     }
     
     fn load_homepage(&self) {
@@ -193,6 +213,19 @@ impl HomePage {
         let card = MediaCard::new(item.clone(), ImageSize::Medium);
         // Trigger image loading immediately for homepage cards
         card.trigger_load(ImageSize::Medium);
+        
+        // Connect click handler
+        let item_clone = item.clone();
+        let self_weak = self.downgrade();
+        card.connect_clicked(move |_| {
+            if let Some(page) = self_weak.upgrade() {
+                info!("Homepage - Media item selected: {}", item_clone.title());
+                if let Some(callback) = page.imp().on_media_selected.borrow().as_ref() {
+                    callback(&item_clone);
+                }
+            }
+        });
+        
         card.upcast()
     }
     

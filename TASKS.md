@@ -38,8 +38,8 @@
   - [x] Fetch shows from library endpoint
   - [x] Parse show/season/episode structure
   - [x] Create show grid view component
-  - [ ] Implement season/episode navigation
-  - [ ] Add episode list view
+  - [x] Implement season/episode navigation with modern dropdown selector
+  - [x] Add episode carousel view with thumbnails and watch indicators
 
 ### 🖼️ Media & Metadata
 - [x] **Image Loading & Caching** (Partially Working - Performance Issues)
@@ -156,7 +156,7 @@
 
 ## Phase 2: Enhanced Features (Future)
 
-### 🏠 Homepage Implementation
+### 🏠 Homepage Implementation (COMPLETED!)
 - [x] **Homepage Sections**
   - [x] Create HomePage UI component with scrollable sections
   - [x] Add "Home" navigation item in sidebar
@@ -165,23 +165,31 @@
   - [x] Add trigger_load for poster images on homepage
   - [x] Fix layout to expand vertically
   - [x] Add library-specific hub sections (Popular, Top Rated, etc.)
-  - [ ] **Make homepage items clickable** - should navigate to player like in library view
+  - [x] **Make homepage items clickable** - navigates to player/show details like in library view
+  - [x] **Separate Home from Libraries** - Home now in its own section in sidebar
   - [ ] Implement "View All" navigation for sections
 
 ### 📊 Advanced Features
 - [x] Continue Watching functionality (via homepage)
 - [x] Recently Added section (via homepage)
 - [ ] Search implementation
-- [x] **Filters and sorting infrastructure** (NEW!)
+- [x] **Filters and Sorting Infrastructure** (COMPLETED!)
   - [x] Generic FilterManager for extensible filtering
   - [x] Watch status filters (All, Watched, Unwatched, In Progress)
   - [x] Sort options (Title, Year, Rating, Date Added)
   - [x] Filter controls in header bar for cleaner UI
+  - [x] Filters only show on library views, not homepage
   - [ ] Genre filter implementation
   - [ ] Year range filter
   - [ ] Rating filter
   - [ ] Resolution filter
   - [ ] Advanced filter popover/dialog
+- [x] **Library Visibility Management** (NEW!)
+  - [x] Edit mode for showing/hiding libraries
+  - [x] Checkbox selection in edit mode
+  - [x] Persistent storage of visibility preferences in config
+  - [x] Edit button in libraries header
+  - [x] Integrated with existing Config system
 - [ ] Collections support
 - [ ] Playlists
 - [ ] Watchlist/Up Next
@@ -346,12 +354,22 @@ window.sync_and_update_libraries(backend_id, backend)
    - [x] Viewport-based lazy loading to prevent UI freezing
    - [x] Concurrent download throttling
 
-2. [ ] **Media Detail Views**
-   - [ ] Create media detail page layout
+2. [x] **Media Detail Views** (Partially Complete)
+   - [x] Create media detail page layout
    - [ ] Implement movie detail view with full metadata
-   - [ ] Add TV show detail view with seasons/episodes
-   - [ ] Display cast, crew, and synopsis
-   - [ ] Add play button to start playback
+   - [x] **TV Show Detail View** (COMPLETED!)
+     - [x] Modern layout with poster and show info
+     - [x] Season dropdown selector for easy navigation
+     - [x] Horizontal episode carousel with thumbnails
+     - [x] Episode cards with titles, duration, and episode numbers
+     - [x] Watch status indicators on episodes
+     - [x] Progress bars for partially watched episodes
+     - [x] Click to play functionality for episodes
+     - [x] Genre tags display
+     - [x] Rating display with star icon
+   - [x] Display synopsis for shows
+   - [ ] Display cast and crew information
+   - [x] Add play button functionality (for episodes)
 
 3. [ ] **Library Enhancements**
    - [x] Implement lazy loading for large libraries
@@ -388,7 +406,6 @@ window.sync_and_update_libraries(backend_id, backend)
 ## Known Issues & Troubleshooting
 
 ### Current Issues
-- [ ] **Homepage Navigation**: Clicking on items in homepage sections doesn't do anything - should navigate to player like in library view
 - [ ] **Music/Photo Libraries**: Views not yet implemented
 - [ ] **Jellyfin Backend**: Integration pending implementation
 - [ ] **Local Files Backend**: File browser not yet implemented
@@ -422,6 +439,11 @@ window.sync_and_update_libraries(backend_id, backend)
 - ✅ **Immersive Player Mode**: Implemented auto-hiding controls with overlay header bar
 - ✅ **Window Aspect Ratio**: Window now resizes to match video aspect ratio
 - ✅ **Player Controls Layout**: Header bar now overlays video instead of pushing it down
+- ✅ **Homepage Navigation Fixed**: Homepage items now properly navigate to player/show details when clicked
+- ✅ **Show Seasons Count**: Fixed "0 seasons" display by using episode count or "TV Series" fallback when season data isn't loaded
+- ✅ **Show Details Page Enhanced**: Completely redesigned with modern dropdown season selector and horizontal episode carousel
+- ✅ **Episode Thumbnails**: Added episode thumbnail support with play icon fallbacks
+- ✅ **Enhanced Episode Cards**: Cards show episode number, duration, watch status, and progress indicators
 
 ## Documentation
 - [ ] API documentation

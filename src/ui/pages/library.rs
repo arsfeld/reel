@@ -741,11 +741,25 @@ impl MediaCard {
                     }
                 }
                 MediaItem::Show(show) => {
-                    let season_count = show.seasons.len();
-                    if season_count == 1 {
-                        "1 season".to_string()
+                    // If seasons aren't loaded yet (homepage), use episode count if available
+                    if show.seasons.is_empty() {
+                        if show.total_episode_count > 0 {
+                            let episodes = show.total_episode_count;
+                            if episodes == 1 {
+                                "1 episode".to_string()
+                            } else {
+                                format!("{} episodes", episodes)
+                            }
+                        } else {
+                            "TV Series".to_string()  // Fallback when no info available
+                        }
                     } else {
-                        format!("{} seasons", season_count)
+                        let season_count = show.seasons.len();
+                        if season_count == 1 {
+                            "1 season".to_string()
+                        } else {
+                            format!("{} seasons", season_count)
+                        }
                     }
                 }
                 _ => String::new(),
