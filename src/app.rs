@@ -4,7 +4,7 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 use adw::glib;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::config::Config;
 use crate::state::AppState;

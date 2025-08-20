@@ -1,4 +1,4 @@
-use gtk4::{gio, glib, prelude::*, subclass::prelude::*};
+use gtk4::{glib, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
@@ -6,12 +6,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use tracing::{info, error, debug};
 use once_cell::sync::Lazy;
-use tokio;
-use anyhow;
 
 use crate::models::{Library, LibraryType, MediaItem};
 use crate::state::AppState;
 use crate::utils::{OptimizedImageLoader, ImageSize};
+use crate::ui::filters::{FilterManager, WatchStatus, SortOrder};
 
 // Global optimized image loader instance
 static IMAGE_LOADER: Lazy<OptimizedImageLoader> = Lazy::new(|| {
@@ -33,6 +32,8 @@ mod imp {
         pub backend_id: RefCell<Option<String>>,
         pub current_view_size: RefCell<ImageSize>,
         pub on_media_selected: RefCell<Option<Box<dyn Fn(&MediaItem)>>>,
+        pub filter_manager: RefCell<FilterManager>,
+        pub all_media_items: RefCell<Vec<MediaItem>>,
     }
     
     impl std::fmt::Debug for LibraryView {
@@ -65,6 +66,8 @@ mod imp {
                 backend_id: RefCell::new(None),
                 current_view_size: RefCell::new(ImageSize::Medium),
                 on_media_selected: RefCell::new(None),
+                filter_manager: RefCell::new(FilterManager::new()),
+                all_media_items: RefCell::new(Vec::new()),
             }
         }
     }
@@ -260,11 +263,14 @@ impl LibraryView {
             }
         };
         
+        // Store all media items
+        self.imp().all_media_items.replace(media_items.clone());
+        
         // Preload first batch of images for smoother experience
         self.preload_initial_images(&media_items).await;
         
-        // Update UI with media items
-        self.display_media_items(media_items);
+        // Apply filters and display items
+        self.apply_filters();
     }
     
     async fn preload_initial_images(&self, items: &[MediaItem]) {
@@ -458,6 +464,38 @@ impl LibraryView {
             widget = w.parent();
         }
     }
+    
+    pub fn apply_filters(&self) {
+        let imp = self.imp();
+        let all_items = imp.all_media_items.borrow().clone();
+        let filter_manager = imp.filter_manager.borrow();
+        
+        // Apply all filters using the FilterManager
+        let filtered_items = filter_manager.apply_filters(all_items);
+        
+        info!("Applied filters: {} items shown of {} total", 
+              filtered_items.len(), 
+              imp.all_media_items.borrow().len());
+        
+        // Display filtered items
+        self.display_media_items(filtered_items);
+    }
+    
+    pub fn update_watch_status_filter(&self, status: WatchStatus) {
+        let imp = self.imp();
+        imp.filter_manager.borrow_mut().set_watch_status(status);
+        self.apply_filters();
+    }
+    
+    pub fn update_sort_order(&self, order: SortOrder) {
+        let imp = self.imp();
+        imp.filter_manager.borrow_mut().set_sort_order(order);
+        self.apply_filters();
+    }
+    
+    pub fn get_filter_manager(&self) -> std::cell::Ref<FilterManager> {
+        self.imp().filter_manager.borrow()
+    }
 }
 
 // Optimized Media Card Widget
@@ -474,6 +512,8 @@ mod imp_card {
         pub subtitle_label: RefCell<Option<gtk4::Label>>,
         pub media_item: RefCell<Option<MediaItem>>,
         pub loading_spinner: RefCell<Option<gtk4::Spinner>>,
+        pub watched_indicator: RefCell<Option<gtk4::Box>>,
+        pub progress_bar: RefCell<Option<gtk4::ProgressBar>>,
         pub image_loaded: RefCell<bool>,
         pub image_loading: RefCell<bool>,
         pub load_handle: RefCell<Option<SourceId>>,
@@ -491,6 +531,8 @@ mod imp_card {
                 subtitle_label: RefCell::new(None),
                 media_item: RefCell::new(None),
                 loading_spinner: RefCell::new(None),
+                watched_indicator: RefCell::new(None),
+                progress_bar: RefCell::new(None),
                 image_loaded: RefCell::new(false),
                 image_loading: RefCell::new(false),
                 load_handle: RefCell::new(None),
@@ -625,6 +667,37 @@ impl MediaCard {
         info_wrapper.append(&info_box);
         overlay.add_overlay(&info_wrapper);
         
+        // Add unwatched indicator overlay (top-right corner glowing dot)
+        let unwatched_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .halign(gtk4::Align::End)
+            .valign(gtk4::Align::Start)
+            .margin_top(8)
+            .margin_end(8)
+            .visible(false)
+            .build();
+        
+        // Create a glowing dot indicator for unwatched content
+        let unwatched_dot = gtk4::Box::builder()
+            .width_request(14)
+            .height_request(14)
+            .build();
+        
+        unwatched_dot.add_css_class("unwatched-glow-dot");
+        unwatched_box.append(&unwatched_dot);
+        unwatched_box.add_css_class("unwatched-indicator");
+        
+        overlay.add_overlay(&unwatched_box);
+        
+        // Add progress bar overlay (bottom)
+        let progress_bar = gtk4::ProgressBar::builder()
+            .valign(gtk4::Align::End)
+            .visible(false)
+            .build();
+        
+        progress_bar.add_css_class("media-progress");
+        overlay.add_overlay(&progress_bar);
+        
         self.set_child(Some(&overlay));
         
         // Store references
@@ -634,6 +707,8 @@ impl MediaCard {
         imp.title_label.replace(Some(title_label));
         imp.subtitle_label.replace(Some(subtitle_label));
         imp.loading_spinner.replace(Some(loading_spinner));
+        imp.watched_indicator.replace(Some(unwatched_box));
+        imp.progress_bar.replace(Some(progress_bar));
     }
     
     fn set_placeholder_image(&self, picture: &gtk4::Picture) {
@@ -676,6 +751,26 @@ impl MediaCard {
                 _ => String::new(),
             };
             subtitle_label.set_text(&subtitle);
+        }
+        
+        // Update unwatched indicator - show for unwatched items
+        if let Some(unwatched_indicator) = imp.watched_indicator.borrow().as_ref() {
+            unwatched_indicator.set_visible(!media_item.is_watched());
+        }
+        
+        // Update progress bar
+        if let Some(progress_bar) = imp.progress_bar.borrow().as_ref() {
+            if let Some(progress) = media_item.watch_progress() {
+                // Only show progress bar if partially watched
+                if media_item.is_partially_watched() {
+                    progress_bar.set_fraction(progress as f64);
+                    progress_bar.set_visible(true);
+                } else {
+                    progress_bar.set_visible(false);
+                }
+            } else {
+                progress_bar.set_visible(false);
+            }
         }
     }
     

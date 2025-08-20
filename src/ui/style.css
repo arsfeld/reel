@@ -100,6 +100,21 @@ flowboxchild {
   border-radius: 0 0 8px 8px;
 }
 
+/* Unwatched indicator */
+.unwatched-indicator {
+  filter: drop-shadow(0 2px 6px alpha(black, 0.5));
+}
+
+.unwatched-glow-dot {
+  background: radial-gradient(circle, #3584e4, #1c71d8);
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 12px #3584e4,
+              0 0 24px #3584e4,
+              0 0 36px #1c71d8,
+              inset 0 0 10px rgba(255, 255, 255, 0.4);
+}
+
 /* Media progress bar */
 .media-progress {
   min-height: 3px;
@@ -109,6 +124,36 @@ flowboxchild {
 /* Navigation split view */
 navigation-split-view > * > * > scrolledwindow {
   background-color: @window_bg_color;
+}
+
+/* Library list separator */
+.navigation-sidebar listbox row:has(separator) {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.navigation-sidebar listbox row separator {
+  opacity: 0.15;
+}
+
+/* Header bar filter controls */
+headerbar dropdown {
+  min-width: 120px;
+}
+
+headerbar dropdown button {
+  padding: 4px 8px;
+}
+
+headerbar .dim-label {
+  opacity: 0.7;
+  font-size: 0.9em;
+}
+
+headerbar separator {
+  margin: 0 8px;
+  opacity: 0.3;
 }
 
 /* Status pages */

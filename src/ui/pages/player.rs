@@ -21,6 +21,8 @@ pub struct PlayerPage {
     overlay: gtk4::Overlay,
     video_container: gtk4::Box,
     current_stream_info: Arc<RwLock<Option<crate::models::StreamInfo>>>,
+    current_media_item: Arc<RwLock<Option<MediaItem>>>,
+    state: Arc<AppState>,
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -33,7 +35,7 @@ impl std::fmt::Debug for PlayerPage {
 }
 
 impl PlayerPage {
-    pub fn new(_state: Arc<AppState>) -> Self {
+    pub fn new(state: Arc<AppState>) -> Self {
         info!("PlayerPage::new() - Creating new player page");
         // Create main container
         let widget = gtk4::Box::builder()
@@ -195,12 +197,17 @@ impl PlayerPage {
             overlay,
             video_container,
             current_stream_info: Arc::new(RwLock::new(None)),
+            current_media_item: Arc::new(RwLock::new(None)),
+            state,
         }
     }
     
     pub async fn load_media(&self, media_item: &MediaItem, state: Arc<AppState>) -> anyhow::Result<()> {
         info!("PlayerPage::load_media() - Starting to load media: {}", media_item.title());
         info!("PlayerPage::load_media() - Media ID: {}", media_item.id());
+        
+        // Store the current media item
+        *self.current_media_item.write().await = Some(media_item.clone());
         
         // Get the backend manager
         debug!("PlayerPage::load_media() - Getting backend manager");
@@ -250,6 +257,20 @@ impl PlayerPage {
             debug!("PlayerPage::load_media() - Starting playback");
             player.play().await?;
             info!("PlayerPage::load_media() - Playback started successfully");
+            
+            // Populate track menus after playback starts (requires Playing state)
+            // Add a small delay to ensure the playbin has discovered all tracks
+            let controls = self.controls.clone();
+            glib::spawn_future_local(async move {
+                debug!("PlayerPage::load_media() - Waiting before populating track menus");
+                glib::timeout_future(std::time::Duration::from_millis(500)).await;
+                debug!("PlayerPage::load_media() - Populating track menus after playback start");
+                controls.populate_track_menus().await;
+                info!("PlayerPage::load_media() - Track menus populated");
+            });
+            
+            // Start monitoring for playback completion
+            self.monitor_playback_completion(backend_id.clone(), backend.clone());
         } else {
             error!("PlayerPage::load_media() - No active backend found!");
             return Err(anyhow::anyhow!("No active backend available"));
@@ -276,6 +297,62 @@ impl PlayerPage {
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
         let player = self.player.read().await;
         player.get_video_dimensions().await
+    }
+    
+    fn monitor_playback_completion(&self, backend_id: String, backend: Arc<dyn MediaBackend>) {
+        let player = self.player.clone();
+        let current_media_item = self.current_media_item.clone();
+        
+        // Spawn a task to monitor player state
+        glib::spawn_future_local(async move {
+            // Add a small delay to let playback start
+            glib::timeout_future(std::time::Duration::from_secs(2)).await;
+            
+            loop {
+                // Check player state every second
+                glib::timeout_future(std::time::Duration::from_secs(1)).await;
+                
+                let state = {
+                    let player = player.read().await;
+                    player.get_state().await
+                };
+                
+                match state {
+                    crate::player::gstreamer_player::PlayerState::Stopped => {
+                        // Playback has ended, check if we should mark as watched
+                        if let Some(media_item) = current_media_item.read().await.as_ref() {
+                            // Get current position and duration
+                            let player = player.read().await;
+                            let position = player.get_position().await;
+                            let duration = player.get_duration().await;
+                            
+                            // If we've watched more than 90% of the content, mark as watched
+                            if let (Some(pos), Some(dur)) = (position, duration) {
+                                let watched_percentage = pos.as_secs_f64() / dur.as_secs_f64();
+                                if watched_percentage > 0.9 {
+                                    info!("Marking {} as watched ({}% watched)", 
+                                        media_item.title(), 
+                                        (watched_percentage * 100.0) as i32);
+                                    
+                                    // Mark as watched on the backend
+                                    if let Err(e) = backend.mark_watched(media_item.id()).await {
+                                        error!("Failed to mark as watched: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        break; // Exit monitoring loop
+                    }
+                    crate::player::gstreamer_player::PlayerState::Error(_) => {
+                        // Playback error, exit monitoring
+                        break;
+                    }
+                    _ => {
+                        // Continue monitoring
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -739,32 +816,53 @@ impl PlayerControls {
         info!("PlayerControls::set_media_info() - Media info set successfully");
     }
     
-    async fn populate_track_menus(&self) {
+    pub async fn populate_track_menus(&self) {
         // Create audio tracks menu
         let audio_menu = gio::Menu::new();
         let audio_tracks = self.player.read().await.get_audio_tracks().await;
         let current_audio = self.player.read().await.get_current_audio_track().await;
         
-        for (index, name) in audio_tracks {
-            let action_name = format!("player.set-audio-track-{}", index);
-            audio_menu.append(Some(&name), Some(&action_name));
+        debug!("PlayerControls::populate_track_menus() - Found {} audio tracks", audio_tracks.len());
+        
+        if audio_tracks.is_empty() {
+            // Add a disabled message if no tracks found
+            audio_menu.append(Some("No audio tracks available"), None);
+        } else {
+            for (index, name) in &audio_tracks {
+                let action_name = format!("player.set-audio-track-{}", index);
+                audio_menu.append(Some(&name), Some(&action_name));
+                debug!("  Audio track {}: {}", index, name);
+            }
         }
         
         let audio_popover = gtk4::PopoverMenu::from_model(Some(&audio_menu));
         self.audio_button.set_popover(Some(&audio_popover));
+        
+        // Enable/disable button based on track availability
+        self.audio_button.set_sensitive(!audio_tracks.is_empty());
         
         // Create subtitle tracks menu
         let subtitle_menu = gio::Menu::new();
         let subtitle_tracks = self.player.read().await.get_subtitle_tracks().await;
         let current_subtitle = self.player.read().await.get_current_subtitle_track().await;
         
-        for (index, name) in subtitle_tracks {
-            let action_name = if index < 0 {
-                "player.disable-subtitles".to_string()
-            } else {
-                format!("player.set-subtitle-track-{}", index)
-            };
-            subtitle_menu.append(Some(&name), Some(&action_name));
+        debug!("PlayerControls::populate_track_menus() - Found {} subtitle tracks", subtitle_tracks.len());
+        
+        if subtitle_tracks.is_empty() || (subtitle_tracks.len() == 1 && subtitle_tracks[0].0 == -1) {
+            // Add a disabled message if no real subtitle tracks found (only "None" option)
+            subtitle_menu.append(Some("No subtitles available"), None);
+            self.subtitle_button.set_sensitive(false);
+        } else {
+            for (index, name) in &subtitle_tracks {
+                let action_name = if *index < 0 {
+                    "player.disable-subtitles".to_string()
+                } else {
+                    format!("player.set-subtitle-track-{}", index)
+                };
+                subtitle_menu.append(Some(&name), Some(&action_name));
+                debug!("  Subtitle track {}: {}", index, name);
+            }
+            self.subtitle_button.set_sensitive(true);
         }
         
         let subtitle_popover = gtk4::PopoverMenu::from_model(Some(&subtitle_menu));
@@ -781,16 +879,17 @@ impl PlayerControls {
             
             // Add audio track actions
             let audio_tracks = self.player.read().await.get_audio_tracks().await;
-            for (index, _name) in audio_tracks {
+            for (index, _name) in &audio_tracks {
                 let action = gio::SimpleAction::new(
                     &format!("set-audio-track-{}", index),
                     None
                 );
                 let player = self.player.clone();
+                let track_index = *index;
                 action.connect_activate(move |_, _| {
                     let player = player.clone();
                     glib::spawn_future_local(async move {
-                        if let Err(e) = player.read().await.set_audio_track(index).await {
+                        if let Err(e) = player.read().await.set_audio_track(track_index).await {
                             error!("Failed to set audio track: {}", e);
                         }
                     });
@@ -800,8 +899,8 @@ impl PlayerControls {
             
             // Add subtitle track actions
             let subtitle_tracks = self.player.read().await.get_subtitle_tracks().await;
-            for (index, _name) in subtitle_tracks {
-                if index < 0 {
+            for (index, _name) in &subtitle_tracks {
+                if *index < 0 {
                     let action = gio::SimpleAction::new("disable-subtitles", None);
                     let player = self.player.clone();
                     action.connect_activate(move |_, _| {
@@ -819,10 +918,11 @@ impl PlayerControls {
                         None
                     );
                     let player = self.player.clone();
+                    let track_index = *index;
                     action.connect_activate(move |_, _| {
                         let player = player.clone();
                         glib::spawn_future_local(async move {
-                            if let Err(e) = player.read().await.set_subtitle_track(index).await {
+                            if let Err(e) = player.read().await.set_subtitle_track(track_index).await {
                                 error!("Failed to set subtitle track: {}", e);
                             }
                         });

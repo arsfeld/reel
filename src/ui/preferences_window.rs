@@ -1,4 +1,4 @@
-use gtk4::{gio, glib, prelude::*, subclass::prelude::*};
+use gtk4::{gio, glib, glib::clone, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
@@ -41,7 +41,7 @@ mod imp {
 glib::wrapper! {
     pub struct PreferencesWindow(ObjectSubclass<imp::PreferencesWindow>)
         @extends gtk4::Widget, gtk4::Window, adw::Window, adw::PreferencesWindow,
-        @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget, gtk4::Native, gtk4::Root;
+        @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget, gtk4::Native, gtk4::Root, gtk4::ShortcutManager;
 }
 
 impl PreferencesWindow {
@@ -119,12 +119,12 @@ impl PreferencesWindow {
         self.add(&backends_page);
         
         // Connect signals
-        add_button.connect_clicked(glib::clone!(@weak self as window => move |_| {
+        add_button.connect_clicked(clone!(#[weak(rename_to = window)] self, move |_| {
             window.show_add_backend_dialog();
         }));
         
         // Theme row handler
-        theme_row.connect_selected_notify(glib::clone!(@weak self as window => move |row| {
+        theme_row.connect_selected_notify(clone!(#[weak(rename_to = window)] self, move |row| {
             let selected = row.selected();
             let theme = match selected {
                 0 => "auto",

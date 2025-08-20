@@ -50,6 +50,15 @@ template ReelMainWindow : Adw.ApplicationWindow {
               }
             }
             
+            Adw.PreferencesGroup home_group {
+              visible: false;
+              
+              Gtk.ListBox home_list {
+                selection-mode: none;
+                styles ["boxed-list"]
+              }
+            }
+            
             Adw.PreferencesGroup libraries_group {
               title: _("Libraries");
               visible: false;

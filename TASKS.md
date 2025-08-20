@@ -121,13 +121,67 @@
   - [x] Create overlay header bar that doesn't affect video layout
   - [ ] Add fullscreen support (partial - button exists but needs implementation)
 
+### 📺 Watched/Unwatched Tracking (COMPLETED!)
+- [x] **Data Model & Storage**
+  - [x] Add watched status fields to Movie, Show, and Episode models
+  - [x] Include view count and last watched timestamp
+  - [x] Add playback position for resume functionality
+  - [x] Update database schema with watch status fields
+
+- [x] **Backend Integration**
+  - [x] Add watch status methods to MediaBackend trait
+  - [x] Implement Plex API calls for mark watched/unwatched
+  - [x] Parse watch status from Plex API responses
+  - [x] Add placeholder implementations for Jellyfin and Local backends
+
+- [x] **UI Indicators** (Enhanced!)
+  - [x] Add watched checkmark overlay to MediaCard
+  - [x] Show progress bar for partially watched content
+  - [x] Calculate and display watch progress percentage
+  - [x] Automatic UI updates based on watch status
+  - [x] **NEW: Enhanced unwatched indicator** - Glowing blue dot for unwatched content
+  - [x] **NEW: Reversed logic** - Show indicators for unwatched items instead of watched
+  - [x] **NEW: CPU-optimized design** - Static glow effect without animations
+
+- [x] **Automatic Tracking**
+  - [x] Monitor playback completion in player
+  - [x] Auto-mark as watched when >90% viewed
+  - [x] Sync watch status back to Plex server
+  - [x] Handle playback interruption gracefully
+
+- [ ] **Manual Controls** (Future Enhancement)
+  - [ ] Add context menu to toggle watched status
+  - [ ] Implement mark all as watched/unwatched
+  - [ ] Add bulk selection for multiple items
+
 ## Phase 2: Enhanced Features (Future)
 
+### 🏠 Homepage Implementation
+- [x] **Homepage Sections**
+  - [x] Create HomePage UI component with scrollable sections
+  - [x] Add "Home" navigation item in sidebar
+  - [x] Implement Continue Watching section (On Deck)
+  - [x] Implement Recently Added section
+  - [x] Add trigger_load for poster images on homepage
+  - [x] Fix layout to expand vertically
+  - [x] Add library-specific hub sections (Popular, Top Rated, etc.)
+  - [ ] **Make homepage items clickable** - should navigate to player like in library view
+  - [ ] Implement "View All" navigation for sections
+
 ### 📊 Advanced Features
-- [ ] Continue Watching functionality
-- [ ] Recently Added section
+- [x] Continue Watching functionality (via homepage)
+- [x] Recently Added section (via homepage)
 - [ ] Search implementation
-- [ ] Filters and sorting
+- [x] **Filters and sorting infrastructure** (NEW!)
+  - [x] Generic FilterManager for extensible filtering
+  - [x] Watch status filters (All, Watched, Unwatched, In Progress)
+  - [x] Sort options (Title, Year, Rating, Date Added)
+  - [x] Filter controls in header bar for cleaner UI
+  - [ ] Genre filter implementation
+  - [ ] Year range filter
+  - [ ] Rating filter
+  - [ ] Resolution filter
+  - [ ] Advanced filter popover/dialog
 - [ ] Collections support
 - [ ] Playlists
 - [ ] Watchlist/Up Next
@@ -270,6 +324,16 @@ window.sync_and_update_libraries(backend_id, backend)
    - [x] Create add backend flow with type selection
    - [x] Integrate with existing auth dialog for Plex
 
+3. [x] **Watched/Unwatched Tracking** (ENHANCED!)
+   - [x] Added watched status fields to all media models
+   - [x] Implemented Plex API integration for watch status
+   - [x] Created visual indicators (checkmark and progress bar)
+   - [x] Auto-mark items as watched on playback completion
+   - [x] Upgraded to Rust edition 2024 for latest language features
+   - [x] **Enhanced unwatched indicator** - Prominent glowing blue dot for unwatched content
+   - [x] **Improved UX** - Reversed indicator logic to highlight new/unwatched content
+   - [x] **Performance optimized** - Removed animations to reduce CPU usage
+
 ### 📋 Next Steps
 
 1. [x] **Image Loading & Display** (COMPLETED)
@@ -324,6 +388,7 @@ window.sync_and_update_libraries(backend_id, backend)
 ## Known Issues & Troubleshooting
 
 ### Current Issues
+- [ ] **Homepage Navigation**: Clicking on items in homepage sections doesn't do anything - should navigate to player like in library view
 - [ ] **Music/Photo Libraries**: Views not yet implemented
 - [ ] **Jellyfin Backend**: Integration pending implementation
 - [ ] **Local Files Backend**: File browser not yet implemented

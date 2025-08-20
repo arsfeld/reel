@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::models::{
     Credentials, Episode, Library, Movie, Show, StreamInfo, User, MediaItem, MusicAlbum, MusicTrack, Photo,
+    HomeSection,
 };
 
 #[async_trait]
@@ -33,7 +34,20 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     
     async fn update_progress(&self, media_id: &str, position: Duration) -> Result<()>;
     
+    async fn mark_watched(&self, media_id: &str) -> Result<()>;
+    
+    async fn mark_unwatched(&self, media_id: &str) -> Result<()>;
+    
+    async fn get_watch_status(&self, media_id: &str) -> Result<WatchStatus>;
+    
     async fn search(&self, query: &str) -> Result<SearchResults>;
+    
+    /// Get homepage sections with suggested content, recently added, etc.
+    async fn get_home_sections(&self) -> Result<Vec<HomeSection>> {
+        // Default implementation returns empty sections
+        // Backends should override this to provide homepage data
+        Ok(Vec::new())
+    }
     
     // Generic media item fetching for all library types
     async fn get_library_items(&self, library_id: &str) -> Result<Vec<MediaItem>> {
@@ -111,6 +125,14 @@ pub struct SearchResults {
     pub movies: Vec<Movie>,
     pub shows: Vec<Show>,
     pub episodes: Vec<Episode>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WatchStatus {
+    pub watched: bool,
+    pub view_count: u32,
+    pub last_watched_at: Option<DateTime<Utc>>,
+    pub playback_position: Option<Duration>,
 }
 
 #[derive(Debug, Clone)]

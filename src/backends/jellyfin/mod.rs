@@ -105,6 +105,21 @@ impl MediaBackend for JellyfinBackend {
         todo!("Updating progress not yet implemented")
     }
     
+    async fn mark_watched(&self, _media_id: &str) -> Result<()> {
+        // TODO: Implement marking as watched in Jellyfin
+        todo!("Mark watched not yet implemented")
+    }
+    
+    async fn mark_unwatched(&self, _media_id: &str) -> Result<()> {
+        // TODO: Implement marking as unwatched in Jellyfin
+        todo!("Mark unwatched not yet implemented")
+    }
+    
+    async fn get_watch_status(&self, _media_id: &str) -> Result<super::traits::WatchStatus> {
+        // TODO: Implement getting watch status from Jellyfin
+        todo!("Get watch status not yet implemented")
+    }
+    
     async fn search(&self, _query: &str) -> Result<SearchResults> {
         // TODO: Implement Jellyfin search
         todo!("Search not yet implemented")

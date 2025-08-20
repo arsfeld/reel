@@ -1,13 +1,12 @@
-use gtk4::{gio, glib, prelude::*, subclass::prelude::*};
+use gtk4::{gio, glib, glib::clone, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
 use std::sync::Arc;
-use tracing::{debug, info, error};
+use tracing::{info, error};
 
-use crate::backends::plex::{PlexAuth, PlexPin, PlexServer, PlexConnection, PlexBackend};
+use crate::backends::plex::{PlexAuth, PlexPin, PlexServer};
 use crate::state::AppState;
-use crate::models::Credentials;
 
 mod imp {
     use super::*;
@@ -108,7 +107,7 @@ mod imp {
             self.server_url_entry.set_text("http://192.168.1.100:32400");
             
             // Enable manual connect when both fields have text
-            let update_manual_button = glib::clone!(@weak obj => move || {
+            let update_manual_button = clone!(#[weak] obj, move || {
                 let imp = obj.imp();
                 let has_url = !imp.server_url_entry.text().is_empty();
                 let has_token = !imp.token_entry.text().is_empty();
@@ -116,7 +115,7 @@ mod imp {
             });
             
             self.server_url_entry.connect_changed(
-                glib::clone!(@strong update_manual_button => move |_| {
+                clone!(#[strong] update_manual_button, move |_| {
                     update_manual_button();
                 })
             );
@@ -141,7 +140,7 @@ mod imp {
 glib::wrapper! {
     pub struct ReelAuthDialog(ObjectSubclass<imp::ReelAuthDialog>)
         @extends gtk4::Widget, adw::Dialog,
-        @implements gtk4::Accessible, gtk4::Buildable;
+        @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget;
 }
 
 impl ReelAuthDialog {

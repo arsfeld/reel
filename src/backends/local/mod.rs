@@ -121,6 +121,21 @@ impl MediaBackend for LocalBackend {
         todo!("Local progress tracking not yet implemented")
     }
     
+    async fn mark_watched(&self, _media_id: &str) -> Result<()> {
+        // TODO: Store watched status locally
+        todo!("Local mark watched not yet implemented")
+    }
+    
+    async fn mark_unwatched(&self, _media_id: &str) -> Result<()> {
+        // TODO: Store unwatched status locally
+        todo!("Local mark unwatched not yet implemented")
+    }
+    
+    async fn get_watch_status(&self, _media_id: &str) -> Result<super::traits::WatchStatus> {
+        // TODO: Get watch status from local storage
+        todo!("Local get watch status not yet implemented")
+    }
+    
     async fn search(&self, _query: &str) -> Result<SearchResults> {
         // TODO: Search local files
         todo!("Local search not yet implemented")

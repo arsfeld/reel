@@ -1,4 +1,4 @@
-use gtk4::{gio, glib, prelude::*, subclass::prelude::*};
+use gtk4::{gio, glib, glib::clone, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
@@ -8,9 +8,11 @@ use tracing::{info, error, warn, debug};
 
 use crate::config::Config;
 use crate::state::AppState;
+use crate::ui::filters::{WatchStatus, SortOrder};
 
 mod imp {
     use super::*;
+    use gtk4::subclass::prelude::*;
     use gtk4::CompositeTemplate;
     
     #[derive(Debug, Default, CompositeTemplate)]
@@ -20,6 +22,10 @@ mod imp {
         pub welcome_page: TemplateChild<adw::StatusPage>,
         #[template_child]
         pub connect_button: TemplateChild<gtk4::Button>,
+        #[template_child]
+        pub home_group: TemplateChild<adw::PreferencesGroup>,
+        #[template_child]
+        pub home_list: TemplateChild<gtk4::ListBox>,
         #[template_child]
         pub libraries_group: TemplateChild<adw::PreferencesGroup>,
         #[template_child]
@@ -44,11 +50,13 @@ mod imp {
         pub state: RefCell<Option<Arc<AppState>>>,
         pub config: RefCell<Option<Arc<Config>>>,
         pub content_stack: RefCell<Option<gtk4::Stack>>,
+        pub home_page: RefCell<Option<crate::ui::pages::HomePage>>,
         pub library_view: RefCell<Option<crate::ui::pages::LibraryView>>,
         pub player_page: RefCell<Option<crate::ui::pages::PlayerPage>>,
         pub show_details_page: RefCell<Option<crate::ui::pages::ShowDetailsPage>>,
         pub back_button: RefCell<Option<gtk4::Button>>,
         pub saved_window_size: RefCell<(i32, i32)>,
+        pub filter_controls: RefCell<Option<gtk4::Box>>,
     }
     
     #[glib::object_subclass]
@@ -91,13 +99,13 @@ mod imp {
             
             // Connect signals
             self.connect_button.connect_clicked(
-                glib::clone!(@weak obj => move |_| {
+                clone!(#[weak] obj, move |_| {
                     obj.show_auth_dialog();
                 })
             );
             
             self.refresh_button.connect_clicked(
-                glib::clone!(@weak obj => move |_| {
+                clone!(#[weak] obj, move |_| {
                     let state_clone = obj.imp().state.borrow().as_ref().map(|s| s.clone());
                     if let Some(state) = state_clone {
                         glib::spawn_future_local(async move {
@@ -107,9 +115,19 @@ mod imp {
                 })
             );
             
+            // Connect to home list row activation
+            self.home_list.connect_row_activated(
+                clone!(#[weak] obj, move |_, row| {
+                    if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
+                        info!("Home selected");
+                        obj.show_home_page();
+                    }
+                })
+            );
+            
             // Connect to library list row activation
             self.libraries_list.connect_row_activated(
-                glib::clone!(@weak obj => move |_, row| {
+                clone!(#[weak] obj, move |_, row| {
                     if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
                         info!("Library selected: {}", action_row.title());
                         
@@ -133,7 +151,8 @@ mod imp {
 glib::wrapper! {
     pub struct ReelMainWindow(ObjectSubclass<imp::ReelMainWindow>)
         @extends gtk4::Widget, gtk4::Window, gtk4::ApplicationWindow, adw::ApplicationWindow,
-        @implements gio::ActionGroup, gio::ActionMap;
+        @implements gio::ActionGroup, gio::ActionMap, gtk4::Accessible, gtk4::Buildable, 
+                    gtk4::ConstraintTarget, gtk4::Native, gtk4::Root, gtk4::ShortcutManager;
 }
 
 impl ReelMainWindow {
@@ -167,7 +186,7 @@ impl ReelMainWindow {
     fn setup_actions(&self, app: &adw::Application) {
         // Preferences action
         let preferences_action = gio::SimpleAction::new("preferences", None);
-        preferences_action.connect_activate(glib::clone!(@weak self as window => move |_, _| {
+        preferences_action.connect_activate(clone!(#[weak(rename_to = window)] self, move |_, _| {
             info!("Opening preferences");
             window.show_preferences();
         }));
@@ -175,7 +194,7 @@ impl ReelMainWindow {
         
         // About action
         let about_action = gio::SimpleAction::new("about", None);
-        about_action.connect_activate(glib::clone!(@weak self as window => move |_, _| {
+        about_action.connect_activate(clone!(#[weak(rename_to = window)] self, move |_, _| {
             window.show_about();
         }));
         app.add_action(&about_action);
@@ -401,6 +420,7 @@ impl ReelMainWindow {
         if connected {
             // Don't set default values here - let update_user_display handle the details
             imp.welcome_page.set_visible(false);  // Hide welcome message
+            imp.home_group.set_visible(true);
             imp.libraries_group.set_visible(true);
             
             // TODO: Load libraries from backend
@@ -409,6 +429,7 @@ impl ReelMainWindow {
             imp.status_row.set_subtitle("No server configured");
             imp.status_icon.set_icon_name(Some("network-offline-symbolic"));
             imp.welcome_page.set_visible(true);   // Show welcome message
+            imp.home_group.set_visible(false);
             imp.libraries_group.set_visible(false);
         }
     }
@@ -613,10 +634,36 @@ impl ReelMainWindow {
     pub fn update_libraries(&self, libraries: Vec<(crate::models::Library, usize)>) {
         let imp = self.imp();
         
-        // Clear existing rows
+        // Clear existing library rows
         while let Some(child) = imp.libraries_list.first_child() {
             imp.libraries_list.remove(&child);
         }
+        
+        // Clear existing home rows
+        while let Some(child) = imp.home_list.first_child() {
+            imp.home_list.remove(&child);
+        }
+        
+        // Add Home row to the home section
+        let home_row = adw::ActionRow::builder()
+            .title("Home")
+            .subtitle("Recently added, continue watching, and more")
+            .activatable(true)
+            .build();
+        
+        let home_icon = gtk4::Image::from_icon_name("user-home-symbolic");
+        home_row.add_prefix(&home_icon);
+        
+        let home_arrow = gtk4::Image::from_icon_name("go-next-symbolic");
+        home_row.add_suffix(&home_arrow);
+        
+        // Use special ID for home
+        home_row.set_widget_name("__home__");
+        
+        imp.home_list.append(&home_row);
+        
+        // Show home group
+        imp.home_group.set_visible(true);
         
         // Add a row for each library
         for (library, item_count) in libraries {
@@ -703,13 +750,54 @@ impl ReelMainWindow {
                 info!("Updating UI with {} cached libraries", library_info.len());
                 self.update_libraries(library_info);
                 
-                // Hide empty state if we have libraries
-                self.imp().empty_state.set_visible(false);
+                // Show home page instead of empty state if we have libraries
+                self.show_home_page();
             }
             Err(e) => {
                 info!("No cached libraries available: {}", e);
             }
         }
+    }
+    
+    fn show_home_page(&self) {
+        let imp = self.imp();
+        
+        // Remove any filter controls since homepage doesn't need them
+        if let Some(filter_controls) = imp.filter_controls.borrow().as_ref() {
+            imp.content_header.remove(filter_controls);
+        }
+        imp.filter_controls.replace(None);
+        
+        // Get or create content stack
+        let content_stack = if imp.content_stack.borrow().is_none() {
+            let stack = gtk4::Stack::new();
+            stack.add_named(&*imp.empty_state, Some("empty"));
+            imp.content_toolbar.set_content(Some(&stack));
+            imp.content_stack.replace(Some(stack.clone()));
+            stack
+        } else {
+            imp.content_stack.borrow().as_ref().unwrap().clone()
+        };
+        
+        // Create home page if it doesn't exist
+        if content_stack.child_by_name("home").is_none() {
+            if let Some(state) = &*imp.state.borrow() {
+                let home_page = crate::ui::pages::HomePage::new(state.clone());
+                content_stack.add_named(&home_page, Some("home"));
+                imp.home_page.replace(Some(home_page));
+            }
+        } else {
+            // Refresh the home page if it already exists
+            if let Some(home_page) = &*imp.home_page.borrow() {
+                home_page.refresh();
+            }
+        }
+        
+        // Show the home page
+        content_stack.set_visible_child_name("home");
+        
+        // Update header title
+        imp.content_header.set_title_widget(Some(&gtk4::Label::new(Some("Home"))));
     }
     
     pub async fn trigger_sync(&self, state: Arc<AppState>) {
@@ -785,9 +873,9 @@ impl ReelMainWindow {
                         info!("Updating UI with {} libraries", library_info.len());
                         self.update_libraries(library_info);
                         
-                        // Hide empty state if we have libraries
+                        // Show home page if we have libraries
                         if !libraries.is_empty() {
-                            self.imp().empty_state.set_visible(false);
+                            self.show_home_page();
                         }
                     }
                     Err(e) => {
@@ -997,14 +1085,74 @@ impl ReelMainWindow {
         player_header.set_show_title(false);
         player_header.set_show_end_title_buttons(true);  // Keep close button visible
         
-        // Create a simple back button for the overlay header
-        let back_button = gtk4::Button::builder()
-            .icon_name("go-previous-symbolic")
-            .tooltip_text("Back to Library")
-            .build();
-        back_button.add_css_class("osd");
-        
-        player_header.pack_start(&back_button);
+        // Always add back button for player since we need to stop playback
+        // The NavigationSplitView's sidebar toggle doesn't handle video cleanup
+        {
+            // Create a simple back button for the overlay header
+            let back_button = gtk4::Button::builder()
+                .icon_name("go-previous-symbolic")
+                .tooltip_text("Back to Library")
+                .build();
+            back_button.add_css_class("osd");
+            
+            player_header.pack_start(&back_button);
+            
+            // Connect the back button click handler with all necessary cleanup
+            let window_weak = self.downgrade();
+            back_button.connect_clicked(move |_| {
+                if let Some(window) = window_weak.upgrade() {
+                    // Stop the player before going back
+                    if let Some(player_page) = window.imp().player_page.borrow().as_ref() {
+                        let player_page = player_page.clone();
+                        glib::spawn_future_local(async move {
+                            player_page.stop().await;
+                        });
+                    }
+                    
+                    // Show the main header bar again
+                    window.imp().content_header.set_visible(true);
+                    
+                    // Restore saved window size first
+                    let (width, height) = *window.imp().saved_window_size.borrow();
+                    window.set_default_size(width, height);
+                    
+                    // First restore the sidebar state
+                    if let Some(content) = window.content() {
+                        if let Some(split_view) = content.downcast_ref::<adw::NavigationSplitView>() {
+                            // Ensure both sidebar and content are visible
+                            split_view.set_collapsed(false);
+                            split_view.set_show_content(true);
+                        }
+                    }
+                    
+                    // Navigate back to library view
+                    // First try to just show the existing library view
+                    if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
+                        stack.set_visible_child_name("library");
+                    }
+                    
+                    // If we need to properly restore the library view with correct state
+                    if let Some(state) = window.imp().state.borrow().as_ref() {
+                        let state = state.clone();
+                        let window_weak = window.downgrade();
+                        glib::spawn_future_local(async move {
+                            if let Some(window) = window_weak.upgrade() {
+                                // Get the current library from state if available
+                                let backend_manager = state.backend_manager.read().await;
+                                if let Some((backend_id, backend)) = backend_manager.get_active_backend() {
+                                    // Get the libraries from the backend
+                                    if let Ok(libraries) = backend.get_libraries().await {
+                                        if let Some(library) = libraries.first() {
+                                            window.show_library_view(backend_id.clone(), library.clone()).await;
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+        }
         
         // Add the overlay header to the player page's overlay
         // The player page widget is a Box, and its first child is the Overlay
@@ -1053,38 +1201,6 @@ impl ReelMainWindow {
                 overlay.add_controller(hover_controller);
             }
         }
-        
-        let window_weak = self.downgrade();
-        back_button.connect_clicked(move |_| {
-            if let Some(window) = window_weak.upgrade() {
-                // Stop the player before going back
-                if let Some(player_page) = window.imp().player_page.borrow().as_ref() {
-                    let player_page = player_page.clone();
-                    glib::spawn_future_local(async move {
-                        player_page.stop().await;
-                    });
-                }
-                
-                // Show the main header bar again
-                window.imp().content_header.set_visible(true);
-                
-                // Show the sidebar again
-                if let Some(content) = window.content() {
-                    if let Some(split_view) = content.downcast_ref::<adw::NavigationSplitView>() {
-                        split_view.set_collapsed(false);
-                    }
-                }
-                
-                // Restore saved window size
-                let (width, height) = *window.imp().saved_window_size.borrow();
-                window.set_default_size(width, height);
-                
-                // Go back to library view
-                if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
-                    stack.set_visible_child_name("library");
-                }
-            }
-        });
         
         // Save current window size before changing it
         let (current_width, current_height) = self.default_size();
@@ -1208,9 +1324,12 @@ impl ReelMainWindow {
         // Update the content page title
         imp.content_page.set_title(&library.title);
         
-        // Remove any existing back button
+        // Remove any existing back button and filter controls
         if let Some(old_button) = imp.back_button.borrow().as_ref() {
             imp.content_header.remove(old_button);
+        }
+        if let Some(old_controls) = imp.filter_controls.borrow().as_ref() {
+            imp.content_header.remove(old_controls);
         }
         
         // Create a new back button for the header bar
@@ -1236,6 +1355,11 @@ impl ReelMainWindow {
             .single_line_mode(true)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
             .build()));
+        
+        // Create filter controls for the header bar
+        let filter_controls = self.create_filter_controls(&library_view);
+        imp.content_header.pack_end(&filter_controls);
+        imp.filter_controls.replace(Some(filter_controls));
         
         // Load the library
         library_view.load_library(backend_id, library).await;
@@ -1264,11 +1388,16 @@ impl ReelMainWindow {
         // Reset content page title
         imp.content_page.set_title("Content");
         
-        // Remove back button if it exists
+        // Remove back button and filter controls if they exist
         if let Some(back_button) = imp.back_button.borrow().as_ref() {
             imp.content_header.remove(back_button);
         }
         imp.back_button.replace(None);
+        
+        if let Some(filter_controls) = imp.filter_controls.borrow().as_ref() {
+            imp.content_header.remove(filter_controls);
+        }
+        imp.filter_controls.replace(None);
         
         // Reset header bar title
         imp.content_header.set_title_widget(gtk4::Widget::NONE);
@@ -1279,5 +1408,119 @@ impl ReelMainWindow {
                 split_view.set_show_content(false);
             }
         }
+    }
+    
+    fn create_filter_controls(&self, library_view: &crate::ui::pages::LibraryView) -> gtk4::Box {
+        let controls_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(8)
+            .build();
+        
+        // Create watch status dropdown
+        let watch_status_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(4)
+            .build();
+        
+        let watch_label = gtk4::Label::builder()
+            .label("Show:")
+            .build();
+        watch_label.add_css_class("dim-label");
+        
+        let watch_model = gtk4::StringList::new(&[
+            "All",
+            "Unwatched",
+            "Watched",
+            "In Progress"
+        ]);
+        
+        let watch_dropdown = gtk4::DropDown::builder()
+            .model(&watch_model)
+            .selected(0)
+            .tooltip_text("Filter by watch status")
+            .build();
+        
+        watch_status_box.append(&watch_label);
+        watch_status_box.append(&watch_dropdown);
+        
+        // Create sort order dropdown
+        let sort_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(4)
+            .build();
+        
+        let sort_label = gtk4::Label::builder()
+            .label("Sort:")
+            .build();
+        sort_label.add_css_class("dim-label");
+        
+        let sort_model = gtk4::StringList::new(&[
+            "Title (A-Z)",
+            "Title (Z-A)",
+            "Year (Oldest)",
+            "Year (Newest)",
+            "Rating (Low-High)",
+            "Rating (High-Low)",
+            "Date Added (Oldest)",
+            "Date Added (Newest)"
+        ]);
+        
+        let sort_dropdown = gtk4::DropDown::builder()
+            .model(&sort_model)
+            .selected(0)
+            .tooltip_text("Sort order")
+            .build();
+        
+        sort_box.append(&sort_label);
+        sort_box.append(&sort_dropdown);
+        
+        // Connect watch status filter handler
+        let library_view_weak = library_view.downgrade();
+        watch_dropdown.connect_selected_notify(move |dropdown| {
+            if let Some(view) = library_view_weak.upgrade() {
+                let status = match dropdown.selected() {
+                    0 => WatchStatus::All,
+                    1 => WatchStatus::Unwatched,
+                    2 => WatchStatus::Watched,
+                    3 => WatchStatus::InProgress,
+                    _ => WatchStatus::All,
+                };
+                view.update_watch_status_filter(status);
+            }
+        });
+        
+        // Connect sort order handler
+        let library_view_weak = library_view.downgrade();
+        sort_dropdown.connect_selected_notify(move |dropdown| {
+            if let Some(view) = library_view_weak.upgrade() {
+                let order = match dropdown.selected() {
+                    0 => SortOrder::TitleAsc,
+                    1 => SortOrder::TitleDesc,
+                    2 => SortOrder::YearAsc,
+                    3 => SortOrder::YearDesc,
+                    4 => SortOrder::RatingAsc,
+                    5 => SortOrder::RatingDesc,
+                    6 => SortOrder::DateAddedAsc,
+                    7 => SortOrder::DateAddedDesc,
+                    _ => SortOrder::TitleAsc,
+                };
+                view.update_sort_order(order);
+            }
+        });
+        
+        // Add controls to the box
+        controls_box.append(&watch_status_box);
+        controls_box.append(&gtk4::Separator::new(gtk4::Orientation::Vertical));
+        controls_box.append(&sort_box);
+        
+        // Future: Add more filter buttons here (genre, year range, etc.)
+        // Example:
+        // let filter_button = gtk4::Button::builder()
+        //     .icon_name("view-filter-symbolic")
+        //     .tooltip_text("More filters")
+        //     .build();
+        // controls_box.append(&filter_button);
+        
+        controls_box
     }
 }

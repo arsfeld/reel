@@ -63,6 +63,9 @@ impl CacheManager {
                 media_id TEXT PRIMARY KEY,
                 position INTEGER NOT NULL,
                 duration INTEGER NOT NULL,
+                watched BOOLEAN DEFAULT FALSE,
+                view_count INTEGER DEFAULT 0,
+                last_watched_at INTEGER,
                 updated_at INTEGER DEFAULT (unixepoch())
             )
             "#,

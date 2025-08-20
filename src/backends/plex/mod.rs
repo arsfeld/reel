@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use std::fmt;
 use dirs;
 
-use super::traits::{MediaBackend, SearchResults};
+use super::traits::{MediaBackend, SearchResults, WatchStatus};
 use crate::models::{
     Credentials, Episode, Library, Movie, Show, StreamInfo, User,
 };
@@ -360,9 +360,35 @@ impl MediaBackend for PlexBackend {
         api.update_progress(media_id, position).await
     }
     
+    async fn mark_watched(&self, media_id: &str) -> Result<()> {
+        let api = self.get_api().await?;
+        api.mark_watched(media_id).await
+    }
+    
+    async fn mark_unwatched(&self, media_id: &str) -> Result<()> {
+        let api = self.get_api().await?;
+        api.mark_unwatched(media_id).await
+    }
+    
+    async fn get_watch_status(&self, media_id: &str) -> Result<super::traits::WatchStatus> {
+        // For now, return a default status - could fetch from API if needed
+        // In practice, the watch status is already included in get_movies/shows/episodes
+        Ok(super::traits::WatchStatus {
+            watched: false,
+            view_count: 0,
+            last_watched_at: None,
+            playback_position: None,
+        })
+    }
+    
     async fn search(&self, _query: &str) -> Result<SearchResults> {
         // TODO: Implement Plex search
         todo!("Search not yet implemented")
+    }
+    
+    async fn get_home_sections(&self) -> Result<Vec<crate::models::HomeSection>> {
+        let api = self.get_api().await?;
+        api.get_home_sections().await
     }
     
     async fn get_backend_info(&self) -> super::traits::BackendInfo {

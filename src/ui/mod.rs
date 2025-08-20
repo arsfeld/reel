@@ -4,6 +4,7 @@ pub mod widgets;
 pub mod components;
 pub mod pages;
 pub mod preferences_window;
+pub mod filters;
 
 // Export the Blueprint-based components
 pub use main_window::ReelMainWindow;

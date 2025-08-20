@@ -42,6 +42,10 @@ pub struct Movie {
     pub crew: Vec<Person>,
     pub added_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
+    pub watched: bool,
+    pub view_count: u32,
+    pub last_watched_at: Option<DateTime<Utc>>,
+    pub playback_position: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +62,9 @@ pub struct Show {
     pub cast: Vec<Person>,
     pub added_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
+    pub watched_episode_count: u32,
+    pub total_episode_count: u32,
+    pub last_watched_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +85,10 @@ pub struct Episode {
     pub thumbnail_url: Option<String>,
     pub overview: Option<String>,
     pub air_date: Option<DateTime<Utc>>,
+    pub watched: bool,
+    pub view_count: u32,
+    pub last_watched_at: Option<DateTime<Utc>>,
+    pub playback_position: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +169,27 @@ pub enum MediaItem {
     Photo(Photo),
 }
 
+/// Homepage section with a collection of media items
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HomeSection {
+    pub id: String,
+    pub title: String,
+    pub section_type: HomeSectionType,
+    pub items: Vec<MediaItem>,
+}
+
+/// Type of homepage section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HomeSectionType {
+    RecentlyAdded,
+    ContinueWatching,
+    Suggested,
+    TopRated,
+    Trending,
+    RecentlyPlayed,
+    Custom(String),
+}
+
 impl MediaItem {
     pub fn id(&self) -> &str {
         match self {
@@ -178,6 +210,39 @@ impl MediaItem {
             MediaItem::MusicAlbum(a) => &a.title,
             MediaItem::MusicTrack(t) => &t.title,
             MediaItem::Photo(p) => &p.title,
+        }
+    }
+    
+    pub fn is_watched(&self) -> bool {
+        match self {
+            MediaItem::Movie(m) => m.watched,
+            MediaItem::Show(s) => s.watched_episode_count > 0 && s.watched_episode_count == s.total_episode_count,
+            MediaItem::Episode(e) => e.watched,
+            _ => false,
+        }
+    }
+    
+    pub fn is_partially_watched(&self) -> bool {
+        match self {
+            MediaItem::Show(s) => s.watched_episode_count > 0 && s.watched_episode_count < s.total_episode_count,
+            MediaItem::Movie(m) => m.playback_position.is_some() && !m.watched,
+            MediaItem::Episode(e) => e.playback_position.is_some() && !e.watched,
+            _ => false,
+        }
+    }
+    
+    pub fn watch_progress(&self) -> Option<f32> {
+        match self {
+            MediaItem::Show(s) if s.total_episode_count > 0 => {
+                Some(s.watched_episode_count as f32 / s.total_episode_count as f32)
+            }
+            MediaItem::Movie(m) => {
+                m.playback_position.map(|pos| pos.as_secs_f32() / m.duration.as_secs_f32())
+            }
+            MediaItem::Episode(e) => {
+                e.playback_position.map(|pos| pos.as_secs_f32() / e.duration.as_secs_f32())
+            }
+            _ => None,
         }
     }
 }
