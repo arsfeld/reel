@@ -29,17 +29,17 @@
   <screenshots>
     <screenshot type="default">
       <caption>Main window showing media library</caption>
-      <image>https://raw.githubusercontent.com/arsfeld/reel/main/screenshots/main-window.png</image>
+      <image>https://raw.githubusercontent.com/arsfeld/gnome-reel/main/screenshots/main-window.png</image>
     </screenshot>
     <screenshot>
       <caption>TV show details with episode list</caption>
-      <image>https://raw.githubusercontent.com/arsfeld/reel/main/screenshots/show-details.png</image>
+      <image>https://raw.githubusercontent.com/arsfeld/gnome-reel/main/screenshots/show-details.png</image>
     </screenshot>
   </screenshots>
   
-  <url type="homepage">https://github.com/arsfeld/reel</url>
-  <url type="bugtracker">https://github.com/arsfeld/reel/issues</url>
-  <url type="vcs-browser">https://github.com/arsfeld/reel</url>
+  <url type="homepage">https://github.com/arsfeld/gnome-reel</url>
+  <url type="bugtracker">https://github.com/arsfeld/gnome-reel/issues</url>
+  <url type="vcs-browser">https://github.com/arsfeld/gnome-reel</url>
   
   <developer id="dev.arsfeld">
     <name>arsfeld</name>
@@ -64,14 +64,18 @@
   </content_rating>
   
   <releases>
-    <release version="0.1.0" date="2024-01-01">
+    <release version="0.1.0" date="2025-08-20">
       <description>
-        <p>Initial release with basic Plex support:</p>
+        <p>First major release with comprehensive Plex support:</p>
         <ul>
-          <li>Plex OAuth authentication</li>
-          <li>Server discovery and connection</li>
-          <li>Library browsing with metadata</li>
-          <li>Offline caching with SQLite</li>
+          <li>Full Plex integration with OAuth authentication</li>
+          <li>Cinematic UI with backdrop images and metadata</li>
+          <li>Hardware-accelerated GStreamer video playback</li>
+          <li>Watch status tracking and progress indicators</li>
+          <li>Continue Watching and Recently Added sections</li>
+          <li>Multi-level image caching with HTTP/2 optimization</li>
+          <li>Instant startup with SQLite offline cache</li>
+          <li>Library filtering and sorting capabilities</li>
         </ul>
       </description>
     </release>
