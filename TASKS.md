@@ -32,7 +32,7 @@
   - [x] Parse movie metadata (title, year, rating, poster)
   - [x] Create movie grid view component
   - [x] Implement lazy loading for large libraries
-  - [ ] Add movie detail view
+  - [x] Add movie detail view (COMPLETED with premium design!)
 
 - [x] **TV Shows Library Implementation**
   - [x] Fetch shows from library endpoint
@@ -280,6 +280,69 @@ window.sync_and_update_libraries(backend_id, backend)
 
 ## Current Priority Tasks
 
+### 🔥 ULTRA-CRITICAL: Image Loading Performance (MUST FIX FIRST)
+
+#### Core Performance Issues
+- [ ] **Fix Request Coalescing** (Priority 1)
+  - [ ] Add pending_downloads tracking to prevent duplicate requests
+  - [ ] Implement watch channels for sharing download results
+  - [ ] Prevent race conditions with multiple simultaneous loads of same URL
+  - [ ] Expected impact: 50% faster initial render, 30-40% bandwidth reduction
+
+- [ ] **Optimize Processing Thresholds** (Priority 2)
+  - [ ] Lower processing threshold to 100KB for medium, 250KB for large
+  - [ ] Skip all processing for Plex's pre-sized 200x300 thumbnails
+  - [ ] Remove WebP conversion attempts (GDK doesn't support it well)
+  - [ ] Expected impact: 30% reduction in CPU usage
+
+- [ ] **Implement Proper Viewport Detection** (Priority 3)
+  - [ ] Replace approximate calculations with actual widget geometry
+  - [ ] Add proper intersection observer pattern for visibility
+  - [ ] Cancel pending loads when cards go off-screen
+  - [ ] Clean up load handles to prevent memory leaks
+  - [ ] Expected impact: 60% better scroll performance
+
+#### Network & Caching Optimizations
+- [ ] **Enable HTTP/2 with Connection Reuse** (Priority 4)
+  - [ ] Force HTTP/2 for known Plex servers with http2_prior_knowledge
+  - [ ] Add TCP keepalive and HTTP/2 keepalive settings
+  - [ ] Increase connection pool for better concurrency
+  - [ ] Expected impact: 25% faster network operations
+
+- [ ] **Replace HashMap Cache with LRU** (Priority 5)
+  - [ ] Use proper LRU cache with O(1) operations
+  - [ ] Fix inefficient sort-based eviction
+  - [ ] Add cache pre-warming for predictive loading
+  - [ ] Expected impact: 20% memory reduction
+
+- [ ] **Implement Adaptive Quality Loading** (Priority 6)
+  - [ ] Load Small size immediately for all cards
+  - [ ] Upgrade to Medium after 500ms if still visible
+  - [ ] Progressive enhancement based on visibility duration
+  - [ ] Expected impact: Instant perceived performance
+
+- [ ] **Add Predictive Preloading** (Priority 7)
+  - [ ] Preload next section's first 4 items on homepage
+  - [ ] Calculate prefetch range based on scroll velocity
+  - [ ] Implement user pattern learning for smart prefetch
+  - [ ] Expected impact: Zero-latency scrolling experience
+
+### 🚀 Library Performance Optimizations (SECOND PRIORITY)
+
+#### FlowBox & UI Rendering
+- [ ] **Implement Model-Based FlowBox with Recycling**
+  - [ ] Replace child removal/recreation with ListStore model binding
+  - [ ] Reuse existing MediaCard widgets when filtering/sorting
+  - [ ] Implement dirty tracking for differential updates
+  - [ ] Expected impact: 60-70% reduction in filter/sort operation time
+
+#### Memory & Cache Optimizations
+- [ ] **Smart Prefetching System**
+  - [ ] Calculate prefetch range based on scroll velocity
+  - [ ] Implement predictive loading based on user patterns
+  - [ ] Combine immediate and prefetch passes into single operation
+  - [ ] Expected impact: Smoother scrolling experience
+
 ### ✅ Completed
 1. [x] **Blueprint UI Implementation**
    - [x] Set up GNOME Blueprint for UI development
@@ -315,6 +378,19 @@ window.sync_and_update_libraries(backend_id, backend)
    - [x] Auto-sync on authentication
 
 ### ✅ Recently Completed
+
+**Movie and Show Details Pages** (December 2024)
+- [x] Created slick, modern movie details page with Blueprint template
+- [x] Added cinematic backdrop images with gradient overlays
+- [x] Implemented enhanced poster styling with drop shadows and rounded corners
+- [x] Added loading placeholders with smooth transitions
+- [x] Created file/stream information display showing codecs and quality
+- [x] Converted show details page to Blueprint for consistency
+- [x] Enhanced episode cards with hover effects and play overlays
+- [x] Added glass-morphism effects on buttons
+- [x] Implemented Mark as Watched functionality for movies and seasons
+
+### ✅ Previously Completed
 1. [x] **Library Navigation**
    - [x] Navigate to library views when clicked
    - [x] Create media grid view component (generic for all types)
@@ -354,22 +430,35 @@ window.sync_and_update_libraries(backend_id, backend)
    - [x] Viewport-based lazy loading to prevent UI freezing
    - [x] Concurrent download throttling
 
-2. [x] **Media Detail Views** (Partially Complete)
+2. [x] **Media Detail Views** (COMPLETED with Premium Design!)
    - [x] Create media detail page layout
-   - [ ] Implement movie detail view with full metadata
-   - [x] **TV Show Detail View** (COMPLETED!)
+   - [x] **Movie Detail View** (COMPLETED!)
+     - [x] Cinematic backdrop image with gradient overlay
+     - [x] Enhanced poster with drop shadow and rounded corners (3D effect)
+     - [x] Loading placeholder with smooth transitions
+     - [x] Synopsis and metadata display
+     - [x] Genre chips with modern styling
+     - [x] File/stream information display (codec, resolution, bitrate)
+     - [x] Play button with glass-morphism effect
+     - [x] Mark as Watched toggle functionality
+     - [x] Direct Play/Transcode indicator
+   - [x] **TV Show Detail View** (ENHANCED with Blueprint!)
+     - [x] Converted to Blueprint template for consistency
+     - [x] Cinematic backdrop image matching movie details style
+     - [x] Enhanced poster with same 3D effect as movies
      - [x] Modern layout with poster and show info
-     - [x] Season dropdown selector for easy navigation
-     - [x] Horizontal episode carousel with thumbnails
-     - [x] Episode cards with titles, duration, and episode numbers
+     - [x] Season dropdown selector integrated in action row
+     - [x] Horizontal episode carousel with enhanced cards
+     - [x] Episode cards with hover effects and play overlay
      - [x] Watch status indicators on episodes
      - [x] Progress bars for partially watched episodes
      - [x] Click to play functionality for episodes
-     - [x] Genre tags display
+     - [x] Genre chips matching movie details style
      - [x] Rating display with star icon
-   - [x] Display synopsis for shows
+     - [x] Mark Season as Watched functionality
+   - [x] Display synopsis for shows and movies
    - [ ] Display cast and crew information
-   - [x] Add play button functionality (for episodes)
+   - [x] Add play button functionality (for movies and episodes)
 
 3. [ ] **Library Enhancements**
    - [x] Implement lazy loading for large libraries
@@ -406,14 +495,20 @@ window.sync_and_update_libraries(backend_id, backend)
 ## Known Issues & Troubleshooting
 
 ### Current Issues
+- [ ] **Homepage Issues** (CRITICAL):
+  - [ ] **Horizontal scrolling broken**: Scrolling horizontally on homepage sections doesn't trigger image loading
+  - [ ] **Continue Watching completely broken**: 
+    - Thumbnails don't load at all
+    - Items don't open when clicked (navigation broken)
+  - [ ] **Scroll handler not working**: The connect_hadjustment_notify handler doesn't properly detect scroll events
 - [ ] **Music/Photo Libraries**: Views not yet implemented
 - [ ] **Jellyfin Backend**: Integration pending implementation
 - [ ] **Local Files Backend**: File browser not yet implemented
 - [ ] **Image Loading Performance**: Still slow despite optimizations - needs further work
   - Loading takes 100-500ms per image even with parallel downloads
   - UI still feels sluggish when scrolling through large libraries
-  - May need to implement thumbnail generation or smaller image variants
-  - Consider pre-caching images in background after library load
+  - Plex now sends 200x300 thumbnails but still needs optimization
+  - Reduced concurrent downloads to 10 to prevent overload
 - [ ] **Minor Player UI Issues**: 
   - Occasional duplicate back button in player overlay (mostly fixed)
   - Fullscreen button exists but not fully implemented
