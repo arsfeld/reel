@@ -103,26 +103,48 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 
 See [TASKS.md](TASKS.md) for the detailed development roadmap.
 
-### ✅ Implemented
-- Plex OAuth authentication
-- Server discovery and connection management
-- Library and metadata synchronization
-- SQLite-based offline cache
-- Blueprint UI templates
-- Rust async/await architecture
+### ✅ Completed Features
+- **Authentication & Server Management**
+  - Plex OAuth authentication with PIN-based flow
+  - Automatic server discovery and connection
+  - Multi-backend architecture supporting Plex, Jellyfin (planned), and local files (planned)
+  - Persistent authentication and server preferences
 
-### 🔧 In Progress
-- Media grid views with lazy loading
-- Image caching system
-- GStreamer integration for playback
-- Rust error handling improvements
+- **Media Browsing & Playback**
+  - Complete movie and TV show libraries with grid views
+  - Cinematic detail pages with backdrop images and metadata
+  - GStreamer-based video playback with hardware acceleration
+  - Immersive player with auto-hiding controls
+  - Watch status tracking and progress indicators
+  - Continue watching and recently added sections
 
-### 📋 Planned
-- Jellyfin backend (implementing MediaBackend trait)
-- Local file support
-- Download manager for offline viewing
-- Continue watching / playback progress
-- Full-text search with SQLite FTS5
+- **Performance & Architecture**
+  - Multi-level image caching (memory + disk) with request coalescing
+  - HTTP/2 connection pooling for faster API calls
+  - Lazy loading with viewport-based rendering
+  - SQLite-based offline cache for instant startup
+  - Backend-agnostic UI architecture for extensibility
+  - Async/await throughout with Tokio runtime
+
+- **User Experience**
+  - Homepage with dynamic content sections
+  - Library filtering (watched/unwatched) and sorting
+  - Library visibility management
+  - Modern Blueprint-based UI with GNOME HIG compliance
+  - Smooth transitions and loading states
+
+### 🔧 In Development
+- Fullscreen playback mode
+- Playback position syncing to server
+- Advanced filtering (genre, year, rating)
+- Search functionality
+
+### 📋 Roadmap
+- **v0.2.0** - Jellyfin backend integration
+- **v0.3.0** - Local file support with metadata providers
+- **v0.4.0** - Offline download manager
+- **v0.5.0** - Music library support
+- **v1.0.0** - Stable release with complete feature set
 
 ## 🛠️ Tech Stack
 
