@@ -7,9 +7,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use super::traits::{MediaBackend, SearchResults};
-use crate::models::{
-    Credentials, Episode, Library, Movie, Show, StreamInfo, User,
-};
+use crate::models::{Credentials, Episode, Library, Movie, Show, StreamInfo, User};
 
 #[derive(Debug)]
 pub struct LocalBackend {
@@ -26,7 +24,7 @@ impl LocalBackend {
             last_scan_time: Arc::new(RwLock::new(None)),
         }
     }
-    
+
     pub fn with_id(id: String) -> Self {
         Self {
             media_directories: Arc::new(RwLock::new(Vec::new())),
@@ -34,7 +32,7 @@ impl LocalBackend {
             last_scan_time: Arc::new(RwLock::new(None)),
         }
     }
-    
+
     pub async fn add_directory(&self, path: PathBuf) -> Result<()> {
         let mut dirs = self.media_directories.write().await;
         if !dirs.contains(&path) {
@@ -49,7 +47,7 @@ impl MediaBackend for LocalBackend {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-    
+
     async fn initialize(&self) -> Result<Option<User>> {
         // Local backend doesn't need authentication
         // Check if we have configured directories
@@ -58,7 +56,7 @@ impl MediaBackend for LocalBackend {
             // No directories configured yet
             return Ok(None);
         }
-        
+
         // Return a local user
         Ok(Some(User {
             id: "local".to_string(),
@@ -67,11 +65,11 @@ impl MediaBackend for LocalBackend {
             avatar_url: None,
         }))
     }
-    
+
     async fn is_initialized(&self) -> bool {
         !self.media_directories.read().await.is_empty()
     }
-    
+
     async fn authenticate(&self, _credentials: Credentials) -> Result<User> {
         // Local backend doesn't need authentication
         Ok(User {
@@ -81,27 +79,27 @@ impl MediaBackend for LocalBackend {
             avatar_url: None,
         })
     }
-    
+
     async fn get_libraries(&self) -> Result<Vec<Library>> {
         // TODO: Scan local directories for media
         todo!("Local library scanning not yet implemented")
     }
-    
+
     async fn get_movies(&self, _library_id: &str) -> Result<Vec<Movie>> {
         // TODO: Scan local directory for movies
         todo!("Local movie scanning not yet implemented")
     }
-    
+
     async fn get_shows(&self, _library_id: &str) -> Result<Vec<Show>> {
         // TODO: Scan local directory for TV shows
         todo!("Local show scanning not yet implemented")
     }
-    
+
     async fn get_episodes(&self, _show_id: &str, _season: u32) -> Result<Vec<Episode>> {
         // TODO: Scan local directory for episodes
         todo!("Local episode scanning not yet implemented")
     }
-    
+
     async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo> {
         // For local files, the stream URL is just the file path
         Ok(StreamInfo {
@@ -115,41 +113,41 @@ impl MediaBackend for LocalBackend {
             quality_options: vec![], // Local files don't need quality options
         })
     }
-    
+
     async fn update_progress(&self, _media_id: &str, _position: Duration) -> Result<()> {
         // TODO: Store progress locally
         todo!("Local progress tracking not yet implemented")
     }
-    
+
     async fn mark_watched(&self, _media_id: &str) -> Result<()> {
         // TODO: Store watched status locally
         todo!("Local mark watched not yet implemented")
     }
-    
+
     async fn mark_unwatched(&self, _media_id: &str) -> Result<()> {
         // TODO: Store unwatched status locally
         todo!("Local mark unwatched not yet implemented")
     }
-    
+
     async fn get_watch_status(&self, _media_id: &str) -> Result<super::traits::WatchStatus> {
         // TODO: Get watch status from local storage
         todo!("Local get watch status not yet implemented")
     }
-    
+
     async fn search(&self, _query: &str) -> Result<SearchResults> {
         // TODO: Search local files
         todo!("Local search not yet implemented")
     }
-    
+
     async fn get_backend_id(&self) -> String {
         self.backend_id.clone()
     }
-    
+
     async fn get_last_sync_time(&self) -> Option<DateTime<Utc>> {
         // For local backend, we return the last scan time
         *self.last_scan_time.read().await
     }
-    
+
     async fn supports_offline(&self) -> bool {
         true // Local files are always available offline
     }

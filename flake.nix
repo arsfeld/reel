@@ -15,8 +15,8 @@
           inherit system overlays;
         };
 
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [ "rust-src" "rust-analyzer" ];
+        rustToolchain = pkgs.rust-bin.stable."1.89.0".default.override {
+          extensions = [ "rust-src" "rust-analyzer" "rustfmt" "clippy" ];
         };
 
         nativeBuildInputs = with pkgs; [
@@ -111,6 +111,18 @@
           fi
         '';
 
+        formatCode = pkgs.writeShellScriptBin "format-code" ''
+          echo "Formatting Rust code..."
+          ${rustToolchain}/bin/cargo fmt
+          echo "Code formatting complete!"
+        '';
+
+        clippyFix = pkgs.writeShellScriptBin "clippy-fix" ''
+          echo "Running clippy with auto-fix..."
+          ${rustToolchain}/bin/cargo clippy --fix --allow-dirty --allow-staged
+          echo "Clippy fixes applied!"
+        '';
+
         devTools = with pkgs; [
           # Development tools
           cargo-watch
@@ -123,8 +135,7 @@
           sqlx-cli
           
           # Code quality
-          rustfmt
-          clippy
+          # rustfmt and clippy are provided by rustToolchain
           pre-commit
           
           # Debugging
@@ -150,6 +161,8 @@
             flatpakBuild
             flatpakBuildInstall
             flatpakLint
+            formatCode
+            clippyFix
           ];
 
           shellHook = ''
@@ -164,8 +177,12 @@
             echo "  cargo run      - Run the application"
             echo "  cargo test     - Run tests"
             echo "  cargo watch    - Watch for changes and rebuild"
-            echo "  cargo fmt      - Format code"
-            echo "  cargo clippy   - Run linter"
+            echo ""
+            echo "Code quality commands:"
+            echo "  format-code    - Format all Rust code with rustfmt"
+            echo "  clippy-fix     - Run clippy and auto-fix issues"
+            echo "  cargo fmt      - Format code (standard)"
+            echo "  cargo clippy   - Run linter (standard)"
             echo ""
             echo "Flatpak commands:"
             echo "  flatpak-update-sources - Update cargo-sources.json"

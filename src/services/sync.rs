@@ -1,18 +1,18 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn, error};
+use tracing::{error, info};
 
 use crate::backends::traits::MediaBackend;
-use crate::models::{Library, Movie, Show, MediaItem};
+use crate::models::{Library, MediaItem, Movie, Show};
 use crate::services::cache::CacheManager;
 
 #[derive(Debug, Clone)]
 pub enum SyncType {
-    Full,           // Full sync of all data
-    Incremental,    // Only changes since last sync
+    Full,            // Full sync of all data
+    Incremental,     // Only changes since last sync
     Library(String), // Specific library
     Media(String),   // Specific media item
 }
@@ -20,9 +20,18 @@ pub enum SyncType {
 #[derive(Debug, Clone)]
 pub enum SyncStatus {
     Idle,
-    Syncing { progress: f32, current_item: String },
-    Completed { at: DateTime<Utc>, items_synced: usize },
-    Failed { error: String, at: DateTime<Utc> },
+    Syncing {
+        progress: f32,
+        current_item: String,
+    },
+    Completed {
+        at: DateTime<Utc>,
+        items_synced: usize,
+    },
+    Failed {
+        error: String,
+        at: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -46,7 +55,7 @@ impl SyncManager {
             sync_status: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-    
+
     /// Sync all data from a backend
     pub async fn sync_backend(
         &self,
@@ -56,7 +65,7 @@ impl SyncManager {
         let start_time = std::time::Instant::now();
         let mut errors = Vec::new();
         let mut items_synced = 0;
-        
+
         // Update sync status
         {
             let mut status = self.sync_status.write().await;
@@ -68,14 +77,14 @@ impl SyncManager {
                 },
             );
         }
-        
+
         info!("Starting sync for backend: {}", backend_id);
-        
+
         // Fetch libraries
         match backend.get_libraries().await {
             Ok(libraries) => {
                 info!("Found {} libraries", libraries.len());
-                
+
                 // Cache libraries
                 for library in &libraries {
                     let cache_key = format!("{}:library:{}", backend_id, library.id);
@@ -86,18 +95,22 @@ impl SyncManager {
                         items_synced += 1;
                     }
                 }
-                
+
                 // Cache the library list
                 let libraries_key = format!("{}:libraries", backend_id);
-                if let Err(e) = self.cache.set_media(&libraries_key, "library_list", &libraries).await {
+                if let Err(e) = self
+                    .cache
+                    .set_media(&libraries_key, "library_list", &libraries)
+                    .await
+                {
                     error!("Failed to cache library list: {}", e);
                     errors.push(format!("Failed to cache library list: {}", e));
                 }
-                
+
                 // Sync content from each library
                 for (idx, library) in libraries.iter().enumerate() {
                     let progress = (idx as f32 / libraries.len() as f32) * 100.0;
-                    
+
                     // Update sync status
                     {
                         let mut status = self.sync_status.write().await;
@@ -109,9 +122,17 @@ impl SyncManager {
                             },
                         );
                     }
-                    
+
                     // Sync library content using generic method
-                    if let Err(e) = self.sync_library_items(backend_id, &library.id, &library.library_type, backend.clone()).await {
+                    if let Err(e) = self
+                        .sync_library_items(
+                            backend_id,
+                            &library.id,
+                            &library.library_type,
+                            backend.clone(),
+                        )
+                        .await
+                    {
                         error!("Failed to sync items from library {}: {}", library.id, e);
                         errors.push(format!("Failed to sync library {}: {}", library.title, e));
                     } else {
@@ -124,10 +145,10 @@ impl SyncManager {
                 errors.push(format!("Failed to fetch libraries: {}", e));
             }
         }
-        
+
         let duration = start_time.elapsed();
         let success = errors.is_empty();
-        
+
         // Update final sync status
         {
             let mut status = self.sync_status.write().await;
@@ -149,12 +170,12 @@ impl SyncManager {
                 );
             }
         }
-        
+
         info!(
             "Sync completed for backend {}: {} items synced in {:?}",
             backend_id, items_synced, duration
         );
-        
+
         Ok(SyncResult {
             backend_id: backend_id.to_string(),
             success,
@@ -163,7 +184,7 @@ impl SyncManager {
             errors,
         })
     }
-    
+
     /// Sync items from a library (generic for all types)
     async fn sync_library_items(
         &self,
@@ -172,14 +193,19 @@ impl SyncManager {
         library_type: &crate::models::LibraryType,
         backend: Arc<dyn MediaBackend>,
     ) -> Result<()> {
-        info!("Syncing {:?} items from library {}", library_type, library_id);
-        
+        info!(
+            "Syncing {:?} items from library {}",
+            library_type, library_id
+        );
+
         // Use the generic get_library_items method
-        let items = backend.get_library_items(library_id).await
+        let items = backend
+            .get_library_items(library_id)
+            .await
             .context("Failed to fetch library items")?;
-        
+
         info!("Found {} items to sync", items.len());
-        
+
         // Cache each item with its appropriate type
         for item in &items {
             let item_type = match item {
@@ -190,78 +216,101 @@ impl SyncManager {
                 MediaItem::MusicTrack(_) => "track",
                 MediaItem::Photo(_) => "photo",
             };
-            
+
             let cache_key = format!("{}:{}:{}", backend_id, item_type, item.id());
-            self.cache.set_media(&cache_key, item_type, item).await
+            self.cache
+                .set_media(&cache_key, item_type, item)
+                .await
                 .context(format!("Failed to cache {} {}", item_type, item.id()))?;
         }
-        
+
         // Cache the item list for this library
         let items_key = format!("{}:library:{}:items", backend_id, library_id);
-        self.cache.set_media(&items_key, "item_list", &items).await
+        self.cache
+            .set_media(&items_key, "item_list", &items)
+            .await
             .context("Failed to cache item list")?;
-        
+
         // Also maintain backward compatibility by caching typed lists
         match library_type {
             crate::models::LibraryType::Movies => {
-                let movies: Vec<Movie> = items.iter()
+                let movies: Vec<Movie> = items
+                    .iter()
                     .filter_map(|item| match item {
                         MediaItem::Movie(m) => Some(m.clone()),
                         _ => None,
                     })
                     .collect();
                 let movies_key = format!("{}:library:{}:movies", backend_id, library_id);
-                self.cache.set_media(&movies_key, "movie_list", &movies).await?;
+                self.cache
+                    .set_media(&movies_key, "movie_list", &movies)
+                    .await?;
             }
             crate::models::LibraryType::Shows => {
-                let shows: Vec<Show> = items.iter()
+                let shows: Vec<Show> = items
+                    .iter()
                     .filter_map(|item| match item {
                         MediaItem::Show(s) => Some(s.clone()),
                         _ => None,
                     })
                     .collect();
                 let shows_key = format!("{}:library:{}:shows", backend_id, library_id);
-                self.cache.set_media(&shows_key, "show_list", &shows).await?;
+                self.cache
+                    .set_media(&shows_key, "show_list", &shows)
+                    .await?;
             }
             _ => {}
         }
-        
+
         Ok(())
     }
-    
+
     /// Get the current sync status for a backend
     pub async fn get_sync_status(&self, backend_id: &str) -> SyncStatus {
         let status = self.sync_status.read().await;
         status.get(backend_id).cloned().unwrap_or(SyncStatus::Idle)
     }
-    
+
     /// Get cached libraries for a backend
     pub async fn get_cached_libraries(&self, backend_id: &str) -> Result<Vec<Library>> {
         let libraries_key = format!("{}:libraries", backend_id);
-        Ok(self.cache.get_media(&libraries_key).await?.unwrap_or_default())
+        Ok(self
+            .cache
+            .get_media(&libraries_key)
+            .await?
+            .unwrap_or_default())
     }
-    
+
     /// Get cached movies for a library
-    pub async fn get_cached_movies(&self, backend_id: &str, library_id: &str) -> Result<Vec<Movie>> {
+    pub async fn get_cached_movies(
+        &self,
+        backend_id: &str,
+        library_id: &str,
+    ) -> Result<Vec<Movie>> {
         let movies_key = format!("{}:library:{}:movies", backend_id, library_id);
         Ok(self.cache.get_media(&movies_key).await?.unwrap_or_default())
     }
-    
+
     /// Get cached shows for a library
     pub async fn get_cached_shows(&self, backend_id: &str, library_id: &str) -> Result<Vec<Show>> {
         let shows_key = format!("{}:library:{}:shows", backend_id, library_id);
         Ok(self.cache.get_media(&shows_key).await?.unwrap_or_default())
     }
-    
+
     /// Get cached items for a library (generic)
-    pub async fn get_cached_items(&self, backend_id: &str, library_id: &str) -> Result<Vec<MediaItem>> {
+    pub async fn get_cached_items(
+        &self,
+        backend_id: &str,
+        library_id: &str,
+    ) -> Result<Vec<MediaItem>> {
         let items_key = format!("{}:library:{}:items", backend_id, library_id);
         Ok(self.cache.get_media(&items_key).await?.unwrap_or_default())
     }
-    
+
     /// Get item count for a library
     pub async fn get_library_item_count(&self, backend_id: &str, library_id: &str) -> usize {
-        self.get_cached_items(backend_id, library_id).await
+        self.get_cached_items(backend_id, library_id)
+            .await
             .unwrap_or_default()
             .len()
     }

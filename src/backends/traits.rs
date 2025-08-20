@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 use crate::models::{
-    Credentials, Episode, Library, Movie, Show, StreamInfo, User, MediaItem, MusicAlbum, MusicTrack, Photo,
-    HomeSection,
+    Credentials, Episode, HomeSection, Library, MediaItem, Movie, MusicAlbum, MusicTrack, Photo,
+    Show, StreamInfo, User,
 };
 
 #[async_trait]
@@ -13,51 +13,53 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     /// Initialize the backend with stored credentials
     /// Returns Ok(Some(user)) if successfully connected, Ok(None) if no credentials, Err if failed
     async fn initialize(&self) -> Result<Option<User>>;
-    
+
     /// Check if the backend is initialized and ready to use
     async fn is_initialized(&self) -> bool;
-    
+
     /// Get the backend as Any for downcasting
     fn as_any(&self) -> &dyn std::any::Any;
-    
+
     async fn authenticate(&self, credentials: Credentials) -> Result<User>;
-    
+
     async fn get_libraries(&self) -> Result<Vec<Library>>;
-    
+
     async fn get_movies(&self, library_id: &str) -> Result<Vec<Movie>>;
-    
+
     async fn get_shows(&self, library_id: &str) -> Result<Vec<Show>>;
-    
+
     async fn get_episodes(&self, show_id: &str, season: u32) -> Result<Vec<Episode>>;
-    
+
     async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo>;
-    
+
     async fn update_progress(&self, media_id: &str, position: Duration) -> Result<()>;
-    
+
     async fn mark_watched(&self, media_id: &str) -> Result<()>;
-    
+
     async fn mark_unwatched(&self, media_id: &str) -> Result<()>;
-    
+
     async fn get_watch_status(&self, media_id: &str) -> Result<WatchStatus>;
-    
+
     async fn search(&self, query: &str) -> Result<SearchResults>;
-    
+
     /// Get homepage sections with suggested content, recently added, etc.
     async fn get_home_sections(&self) -> Result<Vec<HomeSection>> {
         // Default implementation returns empty sections
         // Backends should override this to provide homepage data
         Ok(Vec::new())
     }
-    
+
     // Generic media item fetching for all library types
     async fn get_library_items(&self, library_id: &str) -> Result<Vec<MediaItem>> {
         // Default implementation that only handles movies and shows
         // Backends can override this to support all types
-        let library = self.get_libraries().await?
+        let library = self
+            .get_libraries()
+            .await?
             .into_iter()
             .find(|l| l.id == library_id)
             .ok_or_else(|| anyhow::anyhow!("Library not found"))?;
-        
+
         use crate::models::LibraryType;
         match library.library_type {
             LibraryType::Movies => {
@@ -82,22 +84,22 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
             }
         }
     }
-    
+
     // Optional: Get music albums for music libraries
     async fn get_music_albums(&self, _library_id: &str) -> Result<Vec<MusicAlbum>> {
         Ok(Vec::new())
     }
-    
+
     // Optional: Get music tracks for an album
     async fn get_music_tracks(&self, _album_id: &str) -> Result<Vec<MusicTrack>> {
         Ok(Vec::new())
     }
-    
+
     // Optional: Get photos for photo libraries
     async fn get_photos(&self, _library_id: &str) -> Result<Vec<Photo>> {
         Ok(Vec::new())
     }
-    
+
     // Backend information
     async fn get_backend_info(&self) -> BackendInfo {
         BackendInfo {
@@ -111,12 +113,12 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
             is_relay: false,
         }
     }
-    
+
     // Sync support methods
     async fn get_backend_id(&self) -> String;
-    
+
     async fn get_last_sync_time(&self) -> Option<DateTime<Utc>>;
-    
+
     async fn supports_offline(&self) -> bool;
 }
 
@@ -146,8 +148,8 @@ pub struct SyncResult {
 
 #[derive(Debug, Clone)]
 pub enum SyncType {
-    Full,           // Full sync of all data
-    Incremental,    // Only changes since last sync
+    Full,            // Full sync of all data
+    Incremental,     // Only changes since last sync
     Library(String), // Specific library
     Media(String),   // Specific media item
 }
@@ -162,9 +164,18 @@ pub enum SyncPriority {
 #[derive(Debug, Clone)]
 pub enum SyncStatus {
     Idle,
-    Syncing { progress: f32, current_item: String },
-    Completed { at: DateTime<Utc>, items_synced: usize },
-    Failed { error: String, at: DateTime<Utc> },
+    Syncing {
+        progress: f32,
+        current_item: String,
+    },
+    Completed {
+        at: DateTime<Utc>,
+        items_synced: usize,
+    },
+    Failed {
+        error: String,
+        at: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone)]

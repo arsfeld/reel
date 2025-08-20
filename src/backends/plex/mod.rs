@@ -1,23 +1,22 @@
-mod auth;
 mod api;
+mod auth;
 
-pub use auth::{PlexAuth, PlexPin, PlexUser, PlexServer, PlexConnection};
 use api::PlexApi;
+pub use auth::{PlexAuth, PlexConnection, PlexPin, PlexServer};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use dirs;
 use reqwest::Client;
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use std::fmt;
-use dirs;
 
-use super::traits::{MediaBackend, SearchResults, WatchStatus};
-use crate::models::{
-    Credentials, Episode, Library, Movie, Show, StreamInfo, User,
-};
+use super::traits::{MediaBackend, SearchResults};
+use crate::models::{Credentials, Episode, Library, Movie, Show, StreamInfo, User};
+use crate::services::cache::CacheManager;
 
 pub struct PlexBackend {
     client: Client,
@@ -28,6 +27,7 @@ pub struct PlexBackend {
     api: Arc<RwLock<Option<PlexApi>>>,
     server_name: Arc<RwLock<Option<String>>>,
     server_info: Arc<RwLock<Option<ServerInfo>>>,
+    cache: Option<Arc<CacheManager>>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,13 +42,17 @@ impl PlexBackend {
     pub fn new() -> Self {
         Self::with_id("plex".to_string())
     }
-    
+
     pub fn with_id(id: String) -> Self {
+        Self::with_cache(id, None)
+    }
+
+    pub fn with_cache(id: String, cache: Option<Arc<CacheManager>>) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .expect("Failed to create HTTP client");
-        
+
         Self {
             client,
             base_url: Arc::new(RwLock::new(None)),
@@ -58,79 +62,98 @@ impl PlexBackend {
             api: Arc::new(RwLock::new(None)),
             server_name: Arc::new(RwLock::new(None)),
             server_info: Arc::new(RwLock::new(None)),
+            cache,
         }
     }
-    
+
+    pub fn set_cache(&mut self, cache: Arc<CacheManager>) {
+        self.cache = Some(cache);
+    }
+
     pub async fn get_server_info(&self) -> Option<ServerInfo> {
         self.server_info.read().await.clone()
     }
-    
+
     /// Check if the server is reachable without blocking for too long
     pub async fn check_connectivity(&self) -> bool {
-        if let Some(base_url) = self.base_url.read().await.as_ref() {
-            if let Some(token) = self.auth_token.read().await.as_ref() {
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(2))
-                    .danger_accept_invalid_certs(true)
-                    .build();
-                
-                if let Ok(client) = client {
-                    let response = client
-                        .get(format!("{}/identity", base_url))
-                        .header("X-Plex-Token", token)
-                        .send()
-                        .await;
-                    
-                    return response.is_ok();
-                }
+        if let Some(base_url) = self.base_url.read().await.as_ref()
+            && let Some(token) = self.auth_token.read().await.as_ref()
+        {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(2))
+                .danger_accept_invalid_certs(true)
+                .build();
+
+            if let Ok(client) = client {
+                let response = client
+                    .get(format!("{}/identity", base_url))
+                    .header("X-Plex-Token", token)
+                    .send()
+                    .await;
+
+                return response.is_ok();
             }
         }
         false
     }
-    
+
     /// Save the authentication token to keyring with file fallback
     pub async fn save_token(&self, token: &str) -> Result<()> {
         // Try keyring first
         let service = "dev.arsfeld.Reel";
         let account = &self.backend_id;
-        
-        tracing::info!("Attempting to save token to keyring - service: '{}', account: '{}'", service, account);
-        
+
+        tracing::info!(
+            "Attempting to save token to keyring - service: '{}', account: '{}'",
+            service,
+            account
+        );
+
         match keyring::Entry::new(service, account) {
-            Ok(entry) => {
-                match entry.set_password(token) {
-                    Ok(_) => {
-                        tracing::info!("Token successfully saved to keyring for backend {}", self.backend_id);
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to save to keyring: {}, falling back to file storage", e);
-                    }
+            Ok(entry) => match entry.set_password(token) {
+                Ok(_) => {
+                    tracing::info!(
+                        "Token successfully saved to keyring for backend {}",
+                        self.backend_id
+                    );
+                    return Ok(());
                 }
-            }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to save to keyring: {}, falling back to file storage",
+                        e
+                    );
+                }
+            },
             Err(e) => {
-                tracing::warn!("Failed to create keyring entry: {}, falling back to file storage", e);
+                tracing::warn!(
+                    "Failed to create keyring entry: {}, falling back to file storage",
+                    e
+                );
             }
         }
-        
+
         // Fallback to file storage (encrypted with simple obfuscation)
         let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
-        let token_file = config_dir.join("reel").join(format!(".{}.token", self.backend_id));
-        
+        let token_file = config_dir
+            .join("reel")
+            .join(format!(".{}.token", self.backend_id));
+
         // Create directory if it doesn't exist
         if let Some(parent) = token_file.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        
+
         // Simple obfuscation - not real encryption but better than plaintext
-        let obfuscated = token.bytes()
+        let obfuscated = token
+            .bytes()
             .enumerate()
             .map(|(i, b)| b ^ ((i as u8) + 42))
             .collect::<Vec<u8>>();
-        
+
         std::fs::write(&token_file, obfuscated)?;
-        
+
         // Set restrictive permissions on Unix
         #[cfg(unix)]
         {
@@ -139,66 +162,79 @@ impl PlexBackend {
             perms.set_mode(0o600); // Read/write for owner only
             std::fs::set_permissions(&token_file, perms)?;
         }
-        
-        tracing::info!("Token saved to fallback file storage for backend {}", self.backend_id);
+
+        tracing::info!(
+            "Token saved to fallback file storage for backend {}",
+            self.backend_id
+        );
         Ok(())
     }
-    
+
     /// Authenticate with PIN and select a server
     pub async fn authenticate_with_pin(&self, pin: &PlexPin, server: &PlexServer) -> Result<()> {
         // Poll for the auth token
         let token = PlexAuth::poll_for_token(&pin.id).await?;
-        
+
         // Store the auth token in memory
         *self.auth_token.write().await = Some(token.clone());
-        
+
         // Save token to keyring
         if let Err(e) = self.save_token(&token).await {
             tracing::error!("Failed to save token to keyring: {}", e);
             // Continue anyway - the token is in memory
         }
-        
+
         // Find the best connection for the server
-        let connection = server.connections
+        let connection = server
+            .connections
             .iter()
             .find(|c| !c.relay) // Prefer direct connections
             .or_else(|| server.connections.first())
             .ok_or_else(|| anyhow::anyhow!("No valid connection found for server"))?;
-        
+
         // Store the base URL
         *self.base_url.write().await = Some(connection.uri.clone());
-        
-        // Create the API client
-        let api = PlexApi::new(connection.uri.clone(), token);
+
+        // Create the API client with cache
+        let api = PlexApi::with_cache(
+            connection.uri.clone(),
+            token,
+            self.cache.clone(),
+            self.backend_id.clone(),
+        );
         *self.api.write().await = Some(api);
-        
+
         Ok(())
     }
-    
+
     /// Test all connections in parallel and return the fastest responding one
-    async fn find_best_connection(&self, server: &PlexServer, token: &str) -> Result<PlexConnection> {
+    async fn find_best_connection(
+        &self,
+        server: &PlexServer,
+        token: &str,
+    ) -> Result<PlexConnection> {
         use futures::future::select_ok;
         use std::time::Instant;
-        
+
         if server.connections.is_empty() {
             return Err(anyhow!("No connections available for server"));
         }
-        
+
         // Create futures for testing each connection
         let mut connection_futures = Vec::new();
-        
+
         for conn in &server.connections {
             let uri = conn.uri.clone();
             let token = token.to_string();
             let conn_clone = conn.clone();
-            
+
             let future = async move {
                 let start = Instant::now();
                 let client = reqwest::Client::builder()
                     .timeout(Duration::from_secs(3))
                     .danger_accept_invalid_certs(true) // Plex uses self-signed certs
                     .build()?;
-                
+
                 // Try to access the server identity endpoint
                 let response = client
                     .get(format!("{}/identity", uri))
@@ -206,7 +242,7 @@ impl PlexBackend {
                     .header("Accept", "application/json")
                     .send()
                     .await;
-                
+
                 match response {
                     Ok(resp) if resp.status().is_success() => {
                         let latency = start.elapsed();
@@ -223,69 +259,90 @@ impl PlexBackend {
                     }
                 }
             };
-            
+
             connection_futures.push(Box::pin(future));
         }
-        
+
         // Race all connections and pick the first successful one
         match select_ok(connection_futures).await {
             Ok((result, _remaining)) => {
-                tracing::info!("Best connection found: {} (latency: {:?})", result.0.uri, result.1);
+                tracing::info!(
+                    "Best connection found: {} (latency: {:?})",
+                    result.0.uri,
+                    result.1
+                );
                 Ok(result.0)
             }
             Err(_) => {
                 // If all parallel attempts fail, try them sequentially with more time
                 tracing::warn!("All parallel connection attempts failed, trying sequentially...");
-                
+
                 // Sort connections by priority: local non-relay first, then remote non-relay, then relay
                 let mut sorted_connections = server.connections.clone();
                 sorted_connections.sort_by_key(|c| {
-                    if c.local && !c.relay { 0 }
-                    else if !c.relay { 1 }
-                    else { 2 }
+                    if c.local && !c.relay {
+                        0
+                    } else if !c.relay {
+                        1
+                    } else {
+                        2
+                    }
                 });
-                
+
                 for conn in sorted_connections {
                     let client = reqwest::Client::builder()
                         .timeout(Duration::from_secs(10))
                         .danger_accept_invalid_certs(true)
                         .build()?;
-                    
+
                     let response = client
                         .get(format!("{}/identity", conn.uri))
                         .header("X-Plex-Token", token)
                         .header("Accept", "application/json")
                         .send()
                         .await;
-                    
-                    if let Ok(resp) = response {
-                        if resp.status().is_success() {
-                            tracing::info!("Successfully connected to {} (fallback)", conn.uri);
-                            return Ok(conn);
-                        }
+
+                    if let Ok(resp) = response
+                        && resp.status().is_success()
+                    {
+                        tracing::info!("Successfully connected to {} (fallback)", conn.uri);
+                        return Ok(conn);
                     }
                 }
-                
+
                 Err(anyhow!("Failed to connect to any server endpoint"))
             }
         }
     }
-    
+
     /// Get the API client, ensuring it's initialized
     async fn get_api(&self) -> Result<PlexApi> {
         let api_guard = self.api.read().await;
         if let Some(api) = api_guard.as_ref() {
-            let base_url = self.base_url.read().await
+            let base_url = self
+                .base_url
+                .read()
+                .await
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Base URL not set"))?
                 .clone();
-            let auth_token = self.auth_token.read().await
+            let auth_token = self
+                .auth_token
+                .read()
+                .await
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Auth token not set"))?
                 .clone();
-            Ok(PlexApi::new(base_url, auth_token))
+            Ok(PlexApi::with_cache(
+                base_url,
+                auth_token,
+                self.cache.clone(),
+                self.backend_id.clone(),
+            ))
         } else {
-            Err(anyhow::anyhow!("Plex API not initialized. Please authenticate first."))
+            Err(anyhow::anyhow!(
+                "Plex API not initialized. Please authenticate first."
+            ))
         }
     }
 }
@@ -295,37 +352,46 @@ impl MediaBackend for PlexBackend {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-    
+
     async fn initialize(&self) -> Result<Option<User>> {
         // Try to get token from keyring first, then fallback to file
         let token = {
             // Try keyring first
             let service = "dev.arsfeld.Reel";
             let account = &self.backend_id;
-            
-            tracing::info!("Looking for saved token - service: '{}', account: '{}'", service, account);
-            
+
+            tracing::info!(
+                "Looking for saved token - service: '{}', account: '{}'",
+                service,
+                account
+            );
+
             match keyring::Entry::new(service, account) {
-                Ok(entry) => {
-                    match entry.get_password() {
-                        Ok(token) => {
-                            tracing::info!("Successfully retrieved token from keyring for backend {}", self.backend_id);
-                            Some(token)
-                        }
-                        Err(e) => {
-                            let error_str = e.to_string();
-                            tracing::debug!("Keyring error for backend {}: {}", self.backend_id, error_str);
-                            None
-                        }
+                Ok(entry) => match entry.get_password() {
+                    Ok(token) => {
+                        tracing::info!(
+                            "Successfully retrieved token from keyring for backend {}",
+                            self.backend_id
+                        );
+                        Some(token)
                     }
-                }
+                    Err(e) => {
+                        let error_str = e.to_string();
+                        tracing::debug!(
+                            "Keyring error for backend {}: {}",
+                            self.backend_id,
+                            error_str
+                        );
+                        None
+                    }
+                },
                 Err(e) => {
                     tracing::debug!("Failed to create keyring entry: {}", e);
                     None
                 }
             }
         };
-        
+
         // If keyring failed, try file fallback
         let token = if let Some(token) = token {
             token
@@ -333,10 +399,15 @@ impl MediaBackend for PlexBackend {
             // Try to read from fallback file
             let config_dir = dirs::config_dir()
                 .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
-            let token_file = config_dir.join("reel").join(format!(".{}.token", self.backend_id));
-            
+            let token_file = config_dir
+                .join("reel")
+                .join(format!(".{}.token", self.backend_id));
+
             if token_file.exists() {
-                tracing::info!("Checking fallback token file for backend {}", self.backend_id);
+                tracing::info!(
+                    "Checking fallback token file for backend {}",
+                    self.backend_id
+                );
                 match std::fs::read(&token_file) {
                     Ok(obfuscated) => {
                         // De-obfuscate the token
@@ -345,10 +416,13 @@ impl MediaBackend for PlexBackend {
                             .enumerate()
                             .map(|(i, &b)| b ^ ((i as u8) + 42))
                             .collect();
-                        
+
                         match String::from_utf8(token_bytes) {
                             Ok(token) => {
-                                tracing::info!("Successfully retrieved token from file storage for backend {}", self.backend_id);
+                                tracing::info!(
+                                    "Successfully retrieved token from file storage for backend {}",
+                                    self.backend_id
+                                );
                                 token
                             }
                             Err(e) => {
@@ -363,43 +437,50 @@ impl MediaBackend for PlexBackend {
                     }
                 }
             } else {
-                tracing::debug!("No saved token found for backend {} in keyring or file", self.backend_id);
+                tracing::debug!(
+                    "No saved token found for backend {} in keyring or file",
+                    self.backend_id
+                );
                 return Ok(None);
             }
         };
-        
+
         if token.is_empty() {
             return Ok(None);
         }
-        
+
         // Get user info with the saved token
         let plex_user = match PlexAuth::get_user(&token).await {
             Ok(user) => user,
             Err(e) => {
                 let error_str = e.to_string();
                 tracing::error!("Failed to get user info with saved token: {}", error_str);
-                
+
                 // Only delete token if it's an authentication error
-                if error_str.contains("Authentication failed") || error_str.contains("Invalid or expired token") {
+                if error_str.contains("Authentication failed")
+                    || error_str.contains("Invalid or expired token")
+                {
                     tracing::info!("Token appears to be invalid, removing from storage");
-                    
+
                     // Try to delete from keyring
                     if let Ok(entry) = keyring::Entry::new("dev.arsfeld.Reel", &self.backend_id) {
                         entry.delete_credential().ok();
                     }
-                    
+
                     // Also delete from file fallback
                     if let Some(config_dir) = dirs::config_dir() {
-                        let token_file = config_dir.join("reel").join(format!(".{}.token", self.backend_id));
+                        let token_file = config_dir
+                            .join("reel")
+                            .join(format!(".{}.token", self.backend_id));
                         std::fs::remove_file(token_file).ok();
                     }
-                    
+
                     return Ok(None);
                 } else if error_str.contains("Network error") {
                     tracing::warn!("Network error while validating token, will use cached data");
                     // Store the token even though we can't validate it
                     *self.auth_token.write().await = Some(token.to_string());
-                    
+
                     // Return a minimal user object to indicate partial success
                     // The username will be loaded from cache later
                     return Ok(Some(User {
@@ -412,7 +493,7 @@ impl MediaBackend for PlexBackend {
                     tracing::warn!("Server error while validating token, will use cached data");
                     // Store the token for retry
                     *self.auth_token.write().await = Some(token.to_string());
-                    
+
                     // Return a minimal user object
                     return Ok(Some(User {
                         id: "offline".to_string(),
@@ -423,20 +504,20 @@ impl MediaBackend for PlexBackend {
                 }
             }
         };
-        
+
         // Store the token
         *self.auth_token.write().await = Some(token.to_string());
-        
+
         // Try to discover and connect to the best server
         match PlexAuth::discover_servers(&token).await {
             Ok(servers) => {
                 if let Some(server) = servers.first() {
                     // Test all connections in parallel and use the fastest one
-                    match self.find_best_connection(&server, &token).await {
+                    match self.find_best_connection(server, &token).await {
                         Ok(best_conn) => {
                             *self.base_url.write().await = Some(best_conn.uri.clone());
                             *self.server_name.write().await = Some(server.name.clone());
-                            
+
                             // Store server info
                             *self.server_info.write().await = Some(ServerInfo {
                                 name: server.name.clone(),
@@ -444,15 +525,27 @@ impl MediaBackend for PlexBackend {
                                 is_relay: best_conn.relay,
                                 uri: best_conn.uri.clone(),
                             });
-                            
-                            // Create and store the API client
-                            let api = PlexApi::new(best_conn.uri.clone(), token.to_string());
+
+                            // Create and store the API client with cache
+                            let api = PlexApi::with_cache(
+                                best_conn.uri.clone(),
+                                token.to_string(),
+                                self.cache.clone(),
+                                self.backend_id.clone(),
+                            );
                             *self.api.write().await = Some(api);
-                            
-                            tracing::info!("Connected to Plex server: {} at {} ({})", 
-                                server.name, 
+
+                            tracing::info!(
+                                "Connected to Plex server: {} at {} ({})",
+                                server.name,
                                 best_conn.uri,
-                                if best_conn.local { "local" } else if best_conn.relay { "relay" } else { "remote" }
+                                if best_conn.local {
+                                    "local"
+                                } else if best_conn.relay {
+                                    "relay"
+                                } else {
+                                    "remote"
+                                }
                             );
                         }
                         Err(e) => {
@@ -469,7 +562,7 @@ impl MediaBackend for PlexBackend {
                 // Server discovery can be retried later
             }
         }
-        
+
         Ok(Some(User {
             id: plex_user.id.to_string(),
             username: plex_user.username,
@@ -477,24 +570,24 @@ impl MediaBackend for PlexBackend {
             avatar_url: plex_user.thumb,
         }))
     }
-    
+
     async fn is_initialized(&self) -> bool {
         let has_token = self.auth_token.read().await.is_some();
         let has_api = self.api.read().await.is_some();
         let has_url = self.base_url.read().await.is_some();
-        
+
         has_token && has_api && has_url
     }
-    
+
     async fn authenticate(&self, credentials: Credentials) -> Result<User> {
         match credentials {
             Credentials::Token { token } => {
                 // Store the token for later use
                 *self.auth_token.write().await = Some(token.clone());
-                
+
                 // Get user info from Plex
                 let plex_user = PlexAuth::get_user(&token).await?;
-                
+
                 Ok(User {
                     id: plex_user.id.to_string(),
                     username: plex_user.username,
@@ -502,60 +595,61 @@ impl MediaBackend for PlexBackend {
                     avatar_url: plex_user.thumb,
                 })
             }
-            _ => Err(anyhow::anyhow!("Plex only supports token authentication"))
+            _ => Err(anyhow::anyhow!("Plex only supports token authentication")),
         }
     }
-    
+
     async fn get_libraries(&self) -> Result<Vec<Library>> {
         let api = self.get_api().await?;
         api.get_libraries().await
     }
-    
+
     async fn get_movies(&self, library_id: &str) -> Result<Vec<Movie>> {
         let api = self.get_api().await?;
         api.get_movies(library_id).await
     }
-    
+
     async fn get_shows(&self, library_id: &str) -> Result<Vec<Show>> {
         let api = self.get_api().await?;
         api.get_shows(library_id).await
     }
-    
+
     async fn get_episodes(&self, show_id: &str, season_number: u32) -> Result<Vec<Episode>> {
         let api = self.get_api().await?;
-        
+
         // First, get the seasons for this show to find the correct season ID
         let seasons = api.get_seasons(show_id).await?;
-        
+
         // Find the season with the matching season number
-        let season = seasons.iter()
+        let season = seasons
+            .iter()
             .find(|s| s.season_number == season_number)
             .ok_or_else(|| anyhow!("Season {} not found for show {}", season_number, show_id))?;
-        
+
         // Now get the episodes for the correct season
         api.get_episodes(&season.id).await
     }
-    
+
     async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo> {
         let api = self.get_api().await?;
         api.get_stream_url(media_id).await
     }
-    
+
     async fn update_progress(&self, media_id: &str, position: Duration) -> Result<()> {
         let api = self.get_api().await?;
         api.update_progress(media_id, position).await
     }
-    
+
     async fn mark_watched(&self, media_id: &str) -> Result<()> {
         let api = self.get_api().await?;
         api.mark_watched(media_id).await
     }
-    
+
     async fn mark_unwatched(&self, media_id: &str) -> Result<()> {
         let api = self.get_api().await?;
         api.mark_unwatched(media_id).await
     }
-    
+
     async fn get_watch_status(&self, media_id: &str) -> Result<super::traits::WatchStatus> {
         // For now, return a default status - could fetch from API if needed
         // In practice, the watch status is already included in get_movies/shows/episodes
@@ -566,24 +660,24 @@ impl MediaBackend for PlexBackend {
             playback_position: None,
         })
     }
-    
+
     async fn search(&self, _query: &str) -> Result<SearchResults> {
         // TODO: Implement Plex search
         todo!("Search not yet implemented")
     }
-    
+
     async fn get_home_sections(&self) -> Result<Vec<crate::models::HomeSection>> {
         let api = self.get_api().await?;
         api.get_home_sections().await
     }
-    
+
     async fn get_backend_info(&self) -> super::traits::BackendInfo {
         let server_info = self.server_info.read().await;
         let server_name = self.server_name.read().await;
-        
+
         // Do a quick connectivity check
         let is_online = self.check_connectivity().await;
-        
+
         if let Some(info) = server_info.as_ref() {
             let connection_type = if !is_online {
                 // Server configured but not reachable
@@ -595,7 +689,7 @@ impl MediaBackend for PlexBackend {
             } else {
                 super::traits::ConnectionType::Remote
             };
-            
+
             super::traits::BackendInfo {
                 name: self.backend_id.clone(),
                 display_name: format!("Plex ({})", info.name),
@@ -619,15 +713,15 @@ impl MediaBackend for PlexBackend {
             }
         }
     }
-    
+
     async fn get_backend_id(&self) -> String {
         self.backend_id.clone()
     }
-    
+
     async fn get_last_sync_time(&self) -> Option<DateTime<Utc>> {
         *self.last_sync_time.read().await
     }
-    
+
     async fn supports_offline(&self) -> bool {
         true // Plex supports offline functionality
     }
@@ -637,8 +731,22 @@ impl fmt::Debug for PlexBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlexBackend")
             .field("backend_id", &self.backend_id)
-            .field("has_base_url", &self.base_url.try_read().map(|u| u.is_some()).unwrap_or(false))
-            .field("has_auth_token", &self.auth_token.try_read().map(|t| t.is_some()).unwrap_or(false))
+            .field(
+                "has_base_url",
+                &self
+                    .base_url
+                    .try_read()
+                    .map(|u| u.is_some())
+                    .unwrap_or(false),
+            )
+            .field(
+                "has_auth_token",
+                &self
+                    .auth_token
+                    .try_read()
+                    .map(|t| t.is_some())
+                    .unwrap_or(false),
+            )
             .finish()
     }
 }

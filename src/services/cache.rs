@@ -1,10 +1,9 @@
 use anyhow::{Context, Result};
 use dirs;
-use serde::{de::DeserializeOwned, Serialize};
-use sqlx::{sqlite::SqlitePool, Row};
+use serde::{Serialize, de::DeserializeOwned};
+use sqlx::{Row, sqlite::SqlitePool};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{debug, error};
 
 #[derive(Debug)]
 pub struct CacheManager {
@@ -14,34 +13,29 @@ pub struct CacheManager {
 impl CacheManager {
     pub fn new() -> Result<Self> {
         let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(async {
-            Self::new_async().await
-        })
+        rt.block_on(async { Self::new_async().await })
     }
-    
+
     async fn new_async() -> Result<Self> {
         let db_path = Self::db_path()?;
-        
+
         // Ensure cache directory exists
         if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)
-                .context("Failed to create cache directory")?;
+            std::fs::create_dir_all(parent).context("Failed to create cache directory")?;
         }
-        
+
         // Use proper SQLite connection string with create flag
         let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
         let db = SqlitePool::connect(&db_url)
             .await
             .context("Failed to connect to cache database")?;
-        
+
         // Initialize database schema
         Self::initialize_schema(&db).await?;
-        
-        Ok(Self {
-            db: Arc::new(db),
-        })
+
+        Ok(Self { db: Arc::new(db) })
     }
-    
+
     async fn initialize_schema(db: &SqlitePool) -> Result<()> {
         sqlx::query(
             r#"
@@ -56,7 +50,7 @@ impl CacheManager {
         .execute(db)
         .await
         .context("Failed to create media_cache table")?;
-        
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS playback_progress (
@@ -73,7 +67,7 @@ impl CacheManager {
         .execute(db)
         .await
         .context("Failed to create playback_progress table")?;
-        
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS preferences (
@@ -85,10 +79,10 @@ impl CacheManager {
         .execute(db)
         .await
         .context("Failed to create preferences table")?;
-        
+
         Ok(())
     }
-    
+
     pub async fn get_media<T>(&self, id: &str) -> Result<Option<T>>
     where
         T: DeserializeOwned,
@@ -97,7 +91,7 @@ impl CacheManager {
             .bind(id)
             .fetch_optional(self.db.as_ref())
             .await?;
-        
+
         match result {
             Some(row) => {
                 let data: String = row.try_get("data")?;
@@ -107,13 +101,13 @@ impl CacheManager {
             None => Ok(None),
         }
     }
-    
+
     pub async fn set_media<T>(&self, id: &str, media_type: &str, data: &T) -> Result<()>
     where
         T: Serialize,
     {
         let json = serde_json::to_string(data)?;
-        
+
         sqlx::query(
             r#"
             INSERT INTO media_cache (id, type, data)
@@ -128,18 +122,17 @@ impl CacheManager {
         .bind(json)
         .execute(self.db.as_ref())
         .await?;
-        
+
         Ok(())
     }
-    
+
     pub async fn get_playback_progress(&self, media_id: &str) -> Result<Option<(u64, u64)>> {
-        let result = sqlx::query(
-            "SELECT position, duration FROM playback_progress WHERE media_id = ?",
-        )
-        .bind(media_id)
-        .fetch_optional(self.db.as_ref())
-        .await?;
-        
+        let result =
+            sqlx::query("SELECT position, duration FROM playback_progress WHERE media_id = ?")
+                .bind(media_id)
+                .fetch_optional(self.db.as_ref())
+                .await?;
+
         match result {
             Some(row) => {
                 let position: i64 = row.try_get("position")?;
@@ -149,7 +142,7 @@ impl CacheManager {
             None => Ok(None),
         }
     }
-    
+
     pub async fn set_playback_progress(
         &self,
         media_id: &str,
@@ -171,23 +164,22 @@ impl CacheManager {
         .bind(duration as i64)
         .execute(self.db.as_ref())
         .await?;
-        
+
         Ok(())
     }
-    
+
     pub async fn clear_backend_cache(&self, backend_id: &str) -> Result<()> {
         // Delete all entries for this backend
         sqlx::query("DELETE FROM media_cache WHERE id LIKE ?")
             .bind(format!("{}:%", backend_id))
             .execute(self.db.as_ref())
             .await?;
-        
+
         Ok(())
     }
-    
+
     fn db_path() -> Result<PathBuf> {
-        let cache_dir = dirs::cache_dir()
-            .context("Failed to get cache directory")?;
+        let cache_dir = dirs::cache_dir().context("Failed to get cache directory")?;
         Ok(cache_dir.join("reel").join("cache.db"))
     }
 }

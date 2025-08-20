@@ -89,8 +89,8 @@ pub struct Episode {
     pub view_count: u32,
     pub last_watched_at: Option<DateTime<Utc>>,
     pub playback_position: Option<Duration>,
-    pub show_title: Option<String>,  // Parent show name
-    pub show_poster_url: Option<String>,  // Parent show poster URL
+    pub show_title: Option<String>,      // Parent show name
+    pub show_poster_url: Option<String>, // Parent show poster URL
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,7 +203,7 @@ impl MediaItem {
             MediaItem::Photo(p) => &p.id,
         }
     }
-    
+
     pub fn title(&self) -> &str {
         match self {
             MediaItem::Movie(m) => &m.title,
@@ -214,36 +214,40 @@ impl MediaItem {
             MediaItem::Photo(p) => &p.title,
         }
     }
-    
+
     pub fn is_watched(&self) -> bool {
         match self {
             MediaItem::Movie(m) => m.watched,
-            MediaItem::Show(s) => s.watched_episode_count > 0 && s.watched_episode_count == s.total_episode_count,
+            MediaItem::Show(s) => {
+                s.watched_episode_count > 0 && s.watched_episode_count == s.total_episode_count
+            }
             MediaItem::Episode(e) => e.watched,
             _ => false,
         }
     }
-    
+
     pub fn is_partially_watched(&self) -> bool {
         match self {
-            MediaItem::Show(s) => s.watched_episode_count > 0 && s.watched_episode_count < s.total_episode_count,
+            MediaItem::Show(s) => {
+                s.watched_episode_count > 0 && s.watched_episode_count < s.total_episode_count
+            }
             MediaItem::Movie(m) => m.playback_position.is_some() && !m.watched,
             MediaItem::Episode(e) => e.playback_position.is_some() && !e.watched,
             _ => false,
         }
     }
-    
+
     pub fn watch_progress(&self) -> Option<f32> {
         match self {
             MediaItem::Show(s) if s.total_episode_count > 0 => {
                 Some(s.watched_episode_count as f32 / s.total_episode_count as f32)
             }
-            MediaItem::Movie(m) => {
-                m.playback_position.map(|pos| pos.as_secs_f32() / m.duration.as_secs_f32())
-            }
-            MediaItem::Episode(e) => {
-                e.playback_position.map(|pos| pos.as_secs_f32() / e.duration.as_secs_f32())
-            }
+            MediaItem::Movie(m) => m
+                .playback_position
+                .map(|pos| pos.as_secs_f32() / m.duration.as_secs_f32()),
+            MediaItem::Episode(e) => e
+                .playback_position
+                .map(|pos| pos.as_secs_f32() / e.duration.as_secs_f32()),
             _ => None,
         }
     }
@@ -251,14 +255,7 @@ impl MediaItem {
 
 #[derive(Debug, Clone)]
 pub enum Credentials {
-    UsernamePassword {
-        username: String,
-        password: String,
-    },
-    Token {
-        token: String,
-    },
-    ApiKey {
-        key: String,
-    },
+    UsernamePassword { username: String, password: String },
+    Token { token: String },
+    ApiKey { key: String },
 }

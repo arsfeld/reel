@@ -1,17 +1,20 @@
 use anyhow::{Result, anyhow};
-use gtk4::{gdk, gio, glib, prelude::*};
+use futures::future::join_all;
 use gtk4::gdk_pixbuf::Pixbuf;
+use gtk4::{gdk, gio, glib, prelude::*};
+use lru::LruCache;
 use reqwest::Client;
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::Instant;
 use tokio::fs;
-use tokio::sync::{RwLock, Semaphore};
-use tracing::{debug, error, info, trace};
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
-use image::{ImageFormat, DynamicImage};
-use webp::Encoder;
+use tokio::sync::{RwLock, Semaphore, oneshot};
+use tracing::{debug, info, trace};
+
+use crate::constants::*;
 
 /// Image size variants for different UI contexts
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,39 +30,22 @@ pub enum ImageSize {
 }
 
 impl ImageSize {
+    // Keep dimensions for UI sizing hints (card dimensions)
     pub fn dimensions_for_poster(&self) -> (u32, u32) {
         match self {
             Self::Small => (120, 180),
             Self::Medium => (180, 270),
             Self::Large => (360, 540),
-            Self::Original => (0, 0), // No resize
+            Self::Original => (0, 0),
         }
     }
-    
+
     pub fn dimensions_for_landscape(&self) -> (u32, u32) {
         match self {
             Self::Small => (120, 68),
             Self::Medium => (320, 180),
             Self::Large => (640, 360),
-            Self::Original => (0, 0), // No resize
-        }
-    }
-    
-    pub fn quality(&self) -> u8 {
-        match self {
-            Self::Small => 75,    // Lower quality for small thumbnails
-            Self::Medium => 85,   // Good quality/size balance
-            Self::Large => 90,    // High quality for larger views
-            Self::Original => 95, // Near-lossless
-        }
-    }
-    
-    pub fn webp_quality(&self) -> f32 {
-        match self {
-            Self::Small => 70.0,
-            Self::Medium => 80.0,
-            Self::Large => 85.0,
-            Self::Original => 90.0,
+            Self::Original => (0, 0),
         }
     }
 }
@@ -68,20 +54,25 @@ impl ImageSize {
 struct CacheEntry {
     texture: gdk::Texture,
     size_bytes: usize,
-    last_accessed: u64,
+    last_accessed: Instant,
     access_count: u32,
 }
 
-/// Image loader with WebP support and multi-size caching
+/// Represents a pending download with multiple waiters
+struct PendingDownload {
+    waiters: Vec<oneshot::Sender<Result<Vec<u8>>>>,
+}
+
+/// Image loader with request coalescing and LRU cache
 pub struct ImageLoader {
     client: Client,
     cache_dir: PathBuf,
-    memory_cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
+    memory_cache: Arc<RwLock<LruCache<String, CacheEntry>>>,
     cache_size: Arc<AtomicU64>,
     max_cache_size: u64,
     download_semaphore: Arc<Semaphore>,
     active_downloads: Arc<AtomicUsize>,
-    webp_supported: bool,
+    pending_downloads: Arc<RwLock<HashMap<String, PendingDownload>>>,
 }
 
 impl ImageLoader {
@@ -91,279 +82,208 @@ impl ImageLoader {
             .ok_or_else(|| anyhow!("Failed to get cache directory"))?
             .join("reel")
             .join("images");
-        
+
         // Create subdirectories for different sizes
         for size_dir in &["small", "medium", "large", "original"] {
             std::fs::create_dir_all(cache_dir.join(size_dir))?;
         }
-        
-        // Build a custom client that accepts self-signed certificates
+
+        // Build optimized HTTP client
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(3)) // Reduced from 10s to 3s for faster response
-            .connect_timeout(std::time::Duration::from_secs(2)) // Fast connection timeout
+            .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .connect_timeout(std::time::Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
             .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .pool_max_idle_per_host(100) // Increased for more concurrent connections
+            .pool_max_idle_per_host(100)
             .tcp_nodelay(true)
-            .danger_accept_invalid_certs(true) // Accept Plex's self-signed certificates
-            .danger_accept_invalid_hostnames(true) // Also accept invalid hostnames
+            .tcp_keepalive(std::time::Duration::from_secs(30))
+            // Removed http2_prior_knowledge() as it's incompatible with HTTPS
+            .http2_keep_alive_interval(std::time::Duration::from_secs(10))
+            .http2_keep_alive_timeout(std::time::Duration::from_secs(30))
+            .danger_accept_invalid_certs(true) // Plex self-signed certs
+            .danger_accept_invalid_hostnames(true)
             .build()?;
-        
-        // Check WebP support
-        let webp_supported = Self::check_webp_support();
-        info!("WebP support: {}", webp_supported);
-        
+
+        // Create LRU cache with configurable capacity
+        let cache_capacity = NonZeroUsize::new(MEMORY_CACHE_SIZE).unwrap();
+        let memory_cache = LruCache::new(cache_capacity);
+
         Ok(Self {
             client,
             cache_dir,
-            memory_cache: Arc::new(RwLock::new(HashMap::new())),
+            memory_cache: Arc::new(RwLock::new(memory_cache)),
             cache_size: Arc::new(AtomicU64::new(0)),
-            max_cache_size: 500 * 1024 * 1024, // 500MB memory cache for faster access
-            download_semaphore: Arc::new(Semaphore::new(10)), // Reduced to 10 to prevent overload
+            max_cache_size: MEMORY_CACHE_MAX_MB * 1024 * 1024,
+            download_semaphore: Arc::new(Semaphore::new(CONCURRENT_DOWNLOADS)),
             active_downloads: Arc::new(AtomicUsize::new(0)),
-            webp_supported,
+            pending_downloads: Arc::new(RwLock::new(HashMap::new())),
         })
     }
-    
-    /// Check if WebP is supported by the system
-    fn check_webp_support() -> bool {
-        // Try to create a simple WebP image to test support
-        match image::DynamicImage::new_rgb8(1, 1).as_rgb8() {
-            Some(rgb_image) => {
-                // WebP encoder always succeeds with creation, so we return true
-                // The actual encoding may fail later but we'll handle that with fallback
-                true
-            }
-            None => false,
-        }
-    }
-    
-    /// Load an image with specified size
-    pub async fn load_image(&self, url: &str, size: ImageSize) -> Result<gdk::Texture> {
-        let start_time = std::time::Instant::now();
-        let cache_key = format!("{}_{:?}", url, size);
-        
-        // Extract filename from URL for logging
-        let filename = url.split('/').last().unwrap_or("unknown");
-        
-        // Check memory cache first - use read lock for better concurrency
+
+    /// Load an image with specified size - simplified for fast Plex thumbnails
+    pub async fn load_image(&self, url: &str, _size: ImageSize) -> Result<gdk::Texture> {
+        // Size is ignored since Plex handles resizing server-side
+        let cache_key = url.to_string();
+
+        // Check memory cache first - O(1) LRU lookup
         {
-            let cache = self.memory_cache.read().await;
-            if let Some(entry) = cache.get(&cache_key) {
-                trace!("Memory cache hit for {} ({:?}) - {}ms", filename, size, start_time.elapsed().as_millis());
-                // Update access stats in background to avoid blocking
-                let cache_clone = self.memory_cache.clone();
-                let key_clone = cache_key.clone();
-                tokio::spawn(async move {
-                    if let Ok(mut cache) = cache_clone.try_write() {
-                        if let Some(entry) = cache.get_mut(&key_clone) {
-                            entry.last_accessed = Self::current_timestamp();
-                            entry.access_count += 1;
-                        }
-                    }
-                });
+            let mut cache = self.memory_cache.write().await;
+            if let Some(entry) = cache.get_mut(&cache_key) {
+                entry.last_accessed = Instant::now();
+                entry.access_count += 1;
                 return Ok(entry.texture.clone());
             }
         }
-        
+
         // Generate file cache key
-        let file_cache_key = self.generate_cache_key(url, size);
-        let cache_path = self.get_cache_path(&file_cache_key, size);
-        
+        let file_cache_key = self.generate_cache_key(url, ImageSize::Small);
+        let cache_path = self.get_cache_path(&file_cache_key, ImageSize::Small);
+
         // Check disk cache
-        if cache_path.exists() {
-            match self.load_from_file(&cache_path).await {
-                Ok(texture) => {
-                    debug!("Disk cache hit for {} ({:?}) - {}ms", filename, size, start_time.elapsed().as_millis());
-                    // Add to memory cache in background
-                    let cache_key_clone = cache_key.clone();
-                    let texture_clone = texture.clone();
-                    let self_clone = self.clone();
-                    tokio::spawn(async move {
-                        self_clone.add_to_memory_cache(cache_key_clone, texture_clone).await;
-                    });
-                    return Ok(texture);
-                }
-                Err(_) => {
-                    // Corrupted cache file, delete it
-                    let _ = fs::remove_file(&cache_path).await;
-                }
-            }
+        if cache_path.exists()
+            && let Ok(texture) = self.load_from_file(&cache_path).await
+        {
+            // Add to memory cache in background
+            let cache_key_clone = cache_key.clone();
+            let texture_clone = texture.clone();
+            let self_clone = self.clone();
+            tokio::spawn(async move {
+                self_clone
+                    .add_to_memory_cache(cache_key_clone, texture_clone)
+                    .await;
+            });
+            return Ok(texture);
         }
-        
-        // Download image
-        let download_start = std::time::Instant::now();
-        let bytes = self.download_image(url).await?;
-        let download_time = download_start.elapsed().as_millis();
-        let original_size = bytes.len();
-        
-        // Skip processing for images that are already small enough
-        // With Plex sending 200x300 images, they should be under 50KB
-        let should_process = match size {
-            ImageSize::Small => false, // Never process small images - Plex already resized them
-            ImageSize::Medium => bytes.len() > 200_000, // Only process if > 200KB
-            ImageSize::Large => bytes.len() > 500_000, // Only process if > 500KB
-            ImageSize::Original => false,
-        };
-        
-        let process_start = std::time::Instant::now();
-        let final_bytes = if should_process {
-            debug!("Processing image {} from {} bytes", filename, bytes.len());
-            match self.process_image(bytes.clone(), size).await {
-                Ok(processed) => {
-                    debug!("Processed image {} to {} bytes", filename, processed.len());
-                    processed
-                }
-                Err(e) => {
-                    debug!("Failed to process image {}: {}", filename, e);
-                    bytes
-                }
-            }
-        } else {
-            debug!("Skipping processing for {} ({}KB already small)", filename, bytes.len() / 1024);
-            bytes
-        };
-        let process_time = process_start.elapsed().as_millis();
-        
+
+        // Download with request coalescing
+        let bytes = self.download_with_coalescing(url).await?;
+
         // Save to disk cache in background
         let cache_path_clone = cache_path.clone();
-        let final_bytes_clone = final_bytes.clone();
+        let bytes_clone = bytes.clone();
         tokio::spawn(async move {
-            let _ = fs::write(&cache_path_clone, &final_bytes_clone).await;
+            let _ = fs::write(&cache_path_clone, &bytes_clone).await;
         });
-        
+
         // Create texture
-        let texture = self.create_texture_from_bytes(&final_bytes)?;
-        
-        // Add to memory cache in background
-        let cache_key_clone = cache_key.clone();
-        let texture_clone = texture.clone();
-        let self_clone = self.clone();
-        tokio::spawn(async move {
-            self_clone.add_to_memory_cache(cache_key_clone, texture_clone).await;
-        });
-        
-        if should_process {
-            info!("Downloaded {} ({:?}) - size: {}KB→{}KB, download: {}ms, process: {}ms, total: {}ms", 
-                filename, 
-                size,
-                original_size / 1024,
-                final_bytes.len() / 1024,
-                download_time,
-                process_time,
-                start_time.elapsed().as_millis()
-            );
-        } else {
-            info!("Downloaded {} ({:?}) - size: {}KB, download: {}ms, total: {}ms (no processing needed)", 
-                filename, 
-                size,
-                final_bytes.len() / 1024,
-                download_time,
-                start_time.elapsed().as_millis()
-            );
-        }
-        
+        let texture = self.create_texture_from_bytes(&bytes)?;
+
+        // Add to memory cache
+        self.add_to_memory_cache(cache_key, texture.clone()).await;
+
         Ok(texture)
     }
-    
-    /// Process image: resize and optimize
-    async fn process_image(&self, bytes: Vec<u8>, size: ImageSize) -> Result<Vec<u8>> {
-        // For now, skip WebP conversion as GDK might not support it
-        // Just resize and return as JPEG/PNG
-        tokio::task::spawn_blocking(move || {
-            let img = image::load_from_memory(&bytes)?;
-            
-            // Resize if not original size
-            let resized = if size != ImageSize::Original {
-                let (width, height) = size.dimensions_for_poster();
-                if width > 0 && height > 0 {
-                    img.resize(width, height, image::imageops::FilterType::Lanczos3)
-                } else {
-                    img
-                }
+
+    /// Download with request coalescing to prevent duplicate downloads
+    async fn download_with_coalescing(&self, url: &str) -> Result<Vec<u8>> {
+        let url_key = url.to_string();
+
+        // Check if download is already in progress
+        {
+            let mut pending = self.pending_downloads.write().await;
+            if let Some(entry) = pending.get_mut(&url_key) {
+                // Create a channel to wait for the result
+                let (tx, rx) = oneshot::channel();
+                entry.waiters.push(tx);
+                drop(pending); // Release lock before waiting
+
+                debug!("Coalescing request for {}", url);
+                return rx.await.map_err(|_| anyhow!("Download cancelled"))?;
             } else {
-                img
-            };
-            
-            // Save as JPEG with quality settings
-            let mut output = std::io::Cursor::new(Vec::new());
-            resized.write_to(&mut output, ImageFormat::Jpeg)?;
-            Ok(output.into_inner())
-        }).await?
+                // Start new download
+                pending.insert(
+                    url_key.clone(),
+                    PendingDownload {
+                        waiters: Vec::new(),
+                    },
+                );
+            }
+        }
+
+        // Perform the actual download
+        let result = self.download_image(url).await;
+
+        // Notify all waiters
+        {
+            let mut pending = self.pending_downloads.write().await;
+            if let Some(entry) = pending.remove(&url_key) {
+                for waiter in entry.waiters {
+                    let _ = waiter.send(
+                        result
+                            .as_ref()
+                            .map(|v| v.clone())
+                            .map_err(|e| anyhow::anyhow!(e.to_string())),
+                    );
+                }
+            }
+        }
+
+        result
     }
-    
-    /// Encode image as WebP
-    fn encode_webp(img: &DynamicImage, quality: f32) -> Result<Vec<u8>> {
-        let rgb_image = img.to_rgb8();
-        let (width, height) = rgb_image.dimensions();
-        
-        let encoder = Encoder::from_rgb(&rgb_image, width, height);
-        let webp_memory = encoder.encode(quality);
-        Ok(webp_memory.to_vec())
-    }
-    
-    /// Download image with improved error handling and retries
+
+    /// Download image with improved error handling
     async fn download_image(&self, url: &str) -> Result<Vec<u8>> {
         let _permit = self.download_semaphore.acquire().await?;
         self.active_downloads.fetch_add(1, Ordering::SeqCst);
-        
-        let filename = url.split('/').last().unwrap_or("unknown");
-        let mut retries = 2; // Reduced from 3 to 2 for faster failure
+
+        let filename = url.split('/').next_back().unwrap_or("unknown");
+        let mut retries = 2;
         let mut last_error = None;
-        
+
         while retries > 0 {
             match self.download_attempt(url).await {
                 Ok(bytes) => {
                     self.active_downloads.fetch_sub(1, Ordering::SeqCst);
-                    let active_count = self.active_downloads.load(Ordering::Relaxed);
-                    trace!("Downloaded {} - {} bytes, {} downloads active", filename, bytes.len(), active_count);
+                    let active = self.active_downloads.load(Ordering::Relaxed);
+                    trace!(
+                        "Downloaded {} - {}KB, {} active",
+                        filename,
+                        bytes.len() / 1024,
+                        active
+                    );
                     return Ok(bytes);
                 }
                 Err(e) => {
                     last_error = Some(e);
                     retries -= 1;
                     if retries > 0 {
-                        trace!("Download failed for {}, retrying... ({} attempts left)", filename, retries);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await; // Reduced from 500ms to 100ms
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     }
                 }
             }
         }
-        
+
         self.active_downloads.fetch_sub(1, Ordering::SeqCst);
-        let final_error = last_error.unwrap_or_else(|| anyhow!("Failed to download image"));
-        error!("Failed to download {} after all retries: {}", filename, final_error);
-        Err(final_error)
+        Err(last_error.unwrap_or_else(|| anyhow!("Download failed")))
     }
-    
+
     /// Single download attempt
     async fn download_attempt(&self, url: &str) -> Result<Vec<u8>> {
-        let response = self.client
+        let response = self
+            .client
             .get(url)
-            .header("Accept", "image/webp,image/jpeg,image/png,image/*,*/*;q=0.8")
+            .header(
+                "Accept",
+                "image/webp,image/jpeg,image/png,image/*,*/*;q=0.8",
+            )
             .send()
-            .await?;
-        
+            .await
+            .map_err(|e| anyhow!("Network request failed: {}", e))?;
+
         if !response.status().is_success() {
             return Err(anyhow!("HTTP error: {}", response.status()));
         }
-        
-        // Check content length to avoid downloading huge files
-        if let Some(content_length) = response.content_length() {
-            if content_length > 10 * 1024 * 1024 { // 10MB limit
-                return Err(anyhow!("Image too large: {} bytes", content_length));
-            }
-        }
-        
+
+        // No need to check size - Plex thumbnails are already small
         let bytes = response.bytes().await?;
         Ok(bytes.to_vec())
     }
-    
+
     /// Load texture from file
     async fn load_from_file(&self, path: &Path) -> Result<gdk::Texture> {
         let bytes = fs::read(path).await?;
         self.create_texture_from_bytes(&bytes)
     }
-    
+
     /// Create GDK texture from bytes
     fn create_texture_from_bytes(&self, bytes: &[u8]) -> Result<gdk::Texture> {
         let stream = gio::MemoryInputStream::from_bytes(&glib::Bytes::from(bytes));
@@ -371,65 +291,47 @@ impl ImageLoader {
         let texture = gdk::Texture::for_pixbuf(&pixbuf);
         Ok(texture)
     }
-    
-    /// Add texture to memory cache with LRU eviction
+
+    /// Add texture to LRU memory cache
     async fn add_to_memory_cache(&self, key: String, texture: gdk::Texture) {
-        let size_bytes = texture.width() as usize * texture.height() as usize * 4; // Approximate
-        
+        let size_bytes = texture.width() as usize * texture.height() as usize * 4;
+
         let mut cache = self.memory_cache.write().await;
-        
-        // Check if we need to evict entries
-        let current_size = self.cache_size.load(Ordering::Relaxed);
-        if current_size + size_bytes as u64 > self.max_cache_size {
-            self.evict_lru_entries(&mut cache, size_bytes as u64).await;
+
+        // LRU automatically evicts oldest entries when capacity is reached
+        let old_entry = cache.put(
+            key,
+            CacheEntry {
+                texture,
+                size_bytes,
+                last_accessed: Instant::now(),
+                access_count: 1,
+            },
+        );
+
+        // Update cache size tracking
+        if let Some(old) = old_entry {
+            self.cache_size
+                .fetch_sub(old.size_bytes as u64, Ordering::Relaxed);
         }
-        
-        // Add new entry
-        cache.insert(key, CacheEntry {
-            texture,
-            size_bytes,
-            last_accessed: Self::current_timestamp(),
-            access_count: 1,
-        });
-        
-        self.cache_size.fetch_add(size_bytes as u64, Ordering::Relaxed);
+        self.cache_size
+            .fetch_add(size_bytes as u64, Ordering::Relaxed);
     }
-    
-    /// Evict least recently used entries
-    async fn evict_lru_entries(&self, cache: &mut HashMap<String, CacheEntry>, needed_space: u64) {
-        let mut entries: Vec<_> = cache.iter()
-            .map(|(k, v)| (k.clone(), v.last_accessed, v.size_bytes))
-            .collect();
-        
-        // Sort by last accessed time (oldest first)
-        entries.sort_by_key(|(_, accessed, _)| *accessed);
-        
-        let mut freed_space = 0u64;
-        for (key, _, size) in entries {
-            if freed_space >= needed_space {
-                break;
-            }
-            
-            cache.remove(&key);
-            freed_space += size as u64;
-            self.cache_size.fetch_sub(size as u64, Ordering::Relaxed);
-        }
-    }
-    
+
     /// Generate a cache key from URL and size
     fn generate_cache_key(&self, url: &str, size: ImageSize) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
         url.hash(&mut hasher);
         size.hash(&mut hasher);
         let hash = hasher.finish();
-        
-        // Use jpg extension for processed images
-        format!("{:x}.jpg", hash)
+
+        // Use generic extension since we're storing original format
+        format!("{:x}.img", hash)
     }
-    
+
     /// Get cache path for a given key and size
     fn get_cache_path(&self, key: &str, size: ImageSize) -> PathBuf {
         let size_dir = match size {
@@ -438,28 +340,270 @@ impl ImageLoader {
             ImageSize::Large => "large",
             ImageSize::Original => "original",
         };
-        
+
         self.cache_dir.join(size_dir).join(key)
     }
-    
-    /// Get current timestamp in seconds
-    fn current_timestamp() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
+
+    /// Adaptive loading removed - Plex serves optimized sizes directly
+    pub async fn load_adaptive(&self, url: &str, target_size: ImageSize) -> Result<gdk::Texture> {
+        // Just load the image directly since Plex handles sizing
+        self.load_image(url, target_size).await
     }
-    
-    /// Preload images in background
-    pub async fn preload_images(&self, urls: Vec<(String, ImageSize)>) {
-        for (url, size) in urls {
-            let loader = self.clone();
-            tokio::spawn(async move {
-                let _ = loader.load_image(&url, size).await;
-            });
+
+    /// Batch load multiple images efficiently
+    pub async fn batch_load(
+        &self,
+        requests: Vec<(String, ImageSize)>,
+    ) -> Vec<Result<gdk::Texture>> {
+        let start_time = Instant::now();
+        let total_requests = requests.len();
+
+        // First, check what's already in cache
+        let mut cached_results = HashMap::new();
+        let mut to_download = Vec::new();
+
+        for (idx, (url, size)) in requests.iter().enumerate() {
+            let cache_key = format!("{}_{:?}", url, size);
+
+            // Check memory cache
+            {
+                let mut cache = self.memory_cache.write().await;
+                if let Some(entry) = cache.get_mut(&cache_key) {
+                    entry.last_accessed = Instant::now();
+                    entry.access_count += 1;
+                    cached_results.insert(idx, Ok(entry.texture.clone()));
+                    continue;
+                }
+            }
+
+            // Check disk cache
+            let file_cache_key = self.generate_cache_key(url, *size);
+            let cache_path = self.get_cache_path(&file_cache_key, *size);
+
+            if cache_path.exists()
+                && let Ok(texture) = self.load_from_file(&cache_path).await
+            {
+                cached_results.insert(idx, Ok(texture.clone()));
+                // Add to memory cache in background
+                let cache_key_clone = cache_key.clone();
+                let texture_clone = texture.clone();
+                let self_clone = self.clone();
+                tokio::spawn(async move {
+                    self_clone
+                        .add_to_memory_cache(cache_key_clone, texture_clone)
+                        .await;
+                });
+                continue;
+            }
+
+            // Need to download
+            to_download.push((idx, url.clone(), *size));
         }
+
+        // Use trace for fully cached batches, debug for downloads
+        if to_download.is_empty() {
+            trace!(
+                "Batch load: {} cached, {} to download out of {} total",
+                cached_results.len(),
+                to_download.len(),
+                total_requests
+            );
+        } else {
+            debug!(
+                "Batch load: {} cached, {} to download out of {} total",
+                cached_results.len(),
+                to_download.len(),
+                total_requests
+            );
+        }
+
+        // Group downloads by priority (size)
+        let mut high_priority = Vec::new();
+        let mut medium_priority = Vec::new();
+        let mut low_priority = Vec::new();
+
+        for (idx, url, size) in &to_download {
+            match size {
+                ImageSize::Small => high_priority.push((*idx, url.clone(), *size)),
+                ImageSize::Medium => medium_priority.push((*idx, url.clone(), *size)),
+                _ => low_priority.push((*idx, url.clone(), *size)),
+            }
+        }
+
+        // Process downloads in priority order with controlled concurrency
+        let mut download_results = HashMap::new();
+
+        // Process high priority first (small images)
+        if !high_priority.is_empty() {
+            let results = self.batch_download_group(high_priority).await;
+            download_results.extend(results);
+        }
+
+        // Then medium priority
+        if !medium_priority.is_empty() {
+            let results = self.batch_download_group(medium_priority).await;
+            download_results.extend(results);
+        }
+
+        // Finally low priority
+        if !low_priority.is_empty() {
+            let results = self.batch_download_group(low_priority).await;
+            download_results.extend(results);
+        }
+
+        // Combine all results in original order
+        let mut final_results = Vec::with_capacity(requests.len());
+        for idx in 0..requests.len() {
+            if let Some(result) = cached_results.remove(&idx) {
+                final_results.push(result);
+            } else if let Some(result) = download_results.remove(&idx) {
+                final_results.push(result);
+            } else {
+                final_results.push(Err(anyhow!("Failed to load image")));
+            }
+        }
+
+        // Use appropriate log level based on whether downloads occurred
+        if to_download.is_empty() {
+            trace!(
+                "Batch loaded {} images in {}ms (all cached)",
+                total_requests,
+                start_time.elapsed().as_millis()
+            );
+        } else {
+            info!(
+                "Batch loaded {} images in {}ms ({} cached, {} downloaded)",
+                total_requests,
+                start_time.elapsed().as_millis(),
+                total_requests - to_download.len(),
+                to_download.len()
+            );
+        }
+
+        final_results
     }
-    
+
+    /// Download a group of images with controlled concurrency
+    async fn batch_download_group(
+        &self,
+        group: Vec<(usize, String, ImageSize)>,
+    ) -> HashMap<usize, Result<gdk::Texture>> {
+        let mut results = HashMap::new();
+
+        // Process in chunks to avoid overwhelming the system
+        const CHUNK_SIZE: usize = 10;
+        for chunk in group.chunks(CHUNK_SIZE) {
+            let mut tasks = Vec::new();
+
+            for (idx, url, size) in chunk {
+                let self_clone = self.clone();
+                let url = url.clone();
+                let size = *size;
+                let idx = *idx;
+
+                tasks.push(tokio::spawn(async move {
+                    (idx, self_clone.load_image(&url, size).await)
+                }));
+            }
+
+            // Wait for this chunk to complete
+            let chunk_results = join_all(tasks).await;
+            for (idx, texture_result) in chunk_results.into_iter().flatten() {
+                results.insert(idx, texture_result);
+            }
+        }
+
+        results
+    }
+
+    /// Preload images based on predicted scroll
+    pub async fn predictive_preload(
+        &self,
+        urls: Vec<(String, ImageSize)>,
+        priority: PreloadPriority,
+    ) {
+        let delay = match priority {
+            PreloadPriority::High => 0,
+            PreloadPriority::Medium => 100,
+            PreloadPriority::Low => 500,
+        };
+
+        if delay > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+        }
+
+        // Use batch loading for better efficiency
+        let _ = self.batch_load(urls).await;
+    }
+
+    /// Warm up cache with a batch of URLs
+    pub async fn warm_cache(&self, urls: Vec<(String, ImageSize)>) {
+        let start_time = Instant::now();
+        let total = urls.len();
+
+        // Check what's not already cached
+        let mut to_load = Vec::new();
+        for (url, size) in urls {
+            let cache_key = format!("{}_{:?}", url, size);
+
+            // Quick check without acquiring write lock
+            let in_memory = {
+                let cache = self.memory_cache.read().await;
+                cache.peek(&cache_key).is_some()
+            };
+
+            if !in_memory {
+                let file_cache_key = self.generate_cache_key(&url, size);
+                let cache_path = self.get_cache_path(&file_cache_key, size);
+
+                if !cache_path.exists() {
+                    to_load.push((url, size));
+                }
+            }
+        }
+
+        if !to_load.is_empty() {
+            debug!(
+                "Warming cache with {} images ({} already cached)",
+                to_load.len(),
+                total - to_load.len()
+            );
+            let _ = self.batch_load(to_load).await;
+        }
+
+        debug!(
+            "Cache warm-up completed in {}ms",
+            start_time.elapsed().as_millis()
+        );
+    }
+
+    /// Batch check if images are cached
+    pub async fn batch_check_cached(&self, urls: Vec<(String, ImageSize)>) -> Vec<bool> {
+        let mut results = Vec::with_capacity(urls.len());
+
+        for (url, size) in urls {
+            let cache_key = format!("{}_{:?}", url, size);
+
+            // Check memory cache
+            let in_memory = {
+                let cache = self.memory_cache.read().await;
+                cache.peek(&cache_key).is_some()
+            };
+
+            if in_memory {
+                results.push(true);
+                continue;
+            }
+
+            // Check disk cache
+            let file_cache_key = self.generate_cache_key(&url, size);
+            let cache_path = self.get_cache_path(&file_cache_key, size);
+            results.push(cache_path.exists());
+        }
+
+        results
+    }
+
     /// Clear memory cache
     pub async fn clear_memory_cache(&self) {
         let mut cache = self.memory_cache.write().await;
@@ -467,7 +611,7 @@ impl ImageLoader {
         self.cache_size.store(0, Ordering::Relaxed);
         info!("Memory cache cleared");
     }
-    
+
     /// Clear disk cache for a specific size
     pub async fn clear_disk_cache(&self, size: Option<ImageSize>) -> Result<()> {
         let dirs = if let Some(s) = size {
@@ -480,56 +624,57 @@ impl ImageLoader {
         } else {
             vec!["small", "medium", "large", "original"]
         };
-        
+
         let mut total_deleted = 0;
         for dir in dirs {
             let dir_path = self.cache_dir.join(dir);
             if dir_path.exists() {
                 let mut entries = tokio::fs::read_dir(&dir_path).await?;
                 while let Some(entry) = entries.next_entry().await? {
-                    if let Ok(metadata) = entry.metadata().await {
-                        if metadata.is_file() {
-                            tokio::fs::remove_file(entry.path()).await?;
-                            total_deleted += 1;
-                        }
+                    if let Ok(metadata) = entry.metadata().await
+                        && metadata.is_file()
+                    {
+                        tokio::fs::remove_file(entry.path()).await?;
+                        total_deleted += 1;
                     }
                 }
             }
         }
-        
+
         info!("Deleted {} cached images", total_deleted);
         Ok(())
     }
-    
+
     /// Get cache statistics
     pub async fn get_cache_stats(&self) -> CacheStats {
-        let memory_cache = self.memory_cache.read().await;
-        let memory_entries = memory_cache.len();
+        let cache = self.memory_cache.read().await;
+        let memory_entries = cache.len();
         let memory_size = self.cache_size.load(Ordering::Relaxed);
-        
+
         let mut disk_entries = 0;
         let mut disk_size = 0u64;
-        
+
         for dir in &["small", "medium", "large", "original"] {
             let dir_path = self.cache_dir.join(dir);
             if let Ok(mut entries) = tokio::fs::read_dir(&dir_path).await {
                 while let Some(entry) = entries.next_entry().await.ok().flatten() {
-                    if let Ok(metadata) = entry.metadata().await {
-                        if metadata.is_file() {
-                            disk_entries += 1;
-                            disk_size += metadata.len();
-                        }
+                    if let Ok(metadata) = entry.metadata().await
+                        && metadata.is_file()
+                    {
+                        disk_entries += 1;
+                        disk_size += metadata.len();
                     }
                 }
             }
         }
-        
+
         CacheStats {
             memory_entries,
             memory_size_bytes: memory_size,
             disk_entries,
             disk_size_bytes: disk_size,
             active_downloads: self.active_downloads.load(Ordering::Relaxed),
+            pending_requests: self.pending_downloads.read().await.len(),
         }
     }
 }
@@ -544,7 +689,7 @@ impl Clone for ImageLoader {
             max_cache_size: self.max_cache_size,
             download_semaphore: self.download_semaphore.clone(),
             active_downloads: self.active_downloads.clone(),
-            webp_supported: self.webp_supported,
+            pending_downloads: self.pending_downloads.clone(),
         }
     }
 }
@@ -555,6 +700,14 @@ impl Default for ImageLoader {
     }
 }
 
+/// Preload priority levels
+#[derive(Debug, Clone, Copy)]
+pub enum PreloadPriority {
+    High,   // Load immediately
+    Medium, // Load after 100ms
+    Low,    // Load after 500ms
+}
+
 /// Cache statistics
 #[derive(Debug, Clone)]
 pub struct CacheStats {
@@ -563,4 +716,5 @@ pub struct CacheStats {
     pub disk_entries: usize,
     pub disk_size_bytes: u64,
     pub active_downloads: usize,
+    pub pending_requests: usize,
 }

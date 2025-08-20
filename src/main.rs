@@ -3,16 +3,16 @@ use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use tracing::info;
-use tracing_subscriber;
 
 mod app;
-mod config;
-mod ui;
 mod backends;
+mod config;
+mod constants;
 mod models;
+mod player;
 mod services;
 mod state;
-mod player;
+mod ui;
 mod utils;
 
 use app::ReelApp;
@@ -30,7 +30,7 @@ fn main() -> Result<()> {
     // Initialize Tokio runtime for async operations
     let runtime = tokio::runtime::Runtime::new()?;
     let _guard = runtime.enter();
-    
+
     // Spawn a thread to keep the runtime alive
     std::thread::spawn(move || {
         runtime.block_on(async {
@@ -45,7 +45,7 @@ fn main() -> Result<()> {
 
     // Initialize GStreamer
     gstreamer::init()?;
-    
+
     // Load compiled resources
     gtk4::gio::resources_register_include!("resources.gresource")
         .expect("Failed to register resources");

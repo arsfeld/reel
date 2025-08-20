@@ -30,6 +30,7 @@ futures = "0.3"
 # HTTP and networking
 reqwest = { version = "0.12", features = ["json", "stream", "cookies", "native-tls"] }
 url = "2.5"
+percent-encoding = "2.3"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -56,6 +57,7 @@ image = "0.25"
 webp = "0.3"
 base64 = "0.22"
 uuid = { version = "1.18", features = ["v4", "serde"] }
+lru = "0.12"
 
 # Localization
 gettext-rs = { version = "0.7", features = ["gettext-system"] }

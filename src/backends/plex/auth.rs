@@ -28,7 +28,7 @@ impl PlexAuth {
     /// Request a new PIN from Plex for authentication
     pub async fn get_pin() -> Result<PlexPin> {
         let client = reqwest::Client::new();
-        
+
         let response = client
             .post(format!("{}/api/v2/pins", PLEX_TV_URL))
             .header("X-Plex-Product", PRODUCT_NAME)
@@ -36,35 +36,35 @@ impl PlexAuth {
             .header("Accept", "application/json")
             .send()
             .await?;
-        
+
         if !response.status().is_success() {
             return Err(anyhow!("Failed to get PIN: {}", response.status()));
         }
-        
+
         let text = response.text().await?;
         debug!("PIN response: {}", text);
-        
+
         let pin_response: PlexPinResponse = serde_json::from_str(&text)?;
-        
+
         info!("Got Plex PIN: {}", pin_response.code);
-        
+
         Ok(PlexPin {
             id: pin_response.id.to_string(),
             code: pin_response.code,
         })
     }
-    
+
     /// Poll for the auth token after user has entered the PIN
     pub async fn poll_for_token(pin_id: &str) -> Result<String> {
         let client = reqwest::Client::new();
         let mut attempts = 0;
         const MAX_ATTEMPTS: u32 = 120; // 4 minutes with 2 second intervals
-        
+
         loop {
             if attempts >= MAX_ATTEMPTS {
                 return Err(anyhow!("Authentication timeout"));
             }
-            
+
             let response = client
                 .get(format!("{}/api/v2/pins/{}", PLEX_TV_URL, pin_id))
                 .header("X-Plex-Client-Identifier", CLIENT_ID)
@@ -72,7 +72,7 @@ impl PlexAuth {
                 .header("Accept", "application/json")
                 .send()
                 .await;
-            
+
             match response {
                 Ok(resp) => {
                     // A 404 after linking means the PIN was consumed (success)
@@ -80,21 +80,26 @@ impl PlexAuth {
                         // PIN is gone, which likely means it was used successfully
                         // We should have gotten the token in a previous iteration
                         // This is a known Plex API behavior
-                        return Err(anyhow!("PIN was consumed. If you saw 'Account Linked' on plex.tv, authentication was successful but we couldn't retrieve the token. Please try using manual connection instead."));
+                        return Err(anyhow!(
+                            "PIN was consumed. If you saw 'Account Linked' on plex.tv, authentication was successful but we couldn't retrieve the token. Please try using manual connection instead."
+                        ));
                     }
-                    
+
                     if resp.status().is_success() {
                         let text = resp.text().await.unwrap_or_default();
                         debug!("PIN check response: {}", text);
-                        
+
                         match serde_json::from_str::<PlexPinResponse>(&text) {
                             Ok(pin_response) => {
                                 // Check if we have a token
-                                if let Some(token) = pin_response.auth_token {
-                                    if !token.is_empty() {
-                                        info!("Authentication successful! Token received: {}...", &token[..8.min(token.len())]);
-                                        return Ok(token);
-                                    }
+                                if let Some(token) = pin_response.auth_token
+                                    && !token.is_empty()
+                                {
+                                    info!(
+                                        "Authentication successful! Token received: {}...",
+                                        &token[..8.min(token.len())]
+                                    );
+                                    return Ok(token);
                                 }
                                 // No token yet, continue polling
                                 debug!("No token yet, continuing to poll...");
@@ -112,48 +117,56 @@ impl PlexAuth {
                     // Continue polling on network errors
                 }
             }
-            
-            debug!("Waiting for authentication... (attempt {}/{})", attempts + 1, MAX_ATTEMPTS);
-            
+
+            debug!(
+                "Waiting for authentication... (attempt {}/{})",
+                attempts + 1,
+                MAX_ATTEMPTS
+            );
+
             tokio::time::sleep(Duration::from_secs(2)).await;
             attempts += 1;
         }
     }
-    
+
     /// Get user information with the auth token
     pub async fn get_user(auth_token: &str) -> Result<PlexUser> {
         let client = reqwest::Client::new();
-        
+
         let response = match client
             .get(format!("{}/api/v2/user", PLEX_TV_URL))
             .header("X-Plex-Token", auth_token)
             .header("Accept", "application/json")
             .send()
-            .await {
+            .await
+        {
             Ok(resp) => resp,
             Err(e) => {
                 // Network error - don't treat as auth failure
                 return Err(anyhow!("Network error while fetching user info: {}", e));
             }
         };
-        
+
         // Check for authentication errors specifically
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(anyhow!("Authentication failed: Invalid or expired token"));
         }
-        
+
         if !response.status().is_success() {
-            return Err(anyhow!("Server error while fetching user info: {}", response.status()));
+            return Err(anyhow!(
+                "Server error while fetching user info: {}",
+                response.status()
+            ));
         }
-        
+
         let user: PlexUser = response.json().await?;
         Ok(user)
     }
-    
+
     /// Discover available Plex servers for the authenticated user
     pub async fn discover_servers(auth_token: &str) -> Result<Vec<PlexServer>> {
         let client = reqwest::Client::new();
-        
+
         let response = client
             .get(format!("{}/api/v2/resources", PLEX_TV_URL))
             .header("X-Plex-Token", auth_token)
@@ -163,24 +176,26 @@ impl PlexAuth {
             .query(&[("includeHttps", "1"), ("includeRelay", "1")])
             .send()
             .await?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
             debug!("Server discovery failed with status {}: {}", status, text);
             return Err(anyhow!("Failed to discover servers: {}", status));
         }
-        
+
         // Parse the response as an array of resources
-        let resources: Vec<PlexServer> = response.json().await
+        let resources: Vec<PlexServer> = response
+            .json()
+            .await
             .map_err(|e| anyhow!("Failed to parse server discovery response: {}", e))?;
-        
+
         // Filter for actual Plex Media Servers (not players/controllers)
         let servers: Vec<PlexServer> = resources
             .into_iter()
             .filter(|r| r.provides.contains("server"))
             .collect();
-        
+
         info!("Found {} Plex servers", servers.len());
         Ok(servers)
     }

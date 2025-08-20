@@ -3,7 +3,7 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
 use std::sync::Arc;
-use tracing::{info, error};
+use tracing::{error, info};
 
 use crate::backends::plex::{PlexAuth, PlexPin, PlexServer};
 use crate::state::AppState;
@@ -11,7 +11,7 @@ use crate::state::AppState;
 mod imp {
     use super::*;
     use gtk4::CompositeTemplate;
-    
+
     #[derive(Debug, Default, CompositeTemplate)]
     #[template(resource = "/dev/arsfeld/Reel/auth_dialog.ui")]
     pub struct ReelAuthDialog {
@@ -39,28 +39,28 @@ mod imp {
         pub token_entry: TemplateChild<adw::PasswordEntryRow>,
         #[template_child]
         pub manual_connect_button: TemplateChild<gtk4::Button>,
-        
+
         pub state: RefCell<Option<Arc<AppState>>>,
         pub auth_handle: RefCell<Option<glib::JoinHandle<()>>>,
         pub current_pin: RefCell<Option<PlexPin>>,
     }
-    
+
     #[glib::object_subclass]
     impl ObjectSubclass for ReelAuthDialog {
         const NAME: &'static str = "ReelAuthDialog";
         type Type = super::ReelAuthDialog;
         type ParentType = adw::Dialog;
-        
+
         fn class_init(klass: &mut Self::Class) {
             klass.bind_template();
             klass.bind_template_callbacks();
         }
-        
+
         fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
             obj.init_template();
         }
     }
-    
+
     #[gtk4::template_callbacks]
     impl ReelAuthDialog {
         #[template_callback]
@@ -68,15 +68,18 @@ mod imp {
             info!("Cancel button clicked");
             self.obj().close();
         }
-        
+
         #[template_callback]
         fn on_open_link_clicked(&self) {
             info!("Opening plex.tv/link");
-            if let Err(e) = gio::AppInfo::launch_default_for_uri("https://plex.tv/link", None::<&gio::AppLaunchContext>) {
+            if let Err(e) = gio::AppInfo::launch_default_for_uri(
+                "https://plex.tv/link",
+                None::<&gio::AppLaunchContext>,
+            ) {
                 error!("Failed to open browser: {}", e);
             }
         }
-        
+
         #[template_callback]
         fn on_retry_clicked(&self) {
             info!("Retrying authentication");
@@ -84,47 +87,55 @@ mod imp {
             self.pin_status_page.set_visible(true);
             self.obj().start_auth();
         }
-        
+
         #[template_callback]
         fn on_manual_connect_clicked(&self) {
             let url = self.server_url_entry.text();
             let token = self.token_entry.text();
-            
+
             if !url.is_empty() && !token.is_empty() {
                 info!("Manual connection to: {}", url);
-                self.obj().connect_manual(url.to_string(), token.to_string());
+                self.obj()
+                    .connect_manual(url.to_string(), token.to_string());
             }
         }
     }
-    
+
     impl ObjectImpl for ReelAuthDialog {
         fn constructed(&self) {
             self.parent_constructed();
-            
+
             let obj = self.obj();
-            
+
             // Set placeholder text for server URL
             self.server_url_entry.set_text("http://192.168.1.100:32400");
-            
+
             // Enable manual connect when both fields have text
-            let update_manual_button = clone!(#[weak] obj, move || {
-                let imp = obj.imp();
-                let has_url = !imp.server_url_entry.text().is_empty();
-                let has_token = !imp.token_entry.text().is_empty();
-                imp.manual_connect_button.set_sensitive(has_url && has_token);
-            });
-            
-            self.server_url_entry.connect_changed(
-                clone!(#[strong] update_manual_button, move |_| {
-                    update_manual_button();
-                })
+            let update_manual_button = clone!(
+                #[weak]
+                obj,
+                move || {
+                    let imp = obj.imp();
+                    let has_url = !imp.server_url_entry.text().is_empty();
+                    let has_token = !imp.token_entry.text().is_empty();
+                    imp.manual_connect_button
+                        .set_sensitive(has_url && has_token);
+                }
             );
-            
+
+            self.server_url_entry.connect_changed(clone!(
+                #[strong]
+                update_manual_button,
+                move |_| {
+                    update_manual_button();
+                }
+            ));
+
             self.token_entry.connect_changed(move |_| {
                 update_manual_button();
             });
         }
-        
+
         fn dispose(&self) {
             // Cancel any ongoing authentication
             if let Some(handle) = self.auth_handle.take() {
@@ -132,7 +143,7 @@ mod imp {
             }
         }
     }
-    
+
     impl WidgetImpl for ReelAuthDialog {}
     impl adw::subclass::dialog::AdwDialogImpl for ReelAuthDialog {}
 }
@@ -149,32 +160,32 @@ impl ReelAuthDialog {
         dialog.imp().state.replace(Some(state));
         dialog
     }
-    
+
     pub fn start_auth(&self) {
         info!("Starting Plex authentication");
-        
+
         let imp = self.imp();
-        
+
         // Cancel any existing auth
         if let Some(handle) = imp.auth_handle.take() {
             handle.abort();
         }
-        
+
         // Show progress
         imp.auth_progress.set_visible(true);
         imp.auth_progress.pulse();
-        
+
         // Start pulsing animation
         let progress = imp.auth_progress.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
             progress.pulse();
             glib::ControlFlow::Continue
         });
-        
+
         // Start authentication flow
         let dialog_weak = self.downgrade();
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        
+
         // Spawn Tokio task for async operations
         tokio::spawn(async move {
             // Get a PIN from Plex
@@ -187,26 +198,26 @@ impl ReelAuthDialog {
                 }
             }
         });
-        
+
         let dialog_weak2 = self.downgrade();
         let handle = glib::spawn_future_local(async move {
-            if let Some(result) = rx.recv().await {
-                if let Some(dialog) = dialog_weak2.upgrade() {
-                    match result {
-                        Ok(pin) => {
-                            dialog.start_auth_with_pin(pin).await;
-                        }
-                        Err(e) => {
-                            dialog.on_auth_error(e);
-                        }
+            if let Some(result) = rx.recv().await
+                && let Some(dialog) = dialog_weak2.upgrade()
+            {
+                match result {
+                    Ok(pin) => {
+                        dialog.start_auth_with_pin(pin).await;
+                    }
+                    Err(e) => {
+                        dialog.on_auth_error(e);
                     }
                 }
             }
         });
-        
+
         imp.auth_handle.replace(Some(handle));
     }
-    
+
     async fn start_auth_with_pin(&self, pin: PlexPin) {
         // Display the PIN to the user
         let imp = self.imp();
@@ -215,11 +226,11 @@ impl ReelAuthDialog {
         imp.pin_status_page.set_visible(true);
         imp.auth_status.set_visible(false);
         imp.auth_error.set_visible(false);
-        
+
         // Poll for the auth token in Tokio runtime
         let pin_id = pin.id.clone();
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        
+
         tokio::spawn(async move {
             match PlexAuth::poll_for_token(&pin_id).await {
                 Ok(token) => {
@@ -230,46 +241,47 @@ impl ReelAuthDialog {
                 }
             }
         });
-        
+
         let dialog_weak = self.downgrade();
         glib::spawn_future_local(async move {
-            if let Some(result) = rx.recv().await {
-                if let Some(dialog) = dialog_weak.upgrade() {
-                    match result {
-                        Ok(token) => {
-                            dialog.on_auth_success(token);
-                        }
-                        Err(e) => {
-                            dialog.on_auth_error(e);
-                        }
+            if let Some(result) = rx.recv().await
+                && let Some(dialog) = dialog_weak.upgrade()
+            {
+                match result {
+                    Ok(token) => {
+                        dialog.on_auth_success(token);
+                    }
+                    Err(e) => {
+                        dialog.on_auth_error(e);
                     }
                 }
             }
         });
     }
-    
+
     fn on_auth_success(&self, token: String) {
         info!("Authentication successful with token: {}...", &token[..8]);
-        
+
         let imp = self.imp();
         imp.auth_progress.set_visible(false);
         imp.pin_status_page.set_visible(false);
         imp.auth_status.set_visible(true);
         imp.auth_status.set_icon_name(Some("emblem-ok-symbolic"));
         imp.auth_status.set_title("Authentication Successful!");
-        imp.auth_status.set_description(Some("Connecting to your Plex server..."));
-        
+        imp.auth_status
+            .set_description(Some("Connecting to your Plex server..."));
+
         // Store token and start server discovery
         if let Some(state) = imp.state.borrow().as_ref() {
             let state_clone = state.clone();
             let token_clone = token.clone();
             let dialog_weak = self.downgrade();
             let current_pin = imp.current_pin.borrow().clone();
-            
+
             // Use Tokio for async operations
             let (tx, mut rx) = tokio::sync::mpsc::channel(1);
             let token_for_task = token_clone.clone();
-            
+
             tokio::spawn(async move {
                 // Discover servers and authenticate
                 match PlexAuth::discover_servers(&token_for_task).await {
@@ -288,14 +300,14 @@ impl ReelAuthDialog {
                     }
                 }
             });
-            
+
             glib::spawn_future_local(async move {
                 if let Some(Some((token, server))) = rx.recv().await {
                     // Get or create backend ID
                     let config = state_clone.config.clone();
                     let last_active = config.get_last_active_backend();
                     info!("Last active backend from config: {:?}", last_active);
-                    
+
                     let backend_id = if let Some(ref last_id) = last_active {
                         if last_id.starts_with("plex") {
                             info!("Reusing existing Plex backend ID: {}", last_id);
@@ -316,27 +328,32 @@ impl ReelAuthDialog {
                         info!("No last active backend, using default ID: plex");
                         "plex".to_string()
                     };
-                    
-                    // Create backend with the ID
+
+                    // Create backend with the ID and cache
                     info!("Creating PlexBackend with ID: {}", backend_id);
-                    let plex_backend = Arc::new(crate::backends::plex::PlexBackend::with_id(backend_id.clone()));
-                    
+                    let cache = state_clone.cache_manager.clone();
+                    let plex_backend = Arc::new(crate::backends::plex::PlexBackend::with_cache(
+                        backend_id.clone(),
+                        Some(cache),
+                    ));
+
                     // Authenticate with PIN (this will save the token to keyring)
                     if let Some(pin) = current_pin {
                         if let Err(e) = plex_backend.authenticate_with_pin(&pin, &server).await {
                             error!("Failed to authenticate backend: {}", e);
                         } else {
                             info!("Backend authenticated and token saved to keyring");
-                            
+
                             // Register the backend
                             let mut backend_manager = state_clone.backend_manager.write().await;
-                            backend_manager.register_backend(backend_id.clone(), plex_backend.clone());
+                            backend_manager
+                                .register_backend(backend_id.clone(), plex_backend.clone());
                             backend_manager.set_active(&backend_id).ok();
-                            
+
                             // Save as last active backend
                             let mut config = state_clone.config.as_ref().clone();
                             let _ = config.set_last_active_backend(&backend_id);
-                            
+
                             // Get user info
                             if let Ok(plex_user) = PlexAuth::get_user(&token).await {
                                 let user = crate::models::User {
@@ -349,7 +366,7 @@ impl ReelAuthDialog {
                             }
                         }
                     }
-                    
+
                     // Close dialog
                     if let Some(dialog) = dialog_weak.upgrade() {
                         dialog.close();
@@ -358,10 +375,10 @@ impl ReelAuthDialog {
             });
         }
     }
-    
+
     fn on_auth_error(&self, error: String) {
         error!("Authentication failed: {}", error);
-        
+
         let imp = self.imp();
         imp.auth_progress.set_visible(false);
         imp.pin_status_page.set_visible(false);
@@ -371,21 +388,21 @@ impl ReelAuthDialog {
         imp.auth_error.set_description(Some(&error));
         imp.retry_button.set_visible(true);
     }
-    
+
     fn connect_manual(&self, url: String, _token: String) {
         info!("Connecting manually to {}", url);
-        
+
         let state = self.imp().state.borrow().as_ref().map(|s| s.clone());
-        
+
         if let Some(state) = state {
             let dialog_weak = self.downgrade();
-            
+
             glib::spawn_future_local(async move {
                 let mut backend_manager = state.backend_manager.write().await;
-                
+
                 // Create a new Plex backend
                 let plex_backend = Arc::new(crate::backends::plex::PlexBackend::new());
-                
+
                 // Create a manual server entry
                 let server = PlexServer {
                     name: "Manual Server".to_string(),
@@ -409,22 +426,31 @@ impl ReelAuthDialog {
                         relay: false,
                     }],
                 };
-                
+
                 // Connect with the manual server
-                if let Err(e) = plex_backend.authenticate_with_pin(
-                    &PlexPin { id: String::new(), code: String::new() }, 
-                    &server
-                ).await {
+                if let Err(e) = plex_backend
+                    .authenticate_with_pin(
+                        &PlexPin {
+                            id: String::new(),
+                            code: String::new(),
+                        },
+                        &server,
+                    )
+                    .await
+                {
                     error!("Failed to connect to server: {}", e);
                 } else {
                     // Get or reuse backend ID
                     let config = state.config.clone();
                     let last_active = config.get_last_active_backend();
-                    
+
                     let backend_id = if let Some(ref last_id) = last_active {
                         if last_id.starts_with("plex") {
                             // Reuse the last active backend ID
-                            info!("Reusing existing backend ID for manual connection: {}", last_id);
+                            info!(
+                                "Reusing existing backend ID for manual connection: {}",
+                                last_id
+                            );
                             last_id.clone()
                         } else {
                             "plex".to_string()
@@ -432,15 +458,15 @@ impl ReelAuthDialog {
                     } else {
                         "plex".to_string()
                     };
-                    
+
                     // Register the backend
                     backend_manager.register_backend(backend_id.clone(), plex_backend.clone());
                     backend_manager.set_active(&backend_id).ok();
-                    
+
                     // Save as last active backend
                     let mut config = state.config.as_ref().clone();
                     let _ = config.set_last_active_backend(&backend_id);
-                    
+
                     // Start sync
                     if let Some(dialog) = dialog_weak.upgrade() {
                         dialog.start_sync().await;
@@ -448,22 +474,22 @@ impl ReelAuthDialog {
                 }
             });
         }
-        
+
         self.close();
     }
-    
+
     async fn start_sync(&self) {
         if let Some(state) = self.imp().state.borrow().as_ref() {
             info!("Starting library sync");
             let state_clone = state.clone();
-            
+
             // Run sync in Tokio runtime
             let (tx, mut rx) = tokio::sync::mpsc::channel(1);
             tokio::spawn(async move {
                 let result = state_clone.sync_active_backend().await;
                 let _ = tx.send(result).await;
             });
-            
+
             // Handle result in GTK context
             if let Some(result) = rx.recv().await {
                 match result {
