@@ -1,0 +1,314 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MovieDetailsPage : Box {
+  orientation: vertical;
+  
+  ScrolledWindow {
+    hscrollbar-policy: never;
+    vexpand: true;
+    
+    Box {
+      orientation: vertical;
+      
+      // Movie header with backdrop and info
+      Overlay {
+        // Backdrop background
+        Box backdrop_container {
+          orientation: vertical;
+          height-request: 500;
+          
+          Picture movie_backdrop {
+            content-fit: cover;
+            vexpand: true;
+            opacity: 0.3;
+          }
+        }
+        
+        // Gradient overlay for better text readability
+        [overlay]
+        Box gradient_overlay {
+          styles ["movie-backdrop-gradient"]
+          height-request: 500;
+        }
+        
+        // Main content on top
+        [overlay]
+        Box header_section {
+          orientation: vertical;
+          
+          // Main content container
+          Box {
+            orientation: horizontal;
+            spacing: 32;
+            margin-top: 32;
+            margin-bottom: 32;
+            margin-start: 32;
+            margin-end: 32;
+            
+            // Movie poster with enhanced styling
+            Box poster_container {
+              styles ["movie-poster-container"]
+              
+              Overlay {
+                Frame {
+                  width-request: 300;
+                  height-request: 450;
+                  styles ["movie-poster-frame"]
+                  
+                  Picture movie_poster {
+                    content-fit: cover;
+                    styles ["movie-poster"]
+                  }
+                }
+                
+                [overlay]
+                Box poster_placeholder {
+                  orientation: vertical;
+                  valign: center;
+                  halign: center;
+                  spacing: 12;
+                  visible: true;
+                  styles ["movie-poster-placeholder"]
+                  
+                  Image {
+                    icon-name: "video-x-generic-symbolic";
+                    pixel-size: 64;
+                    styles ["dim-label"]
+                  }
+                  
+                  Label {
+                    label: _("Loading...");
+                    styles ["dim-label", "caption"]
+                  }
+                }
+              }
+            }
+          
+          // Movie information
+          Box info_container {
+            orientation: vertical;
+            spacing: 16;
+            hexpand: true;
+            valign: center;
+            
+            // Title
+            Label movie_title {
+              xalign: 0;
+              wrap: true;
+              styles ["title-1"]
+            }
+            
+            // Metadata row (year, rating, duration)
+            Box metadata_row {
+              orientation: horizontal;
+              spacing: 24;
+              
+              // Year
+              Label year_label {
+                styles ["dim-label"]
+              }
+              
+              // Rating with star
+              Box rating_box {
+                orientation: horizontal;
+                spacing: 4;
+                
+                Image {
+                  icon-name: "starred-symbolic";
+                  styles ["warning"]
+                }
+                
+                Label rating_label {
+                  styles ["heading"]
+                }
+              }
+              
+              // Duration
+              Box duration_box {
+                orientation: horizontal;
+                spacing: 4;
+                
+                Image {
+                  icon-name: "timer-symbolic";
+                  styles ["dim-label"]
+                }
+                
+                Label duration_label {
+                  styles ["dim-label"]
+                }
+              }
+            }
+            
+            // Synopsis
+            Label synopsis_label {
+              xalign: 0;
+              wrap: true;
+              margin-top: 12;
+              styles ["body"]
+            }
+            
+            // Genres
+            FlowBox genres_box {
+              selection-mode: none;
+              max-children-per-line: 10;
+              column-spacing: 8;
+              row-spacing: 8;
+              margin-top: 12;
+            }
+            
+            // Action buttons
+            Box action_buttons {
+              orientation: horizontal;
+              spacing: 12;
+              margin-top: 24;
+              
+              Button play_button {
+                styles ["suggested-action", "pill"]
+                
+                Box {
+                  orientation: horizontal;
+                  spacing: 8;
+                  
+                  Image {
+                    icon-name: "media-playback-start-symbolic";
+                  }
+                  
+                  Label {
+                    label: _("Play");
+                  }
+                }
+              }
+              
+              Button mark_watched_button {
+                styles ["pill"]
+                
+                Box {
+                  orientation: horizontal;
+                  spacing: 8;
+                  
+                  Image watched_icon {
+                    icon-name: "object-select-symbolic";
+                  }
+                  
+                  Label watched_label {
+                    label: _("Mark as Watched");
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // File/Stream Information Section
+      Box file_info_section {
+        orientation: vertical;
+        margin-start: 32;
+        margin-end: 32;
+        margin-bottom: 32;
+        spacing: 16;
+        
+        Label {
+          label: _("File Information");
+          xalign: 0;
+          styles ["title-2"]
+        }
+        
+        ListBox stream_info_list {
+          selection-mode: none;
+          styles ["boxed-list"]
+          
+          // Video codec row
+          Adw.ActionRow video_codec_row {
+            title: _("Video Codec");
+            styles ["property"]
+            
+            Label video_codec_label {
+              styles ["dim-label", "monospace"]
+            }
+          }
+          
+          // Audio codec row
+          Adw.ActionRow audio_codec_row {
+            title: _("Audio Codec");
+            styles ["property"]
+            
+            Label audio_codec_label {
+              styles ["dim-label", "monospace"]
+            }
+          }
+          
+          // Resolution row
+          Adw.ActionRow resolution_row {
+            title: _("Resolution");
+            styles ["property"]
+            
+            Label resolution_label {
+              styles ["dim-label"]
+            }
+          }
+          
+          // Bitrate row
+          Adw.ActionRow bitrate_row {
+            title: _("Bitrate");
+            styles ["property"]
+            
+            Label bitrate_label {
+              styles ["dim-label"]
+            }
+          }
+          
+          // Container row
+          Adw.ActionRow container_row {
+            title: _("Container");
+            styles ["property"]
+            
+            Label container_label {
+              styles ["dim-label", "monospace"]
+            }
+          }
+          
+          // File size row (if available)
+          Adw.ActionRow file_size_row {
+            title: _("File Size");
+            visible: false;
+            styles ["property"]
+            
+            Label file_size_label {
+              styles ["dim-label"]
+            }
+          }
+        }
+      }
+      
+      // Cast & Crew Section (optional, can be expanded later)
+      Box cast_section {
+        orientation: vertical;
+        margin-start: 32;
+        margin-end: 32;
+        margin-bottom: 32;
+        spacing: 16;
+        visible: false;
+        
+        Label {
+          label: _("Cast & Crew");
+          xalign: 0;
+          styles ["title-2"]
+        }
+        
+        ScrolledWindow {
+          height-request: 200;
+          hscrollbar-policy: automatic;
+          vscrollbar-policy: never;
+          
+          Box cast_list {
+            orientation: horizontal;
+            spacing: 16;
+          }
+        }
+      }
+    }
+  }
+}
+}
