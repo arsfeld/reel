@@ -31,7 +31,7 @@ impl ReelApp {
             .build();
         
         // Set the application icon
-        gtk4::IconTheme::default().add_resource_path("/com/github/arsfeld/Reel/icons");
+        gtk4::IconTheme::default().add_resource_path("/dev/arsfeld/Reel/icons");
         
         // Setup actions
         let state_clone = state.clone();
@@ -42,7 +42,7 @@ impl ReelApp {
             
             // Load CSS
             let css_provider = gtk4::CssProvider::new();
-            css_provider.load_from_resource("/com/github/arsfeld/Reel/style.css");
+            css_provider.load_from_resource("/dev/arsfeld/Reel/style.css");
             gtk4::style_context_add_provider_for_display(
                 &gtk4::gdk::Display::default().expect("Could not get default display"),
                 &css_provider,

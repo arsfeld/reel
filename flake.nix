@@ -60,6 +60,8 @@
           
           # Keyring support
           libsecret
+          dbus
+          dbus.dev
           
           # Localization
           gettext
@@ -133,6 +135,7 @@
           mdbook
           
           # Flatpak tools
+          appstream
           flatpak-builder
           pythonWithPkgs
         ];

@@ -41,6 +41,7 @@
         "*.la",
         "*.a"
     ],
+    "disable-appstream-compose": true,
     "modules": [
         {
             "name": "blueprint-compiler",

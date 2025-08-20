@@ -24,6 +24,8 @@ fn main() {
         "auth_dialog.blp",
         "library_view.blp",
         "media_card.blp",
+        "movie_details.blp",
+        "show_details.blp",
     ];
     
     // Compile each Blueprint file to UI
@@ -58,11 +60,13 @@ fn main() {
     let gresource_content = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <gresources>
-  <gresource prefix="/com/github/arsfeld/Reel">
+  <gresource prefix="/dev/arsfeld/Reel">
     <file>window.ui</file>
     <file>auth_dialog.ui</file>
     <file>library_view.ui</file>
     <file>media_card.ui</file>
+    <file>movie_details.ui</file>
+    <file>show_details.ui</file>
     <file>style.css</file>
   </gresource>
 </gresources>"#

@@ -508,10 +508,14 @@ impl GStreamerPlayer {
     
     pub async fn get_current_subtitle_track(&self) -> i32 {
         if let Some(playbin) = self.playbin.borrow().as_ref() {
-            let flags = playbin.property::<String>("flags");
-            if !flags.contains("text") {
-                return -1; // Subtitles disabled
+            // Check if we have any subtitle tracks available
+            let n_text = playbin.property::<i32>("n-text");
+            if n_text <= 0 {
+                return -1; // No subtitle tracks available
             }
+            
+            // Get the current subtitle track
+            // If subtitles are disabled, this will return -1
             playbin.property::<i32>("current-text")
         } else {
             -1
