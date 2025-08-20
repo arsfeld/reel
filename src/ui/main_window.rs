@@ -4,7 +4,7 @@ use libadwaita::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use tracing::{info, error, warn};
+use tracing::{info, error, warn, debug};
 
 use crate::config::Config;
 use crate::state::AppState;
@@ -917,10 +917,16 @@ impl ReelMainWindow {
     }
     
     async fn show_player(&self, media_item: &crate::models::MediaItem, state: Arc<AppState>) {
+        info!("MainWindow::show_player() - Called for media: {}", media_item.title());
+        debug!("MainWindow::show_player() - Media type: {:?}, ID: {}", 
+            std::mem::discriminant(media_item), media_item.id());
+        
         let imp = self.imp();
         
         // Get or create content stack
+        debug!("MainWindow::show_player() - Getting content stack");
         let content_stack = if imp.content_stack.borrow().is_none() {
+            info!("MainWindow::show_player() - Creating new content stack");
             let stack = gtk4::Stack::builder()
                 .transition_type(gtk4::StackTransitionType::SlideLeftRight)
                 .transition_duration(300)
@@ -932,29 +938,39 @@ impl ReelMainWindow {
             
             stack
         } else {
+            debug!("MainWindow::show_player() - Using existing content stack");
             imp.content_stack.borrow().as_ref().unwrap().clone()
         };
         
         // Create or get player page
+        debug!("MainWindow::show_player() - Getting or creating player page");
         let player_page = {
             let existing_page = imp.player_page.borrow();
+            if existing_page.is_some() {
+                debug!("MainWindow::show_player() - Using existing player page");
+            }
             existing_page.as_ref().cloned()
         }.unwrap_or_else(|| {
+            info!("MainWindow::show_player() - Creating new player page");
             let page = crate::ui::pages::PlayerPage::new(state.clone());
             imp.player_page.replace(Some(page.clone()));
             
             // Add to content stack
+            debug!("MainWindow::show_player() - Adding player page to content stack");
             content_stack.add_named(page.widget(), Some("player"));
+            info!("MainWindow::show_player() - Player page added to stack with name 'player'");
             
             page
         });
         
         // Update the content page title first
         imp.content_page.set_title(media_item.title());
+        debug!("MainWindow::show_player() - Updated content page title");
         
         // Load the media (but don't block navigation on failure)
+        debug!("MainWindow::show_player() - Loading media into player");
         if let Err(e) = player_page.load_media(media_item, state).await {
-            error!("Failed to load media: {}", e);
+            error!("MainWindow::show_player() - Failed to load media: {}", e);
             // Show error dialog but still navigate to player page
             let dialog = adw::AlertDialog::new(
                 Some("Failed to Load Media"),
@@ -1075,7 +1091,9 @@ impl ReelMainWindow {
         imp.saved_window_size.replace((current_width, current_height));
         
         // Show the player page
+        info!("MainWindow::show_player() - Switching stack to 'player' page");
         content_stack.set_visible_child_name("player");
+        info!("MainWindow::show_player() - Navigation to player complete");
         
         // Hide the sidebar and header bar for immersive playback
         if let Some(content) = self.content() {
@@ -1149,26 +1167,33 @@ impl ReelMainWindow {
             let window_weak = self.downgrade();
             let state_clone = state.clone();
             view.set_on_media_selected(move |media_item| {
+                info!("MainWindow - Media selected callback triggered: {}", media_item.title());
                 if let Some(window) = window_weak.upgrade() {
                     let media_item = media_item.clone();
                     let state = state_clone.clone();
+                    debug!("MainWindow - Spawning navigation task for: {}", media_item.title());
                     glib::spawn_future_local(async move {
                         use crate::models::MediaItem;
+                        info!("MainWindow - Processing media selection: {}", media_item.title());
                         match &media_item {
                             MediaItem::Movie(_) => {
                                 // Movies go directly to player
+                                info!("MainWindow - Movie selected, navigating to player");
                                 window.show_player(&media_item, state).await;
                             }
                             MediaItem::Show(show) => {
                                 // Shows go to episode selection
+                                info!("MainWindow - Show selected, navigating to show details");
                                 window.show_show_details(show.clone(), state).await;
                             }
                             _ => {
                                 // Other media types could be handled here
-                                info!("Unsupported media type selected");
+                                info!("MainWindow - Unsupported media type selected");
                             }
                         }
                     });
+                } else {
+                    error!("MainWindow - Failed to upgrade window weak reference!");
                 }
             });
             

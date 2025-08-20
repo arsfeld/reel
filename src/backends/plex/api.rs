@@ -5,7 +5,7 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::models::{
-    Library, LibraryType, Movie, Show, Season, Episode, Person, StreamInfo, Resolution
+    Library, LibraryType, Movie, Show, Season, Episode, Person, StreamInfo, Resolution, QualityOption
 };
 
 const PLEX_HEADERS: &[(&str, &str)] = &[
@@ -261,17 +261,69 @@ impl PlexApi {
                         self.auth_token
                     );
                     
+                    // Generate quality options for transcoding
+                    let mut quality_options = Vec::new();
+                    
+                    // Add original quality (direct play)
+                    let original_bitrate = media.bitrate.unwrap_or(0);
+                    let original_width = media.width.unwrap_or(1920);
+                    let original_height = media.height.unwrap_or(1080);
+                    
+                    quality_options.push(QualityOption {
+                        name: format!("Original ({}p)", original_height),
+                        resolution: Resolution {
+                            width: original_width,
+                            height: original_height,
+                        },
+                        bitrate: original_bitrate,
+                        url: stream_url.clone(),
+                        requires_transcode: false,
+                    });
+                    
+                    // Add transcoding options
+                    let transcode_qualities = vec![
+                        ("1080p", 1920, 1080, 8000000),
+                        ("720p", 1280, 720, 4000000),
+                        ("480p", 854, 480, 2000000),
+                        ("360p", 640, 360, 1000000),
+                    ];
+                    
+                    for (name, width, height, bitrate) in transcode_qualities {
+                        // Only add qualities lower than original
+                        if height < original_height {
+                            let path = format!("/library/metadata/{}", media_id);
+                            let transcode_url = format!(
+                                "{}/video/:/transcode/universal/start.m3u8?path={}&mediaIndex=0&partIndex=0&protocol=hls&directPlay=0&directStream=0&fastSeek=1&maxVideoBitrate={}&videoResolution={}x{}&X-Plex-Token={}",
+                                self.base_url,
+                                path.replace("/", "%2F"),
+                                bitrate / 1000, // Convert to kbps
+                                width,
+                                height,
+                                self.auth_token
+                            );
+                            
+                            quality_options.push(QualityOption {
+                                name: name.to_string(),
+                                resolution: Resolution { width, height },
+                                bitrate: bitrate as u64,
+                                url: transcode_url,
+                                requires_transcode: true,
+                            });
+                        }
+                    }
+                    
                     return Ok(StreamInfo {
                         url: stream_url,
                         direct_play: true,
                         video_codec: media.video_codec.clone().unwrap_or_default(),
                         audio_codec: media.audio_codec.clone().unwrap_or_default(),
                         container: part.container.clone().unwrap_or_default(),
-                        bitrate: media.bitrate.unwrap_or(0),
+                        bitrate: original_bitrate,
                         resolution: Resolution {
-                            width: media.width.unwrap_or(0),
-                            height: media.height.unwrap_or(0),
+                            width: original_width,
+                            height: original_height,
                         },
+                        quality_options,
                     });
                 }
             }

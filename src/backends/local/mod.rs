@@ -112,6 +112,7 @@ impl MediaBackend for LocalBackend {
             container: String::new(),
             bitrate: 0,
             resolution: crate::models::Resolution::default(),
+            quality_options: vec![], // Local files don't need quality options
         })
     }
     

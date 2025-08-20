@@ -97,6 +97,16 @@ pub struct StreamInfo {
     pub container: String,
     pub bitrate: u64,
     pub resolution: Resolution,
+    pub quality_options: Vec<QualityOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QualityOption {
+    pub name: String,
+    pub resolution: Resolution,
+    pub bitrate: u64,
+    pub url: String,
+    pub requires_transcode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

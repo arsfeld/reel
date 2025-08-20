@@ -99,8 +99,8 @@
           packages = devTools;
 
           shellHook = ''
-            echo "Plex GTK Development Environment"
-            echo "================================"
+            echo "Gnome Reel Development Environment"
+            echo "=================================="
             echo ""
             echo "Rust toolchain: $(rustc --version)"
             echo "Cargo: $(cargo --version)"
@@ -136,7 +136,7 @@
         };
 
         packages.default = pkgs.rustPlatform.buildRustPackage {
-          pname = "plex-gtk";
+          pname = "gnome-reel";
           version = "0.1.0";
           
           src = ./.;
@@ -152,7 +152,7 @@
           
           meta = with pkgs.lib; {
             description = "A modern GTK frontend for Plex and other media servers";
-            homepage = "https://github.com/arsfeld/plex-gtk";
+            homepage = "https://github.com/arsfeld/gnome-reel";
             license = licenses.gpl3Plus;
             maintainers = [];
             platforms = platforms.linux;

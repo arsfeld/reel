@@ -30,11 +30,12 @@ pub struct GStreamerPlayer {
 
 impl GStreamerPlayer {
     pub fn new() -> Result<Self> {
+        info!("GStreamerPlayer::new() - Initializing GStreamer player");
         // Initialize GStreamer if not already done
         match gst::init() {
-            Ok(_) => info!("GStreamer initialized successfully"),
+            Ok(_) => info!("GStreamerPlayer::new() - GStreamer initialized successfully"),
             Err(e) => {
-                error!("Failed to initialize GStreamer: {}", e);
+                error!("GStreamerPlayer::new() - Failed to initialize GStreamer: {}", e);
                 return Err(anyhow::anyhow!("Failed to initialize GStreamer: {}", e));
             }
         }
@@ -86,13 +87,15 @@ impl GStreamerPlayer {
     }
     
     pub fn create_video_widget(&self) -> gtk4::Widget {
-        info!("Creating video widget");
+        info!("GStreamerPlayer::create_video_widget() - Starting video widget creation");
         
         // Create a GTK Picture widget for video display
+        debug!("GStreamerPlayer::create_video_widget() - Creating GTK Picture widget");
         let picture = gtk4::Picture::new();
         picture.set_can_shrink(true);
         picture.set_vexpand(true);
         picture.set_hexpand(true);
+        debug!("GStreamerPlayer::create_video_widget() - Picture widget created");
         
         // Try to create gtk4paintablesink
         let gtksink_result = gst::ElementFactory::make("gtk4paintablesink")
@@ -101,15 +104,16 @@ impl GStreamerPlayer {
         
         match gtksink_result {
             Ok(sink) => {
-                info!("Successfully created gtk4paintablesink");
+                info!("GStreamerPlayer::create_video_widget() - Successfully created gtk4paintablesink");
                 // Get the paintable from the sink and set it on the picture
                 let paintable = sink.property::<gdk::Paintable>("paintable");
                 picture.set_paintable(Some(&paintable));
                 // Store the sink for later use
                 self.video_sink.replace(Some(sink));
+                debug!("GStreamerPlayer::create_video_widget() - gtk4paintablesink configured");
             }
             Err(e) => {
-                info!("gtk4paintablesink not available ({}), using fallback widget", e);
+                info!("GStreamerPlayer::create_video_widget() - gtk4paintablesink not available ({}), using fallback widget", e);
                 // For fallback, we'll use a simple DrawingArea
                 // The actual video will be rendered using autovideosink
                 self.video_sink.replace(None);
@@ -120,56 +124,69 @@ impl GStreamerPlayer {
         let widget = picture.upcast::<gtk4::Widget>();
         self.video_widget.replace(Some(widget.clone()));
         
+        info!("GStreamerPlayer::create_video_widget() - Video widget creation complete");
         widget
     }
     
     pub async fn load_media(&self, url: &str, _video_sink: Option<&gst::Element>) -> Result<()> {
-        info!("Loading media: {}", url);
+        info!("GStreamerPlayer::load_media() - Loading media: {}", url);
+        debug!("GStreamerPlayer::load_media() - Full URL: {}", url);
         
         // Update state
         {
             let mut state = self.state.write().await;
             *state = PlayerState::Loading;
+            debug!("GStreamerPlayer::load_media() - State set to Loading");
         }
         
         // Clear existing playbin if any
         if let Some(old_playbin) = self.playbin.borrow().as_ref() {
+            debug!("GStreamerPlayer::load_media() - Clearing existing playbin");
             old_playbin.set_state(gst::State::Null)
                 .context("Failed to set old playbin to null state")?;
         }
         
         // Try to create playbin - note: playbin3 might not exist in all configurations
         let playbin = if gst::ElementFactory::find("playbin").is_some() {
-            info!("Creating playbin element");
-            gst::ElementFactory::make("playbin")
+            info!("GStreamerPlayer::load_media() - Creating playbin element");
+            let pb = gst::ElementFactory::make("playbin")
                 .name("player")
                 .property("uri", url)
                 .build()
-                .context("Failed to create playbin element")?
+                .context("Failed to create playbin element")?;
+            info!("GStreamerPlayer::load_media() - Playbin created successfully");
+            pb
         } else {
+            error!("GStreamerPlayer::load_media() - No playbin element available!");
             return Err(anyhow::anyhow!("No playbin element available - GStreamer plugins may not be properly installed"));
         };
         
         // Use our stored video sink if available
         if let Some(sink) = self.video_sink.borrow().as_ref() {
-            debug!("Setting video sink on playbin");
+            debug!("GStreamerPlayer::load_media() - Setting video sink on playbin");
             playbin.set_property("video-sink", sink);
+            info!("GStreamerPlayer::load_media() - Video sink configured");
         } else {
             // Try to create a fallback video sink
-            info!("No gtk4paintablesink available, trying autovideosink");
+            info!("GStreamerPlayer::load_media() - No gtk4paintablesink available, trying autovideosink");
             if let Ok(autosink) = gst::ElementFactory::make("autovideosink")
                 .name("videosink")
                 .build() {
                 playbin.set_property("video-sink", &autosink);
+                info!("GStreamerPlayer::load_media() - Autovideosink configured as fallback");
+            } else {
+                error!("GStreamerPlayer::load_media() - Failed to create any video sink!");
             }
         }
         
         // Store the playbin
         self.playbin.replace(Some(playbin.clone()));
+        debug!("GStreamerPlayer::load_media() - Playbin stored");
         
         // Set up message handling
         let bus = playbin.bus()
             .context("Failed to get playbin bus")?;
+        debug!("GStreamerPlayer::load_media() - Got playbin bus");
         
         let state_clone = self.state.clone();
         let _ = bus.add_watch(move |_, msg| {
@@ -183,38 +200,42 @@ impl GStreamerPlayer {
         .context("Failed to add bus watch")?;
         
         // Set to ready state first
+        debug!("GStreamerPlayer::load_media() - Setting playbin to Ready state");
         playbin.set_state(gst::State::Ready)
             .context("Failed to set playbin to ready state")?;
+        info!("GStreamerPlayer::load_media() - Playbin set to Ready state");
         
+        info!("GStreamerPlayer::load_media() - Media loading complete");
         Ok(())
     }
     
     pub async fn play(&self) -> Result<()> {
-        debug!("Starting playback");
+        info!("GStreamerPlayer::play() - Starting playback");
         
         if let Some(playbin) = self.playbin.borrow().as_ref() {
+            debug!("GStreamerPlayer::play() - Setting playbin to Playing state");
             match playbin.set_state(gst::State::Playing) {
                 Ok(gst::StateChangeSuccess::Success) => {
-                    info!("Successfully set playbin to playing state");
+                    info!("GStreamerPlayer::play() - Successfully set playbin to playing state");
                 }
                 Ok(gst::StateChangeSuccess::Async) => {
-                    info!("Playbin state change is async, waiting...");
+                    info!("GStreamerPlayer::play() - Playbin state change is async, waiting...");
                 }
                 Ok(gst::StateChangeSuccess::NoPreroll) => {
-                    info!("Playbin state change: no preroll");
+                    info!("GStreamerPlayer::play() - Playbin state change: no preroll");
                 }
                 Err(gst::StateChangeError) => {
                     // Get more details about the error
                     let state = playbin.state(gst::ClockTime::from_seconds(1));
-                    error!("Failed to set playbin to playing state");
-                    error!("Current state: {:?}", state);
+                    error!("GStreamerPlayer::play() - Failed to set playbin to playing state");
+                    error!("GStreamerPlayer::play() - Current state: {:?}", state);
                     
                     // Get the bus to check for error messages
                     if let Some(bus) = playbin.bus() {
                         while let Some(msg) = bus.pop() {
                             use gst::MessageView;
                             if let MessageView::Error(err) = msg.view() {
-                                error!("Bus error: {} ({:?})", err.error(), err.debug());
+                                error!("GStreamerPlayer::play() - Bus error: {} ({:?})", err.error(), err.debug());
                             }
                         }
                     }
@@ -225,7 +246,12 @@ impl GStreamerPlayer {
             
             let mut state = self.state.write().await;
             *state = PlayerState::Playing;
+            info!("GStreamerPlayer::play() - Player state set to Playing");
+        } else {
+            error!("GStreamerPlayer::play() - No playbin available!");
+            return Err(anyhow::anyhow!("No playbin available"));
         }
+        info!("GStreamerPlayer::play() - Playback started");
         Ok(())
     }
     
@@ -342,13 +368,13 @@ impl GStreamerPlayer {
         
         match msg.view() {
             MessageView::Eos(_) => {
-                info!("End of stream");
+                info!("GStreamerPlayer - Bus message: End of stream");
                 let mut state = state.write().await;
                 *state = PlayerState::Stopped;
             }
             MessageView::Error(err) => {
                 error!(
-                    "Error from {:?}: {} ({:?})",
+                    "GStreamerPlayer - Bus error from {:?}: {} ({:?})",
                     err.src().map(|s| s.path_string()),
                     err.error(),
                     err.debug()
@@ -359,7 +385,7 @@ impl GStreamerPlayer {
             MessageView::StateChanged(state_changed) => {
                 if state_changed.src().map(|s| s == state_changed.src().unwrap()).unwrap_or(false) {
                     debug!(
-                        "State changed from {:?} to {:?}",
+                        "GStreamerPlayer - State changed from {:?} to {:?}",
                         state_changed.old(),
                         state_changed.current()
                     );
@@ -367,7 +393,7 @@ impl GStreamerPlayer {
             }
             MessageView::Buffering(buffering) => {
                 let percent = buffering.percent();
-                debug!("Buffering: {}%", percent);
+                debug!("GStreamerPlayer - Buffering: {}%", percent);
             }
             _ => {}
         }
@@ -375,5 +401,120 @@ impl GStreamerPlayer {
     
     pub async fn get_state(&self) -> PlayerState {
         self.state.read().await.clone()
+    }
+    
+    pub async fn get_audio_tracks(&self) -> Vec<(i32, String)> {
+        let mut tracks = Vec::new();
+        
+        if let Some(playbin) = self.playbin.borrow().as_ref() {
+            let n_audio = playbin.property::<i32>("n-audio");
+            info!("Found {} audio tracks", n_audio);
+            
+            for i in 0..n_audio {
+                // Get audio stream tags
+                if let Some(tags) = playbin.emit_by_name::<Option<gst::TagList>>("get-audio-tags", &[&i]) {
+                    let mut title = format!("Audio Track {}", i + 1);
+                    
+                    // Try to get language code
+                    if let Some(lang) = tags.get::<gst::tags::LanguageCode>() {
+                        let lang_str = lang.get();
+                        title = format!("Audio {} ({})", i + 1, lang_str);
+                    }
+                    
+                    // Try to get title
+                    if let Some(tag_title) = tags.get::<gst::tags::Title>() {
+                        let title_str = tag_title.get();
+                        title = title_str.to_string();
+                    }
+                    
+                    tracks.push((i, title));
+                } else {
+                    tracks.push((i, format!("Audio Track {}", i + 1)));
+                }
+            }
+        }
+        
+        tracks
+    }
+    
+    pub async fn get_subtitle_tracks(&self) -> Vec<(i32, String)> {
+        let mut tracks = Vec::new();
+        
+        if let Some(playbin) = self.playbin.borrow().as_ref() {
+            let n_text = playbin.property::<i32>("n-text");
+            info!("Found {} subtitle tracks", n_text);
+            
+            // Add "None" option
+            tracks.push((-1, "None".to_string()));
+            
+            for i in 0..n_text {
+                // Get subtitle stream tags
+                if let Some(tags) = playbin.emit_by_name::<Option<gst::TagList>>("get-text-tags", &[&i]) {
+                    let mut title = format!("Subtitle {}", i + 1);
+                    
+                    // Try to get language code
+                    if let Some(lang) = tags.get::<gst::tags::LanguageCode>() {
+                        let lang_str = lang.get();
+                        title = format!("Subtitle {} ({})", i + 1, lang_str);
+                    }
+                    
+                    // Try to get title
+                    if let Some(tag_title) = tags.get::<gst::tags::Title>() {
+                        let title_str = tag_title.get();
+                        title = title_str.to_string();
+                    }
+                    
+                    tracks.push((i, title));
+                } else {
+                    tracks.push((i, format!("Subtitle {}", i + 1)));
+                }
+            }
+        }
+        
+        tracks
+    }
+    
+    pub async fn set_audio_track(&self, track_index: i32) -> Result<()> {
+        if let Some(playbin) = self.playbin.borrow().as_ref() {
+            playbin.set_property("current-audio", track_index);
+            info!("Set audio track to {}", track_index);
+        }
+        Ok(())
+    }
+    
+    pub async fn set_subtitle_track(&self, track_index: i32) -> Result<()> {
+        if let Some(playbin) = self.playbin.borrow().as_ref() {
+            if track_index < 0 {
+                // Disable subtitles
+                playbin.set_property_from_str("flags", "video+audio");
+                info!("Disabled subtitles");
+            } else {
+                // Enable subtitles and set track
+                playbin.set_property_from_str("flags", "video+audio+text");
+                playbin.set_property("current-text", track_index);
+                info!("Set subtitle track to {}", track_index);
+            }
+        }
+        Ok(())
+    }
+    
+    pub async fn get_current_audio_track(&self) -> i32 {
+        if let Some(playbin) = self.playbin.borrow().as_ref() {
+            playbin.property::<i32>("current-audio")
+        } else {
+            -1
+        }
+    }
+    
+    pub async fn get_current_subtitle_track(&self) -> i32 {
+        if let Some(playbin) = self.playbin.borrow().as_ref() {
+            let flags = playbin.property::<String>("flags");
+            if !flags.contains("text") {
+                return -1; // Subtitles disabled
+            }
+            playbin.property::<i32>("current-text")
+        } else {
+            -1
+        }
     }
 }
