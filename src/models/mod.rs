@@ -89,6 +89,8 @@ pub struct Episode {
     pub view_count: u32,
     pub last_watched_at: Option<DateTime<Utc>>,
     pub playback_position: Option<Duration>,
+    pub show_title: Option<String>,  // Parent show name
+    pub show_poster_url: Option<String>,  // Parent show poster URL
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

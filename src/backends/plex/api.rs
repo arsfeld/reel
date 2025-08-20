@@ -252,6 +252,8 @@ impl PlexApi {
                     view_count: meta.view_count.unwrap_or(0),
                     last_watched_at: meta.last_viewed_at.and_then(|ts| DateTime::from_timestamp(ts, 0)),
                     playback_position: meta.view_offset.map(Duration::from_millis),
+                    show_title: None,  // Show title not available in this context
+                    show_poster_url: None,  // Show poster not available in this context
                 }
             })
             .collect();
@@ -725,6 +727,8 @@ impl PlexApi {
                     view_count: meta.view_count.unwrap_or(0),
                     last_watched_at: meta.last_viewed_at.map(|ts| DateTime::from_timestamp(ts, 0).unwrap()),
                     playback_position: meta.view_offset.map(Duration::from_millis),
+                    show_title: meta.grandparent_title,
+                    show_poster_url: meta.grandparent_thumb.map(|t| self.build_image_url(&t)),
                 };
                 Ok(MediaItem::Episode(episode))
             }
@@ -751,7 +755,10 @@ impl PlexApi {
         if path.starts_with("http") {
             path.to_string()
         } else {
-            format!("{}{}?X-Plex-Token={}", self.base_url, path, self.auth_token)
+            // Request smaller thumbnails from Plex to reduce bandwidth and processing
+            // Plex supports width and height parameters for image resizing
+            // Using width=200 for posters (perfect for Small size, no processing needed)
+            format!("{}{}?X-Plex-Token={}&width=200&height=300", self.base_url, path, self.auth_token)
         }
     }
 }
@@ -957,6 +964,8 @@ struct PlexGenericMetadata {
     index: Option<u32>,          // Episode number
     viewed_leaf_count: Option<u32>,  // For shows
     leaf_count: Option<u32>,         // Total episodes for shows
+    grandparent_title: Option<String>,  // Show name for episodes
+    grandparent_thumb: Option<String>,  // Show poster for episodes
     #[serde(rename = "Genre", default)]
     genre: Option<Vec<PlexTag>>,
 }

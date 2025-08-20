@@ -209,11 +209,12 @@ impl std::fmt::Display for BackendType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionType {
     Local,
     Remote,
     Relay,
+    Offline,
     Unknown,
 }
 

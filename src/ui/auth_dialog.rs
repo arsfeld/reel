@@ -13,7 +13,7 @@ mod imp {
     use gtk4::CompositeTemplate;
     
     #[derive(Debug, Default, CompositeTemplate)]
-    #[template(resource = "/com/github/arsfeld/Reel/auth_dialog.ui")]
+    #[template(resource = "/dev/arsfeld/Reel/auth_dialog.ui")]
     pub struct ReelAuthDialog {
         #[template_child]
         pub cancel_button: TemplateChild<gtk4::Button>,
@@ -264,57 +264,94 @@ impl ReelAuthDialog {
             let state_clone = state.clone();
             let token_clone = token.clone();
             let dialog_weak = self.downgrade();
+            let current_pin = imp.current_pin.borrow().clone();
             
             // Use Tokio for async operations
             let (tx, mut rx) = tokio::sync::mpsc::channel(1);
             let token_for_task = token_clone.clone();
             
             tokio::spawn(async move {
-                // Simply get user info and return token
-                // Backend setup and server discovery will happen later
-                
-                // Get user info from Plex
-                match PlexAuth::get_user(&token_for_task).await {
-                    Ok(plex_user) => {
-                        let user = crate::models::User {
-                            id: plex_user.id.to_string(),
-                            username: plex_user.username,
-                            email: Some(plex_user.email),
-                            avatar_url: plex_user.thumb,
-                        };
-                        
-                        let _ = tx.send((user, token_for_task)).await;
-                        info!("Successfully authenticated with Plex");
+                // Discover servers and authenticate
+                match PlexAuth::discover_servers(&token_for_task).await {
+                    Ok(servers) => {
+                        if !servers.is_empty() {
+                            let server = servers.into_iter().next().unwrap();
+                            let _ = tx.send(Some((token_for_task, server))).await;
+                        } else {
+                            error!("No Plex servers found");
+                            let _ = tx.send(None).await;
+                        }
                     }
                     Err(e) => {
-                        error!("Failed to get user info: {}", e);
+                        error!("Failed to discover servers: {}", e);
+                        let _ = tx.send(None).await;
                     }
                 }
             });
             
             glib::spawn_future_local(async move {
-                if let Some((user, token)) = rx.recv().await {
-                    // Save the token to config file directly
-                    let config_dir = dirs::config_dir().unwrap().join("reel");
-                    std::fs::create_dir_all(&config_dir).ok();
-                    let token_file = config_dir.join("plex_token");
-                    if let Err(e) = std::fs::write(&token_file, &token) {
-                        error!("Failed to save Plex token: {}", e);
+                if let Some(Some((token, server))) = rx.recv().await {
+                    // Get or create backend ID
+                    let config = state_clone.config.clone();
+                    let last_active = config.get_last_active_backend();
+                    info!("Last active backend from config: {:?}", last_active);
+                    
+                    let backend_id = if let Some(ref last_id) = last_active {
+                        if last_id.starts_with("plex") {
+                            info!("Reusing existing Plex backend ID: {}", last_id);
+                            last_id.clone()
+                        } else {
+                            let existing_backends = config.get_configured_backends();
+                            info!("Existing configured backends: {:?}", existing_backends);
+                            let mut new_id = "plex".to_string();
+                            let mut counter = 1;
+                            while existing_backends.contains(&new_id) {
+                                new_id = format!("plex_{}", counter);
+                                counter += 1;
+                            }
+                            info!("Creating new Plex backend ID: {}", new_id);
+                            new_id
+                        }
                     } else {
-                        info!("Plex token saved successfully");
+                        info!("No last active backend, using default ID: plex");
+                        "plex".to_string()
+                    };
+                    
+                    // Create backend with the ID
+                    info!("Creating PlexBackend with ID: {}", backend_id);
+                    let plex_backend = Arc::new(crate::backends::plex::PlexBackend::with_id(backend_id.clone()));
+                    
+                    // Authenticate with PIN (this will save the token to keyring)
+                    if let Some(pin) = current_pin {
+                        if let Err(e) = plex_backend.authenticate_with_pin(&pin, &server).await {
+                            error!("Failed to authenticate backend: {}", e);
+                        } else {
+                            info!("Backend authenticated and token saved to keyring");
+                            
+                            // Register the backend
+                            let mut backend_manager = state_clone.backend_manager.write().await;
+                            backend_manager.register_backend(backend_id.clone(), plex_backend.clone());
+                            backend_manager.set_active(&backend_id).ok();
+                            
+                            // Save as last active backend
+                            let mut config = state_clone.config.as_ref().clone();
+                            let _ = config.set_last_active_backend(&backend_id);
+                            
+                            // Get user info
+                            if let Ok(plex_user) = PlexAuth::get_user(&token).await {
+                                let user = crate::models::User {
+                                    id: plex_user.id.to_string(),
+                                    username: plex_user.username,
+                                    email: Some(plex_user.email),
+                                    avatar_url: plex_user.thumb,
+                                };
+                                state_clone.set_user(user.clone()).await;
+                            }
+                        }
                     }
                     
-                    // Save user info
-                    state_clone.set_user(user.clone()).await;
-                    
-                    // Update the main window UI
+                    // Close dialog
                     if let Some(dialog) = dialog_weak.upgrade() {
-                        // Trigger sync after successful authentication
-                        info!("Authentication successful, starting sync...");
-                        
-                        // Note: We'll trigger sync from the main window after dialog closes
-                        // The main window will detect the new authentication and sync automatically
-                        
                         dialog.close();
                     }
                 }

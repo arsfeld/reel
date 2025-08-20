@@ -65,13 +65,98 @@ impl PlexBackend {
         self.server_info.read().await.clone()
     }
     
+    /// Check if the server is reachable without blocking for too long
+    pub async fn check_connectivity(&self) -> bool {
+        if let Some(base_url) = self.base_url.read().await.as_ref() {
+            if let Some(token) = self.auth_token.read().await.as_ref() {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(2))
+                    .danger_accept_invalid_certs(true)
+                    .build();
+                
+                if let Ok(client) = client {
+                    let response = client
+                        .get(format!("{}/identity", base_url))
+                        .header("X-Plex-Token", token)
+                        .send()
+                        .await;
+                    
+                    return response.is_ok();
+                }
+            }
+        }
+        false
+    }
+    
+    /// Save the authentication token to keyring with file fallback
+    pub async fn save_token(&self, token: &str) -> Result<()> {
+        // Try keyring first
+        let service = "dev.arsfeld.Reel";
+        let account = &self.backend_id;
+        
+        tracing::info!("Attempting to save token to keyring - service: '{}', account: '{}'", service, account);
+        
+        match keyring::Entry::new(service, account) {
+            Ok(entry) => {
+                match entry.set_password(token) {
+                    Ok(_) => {
+                        tracing::info!("Token successfully saved to keyring for backend {}", self.backend_id);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to save to keyring: {}, falling back to file storage", e);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create keyring entry: {}, falling back to file storage", e);
+            }
+        }
+        
+        // Fallback to file storage (encrypted with simple obfuscation)
+        let config_dir = dirs::config_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+        let token_file = config_dir.join("reel").join(format!(".{}.token", self.backend_id));
+        
+        // Create directory if it doesn't exist
+        if let Some(parent) = token_file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        
+        // Simple obfuscation - not real encryption but better than plaintext
+        let obfuscated = token.bytes()
+            .enumerate()
+            .map(|(i, b)| b ^ ((i as u8) + 42))
+            .collect::<Vec<u8>>();
+        
+        std::fs::write(&token_file, obfuscated)?;
+        
+        // Set restrictive permissions on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&token_file)?.permissions();
+            perms.set_mode(0o600); // Read/write for owner only
+            std::fs::set_permissions(&token_file, perms)?;
+        }
+        
+        tracing::info!("Token saved to fallback file storage for backend {}", self.backend_id);
+        Ok(())
+    }
+    
     /// Authenticate with PIN and select a server
     pub async fn authenticate_with_pin(&self, pin: &PlexPin, server: &PlexServer) -> Result<()> {
         // Poll for the auth token
         let token = PlexAuth::poll_for_token(&pin.id).await?;
         
-        // Store the auth token
+        // Store the auth token in memory
         *self.auth_token.write().await = Some(token.clone());
+        
+        // Save token to keyring
+        if let Err(e) = self.save_token(&token).await {
+            tracing::error!("Failed to save token to keyring: {}", e);
+            // Continue anyway - the token is in memory
+        }
         
         // Find the best connection for the server
         let connection = server.connections
@@ -212,16 +297,76 @@ impl MediaBackend for PlexBackend {
     }
     
     async fn initialize(&self) -> Result<Option<User>> {
-        // Check for saved Plex token
-        let config_dir = dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
-        let token_file = config_dir.join("reel").join("plex_token");
+        // Try to get token from keyring first, then fallback to file
+        let token = {
+            // Try keyring first
+            let service = "dev.arsfeld.Reel";
+            let account = &self.backend_id;
+            
+            tracing::info!("Looking for saved token - service: '{}', account: '{}'", service, account);
+            
+            match keyring::Entry::new(service, account) {
+                Ok(entry) => {
+                    match entry.get_password() {
+                        Ok(token) => {
+                            tracing::info!("Successfully retrieved token from keyring for backend {}", self.backend_id);
+                            Some(token)
+                        }
+                        Err(e) => {
+                            let error_str = e.to_string();
+                            tracing::debug!("Keyring error for backend {}: {}", self.backend_id, error_str);
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("Failed to create keyring entry: {}", e);
+                    None
+                }
+            }
+        };
         
-        if !token_file.exists() {
-            return Ok(None);
-        }
-        
-        let token = std::fs::read_to_string(&token_file)?;
-        let token = token.trim();
+        // If keyring failed, try file fallback
+        let token = if let Some(token) = token {
+            token
+        } else {
+            // Try to read from fallback file
+            let config_dir = dirs::config_dir()
+                .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+            let token_file = config_dir.join("reel").join(format!(".{}.token", self.backend_id));
+            
+            if token_file.exists() {
+                tracing::info!("Checking fallback token file for backend {}", self.backend_id);
+                match std::fs::read(&token_file) {
+                    Ok(obfuscated) => {
+                        // De-obfuscate the token
+                        let token_bytes: Vec<u8> = obfuscated
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &b)| b ^ ((i as u8) + 42))
+                            .collect();
+                        
+                        match String::from_utf8(token_bytes) {
+                            Ok(token) => {
+                                tracing::info!("Successfully retrieved token from file storage for backend {}", self.backend_id);
+                                token
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to decode token from file: {}", e);
+                                return Ok(None);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("Failed to read token file: {}", e);
+                        return Ok(None);
+                    }
+                }
+            } else {
+                tracing::debug!("No saved token found for backend {} in keyring or file", self.backend_id);
+                return Ok(None);
+            }
+        };
         
         if token.is_empty() {
             return Ok(None);
@@ -231,10 +376,51 @@ impl MediaBackend for PlexBackend {
         let plex_user = match PlexAuth::get_user(&token).await {
             Ok(user) => user,
             Err(e) => {
-                tracing::error!("Failed to get user info with saved token: {}", e);
-                // Token might be expired, remove it
-                std::fs::remove_file(&token_file).ok();
-                return Ok(None);
+                let error_str = e.to_string();
+                tracing::error!("Failed to get user info with saved token: {}", error_str);
+                
+                // Only delete token if it's an authentication error
+                if error_str.contains("Authentication failed") || error_str.contains("Invalid or expired token") {
+                    tracing::info!("Token appears to be invalid, removing from storage");
+                    
+                    // Try to delete from keyring
+                    if let Ok(entry) = keyring::Entry::new("dev.arsfeld.Reel", &self.backend_id) {
+                        entry.delete_credential().ok();
+                    }
+                    
+                    // Also delete from file fallback
+                    if let Some(config_dir) = dirs::config_dir() {
+                        let token_file = config_dir.join("reel").join(format!(".{}.token", self.backend_id));
+                        std::fs::remove_file(token_file).ok();
+                    }
+                    
+                    return Ok(None);
+                } else if error_str.contains("Network error") {
+                    tracing::warn!("Network error while validating token, will use cached data");
+                    // Store the token even though we can't validate it
+                    *self.auth_token.write().await = Some(token.to_string());
+                    
+                    // Return a minimal user object to indicate partial success
+                    // The username will be loaded from cache later
+                    return Ok(Some(User {
+                        id: "offline".to_string(),
+                        username: "Offline Mode".to_string(),
+                        email: None,
+                        avatar_url: None,
+                    }));
+                } else {
+                    tracing::warn!("Server error while validating token, will use cached data");
+                    // Store the token for retry
+                    *self.auth_token.write().await = Some(token.to_string());
+                    
+                    // Return a minimal user object
+                    return Ok(Some(User {
+                        id: "offline".to_string(),
+                        username: "Offline Mode".to_string(),
+                        email: None,
+                        avatar_url: None,
+                    }));
+                }
             }
         };
         
@@ -395,20 +581,28 @@ impl MediaBackend for PlexBackend {
         let server_info = self.server_info.read().await;
         let server_name = self.server_name.read().await;
         
+        // Do a quick connectivity check
+        let is_online = self.check_connectivity().await;
+        
         if let Some(info) = server_info.as_ref() {
+            let connection_type = if !is_online {
+                // Server configured but not reachable
+                super::traits::ConnectionType::Offline
+            } else if info.is_local {
+                super::traits::ConnectionType::Local
+            } else if info.is_relay {
+                super::traits::ConnectionType::Relay
+            } else {
+                super::traits::ConnectionType::Remote
+            };
+            
             super::traits::BackendInfo {
                 name: self.backend_id.clone(),
                 display_name: format!("Plex ({})", info.name),
                 backend_type: super::traits::BackendType::Plex,
                 server_name: Some(info.name.clone()),
-                server_version: None, // Could fetch this from API if needed
-                connection_type: if info.is_local {
-                    super::traits::ConnectionType::Local
-                } else if info.is_relay {
-                    super::traits::ConnectionType::Relay
-                } else {
-                    super::traits::ConnectionType::Remote
-                },
+                server_version: None,
+                connection_type,
                 is_local: info.is_local,
                 is_relay: info.is_relay,
             }

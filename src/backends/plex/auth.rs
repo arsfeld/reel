@@ -124,15 +124,26 @@ impl PlexAuth {
     pub async fn get_user(auth_token: &str) -> Result<PlexUser> {
         let client = reqwest::Client::new();
         
-        let response = client
+        let response = match client
             .get(format!("{}/api/v2/user", PLEX_TV_URL))
             .header("X-Plex-Token", auth_token)
             .header("Accept", "application/json")
             .send()
-            .await?;
+            .await {
+            Ok(resp) => resp,
+            Err(e) => {
+                // Network error - don't treat as auth failure
+                return Err(anyhow!("Network error while fetching user info: {}", e));
+            }
+        };
+        
+        // Check for authentication errors specifically
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(anyhow!("Authentication failed: Invalid or expired token"));
+        }
         
         if !response.status().is_success() {
-            return Err(anyhow!("Failed to get user info: {}", response.status()));
+            return Err(anyhow!("Server error while fetching user info: {}", response.status()));
         }
         
         let user: PlexUser = response.json().await?;
