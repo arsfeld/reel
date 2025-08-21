@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone)]
 pub enum PlayerState {
@@ -25,6 +25,7 @@ pub struct GStreamerPlayer {
     state: Arc<RwLock<PlayerState>>,
     video_widget: RefCell<Option<gtk4::Widget>>,
     video_sink: RefCell<Option<gst::Element>>,
+    is_playbin3: RefCell<bool>,
 }
 
 impl GStreamerPlayer {
@@ -51,6 +52,7 @@ impl GStreamerPlayer {
             state: Arc::new(RwLock::new(PlayerState::Idle)),
             video_widget: RefCell::new(None),
             video_sink: RefCell::new(None),
+            is_playbin3: RefCell::new(false),
         })
     }
 
@@ -58,15 +60,17 @@ impl GStreamerPlayer {
         info!("Checking GStreamer plugin availability");
 
         let required_elements = vec![
-            "playbin",
             "playbin3",
+            "playbin", // Fallback if playbin3 not available
             "autovideosink",
             "autoaudiosink",
             "gtk4paintablesink",
             "glimagesink",
-            "videoconvert",
-            "videoscale",
+            "videoconvertscale", // Combined element for better performance
+            "videoconvert",      // Fallback
+            "videoscale",        // Fallback
             "capsfilter",
+            "glsinkbin", // For better GL handling
         ];
 
         for element in required_elements {
@@ -111,170 +115,382 @@ impl GStreamerPlayer {
         let force_fallback = std::env::var("REEL_FORCE_FALLBACK_SINK").is_ok();
         let use_gl_sink = std::env::var("REEL_USE_GL_SINK").is_ok();
 
-        // Try to create gtk4paintablesink with proper video conversion pipeline
-        let gtksink_result = if !force_fallback && !use_gl_sink {
-            gst::ElementFactory::make("gtk4paintablesink")
-                .name("videosink")
-                .build()
-        } else if use_gl_sink {
-            info!("GStreamerPlayer::create_video_widget() - Using GL sink (REEL_USE_GL_SINK set)");
-            Err(gst::glib::bool_error!("Use GL sink"))
-        } else {
-            info!(
-                "GStreamerPlayer::create_video_widget() - Forcing fallback sink (REEL_FORCE_FALLBACK_SINK set)"
-            );
-            Err(gst::glib::bool_error!("Forced fallback"))
-        };
+        // Try to create optimized video sink with glsinkbin wrapper
+        let video_sink = self.create_optimized_video_sink(force_fallback, use_gl_sink);
 
-        match gtksink_result {
-            Ok(gtk_sink) => {
-                info!(
-                    "GStreamerPlayer::create_video_widget() - Successfully created gtk4paintablesink"
-                );
-
-                // Create a simpler, more robust pipeline for gtk4paintablesink
-                let bin = gst::Bin::new();
-
-                // Single videoconvert with proper configuration
-                let videoconvert = gst::ElementFactory::make("videoconvert")
-                    .name("videoconvert")
-                    .build()
-                    .expect("Failed to create videoconvert");
-
-                // Configure videoconvert to handle subtitle overlays properly
-                // Disable passthrough to force conversion even if formats match
-                videoconvert.set_property_from_str("n-threads", "4");
-
-                // Add videoscale for proper scaling
-                let videoscale = gst::ElementFactory::make("videoscale")
-                    .name("videoscale")
-                    .build()
-                    .expect("Failed to create videoscale");
-
-                // Force output to RGBA - critical for gtk4paintablesink with subtitles
-                let capsfilter = gst::ElementFactory::make("capsfilter")
-                    .name("capsfilter")
-                    .build()
-                    .expect("Failed to create capsfilter");
-
-                // Force RGBA format and disable DMA-BUF to avoid YUV colorspace issues
-                // This is critical for subtitle rendering
-                let caps = gst::Caps::builder("video/x-raw")
-                    .field("format", "RGBA")
-                    .build();
-                capsfilter.set_property("caps", &caps);
-
-                // Add elements to the bin
-                bin.add(&videoconvert).expect("Failed to add videoconvert");
-                bin.add(&videoscale).expect("Failed to add videoscale");
-                bin.add(&capsfilter).expect("Failed to add capsfilter");
-                bin.add(&gtk_sink).expect("Failed to add gtk_sink");
-
-                // Link the elements
-                videoconvert
-                    .link(&videoscale)
-                    .expect("Failed to link videoconvert to videoscale");
-                videoscale
-                    .link(&capsfilter)
-                    .expect("Failed to link videoscale to capsfilter");
-                capsfilter
-                    .link(&gtk_sink)
-                    .expect("Failed to link capsfilter to gtk_sink");
-
-                // Create ghost pad for the bin
-                let sink_pad = videoconvert
-                    .static_pad("sink")
-                    .expect("Failed to get sink pad");
-                let ghost_pad =
-                    gst::GhostPad::with_target(&sink_pad).expect("Failed to create ghost pad");
-                bin.add_pad(&ghost_pad).expect("Failed to add ghost pad");
-
-                // Get the paintable from the sink and set it on the picture
+        // If we have a gtk4paintablesink, extract and set its paintable
+        if let Some(ref sink) = video_sink {
+            if let Some(gtk_sink) = self.extract_gtk4_sink(sink) {
                 let paintable = gtk_sink.property::<gdk::Paintable>("paintable");
                 picture.set_paintable(Some(&paintable));
-
-                // Store the bin (which includes the sink) for later use
-                self.video_sink.replace(Some(bin.upcast()));
-                debug!(
-                    "GStreamerPlayer::create_video_widget() - gtk4paintablesink with conversion pipeline configured"
-                );
-            }
-            Err(e) => {
-                info!(
-                    "GStreamerPlayer::create_video_widget() - gtk4paintablesink not available ({}), using fallback widget",
-                    e
-                );
-
-                // Try glimagesink first as it has better colorspace handling
-                let sink_result = if use_gl_sink {
-                    gst::ElementFactory::make("glimagesink")
-                        .name("glimagesink")
-                        .build()
-                } else {
-                    gst::ElementFactory::make("autovideosink")
-                        .name("autovideosink")
-                        .build()
-                };
-
-                if let Ok(video_sink) = sink_result {
-                    let bin = gst::Bin::new();
-
-                    // Create robust conversion pipeline for fallback
-                    let videoconvert = gst::ElementFactory::make("videoconvert")
-                        .name("videoconvert")
-                        .build()
-                        .expect("Failed to create videoconvert");
-
-                    // Force RGBA to handle subtitles properly
-                    let capsfilter = gst::ElementFactory::make("capsfilter")
-                        .name("capsfilter")
-                        .build()
-                        .expect("Failed to create capsfilter");
-
-                    let caps = gst::Caps::builder("video/x-raw")
-                        .field("format", "RGBA")
-                        .build();
-                    capsfilter.set_property("caps", &caps);
-
-                    bin.add(&videoconvert).expect("Failed to add videoconvert");
-                    bin.add(&capsfilter).expect("Failed to add capsfilter");
-                    bin.add(&video_sink).expect("Failed to add video sink");
-
-                    videoconvert
-                        .link(&capsfilter)
-                        .expect("Failed to link videoconvert to capsfilter");
-                    capsfilter
-                        .link(&video_sink)
-                        .expect("Failed to link capsfilter to sink");
-
-                    let sink_pad = videoconvert
-                        .static_pad("sink")
-                        .expect("Failed to get sink pad");
-                    let ghost_pad =
-                        gst::GhostPad::with_target(&sink_pad).expect("Failed to create ghost pad");
-                    bin.add_pad(&ghost_pad).expect("Failed to add ghost pad");
-
-                    self.video_sink.replace(Some(bin.upcast()));
-                    info!(
-                        "Using {} as video sink",
-                        if use_gl_sink {
-                            "glimagesink"
-                        } else {
-                            "autovideosink"
-                        }
-                    );
-                } else {
-                    self.video_sink.replace(None);
-                }
+                debug!("GStreamerPlayer::create_video_widget() - Paintable set on Picture widget");
             }
         }
 
-        // Store the widget
+        // Store the video sink
+        self.video_sink.replace(video_sink);
+
+        // Store and return the widget
         let widget = picture.upcast::<gtk4::Widget>();
         self.video_widget.replace(Some(widget.clone()));
 
         info!("GStreamerPlayer::create_video_widget() - Video widget creation complete");
         widget
+    }
+
+    fn create_optimized_video_sink(
+        &self,
+        force_fallback: bool,
+        use_gl_sink: bool,
+    ) -> Option<gst::Element> {
+        if !force_fallback && !use_gl_sink {
+            // Try glsinkbin + gtk4paintablesink first (best performance)
+            if let Some(sink) = self.create_glsinkbin_gtk4_sink() {
+                info!("Using glsinkbin + gtk4paintablesink (optimal GL handling)");
+                return Some(sink);
+            }
+
+            // Fallback to direct gtk4paintablesink
+            if let Some(sink) = self.create_gtk4_sink_with_conversion() {
+                info!("Using gtk4paintablesink with conversion pipeline");
+                return Some(sink);
+            }
+        }
+
+        // Try glimagesink or autovideosink fallback
+        if use_gl_sink {
+            if let Some(sink) = self.create_gl_fallback_sink() {
+                info!("Using glimagesink fallback");
+                return Some(sink);
+            }
+        }
+
+        // Final fallback to autovideosink
+        if let Some(sink) = self.create_auto_fallback_sink() {
+            info!("Using autovideosink fallback");
+            return Some(sink);
+        }
+
+        error!("Failed to create any video sink!");
+        None
+    }
+
+    fn create_glsinkbin_gtk4_sink(&self) -> Option<gst::Element> {
+        info!("Attempting to create glsinkbin + gtk4paintablesink pipeline");
+
+        // Try to create glsinkbin with gtk4paintablesink
+        let glsinkbin = gst::ElementFactory::make("glsinkbin")
+            .name("glsinkbin")
+            .build()
+            .ok()?;
+
+        let gtk_sink = gst::ElementFactory::make("gtk4paintablesink")
+            .name("gtk4paintablesink")
+            .build()
+            .ok()?;
+
+        // Set gtk4paintablesink as the sink for glsinkbin
+        glsinkbin.set_property("sink", &gtk_sink);
+
+        // Create conversion bin with optimized videoconvertscale
+        let bin = gst::Bin::new();
+
+        // Try to use videoconvertscale (combined element)
+        let convert = if let Ok(convert) = gst::ElementFactory::make("videoconvertscale")
+            .name("video_converter")
+            .build()
+        {
+            debug!("Using optimized videoconvertscale element");
+            convert
+        } else {
+            // Fallback to separate elements
+            debug!("videoconvertscale not available, using separate videoconvert");
+            gst::ElementFactory::make("videoconvert")
+                .name("video_converter")
+                .build()
+                .ok()?
+        };
+
+        // Auto-detect optimal thread count (0 = automatic)
+        convert.set_property("n-threads", 0u32);
+        debug!("Set video converter to auto-detect optimal thread count");
+
+        // Force RGBA for subtitle overlay compatibility
+        let capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("capsfilter")
+            .build()
+            .ok()?;
+
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", "RGBA")
+            .build();
+        capsfilter.set_property("caps", &caps);
+
+        // Build pipeline
+        bin.add(&convert).ok()?;
+        bin.add(&capsfilter).ok()?;
+        bin.add(&glsinkbin).ok()?;
+
+        gst::Element::link_many(&[&convert, &capsfilter, &glsinkbin]).ok()?;
+
+        // Add ghost pad
+        let sink_pad = convert.static_pad("sink")?;
+        let ghost_pad = gst::GhostPad::with_target(&sink_pad).ok()?;
+        bin.add_pad(&ghost_pad).ok()?;
+
+        Some(bin.upcast())
+    }
+
+    fn create_gtk4_sink_with_conversion(&self) -> Option<gst::Element> {
+        let gtk_sink = gst::ElementFactory::make("gtk4paintablesink")
+            .name("gtk4paintablesink")
+            .build()
+            .ok()?;
+
+        let bin = gst::Bin::new();
+
+        // Try videoconvertscale first, fallback to separate elements
+        let convert = if let Ok(convert) = gst::ElementFactory::make("videoconvertscale")
+            .name("video_converter")
+            .build()
+        {
+            debug!("Using optimized videoconvertscale element");
+            convert
+        } else {
+            debug!("videoconvertscale not available, using separate videoconvert");
+            gst::ElementFactory::make("videoconvert")
+                .name("video_converter")
+                .build()
+                .ok()?
+        };
+
+        // Auto-detect optimal thread count (0 = automatic)
+        convert.set_property("n-threads", 0u32);
+
+        // Force RGBA format
+        let capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("capsfilter")
+            .build()
+            .ok()?;
+
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", "RGBA")
+            .build();
+        capsfilter.set_property("caps", &caps);
+
+        // Build pipeline
+        bin.add(&convert).ok()?;
+        bin.add(&capsfilter).ok()?;
+        bin.add(&gtk_sink).ok()?;
+
+        gst::Element::link_many(&[&convert, &capsfilter, &gtk_sink]).ok()?;
+
+        // Create ghost pad
+        let sink_pad = convert.static_pad("sink")?;
+        let ghost_pad = gst::GhostPad::with_target(&sink_pad).ok()?;
+        bin.add_pad(&ghost_pad).ok()?;
+
+        Some(bin.upcast())
+    }
+
+    fn create_gl_fallback_sink(&self) -> Option<gst::Element> {
+        let gl_sink = gst::ElementFactory::make("glimagesink")
+            .name("glimagesink")
+            .build()
+            .ok()?;
+
+        self.create_sink_with_conversion(gl_sink)
+    }
+
+    fn create_auto_fallback_sink(&self) -> Option<gst::Element> {
+        let auto_sink = gst::ElementFactory::make("autovideosink")
+            .name("autovideosink")
+            .build()
+            .ok()?;
+
+        self.create_sink_with_conversion(auto_sink)
+    }
+
+    fn create_sink_with_conversion(&self, sink: gst::Element) -> Option<gst::Element> {
+        let bin = gst::Bin::new();
+
+        // Try videoconvertscale first
+        let convert = if let Ok(convert) = gst::ElementFactory::make("videoconvertscale")
+            .name("video_converter")
+            .build()
+        {
+            convert
+        } else {
+            gst::ElementFactory::make("videoconvert")
+                .name("video_converter")
+                .build()
+                .ok()?
+        };
+
+        // Auto-detect optimal thread count (0 = automatic)
+        convert.set_property("n-threads", 0u32);
+
+        // Force RGBA for subtitle compatibility
+        let capsfilter = gst::ElementFactory::make("capsfilter")
+            .name("capsfilter")
+            .build()
+            .ok()?;
+
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", "RGBA")
+            .build();
+        capsfilter.set_property("caps", &caps);
+
+        bin.add(&convert).ok()?;
+        bin.add(&capsfilter).ok()?;
+        bin.add(&sink).ok()?;
+
+        gst::Element::link_many(&[&convert, &capsfilter, &sink]).ok()?;
+
+        let sink_pad = convert.static_pad("sink")?;
+        let ghost_pad = gst::GhostPad::with_target(&sink_pad).ok()?;
+        bin.add_pad(&ghost_pad).ok()?;
+
+        Some(bin.upcast())
+    }
+
+    fn create_subtitle_filter(&self) -> Option<gst::Element> {
+        info!("Creating subtitle filter for colorspace conversion");
+
+        // According to GStreamer docs, subtitle overlay should happen at sink level
+        // But we need to ensure proper colorspace for the overlay composition
+        let bin = gst::Bin::new();
+
+        // Use videoconvertscale if available, fallback to videoconvert
+        let convert = if let Ok(convert) = gst::ElementFactory::make("videoconvertscale")
+            .name("subtitle_convert")
+            .build()
+        {
+            info!("Using videoconvertscale for subtitle filter");
+            convert
+        } else if let Ok(convert) = gst::ElementFactory::make("videoconvert")
+            .name("subtitle_convert")
+            .build()
+        {
+            info!("Using videoconvert for subtitle filter (videoconvertscale not available)");
+            convert
+        } else {
+            error!("Failed to create any video converter for subtitle filter");
+            return None;
+        };
+
+        // Configure for optimal performance (0 = auto-detect threads)
+        convert.set_property("n-threads", 0u32);
+
+        // IMPORTANT: Set matrix-mode to ensure proper color conversion
+        // This helps with YUV to RGB conversion issues
+        if convert.has_property("matrix-mode") {
+            // 0 = full range, 1 = GST_VIDEO_MATRIX_MODE_INPUT_ONLY
+            convert.set_property_from_str("matrix-mode", "input-only");
+            info!("Set matrix-mode to input-only for proper colorspace conversion");
+        }
+
+        // Set dither to none to avoid artifacts
+        if convert.has_property("dither") {
+            convert.set_property_from_str("dither", "none");
+            info!("Disabled dithering to avoid artifacts");
+        }
+
+        info!("Configured subtitle filter with auto-detected thread count");
+
+        // Add to bin and create ghost pads
+        if bin.add(&convert).is_err() {
+            error!("Failed to add converter to subtitle filter bin");
+            return None;
+        }
+
+        let sink_pad = convert.static_pad("sink")?;
+        let src_pad = convert.static_pad("src")?;
+
+        let ghost_sink = gst::GhostPad::with_target(&sink_pad).ok()?;
+        let ghost_src = gst::GhostPad::with_target(&src_pad).ok()?;
+
+        bin.add_pad(&ghost_sink).ok()?;
+        bin.add_pad(&ghost_src).ok()?;
+
+        info!("Successfully created subtitle filter");
+        Some(bin.upcast())
+    }
+
+    fn print_gst_launch_pipeline(&self, playbin: &gst::Element, _url: &str) {
+        // Check if GST_DEBUG_DUMP_DOT_DIR is set
+        let dot_dir = std::env::var("GST_DEBUG_DUMP_DOT_DIR").unwrap_or_else(|_| {
+            // If not set, set it to /tmp
+            unsafe {
+                std::env::set_var("GST_DEBUG_DUMP_DOT_DIR", "/tmp");
+            }
+            "/tmp".to_string()
+        });
+
+        info!("GST_DEBUG_DUMP_DOT_DIR is set to: {}", dot_dir);
+
+        // Dump the pipeline graph
+        if let Some(bin) = playbin.dynamic_cast_ref::<gst::Bin>() {
+            bin.debug_to_dot_file(gst::DebugGraphDetails::ALL, "reel-playbin-READY");
+            info!("Dumped pipeline to {}/reel-playbin-READY.dot", dot_dir);
+
+            // Also try to get the actual pipeline description
+            info!("════════════════════════════════════════════════════════════════");
+            info!("Playbin element details:");
+            info!("  Name: {}", playbin.name());
+            if let Some(factory) = playbin.factory() {
+                info!("  Factory: {}", factory.name());
+            }
+
+            // List all properties for debugging
+            if playbin.has_property("uri") {
+                let uri: String = playbin.property("uri");
+                info!("  URI: {}", uri);
+            }
+
+            // Try to iterate through bin children
+            let mut count = 0;
+            let mut iter = bin.iterate_elements();
+            info!("Elements in playbin:");
+            while let Ok(Some(elem)) = iter.next() {
+                count += 1;
+                if let Some(factory) = elem.factory() {
+                    info!("  - {} ({})", elem.name(), factory.name());
+                } else {
+                    info!("  - {}", elem.name());
+                }
+            }
+            info!("Total elements in bin: {}", count);
+            info!("════════════════════════════════════════════════════════════════");
+        } else {
+            error!("Playbin is not a Bin! Type: {:?}", playbin.type_());
+        }
+    }
+
+    fn extract_gtk4_sink(&self, element: &gst::Element) -> Option<gst::Element> {
+        // Check if this is a bin
+        if let Some(bin) = element.dynamic_cast_ref::<gst::Bin>() {
+            // Iterate through bin elements to find gtk4paintablesink
+            let mut iter = bin.iterate_elements();
+            while let Ok(Some(elem)) = iter.next() {
+                if elem
+                    .factory()
+                    .map_or(false, |f| f.name() == "gtk4paintablesink")
+                {
+                    return Some(elem);
+                }
+                // Recursively check if this element is also a bin
+                if let Some(sink) = self.extract_gtk4_sink(&elem) {
+                    return Some(sink);
+                }
+            }
+        } else if element
+            .factory()
+            .map_or(false, |f| f.name() == "gtk4paintablesink")
+        {
+            return Some(element.clone());
+        }
+        None
     }
 
     pub async fn load_media(&self, url: &str, _video_sink: Option<&gst::Element>) -> Result<()> {
@@ -296,9 +512,40 @@ impl GStreamerPlayer {
                 .context("Failed to set old playbin to null state")?;
         }
 
-        // Try to create playbin - note: playbin3 might not exist in all configurations
-        let playbin = if gst::ElementFactory::find("playbin").is_some() {
-            info!("GStreamerPlayer::load_media() - Creating playbin element");
+        // Try to create playbin3 first (better subtitle support)
+        let (playbin, is_playbin3) = if gst::ElementFactory::find("playbin3").is_some() {
+            info!("GStreamerPlayer::load_media() - Creating playbin3 element");
+            let pb = gst::ElementFactory::make("playbin3")
+                .name("player")
+                .property("uri", url)
+                .build()
+                .context("Failed to create playbin3 element")?;
+
+            // Enable all features including text overlay
+            pb.set_property_from_str(
+                "flags",
+                "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
+            );
+
+            // playbin3 has QoS always enabled, no property needed
+
+            // Configure subtitle properties
+            if pb.has_property("subtitle-encoding") {
+                pb.set_property_from_str("subtitle-encoding", "UTF-8");
+                info!("Set subtitle encoding to UTF-8");
+            }
+
+            if pb.has_property("subtitle-font-desc") {
+                pb.set_property_from_str("subtitle-font-desc", "Sans, 18");
+                info!("Set subtitle font to Sans, 18");
+            }
+
+            info!("GStreamerPlayer::load_media() - Using modern playbin3");
+            (pb, true)
+        } else if gst::ElementFactory::find("playbin").is_some() {
+            info!(
+                "GStreamerPlayer::load_media() - Falling back to playbin (playbin3 not available)"
+            );
             let pb = gst::ElementFactory::make("playbin")
                 .name("player")
                 .property("uri", url)
@@ -311,68 +558,33 @@ impl GStreamerPlayer {
                 "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
             );
 
-            // Create a video filter bin to ensure proper colorspace for subtitles
-            // This prevents the green bar issue when subtitles appear
-            let filter_bin = gst::Bin::new();
-
-            // Add videoconvert to handle colorspace changes from subtitle overlay
-            if let Ok(videoconvert) = gst::ElementFactory::make("videoconvert")
-                .name("subtitle_videoconvert")
-                .build()
-            {
-                // Add capsfilter to force RGBA after subtitle compositing
-                if let Ok(capsfilter) = gst::ElementFactory::make("capsfilter")
-                    .name("subtitle_capsfilter")
-                    .build()
-                {
-                    // Force RGBA to prevent YUV issues with subtitles
-                    let caps = gst::Caps::builder("video/x-raw")
-                        .field("format", "RGBA")
-                        .build();
-                    capsfilter.set_property("caps", &caps);
-
-                    filter_bin
-                        .add(&videoconvert)
-                        .expect("Failed to add videoconvert to filter bin");
-                    filter_bin
-                        .add(&capsfilter)
-                        .expect("Failed to add capsfilter to filter bin");
-
-                    videoconvert
-                        .link(&capsfilter)
-                        .expect("Failed to link videoconvert to capsfilter");
-
-                    // Create ghost pads for the bin
-                    let sink_pad = videoconvert
-                        .static_pad("sink")
-                        .expect("Failed to get sink pad");
-                    let src_pad = capsfilter.static_pad("src").expect("Failed to get src pad");
-
-                    let ghost_sink =
-                        gst::GhostPad::with_target(&sink_pad).expect("Failed to create ghost sink");
-                    let ghost_src =
-                        gst::GhostPad::with_target(&src_pad).expect("Failed to create ghost src");
-
-                    filter_bin
-                        .add_pad(&ghost_sink)
-                        .expect("Failed to add ghost sink");
-                    filter_bin
-                        .add_pad(&ghost_src)
-                        .expect("Failed to add ghost src");
-
-                    pb.set_property("video-filter", &filter_bin);
-                    info!("Added video-filter bin to force RGBA for subtitle colorspace");
-                }
+            // Enable QoS for better performance
+            if pb.has_property("enable-qos") {
+                pb.set_property("enable-qos", true);
+                info!("Enabled QoS for better performance");
             }
 
-            info!("GStreamerPlayer::load_media() - Playbin created successfully");
-            pb
+            // Configure subtitle rendering properties
+            if pb.has_property("subtitle-encoding") {
+                pb.set_property_from_str("subtitle-encoding", "UTF-8");
+                info!("Set subtitle encoding to UTF-8");
+            }
+
+            if pb.has_property("subtitle-font-desc") {
+                pb.set_property_from_str("subtitle-font-desc", "Sans, 18");
+                info!("Set subtitle font to Sans, 18");
+            }
+
+            (pb, false)
         } else {
-            error!("GStreamerPlayer::load_media() - No playbin element available!");
+            error!("GStreamerPlayer::load_media() - No playbin/playbin3 element available!");
             return Err(anyhow::anyhow!(
-                "No playbin element available - GStreamer plugins may not be properly installed"
+                "No playbin/playbin3 element available - GStreamer plugins may not be properly installed"
             ));
         };
+
+        // Store whether we're using playbin3
+        self.is_playbin3.replace(is_playbin3);
 
         // Use our stored video sink if available
         if let Some(sink) = self.video_sink.borrow().as_ref() {
@@ -380,51 +592,41 @@ impl GStreamerPlayer {
             playbin.set_property("video-sink", sink);
             info!("GStreamerPlayer::load_media() - Video sink configured");
         } else {
-            // Create a fallback video sink with proper conversion
-            info!(
-                "GStreamerPlayer::load_media() - No pre-configured sink, creating fallback with conversion"
-            );
+            // Create a fallback video sink
+            info!("GStreamerPlayer::load_media() - No pre-configured sink, creating fallback");
 
-            // Create a bin with videoconvert and autovideosink for proper colorspace handling
-            let bin = gst::Bin::new();
-
-            if let Ok(videoconvert) = gst::ElementFactory::make("videoconvert")
-                .name("videoconvert")
-                .build()
-            {
-                if let Ok(autosink) = gst::ElementFactory::make("autovideosink")
-                    .name("autovideosink")
-                    .build()
-                {
-                    bin.add(&videoconvert).expect("Failed to add videoconvert");
-                    bin.add(&autosink).expect("Failed to add autosink");
-
-                    videoconvert
-                        .link(&autosink)
-                        .expect("Failed to link videoconvert to autosink");
-
-                    let sink_pad = videoconvert
-                        .static_pad("sink")
-                        .expect("Failed to get sink pad");
-                    let ghost_pad =
-                        gst::GhostPad::with_target(&sink_pad).expect("Failed to create ghost pad");
-                    bin.add_pad(&ghost_pad).expect("Failed to add ghost pad");
-
-                    playbin.set_property("video-sink", &bin);
-                    info!(
-                        "GStreamerPlayer::load_media() - Fallback video sink with conversion configured"
-                    );
-                } else {
-                    error!("GStreamerPlayer::load_media() - Failed to create autovideosink!");
-                }
+            if let Some(fallback_sink) = self.create_auto_fallback_sink() {
+                playbin.set_property("video-sink", &fallback_sink);
+                info!("GStreamerPlayer::load_media() - Fallback video sink configured");
             } else {
-                error!("GStreamerPlayer::load_media() - Failed to create videoconvert!");
+                error!("GStreamerPlayer::load_media() - Failed to create any fallback video sink!");
             }
         }
 
         // Store the playbin
         self.playbin.replace(Some(playbin.clone()));
         debug!("GStreamerPlayer::load_media() - Playbin stored");
+
+        // Print the pipeline in gst-launch format
+        self.print_gst_launch_pipeline(&playbin, url);
+
+        // Debug: Log the complete pipeline structure
+        if let Some(sink) = playbin.property::<Option<gst::Element>>("video-sink") {
+            info!("video-sink is attached: {:?}", sink.name());
+            // Try to inspect the sink structure
+            if let Some(bin) = sink.dynamic_cast_ref::<gst::Bin>() {
+                info!("video-sink is a bin, contains:");
+                let mut iter = bin.iterate_elements();
+                while let Ok(Some(elem)) = iter.next() {
+                    info!(
+                        "  - {}: {}",
+                        elem.name(),
+                        elem.factory()
+                            .map_or("unknown".to_string(), |f| f.name().to_string())
+                    );
+                }
+            }
+        }
 
         // Set up message handling
         let bus = playbin.bus().context("Failed to get playbin bus")?;
@@ -461,9 +663,63 @@ impl GStreamerPlayer {
             match playbin.set_state(gst::State::Playing) {
                 Ok(gst::StateChangeSuccess::Success) => {
                     info!("GStreamerPlayer::play() - Successfully set playbin to playing state");
+
+                    // Ensure GST_DEBUG_DUMP_DOT_DIR is set
+                    if std::env::var("GST_DEBUG_DUMP_DOT_DIR").is_err() {
+                        unsafe {
+                            std::env::set_var("GST_DEBUG_DUMP_DOT_DIR", "/tmp");
+                        }
+                    }
+
+                    // Dump the actual running pipeline after it starts playing
+                    if let Some(bin) = playbin.dynamic_cast_ref::<gst::Bin>() {
+                        bin.debug_to_dot_file(gst::DebugGraphDetails::ALL, "reel-playbin-PLAYING");
+                        info!("Dumped PLAYING state pipeline to /tmp/reel-playbin-PLAYING.dot");
+
+                        // List what's actually in the pipeline now
+                        let mut iter = bin.iterate_elements();
+                        info!("Elements in PLAYING pipeline:");
+                        while let Ok(Some(elem)) = iter.next() {
+                            if let Some(factory) = elem.factory() {
+                                info!("  - {} ({})", elem.name(), factory.name());
+                            }
+                        }
+                    }
                 }
                 Ok(gst::StateChangeSuccess::Async) => {
                     info!("GStreamerPlayer::play() - Playbin state change is async, waiting...");
+
+                    // Wait a bit for the pipeline to negotiate, then dump it
+                    glib::timeout_add_once(std::time::Duration::from_secs(2), {
+                        let playbin = playbin.clone();
+                        move || {
+                            // Ensure GST_DEBUG_DUMP_DOT_DIR is set
+                            if std::env::var("GST_DEBUG_DUMP_DOT_DIR").is_err() {
+                                unsafe {
+                                    std::env::set_var("GST_DEBUG_DUMP_DOT_DIR", "/tmp");
+                                }
+                            }
+
+                            if let Some(bin) = playbin.dynamic_cast_ref::<gst::Bin>() {
+                                bin.debug_to_dot_file(
+                                    gst::DebugGraphDetails::ALL,
+                                    "reel-playbin-PLAYING-async",
+                                );
+                                info!(
+                                    "Dumped PLAYING state pipeline (async) to /tmp/reel-playbin-PLAYING-async.dot"
+                                );
+
+                                // List what's actually in the pipeline now
+                                let mut iter = bin.iterate_elements();
+                                info!("Elements in PLAYING pipeline (after async):");
+                                while let Ok(Some(elem)) = iter.next() {
+                                    if let Some(factory) = elem.factory() {
+                                        info!("  - {} ({})", elem.name(), factory.name());
+                                    }
+                                }
+                            }
+                        }
+                    });
                 }
                 Ok(gst::StateChangeSuccess::NoPreroll) => {
                     info!("GStreamerPlayer::play() - Playbin state change: no preroll");
@@ -594,17 +850,36 @@ impl GStreamerPlayer {
             }
 
             // Alternative: try to get from stream info
-            let n_video = playbin.property::<i32>("n-video");
-            if n_video > 0
-                && let Some(pad) =
+            // Handle both playbin and playbin3 property names
+            let n_video = if playbin.has_property("n-video-streams") {
+                // playbin3 property
+                playbin.property::<i32>("n-video-streams")
+            } else if playbin.has_property("n-video") {
+                // playbin property
+                playbin.property::<i32>("n-video")
+            } else {
+                0
+            };
+
+            if n_video > 0 {
+                // Try to get video pad - signal names differ between playbin versions
+                let pad = if playbin.has_property("n-video-streams") {
+                    // playbin3 uses get-video-stream-pad
+                    playbin.emit_by_name::<Option<gst::Pad>>("get-video-stream-pad", &[&0i32])
+                } else {
+                    // playbin uses get-video-pad
                     playbin.emit_by_name::<Option<gst::Pad>>("get-video-pad", &[&0i32])
-                && let Some(caps) = pad.current_caps()
-                && let Some(structure) = caps.structure(0)
-            {
-                let width = structure.get::<i32>("width").ok();
-                let height = structure.get::<i32>("height").ok();
-                if let (Some(w), Some(h)) = (width, height) {
-                    return Some((w, h));
+                };
+
+                if let Some(pad) = pad
+                    && let Some(caps) = pad.current_caps()
+                    && let Some(structure) = caps.structure(0)
+                {
+                    let width = structure.get::<i32>("width").ok();
+                    let height = structure.get::<i32>("height").ok();
+                    if let (Some(w), Some(h)) = (width, height) {
+                        return Some((w, h));
+                    }
                 }
             }
             None
@@ -661,14 +936,59 @@ impl GStreamerPlayer {
         let mut tracks = Vec::new();
 
         if let Some(playbin) = self.playbin.borrow().as_ref() {
-            let n_audio = playbin.property::<i32>("n-audio");
+            // Check playbin state - tracks might not be available until PLAYING
+            let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
+            debug!("Getting audio tracks, playbin state: {:?}", current);
+
+            // Check if this is playbin3 (doesn't have n-audio property)
+            let is_playbin3 = *self.is_playbin3.borrow();
+
+            let n_audio = if is_playbin3 {
+                // playbin3 doesn't expose track count directly
+                // We need to wait for PAUSED/PLAYING state for stream collection
+                if current < gst::State::Paused {
+                    debug!("playbin3 not in PAUSED/PLAYING state yet, can't get tracks");
+                    return tracks;
+                }
+
+                // For now, try a reasonable maximum
+                // TODO: Use GstStreamCollection API when available
+                let mut count = 0;
+                for i in 0..10 {
+                    // Try to select the stream to see if it exists
+                    if playbin
+                        .emit_by_name::<Option<gst::TagList>>("get-audio-tags", &[&i])
+                        .is_some()
+                    {
+                        count = i + 1;
+                    } else {
+                        break;
+                    }
+                }
+                debug!("playbin3: Found {} audio tracks by probing", count);
+                count
+            } else if playbin.has_property("n-audio") {
+                // Regular playbin
+                let count = playbin.property::<i32>("n-audio");
+                debug!("Got n-audio: {}", count);
+                count
+            } else {
+                warn!("No audio track count property found!");
+                0
+            };
             info!("Found {} audio tracks", n_audio);
 
             for i in 0..n_audio {
-                // Get audio stream tags
-                if let Some(tags) =
+                // Get audio stream tags - try different signal names for compatibility
+                let tags = if playbin.has_property("n-audio-streams") {
+                    // playbin3 uses get-audio-stream-tags
+                    playbin.emit_by_name::<Option<gst::TagList>>("get-audio-stream-tags", &[&i])
+                } else {
+                    // playbin uses get-audio-tags
                     playbin.emit_by_name::<Option<gst::TagList>>("get-audio-tags", &[&i])
-                {
+                };
+
+                if let Some(tags) = tags {
                     let mut title = format!("Audio Track {}", i + 1);
 
                     // Try to get language code
@@ -697,17 +1017,64 @@ impl GStreamerPlayer {
         let mut tracks = Vec::new();
 
         if let Some(playbin) = self.playbin.borrow().as_ref() {
-            let n_text = playbin.property::<i32>("n-text");
+            // Check playbin state - tracks might not be available until PLAYING
+            let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
+            debug!("Getting subtitle tracks, playbin state: {:?}", current);
+
+            // Check if this is playbin3
+            let is_playbin3 = *self.is_playbin3.borrow();
+
+            let n_text = if is_playbin3 {
+                // playbin3 doesn't expose track count directly
+                // We need to wait for PAUSED/PLAYING state for stream collection
+                if current < gst::State::Paused {
+                    debug!("playbin3 not in PAUSED/PLAYING state yet, can't get tracks");
+                    // Still add None option
+                    tracks.push((-1, "None".to_string()));
+                    return tracks;
+                }
+
+                // For now, try a reasonable maximum
+                // TODO: Use GstStreamCollection API when available
+                let mut count = 0;
+                for i in 0..10 {
+                    // Try to get tags to see if track exists
+                    if playbin
+                        .emit_by_name::<Option<gst::TagList>>("get-text-tags", &[&i])
+                        .is_some()
+                    {
+                        count = i + 1;
+                    } else {
+                        break;
+                    }
+                }
+                debug!("playbin3: Found {} subtitle tracks by probing", count);
+                count
+            } else if playbin.has_property("n-text") {
+                // Regular playbin
+                let count = playbin.property::<i32>("n-text");
+                debug!("Got n-text: {}", count);
+                count
+            } else {
+                warn!("No subtitle track count property found!");
+                0
+            };
             info!("Found {} subtitle tracks", n_text);
 
             // Add "None" option
             tracks.push((-1, "None".to_string()));
 
             for i in 0..n_text {
-                // Get subtitle stream tags
-                if let Some(tags) =
+                // Get subtitle stream tags - try different signal names for compatibility
+                let tags = if playbin.has_property("n-text-streams") {
+                    // playbin3 uses get-text-stream-tags
+                    playbin.emit_by_name::<Option<gst::TagList>>("get-text-stream-tags", &[&i])
+                } else {
+                    // playbin uses get-text-tags
                     playbin.emit_by_name::<Option<gst::TagList>>("get-text-tags", &[&i])
-                {
+                };
+
+                if let Some(tags) = tags {
                     let mut title = format!("Subtitle {}", i + 1);
 
                     // Try to get language code
@@ -734,29 +1101,58 @@ impl GStreamerPlayer {
 
     pub async fn set_audio_track(&self, track_index: i32) -> Result<()> {
         if let Some(playbin) = self.playbin.borrow().as_ref() {
-            playbin.set_property("current-audio", track_index);
-            info!("Set audio track to {}", track_index);
+            let is_playbin3 = *self.is_playbin3.borrow();
+
+            if is_playbin3 {
+                // playbin3 uses signals for track selection
+                // emit select-stream signal
+                // For now, we'll use the compatibility approach
+                info!("Setting audio track on playbin3 to index {}", track_index);
+                // TODO: Implement proper stream selection for playbin3
+            } else if playbin.has_property("current-audio") {
+                // playbin property
+                playbin.set_property("current-audio", track_index);
+                info!("Set current-audio to {}", track_index);
+            }
         }
         Ok(())
     }
 
     pub async fn set_subtitle_track(&self, track_index: i32) -> Result<()> {
         if let Some(playbin) = self.playbin.borrow().as_ref() {
+            info!("Setting subtitle track to index: {}", track_index);
+
             if track_index < 0 {
                 // Disable subtitles
                 playbin.set_property_from_str(
                     "flags",
                     "soft-colorbalance+deinterlace+soft-volume+audio+video",
                 );
-                info!("Disabled subtitles");
+                info!("Disabled subtitles - flags set to audio+video only");
             } else {
                 // Enable subtitles and set track
                 playbin.set_property_from_str(
                     "flags",
                     "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
                 );
-                playbin.set_property("current-text", track_index);
-                info!("Set subtitle track to {}", track_index);
+                info!("Enabled subtitles - flags set to audio+video+text");
+
+                let is_playbin3 = *self.is_playbin3.borrow();
+
+                if is_playbin3 {
+                    // playbin3 uses different approach for subtitle selection
+                    info!(
+                        "Setting subtitle track on playbin3 to index {}",
+                        track_index
+                    );
+                    // TODO: Implement proper stream selection for playbin3
+                } else if playbin.has_property("current-text") {
+                    // playbin property
+                    playbin.set_property("current-text", track_index);
+                    info!("Set current-text to {} (playbin)", track_index);
+                } else {
+                    error!("No subtitle track property available!");
+                }
             }
         }
         Ok(())
@@ -764,7 +1160,15 @@ impl GStreamerPlayer {
 
     pub async fn get_current_audio_track(&self) -> i32 {
         if let Some(playbin) = self.playbin.borrow().as_ref() {
-            playbin.property::<i32>("current-audio")
+            if playbin.has_property("current-audio-stream") {
+                // playbin3 property
+                playbin.property::<i32>("current-audio-stream")
+            } else if playbin.has_property("current-audio") {
+                // playbin property
+                playbin.property::<i32>("current-audio")
+            } else {
+                -1
+            }
         } else {
             -1
         }
@@ -773,14 +1177,28 @@ impl GStreamerPlayer {
     pub async fn get_current_subtitle_track(&self) -> i32 {
         if let Some(playbin) = self.playbin.borrow().as_ref() {
             // Check if we have any subtitle tracks available
-            let n_text = playbin.property::<i32>("n-text");
+            let n_text = if playbin.has_property("n-text-streams") {
+                playbin.property::<i32>("n-text-streams")
+            } else if playbin.has_property("n-text") {
+                playbin.property::<i32>("n-text")
+            } else {
+                0
+            };
             if n_text <= 0 {
                 return -1; // No subtitle tracks available
             }
 
             // Get the current subtitle track
             // If subtitles are disabled, this will return -1
-            playbin.property::<i32>("current-text")
+            if playbin.has_property("current-text-stream") {
+                // playbin3 property
+                playbin.property::<i32>("current-text-stream")
+            } else if playbin.has_property("current-text") {
+                // playbin property
+                playbin.property::<i32>("current-text")
+            } else {
+                -1
+            }
         } else {
             -1
         }
