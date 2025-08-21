@@ -12,6 +12,9 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
+// MPV render update flags
+const MPV_RENDER_UPDATE_FRAME: u64 = 1;
+
 #[derive(Debug, Clone)]
 pub enum PlayerState {
     Idle,
@@ -69,31 +72,52 @@ impl MpvPlayer {
             let name_str = CStr::from_ptr(name).to_string_lossy();
             debug!("get_proc_address called for: {}", name_str);
 
-            // For MPV render API, we need to return NULL for functions it's just probing
-            // and valid pointers for functions it actually needs
+            // GTK4 uses Epoxy for GL function loading, which handles GL/GLES/EGL transparently
+            // We need to use the epoxy functions directly, not through dlsym
 
-            // MPV often calls glGetString first to check GL capabilities
-            // The segfault suggests the function pointer we're returning isn't valid
-            // Let's try returning NULL for glGetString to see if MPV can handle it
-            if name_str == "glGetString" {
-                warn!("Returning NULL for glGetString - MPV should handle this");
-                return ptr::null_mut();
+            // First try to get the epoxy_get_proc_address function itself
+            let epoxy_get_proc = libc::dlsym(
+                libc::RTLD_DEFAULT,
+                b"epoxy_get_proc_address\0".as_ptr() as *const i8,
+            );
+
+            if !epoxy_get_proc.is_null() {
+                // Use epoxy_get_proc_address to get the GL function
+                type EpoxyGetProcFn = unsafe extern "C" fn(*const i8) -> *mut c_void;
+                let get_proc: EpoxyGetProcFn = std::mem::transmute(epoxy_get_proc);
+                let func = get_proc(name);
+
+                if !func.is_null() {
+                    debug!(
+                        "Found {} via epoxy_get_proc_address at {:p}",
+                        name_str, func
+                    );
+                    return func;
+                }
             }
 
-            // Try epoxy function first
-            let epoxy_name = format!("epoxy_{}\0", name_str);
-            let epoxy_func = libc::dlsym(libc::RTLD_DEFAULT, epoxy_name.as_ptr() as *const i8);
+            // Fallback: Try EGL if available (common on Wayland)
+            let egl_get_proc = libc::dlsym(
+                libc::RTLD_DEFAULT,
+                b"eglGetProcAddress\0".as_ptr() as *const i8,
+            );
 
-            if !epoxy_func.is_null() {
-                debug!("Found epoxy_{} at {:p}", name_str, epoxy_func);
-                return epoxy_func;
+            if !egl_get_proc.is_null() {
+                type EglGetProcFn = unsafe extern "C" fn(*const i8) -> *mut c_void;
+                let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
+                let func = get_proc(name);
+
+                if !func.is_null() {
+                    debug!("Found {} via eglGetProcAddress at {:p}", name_str, func);
+                    return func;
+                }
             }
 
-            // Try plain name
-            let plain_func = libc::dlsym(libc::RTLD_DEFAULT, name);
-            if !plain_func.is_null() {
-                debug!("Found {} at {:p}", name_str, plain_func);
-                return plain_func;
+            // Last resort: Try direct dlsym (may not work for all GL functions)
+            let func = libc::dlsym(libc::RTLD_DEFAULT, name);
+            if !func.is_null() {
+                debug!("Found {} via dlsym at {:p}", name_str, func);
+                return func;
             }
 
             warn!("Failed to get proc address for: {}", name_str);
@@ -104,6 +128,8 @@ impl MpvPlayer {
     unsafe extern "C" fn on_mpv_render_update(ctx: *mut c_void) {
         unsafe {
             let gl_area = &*(ctx as *const GLArea);
+
+            debug!("MPV render update callback triggered");
 
             // Queue a redraw on the GL area
             let gl_area_clone = gl_area.clone();
@@ -138,38 +164,6 @@ impl MpvPlayer {
         gl_context.make_current();
         let is_legacy = gl_context.is_legacy();
         info!("GL context available - Legacy: {}", is_legacy);
-
-        // Try to get GL version - but don't call GL functions directly here
-        // They will be called through the proper get_proc_address callback
-        unsafe {
-            // Check if epoxy is available
-            let epoxy_test = libc::dlsym(
-                libc::RTLD_DEFAULT,
-                b"epoxy_get_proc_address\0".as_ptr() as *const i8,
-            );
-            info!(
-                "epoxy_get_proc_address available: {}",
-                !epoxy_test.is_null()
-            );
-
-            // Try direct epoxy function
-            let epoxy_glGetString = libc::dlsym(
-                libc::RTLD_DEFAULT,
-                b"epoxy_glGetString\0".as_ptr() as *const i8,
-            );
-            info!(
-                "epoxy_glGetString available: {}",
-                !epoxy_glGetString.is_null()
-            );
-
-            // Try plain GL function
-            let plain_glGetString =
-                libc::dlsym(libc::RTLD_DEFAULT, b"glGetString\0".as_ptr() as *const i8);
-            info!("glGetString available: {}", !plain_glGetString.is_null());
-
-            // Don't actually call GL functions here - it would crash without proper context
-            info!("GL function availability checked - will use them through MPV's callback");
-        }
 
         info!("Proceeding with MPV render context creation");
 
@@ -265,14 +259,19 @@ impl MpvPlayer {
 
             info!("MpvPlayer::init_gl_render_context() - OpenGL render context initialized");
 
-            // Load pending media if any
+            // Load pending media if any - do this after a small delay to ensure context is ready
             if let Some(url) = self.inner.pending_media_url.borrow_mut().take() {
                 info!("Loading pending media: {}", url);
-                if let Some(ref mpv) = *self.inner.mpv.borrow() {
-                    if let Err(e) = mpv.command("loadfile", &[&url, "replace"]) {
-                        error!("Failed to load pending media: {:?}", e);
+                let inner_clone = self.inner.clone();
+                let url_clone = url.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
+                    if let Some(ref mpv) = *inner_clone.mpv.borrow() {
+                        info!("Actually loading media now: {}", url_clone);
+                        if let Err(e) = mpv.command("loadfile", &[&url_clone, "replace"]) {
+                            error!("Failed to load pending media: {:?}", e);
+                        }
                     }
-                }
+                });
             }
         }
 
@@ -286,7 +285,8 @@ impl MpvPlayer {
         gl_area.set_vexpand(true);
         gl_area.set_hexpand(true);
         gl_area.set_can_focus(true);
-        gl_area.set_auto_render(false);
+        // Enable auto-render so GTK manages the framebuffer properly
+        gl_area.set_auto_render(true);
 
         // Don't request a specific version - let GTK choose what's available
         // MPV should work with whatever GL context GTK provides
@@ -328,14 +328,120 @@ impl MpvPlayer {
             // Make GL context current
             gl_area.make_current();
 
+            // Clear any GL errors before we start
+            unsafe {
+                // Clear GL error state
+                let gl_get_error =
+                    libc::dlsym(libc::RTLD_DEFAULT, b"glGetError\0".as_ptr() as *const i8);
+                if !gl_get_error.is_null() {
+                    type GlGetErrorFn = unsafe extern "C" fn() -> u32;
+                    let get_error: GlGetErrorFn = std::mem::transmute(gl_get_error);
+                    while get_error() != 0 {} // Clear all errors
+                }
+            }
+
             // Render the current frame
             if let Some(mpv_gl) = &*inner_render.mpv_gl.borrow() {
                 unsafe {
                     let (width, height) = (gl_area.width(), gl_area.height());
 
-                    // Set up render params
-                    let fbo = 0i32;
-                    let flip_y = 1i32;
+                    // Skip rendering if area has no size
+                    if width <= 0 || height <= 0 {
+                        debug!("Skipping render - GLArea has no size");
+                        return glib::Propagation::Stop;
+                    }
+
+                    // Check if video is actually loaded
+                    if let Some(ref mpv) = *inner_render.mpv.borrow() {
+                        if let Ok(video_width) = mpv.get_property::<i64>("width") {
+                            if video_width > 0 {
+                                debug!(
+                                    "Rendering frame at {}x{}, video is {}x{}",
+                                    width,
+                                    height,
+                                    video_width,
+                                    mpv.get_property::<i64>("height").unwrap_or(0)
+                                );
+                            }
+                        }
+                    }
+
+                    // Check if MPV needs update
+                    let result = mpv_render_context_update(*mpv_gl) as u64;
+                    if result & MPV_RENDER_UPDATE_FRAME != 0 {
+                        debug!("MPV has new frame to render");
+                    }
+
+                    // IMPORTANT: Attach GTK's buffers before rendering
+                    // This ensures we render to GTK's framebuffer
+                    gl_area.attach_buffers();
+
+                    // Clear any GL errors that might have been generated by attach_buffers
+                    unsafe {
+                        let egl_get_proc = libc::dlsym(
+                            libc::RTLD_DEFAULT,
+                            b"eglGetProcAddress\0".as_ptr() as *const i8,
+                        );
+                        if !egl_get_proc.is_null() {
+                            type EglGetProcFn = unsafe extern "C" fn(*const i8) -> *const c_void;
+                            let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
+                            let gl_get_error = get_proc(b"glGetError\0".as_ptr() as *const i8);
+                            if !gl_get_error.is_null() {
+                                type GlGetErrorFn = unsafe extern "C" fn() -> u32;
+                                let get_error: GlGetErrorFn = std::mem::transmute(gl_get_error);
+                                while get_error() != 0 {} // Clear all errors
+                            }
+                        }
+                    }
+
+                    // Query the current framebuffer binding to use GTK's FBO
+                    let mut current_fbo = 0i32;
+                    unsafe {
+                        // Get glGetIntegerv function using eglGetProcAddress
+                        let egl_get_proc = libc::dlsym(
+                            libc::RTLD_DEFAULT,
+                            b"eglGetProcAddress\0".as_ptr() as *const i8,
+                        );
+                        if !egl_get_proc.is_null() {
+                            type EglGetProcFn = unsafe extern "C" fn(*const i8) -> *const c_void;
+                            let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
+                            let gl_get_integerv =
+                                get_proc(b"glGetIntegerv\0".as_ptr() as *const i8);
+
+                            if !gl_get_integerv.is_null() {
+                                type GlGetIntegervFn = unsafe extern "C" fn(u32, *mut i32);
+                                let get_integerv: GlGetIntegervFn =
+                                    std::mem::transmute(gl_get_integerv);
+                                const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
+                                get_integerv(GL_FRAMEBUFFER_BINDING, &mut current_fbo);
+                                info!("Current framebuffer binding: {}", current_fbo);
+                            } else {
+                                warn!("Could not get glGetIntegerv function via eglGetProcAddress");
+                            }
+                        } else {
+                            warn!("Could not get eglGetProcAddress");
+                        }
+                    }
+
+                    // Use the current FBO that GTK has bound
+                    let fbo = current_fbo;
+                    let flip_y = 1i32; // GTK4 needs Y-flipping
+
+                    debug!(
+                        "Rendering to FBO {} with size {}x{}, flip_y={}",
+                        fbo, width, height, flip_y
+                    );
+
+                    // Clear any existing GL errors before rendering
+                    unsafe {
+                        let gl_get_error =
+                            libc::dlsym(libc::RTLD_DEFAULT, b"glGetError\0".as_ptr() as *const i8);
+                        if !gl_get_error.is_null() {
+                            type GlGetErrorFn = unsafe extern "C" fn() -> u32;
+                            let get_error: GlGetErrorFn = std::mem::transmute(gl_get_error);
+                            while get_error() != 0 {} // Clear all pending errors
+                        }
+                    }
 
                     let opengl_fbo = mpv_opengl_fbo {
                         fbo,
@@ -360,11 +466,43 @@ impl MpvPlayer {
                     ];
 
                     // Render the frame
-                    mpv_render_context_render(*mpv_gl, params.as_mut_ptr());
+                    let result = mpv_render_context_render(*mpv_gl, params.as_mut_ptr());
+                    if result < 0 {
+                        error!("mpv_render_context_render failed with error: {}", result);
+                    } else {
+                        debug!("mpv_render_context_render succeeded");
+
+                        // Force GL to flush commands
+                        let gl_flush =
+                            libc::dlsym(libc::RTLD_DEFAULT, b"glFlush\0".as_ptr() as *const i8);
+                        if !gl_flush.is_null() {
+                            type GlFlushFn = unsafe extern "C" fn();
+                            let flush: GlFlushFn = std::mem::transmute(gl_flush);
+                            flush();
+                        }
+
+                        // Report that the frame was displayed
+                        mpv_render_context_report_swap(*mpv_gl);
+                    }
+
+                    // Check for GL errors after rendering
+                    let gl_get_error =
+                        libc::dlsym(libc::RTLD_DEFAULT, b"glGetError\0".as_ptr() as *const i8);
+                    if !gl_get_error.is_null() {
+                        type GlGetErrorFn = unsafe extern "C" fn() -> u32;
+                        let get_error: GlGetErrorFn = std::mem::transmute(gl_get_error);
+                        let error = get_error();
+                        if error != 0 {
+                            warn!("GL error after MPV render: 0x{:x}", error);
+                        }
+                    }
                 }
+            } else {
+                debug!("No render context available yet");
             }
 
-            glib::Propagation::Stop
+            // Return Proceed to let GTK finish the render
+            glib::Propagation::Proceed
         });
 
         // Handle unrealize signal - cleanup
@@ -383,7 +521,19 @@ impl MpvPlayer {
         // Store the GLArea
         self.inner.gl_area.replace(Some(gl_area.clone()));
 
-        info!("MpvPlayer::create_video_widget() - GLArea created");
+        // Only use timer as a fallback - MPV should trigger renders via update callback
+        // Reduce frequency to avoid conflicts with MPV's render timing
+        let gl_area_timer = gl_area.clone();
+        let inner_timer = inner.clone();
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            // Only force render if we have a render context but haven't received updates
+            if inner_timer.mpv_gl.borrow().is_some() {
+                gl_area_timer.queue_render();
+            }
+            glib::ControlFlow::Continue
+        });
+
+        info!("MpvPlayer::create_video_widget() - GLArea created with periodic rendering");
         gl_area.upcast::<gtk4::Widget>()
     }
 
@@ -660,6 +810,17 @@ impl MpvPlayerInner {
         let mpv =
             Mpv::new().map_err(|e| anyhow::anyhow!("Failed to create MPV instance: {:?}", e))?;
 
+        // Enable verbose logging for debugging
+        // Note: log-level might not be available in all MPV builds
+        let _ = mpv.set_property("log-level", "debug");
+
+        // Enable terminal output for debugging (logs will go to console)
+        let _ = mpv.set_property("terminal", true);
+        let _ = mpv.set_property("msg-level", "all=debug");
+
+        // Also try msg-color for colored output
+        let _ = mpv.set_property("msg-color", false);
+
         // Check MPV version and features
         if let Ok(version) = mpv.get_property::<String>("mpv-version") {
             info!("MPV version: {}", version);
@@ -671,6 +832,12 @@ impl MpvPlayerInner {
         // Configure MPV for render API
         mpv.set_property("vo", "libmpv")
             .map_err(|e| anyhow::anyhow!("Failed to set vo=libmpv: {:?}", e))?;
+
+        // Add debug options for render API
+        // gpu-debug helps with shader debugging
+        let _ = mpv.set_property("gpu-debug", true);
+        // opengl-debug might not be available in all builds
+        let _ = mpv.set_property("opengl-debug", true);
 
         // Set basic options
         mpv.set_property("keep-open", "yes")
