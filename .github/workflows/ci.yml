@@ -70,135 +70,138 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: reel-linux-x86_64
-          path: target/release/plex-gtk
+          path: target/release/reel
 
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install dependencies via Homebrew
-        run: |
-          brew install gtk4 libadwaita gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav pkg-config blueprint-compiler
-      
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      
-      - name: Cache cargo dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-      
-      - name: Build
-        run: cargo build --release
-      
-      - name: Run tests
-        run: cargo test --release
-      
-      - name: Create macOS app bundle
-        run: |
-          mkdir -p Reel.app/Contents/MacOS
-          mkdir -p Reel.app/Contents/Resources
-          cp target/release/plex-gtk Reel.app/Contents/MacOS/reel
-          echo '<?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key>
-              <string>reel</string>
-              <key>CFBundleIdentifier</key>
-              <string>org.gnome.Reel</string>
-              <key>CFBundleName</key>
-              <string>Reel</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>0.1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>LSMinimumSystemVersion</key>
-              <string>10.15</string>
-              <key>NSHighResolutionCapable</key>
-              <true/>
-          </dict>
-          </plist>' > Reel.app/Contents/Info.plist
-          tar -czf reel-macos-universal.tar.gz Reel.app
-      
-      - name: Upload macOS bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: reel-macos-universal
-          path: reel-macos-universal.tar.gz
+  # macOS and Windows builds are disabled for now - we only test on Linux
+  # Uncomment the sections below to enable multi-platform builds
+  
+  # build-macos:
+  #   runs-on: macos-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     
+  #     - name: Install dependencies via Homebrew
+  #       run: |
+  #         brew install gtk4 libadwaita gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav pkg-config blueprint-compiler
+  #     
+  #     - name: Setup Rust
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         components: rustfmt, clippy
+  #     
+  #     - name: Cache cargo dependencies
+  #       uses: actions/cache@v4
+  #       with:
+  #         path: |
+  #           ~/.cargo/bin/
+  #           ~/.cargo/registry/index/
+  #           ~/.cargo/registry/cache/
+  #           ~/.cargo/git/db/
+  #           target/
+  #         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+  #         restore-keys: ${{ runner.os }}-cargo-
+  #     
+  #     - name: Build
+  #       run: cargo build --release
+  #     
+  #     - name: Run tests
+  #       run: cargo test --release
+  #     
+  #     - name: Create macOS app bundle
+  #       run: |
+  #         mkdir -p Reel.app/Contents/MacOS
+  #         mkdir -p Reel.app/Contents/Resources
+  #         cp target/release/reel Reel.app/Contents/MacOS/reel
+  #         echo '<?xml version="1.0" encoding="UTF-8"?>
+  #         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  #         <plist version="1.0">
+  #         <dict>
+  #             <key>CFBundleExecutable</key>
+  #             <string>reel</string>
+  #             <key>CFBundleIdentifier</key>
+  #             <string>org.gnome.Reel</string>
+  #             <key>CFBundleName</key>
+  #             <string>Reel</string>
+  #             <key>CFBundlePackageType</key>
+  #             <string>APPL</string>
+  #             <key>CFBundleShortVersionString</key>
+  #             <string>0.1.0</string>
+  #             <key>CFBundleVersion</key>
+  #             <string>1</string>
+  #             <key>LSMinimumSystemVersion</key>
+  #             <string>10.15</string>
+  #             <key>NSHighResolutionCapable</key>
+  #             <true/>
+  #         </dict>
+  #         </plist>' > Reel.app/Contents/Info.plist
+  #         tar -czf reel-macos-universal.tar.gz Reel.app
+  #     
+  #     - name: Upload macOS bundle
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: reel-macos-universal
+  #         path: reel-macos-universal.tar.gz
 
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-gnu
-          components: rustfmt, clippy
-      
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-gtk4
-            mingw-w64-x86_64-libadwaita
-            mingw-w64-x86_64-gstreamer
-            mingw-w64-x86_64-gst-plugins-base
-            mingw-w64-x86_64-gst-plugins-good
-            mingw-w64-x86_64-gst-plugins-bad
-            mingw-w64-x86_64-gst-plugins-ugly
-            mingw-w64-x86_64-gst-libav
-            mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-blueprint-compiler
-            base-devel
-      
-      - name: Cache cargo dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-      
-      - name: Build
-        shell: msys2 {0}
-        run: |
-          export PATH="/c/Users/runneradmin/.cargo/bin:$PATH"
-          export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:$PKG_CONFIG_PATH"
-          cargo build --release
-      
-      - name: Package Windows executable with dependencies
-        shell: msys2 {0}
-        run: |
-          mkdir -p dist
-          cp target/release/plex-gtk.exe dist/reel.exe
-          # Copy required DLLs
-          ldd target/release/plex-gtk.exe | grep mingw64 | awk '{print $3}' | xargs -I {} cp {} dist/
-          # Create zip archive
-          cd dist && zip -r ../reel-windows-x86_64.zip * && cd ..
-      
-      - name: Upload Windows binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: reel-windows-x86_64
-          path: reel-windows-x86_64.zip
+  # build-windows:
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     
+  #     - name: Setup Rust
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: x86_64-pc-windows-gnu
+  #         components: rustfmt, clippy
+  #     
+  #     - uses: msys2/setup-msys2@v2
+  #       with:
+  #         msystem: MINGW64
+  #         update: true
+  #         install: >-
+  #           mingw-w64-x86_64-gtk4
+  #           mingw-w64-x86_64-libadwaita
+  #           mingw-w64-x86_64-gstreamer
+  #           mingw-w64-x86_64-gst-plugins-base
+  #           mingw-w64-x86_64-gst-plugins-good
+  #           mingw-w64-x86_64-gst-plugins-bad
+  #           mingw-w64-x86_64-gst-plugins-ugly
+  #           mingw-w64-x86_64-gst-libav
+  #           mingw-w64-x86_64-pkg-config
+  #           mingw-w64-x86_64-gcc
+  #           mingw-w64-x86_64-blueprint-compiler
+  #           base-devel
+  #     
+  #     - name: Cache cargo dependencies
+  #       uses: actions/cache@v4
+  #       with:
+  #         path: |
+  #           ~/.cargo/bin/
+  #           ~/.cargo/registry/index/
+  #           ~/.cargo/registry/cache/
+  #           ~/.cargo/git/db/
+  #           target/
+  #         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+  #         restore-keys: ${{ runner.os }}-cargo-
+  #     
+  #     - name: Build
+  #       shell: msys2 {0}
+  #       run: |
+  #         export PATH="/c/Users/runneradmin/.cargo/bin:$PATH"
+  #         export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:$PKG_CONFIG_PATH"
+  #         cargo build --release
+  #     
+  #     - name: Package Windows executable with dependencies
+  #       shell: msys2 {0}
+  #       run: |
+  #         mkdir -p dist
+  #         cp target/release/reel.exe dist/reel.exe
+  #         # Copy required DLLs
+  #         ldd target/release/reel.exe | grep mingw64 | awk '{print $3}' | xargs -I {} cp {} dist/
+  #         # Create zip archive
+  #         cd dist && zip -r ../reel-windows-x86_64.zip * && cd ..
+  #     
+  #     - name: Upload Windows binary
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: reel-windows-x86_64
+  #         path: reel-windows-x86_64.zip
