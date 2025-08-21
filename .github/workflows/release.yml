@@ -18,8 +18,9 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       
@@ -35,12 +36,10 @@ jobs:
       
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.version }}
-          release_name: Reel ${{ steps.get_version.outputs.version }}
+          name: Reel ${{ steps.get_version.outputs.version }}
           draft: true
           prerelease: false
           body: |
@@ -81,6 +80,8 @@ jobs:
   build-linux:
     needs: create-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       
@@ -100,13 +101,24 @@ jobs:
             gstreamer1.0-libav \
             libsqlite3-dev \
             pkg-config \
-            libssl-dev
+            libssl-dev \
+            libdbus-1-dev \
+            blueprint-compiler
       
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
         with:
-          toolchain: stable
-          override: true
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-
       
       - name: Build release binary
         run: |
@@ -119,30 +131,37 @@ jobs:
           tar -czf reel-linux-x86_64.tar.gz reel
       
       - name: Upload Linux Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./reel-linux-x86_64.tar.gz
-          asset_name: reel-linux-x86_64.tar.gz
-          asset_content_type: application/gzip
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: reel-linux-x86_64.tar.gz
 
   build-macos:
     needs: create-release
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       
       - name: Install dependencies
         run: |
-          brew install gtk4 libadwaita gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav pkg-config create-dmg
+          brew install gtk4 libadwaita gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav pkg-config blueprint-compiler create-dmg
       
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
         with:
-          toolchain: stable
-          override: true
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-
       
       - name: Build release binary
         run: |
@@ -199,23 +218,23 @@ jobs:
             "Reel.app"
       
       - name: Upload macOS Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./reel-macos-universal.dmg
-          asset_name: reel-macos-universal.dmg
-          asset_content_type: application/x-apple-diskimage
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: reel-macos-universal.dmg
 
   build-windows:
     needs: create-release
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
       
       - uses: msys2/setup-msys2@v2
         with:
@@ -232,22 +251,32 @@ jobs:
             mingw-w64-x86_64-gst-libav
             mingw-w64-x86_64-pkg-config
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-blueprint-compiler
             base-devel
             zip
       
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
         with:
-          toolchain: stable-x86_64-pc-windows-gnu
-          override: true
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-
       
       - name: Build release binary
+        shell: msys2 {0}
         run: |
+          export PATH="/c/Users/runneradmin/.cargo/bin:$PATH"
           export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:$PKG_CONFIG_PATH"
           cargo build --release
           strip target/release/plex-gtk.exe
       
       - name: Package Windows executable
+        shell: msys2 {0}
         run: |
           mkdir -p dist/Reel
           cp target/release/plex-gtk.exe dist/Reel/reel.exe
@@ -273,11 +302,7 @@ jobs:
           cd dist && zip -r ../reel-windows-x86_64.zip Reel && cd ..
       
       - name: Upload Windows Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./reel-windows-x86_64.zip
-          asset_name: reel-windows-x86_64.zip
-          asset_content_type: application/zip
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: reel-windows-x86_64.zip
