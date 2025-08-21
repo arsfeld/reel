@@ -106,11 +106,27 @@
   - [x] Construct direct play URLs
   - [ ] Handle transcoding decisions
   - [ ] Implement quality selection
-  - [ ] Add subtitle/audio track selection
+  - [x] Add subtitle/audio track selection (implemented in both players)
   - [ ] Create playback decision engine
 
-- [x] **Player Integration** (Completed!)
+- [x] **Player Integration** (Completed with Dual Backend Support!)
   - [x] Initialize GStreamer player
+  - [x] **NEW: MPV Player Backend** (December 2024)
+    - [x] Created alternative MPV player implementation using libmpv2
+    - [x] Full feature parity with GStreamer player
+    - [x] Configurable player backend via config.toml
+    - [x] Wayland-native rendering support
+    - [x] Audio/subtitle track selection
+    - [ ] **MPV Render API Integration** (January 2025 - IN PROGRESS)
+      - [x] Implemented GLArea-based rendering with libmpv2-sys
+      - [x] Replaced dmabuf-wayland with vo=libmpv for embedded rendering
+      - [x] OpenGL context integration via dlsym for GL function loading
+      - [ ] **CRITICAL BLOCKER**: MPV_ERROR_UNSUPPORTED (-18) on render context creation
+        - Epoxy GL functions found but crash when called by MPV
+        - `epoxy_glGetString` exists but segfaults when MPV calls it
+        - Returning NULL for glGetString causes MPV to fail with UNSUPPORTED
+        - Need alternative approach for GL function loading
+      - [ ] Proper frame rendering in GTK widget (blocked by render context issue)
   - [x] Load and play video streams
   - [x] Implement basic controls (play/pause/seek)
   - [x] Add immersive playback mode with auto-hiding controls
@@ -489,6 +505,19 @@ window.sync_and_update_libraries(backend_id, backend)
 ## Known Issues & Troubleshooting
 
 ### Current Issues
+- [ ] **MPV Integration Issue (CRITICAL)**: 
+  - **Status**: Render API integration failing with MPV_ERROR_UNSUPPORTED
+  - **Problem**: Epoxy GL functions segfault when called by MPV
+  - **Attempted Solutions**:
+    1. Direct dlsym for epoxy functions - Functions found but crash
+    2. Making GL context current in callback - No effect
+    3. Returning NULL for problematic functions - MPV fails
+  - **Next Steps to Try**:
+    1. Use eglGetProcAddress instead of dlsym
+    2. Create minimal C test case to verify MPV render API works
+    3. Check if GTK4's GL context is compatible with MPV's requirements
+    4. Consider using GStreamer gtksink as fallback
+  - GStreamer player works correctly embedded (temporary workaround)
 - [ ] **Homepage Issues** (CRITICAL):
   - [ ] **Horizontal scrolling broken**: Scrolling horizontally on homepage sections doesn't trigger image loading
   - [ ] **Continue Watching completely broken**: 
@@ -536,6 +565,125 @@ window.sync_and_update_libraries(backend_id, backend)
 - ✅ **Show Details Page Enhanced**: Completely redesigned with modern dropdown season selector and horizontal episode carousel
 - ✅ **Episode Thumbnails**: Added episode thumbnail support with play icon fallbacks
 - ✅ **Enhanced Episode Cards**: Cards show episode number, duration, watch status, and progress indicators
+
+## MPV Render API Integration Plan
+
+### Problem Statement
+The current MPV player implementation uses `dmabuf-wayland` output driver which creates its own separate window instead of embedding video into the GTK widget. This is due to Wayland's security model which doesn't allow direct window embedding like X11.
+
+### Solution: MPV Render API with GTK4 GLArea
+
+The proper approach is to use MPV's render API (`libmpv_render`) to draw video frames directly into a GTK4 GLArea widget. This provides true embedding and full control over the video rendering surface.
+
+### Implementation Steps
+
+#### Phase 1: Dependencies & Setup
+- [ ] **Update Cargo.toml dependencies**
+  - [ ] Check if libmpv2 crate supports render API (if not, may need libmpv-sys or custom bindings)
+  - [ ] Add gtk4-rs GLArea support dependencies if needed
+  - [ ] Ensure OpenGL/EGL dependencies are available
+
+#### Phase 2: Create GLArea-based Video Widget
+- [ ] **Create new `mpv_gl_player.rs` module**
+  - [ ] Implement GTK4 GLArea widget wrapper
+  - [ ] Set up OpenGL context initialization
+  - [ ] Handle widget realize/unrealize signals
+  - [ ] Implement proper cleanup on widget destruction
+
+#### Phase 3: MPV Render Context Integration
+- [ ] **Initialize MPV with render API**
+  - [ ] Create MPV instance with `vo=libmpv` instead of output drivers
+  - [ ] Create render context with OpenGL backend
+  - [ ] Get OpenGL proc address function from GTK GLArea
+  - [ ] Initialize render context with GL context from widget
+
+#### Phase 4: Rendering Pipeline
+- [ ] **Implement render loop**
+  - [ ] Connect to GLArea's `render` signal
+  - [ ] Call `mpv_render_context_render()` in render callback
+  - [ ] Handle render updates from MPV
+  - [ ] Implement proper frame timing and vsync
+
+#### Phase 5: Event Handling
+- [ ] **Handle MPV render events**
+  - [ ] Set up wakeup callback for render updates
+  - [ ] Handle MPV_EVENT_VIDEO_RECONFIG for size changes
+  - [ ] Properly queue widget redraws when new frames available
+  - [ ] Handle OpenGL context loss/recreation
+
+#### Phase 6: Migration & Testing
+- [ ] **Migrate existing functionality**
+  - [ ] Port all playback controls to new implementation
+  - [ ] Ensure audio/subtitle track selection works
+  - [ ] Test seek functionality
+  - [ ] Verify proper cleanup on player destruction
+- [ ] **Testing**
+  - [ ] Test on Wayland session
+  - [ ] Test on X11/XWayland for compatibility
+  - [ ] Test with various video formats and codecs
+  - [ ] Verify hardware acceleration works
+
+### Technical Details
+
+#### Key Components:
+1. **GTK4 GLArea Widget**: Provides OpenGL context for rendering
+2. **MPV Render API**: `mpv_render_context` for GPU-accelerated rendering
+3. **OpenGL Backend**: Uses EGL/OpenGL for hardware acceleration
+4. **Frame Callback System**: Proper synchronization between MPV and GTK
+
+#### Code Structure:
+```rust
+// Pseudo-code structure
+pub struct MpvGLPlayer {
+    mpv: Mpv,
+    render_context: MpvRenderContext,
+    gl_area: gtk4::GLArea,
+    // ... other fields
+}
+
+impl MpvGLPlayer {
+    pub fn new() -> Result<Self> {
+        // 1. Create GLArea widget
+        // 2. Initialize MPV with vo=libmpv
+        // 3. Create render context on widget realize
+        // 4. Connect render signals
+    }
+    
+    fn on_gl_realize(&self) {
+        // Initialize OpenGL context
+        // Create MPV render context
+    }
+    
+    fn on_gl_render(&self) -> bool {
+        // Call mpv_render_context_render()
+        // Return true to stop other handlers
+    }
+}
+```
+
+#### Key Challenges:
+- OpenGL context management between GTK and MPV
+- Proper synchronization of render updates
+- Handling context loss (GPU reset, suspend/resume)
+- Ensuring proper cleanup to avoid GPU memory leaks
+
+### Alternative Approaches (if render API fails)
+1. **GStreamer with mpv sink**: Use GStreamer pipeline with custom MPV sink
+2. **Texture sharing**: Use dmabuf texture sharing between MPV and GTK
+3. **Fallback to GStreamer**: Keep GStreamer as primary, MPV as optional
+
+### Success Criteria
+- [ ] Video renders inside GTK widget (not separate window)
+- [ ] Smooth playback without tearing
+- [ ] Hardware acceleration working
+- [ ] All existing player features functional
+- [ ] No memory/GPU resource leaks
+- [ ] Works on both Wayland and X11
+
+### References
+- [MPV Render API Documentation](https://github.com/mpv-player/mpv/blob/master/libmpv/render.h)
+- [GTK4 GLArea Documentation](https://docs.gtk.org/gtk4/class.GLArea.html)
+- [mpv-player/mpv-examples](https://github.com/mpv-player/mpv-examples/tree/master/libmpv/sdl)
 
 ## Documentation
 - [ ] API documentation

@@ -33,6 +33,9 @@ pub struct GeneralConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaybackConfig {
+    #[serde(default = "default_player_backend")]
+    pub player_backend: String,
+
     #[serde(default = "default_true")]
     pub hardware_acceleration: bool,
 
@@ -212,6 +215,7 @@ impl Default for GeneralConfig {
 impl Default for PlaybackConfig {
     fn default() -> Self {
         Self {
+            player_backend: default_player_backend(),
             hardware_acceleration: default_true(),
             default_subtitle: default_subtitle(),
             default_audio: default_audio(),
@@ -236,6 +240,9 @@ fn default_theme() -> String {
 }
 fn default_language() -> String {
     "system".to_string()
+}
+fn default_player_backend() -> String {
+    "gstreamer".to_string()
 }
 fn default_true() -> bool {
     true

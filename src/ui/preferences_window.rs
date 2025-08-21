@@ -82,6 +82,28 @@ impl PreferencesWindow {
         appearance_group.add(&theme_row);
         general_page.add(&appearance_group);
 
+        // Create Playback group
+        let playback_group = adw::PreferencesGroup::builder().title("Playback").build();
+
+        let player_backend_row = adw::ComboRow::builder()
+            .title("Player Backend")
+            .subtitle("Choose between GStreamer and MPV for media playback")
+            .model(&gtk4::StringList::new(&["GStreamer", "MPV"]))
+            .build();
+
+        // Set current selection based on config
+        if let Some(state) = self.imp().state.borrow().as_ref() {
+            let config = state.config.as_ref();
+            let selected_index = match config.playback.player_backend.as_str() {
+                "mpv" => 1,
+                _ => 0, // Default to GStreamer
+            };
+            player_backend_row.set_selected(selected_index);
+        }
+
+        playback_group.add(&player_backend_row);
+        general_page.add(&playback_group);
+
         // Create Backends page
         let backends_page = adw::PreferencesPage::builder()
             .title("Backends")
@@ -141,6 +163,20 @@ impl PreferencesWindow {
                     _ => "auto",
                 };
                 window.apply_theme(theme);
+            }
+        ));
+
+        // Player backend row handler
+        player_backend_row.connect_selected_notify(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |row| {
+                let selected = row.selected();
+                let backend = match selected {
+                    1 => "mpv",
+                    _ => "gstreamer",
+                };
+                window.apply_player_backend(backend);
             }
         ));
     }
@@ -412,5 +448,23 @@ impl PreferencesWindow {
         if let Err(e) = config.save() {
             error!("Failed to save theme preference: {}", e);
         }
+    }
+
+    fn apply_player_backend(&self, backend: &str) {
+        info!("Applying player backend: {}", backend);
+
+        // Save player backend preference
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+        let mut config = state.config.as_ref().clone();
+        config.playback.player_backend = backend.to_string();
+        if let Err(e) = config.save() {
+            error!("Failed to save player backend preference: {}", e);
+        }
+
+        // Note: Application restart may be required for the change to take effect
+        info!(
+            "Player backend changed to '{}'. Restart may be required.",
+            backend
+        );
     }
 }

@@ -33,6 +33,7 @@
           # GTK and UI
           gtk4
           libadwaita
+          libepoxy  # For OpenGL function loading
           
           # GStreamer and media
           gst_all_1.gstreamer
@@ -43,6 +44,9 @@
           gst_all_1.gst-libav
           gst_all_1.gst-vaapi
           gst_all_1.gst-plugins-rs  # Includes gtk4paintablesink
+          
+          # MPV for alternative player backend
+          mpv
           
           # System libraries
           glib
@@ -221,6 +225,11 @@
             
             # SQLx offline mode for development
             export SQLX_OFFLINE=true
+            
+            # Force libmpv-sys to use system MPV
+            export MPV_NO_PKG_CONFIG=0
+            export DEP_MPV_VERSION_MAJOR=2
+            export DEP_MPV_VERSION_MINOR=5
           '';
 
           # Environment variables

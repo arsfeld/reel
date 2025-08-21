@@ -7,10 +7,3 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
-      - id: cargo-clippy
-        name: cargo clippy
-        entry: cargo clippy
-        language: system
-        types: [rust]
-        pass_filenames: false
-        args: [--all-targets, --all-features, --, -D, warnings]

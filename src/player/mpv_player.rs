@@ -1,0 +1,731 @@
+use anyhow::Result;
+use gtk4::GLArea;
+use gtk4::{self, glib, prelude::*};
+use libmpv2::Mpv;
+use libmpv2_sys::*;
+use std::cell::{Cell, RefCell};
+use std::ffi::{CStr, CString, c_void};
+use std::ptr;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
+
+#[derive(Debug, Clone)]
+pub enum PlayerState {
+    Idle,
+    Loading,
+    Playing,
+    Paused,
+    Stopped,
+    Error(String),
+}
+
+struct MpvPlayerInner {
+    mpv: RefCell<Option<Mpv>>,
+    mpv_gl: RefCell<Option<*mut mpv_render_context>>,
+    state: Arc<RwLock<PlayerState>>,
+    gl_area: RefCell<Option<GLArea>>,
+    update_callback_registered: Cell<bool>,
+    pending_media_url: RefCell<Option<String>>,
+}
+
+#[derive(Clone)]
+pub struct MpvPlayer {
+    inner: Rc<MpvPlayerInner>,
+}
+
+unsafe impl Send for MpvPlayer {}
+unsafe impl Sync for MpvPlayer {}
+
+impl MpvPlayer {
+    pub fn new() -> Result<Self> {
+        info!("MpvPlayer::new() - Initializing MPV GL player");
+
+        Ok(Self {
+            inner: Rc::new(MpvPlayerInner {
+                mpv: RefCell::new(None),
+                mpv_gl: RefCell::new(None),
+                state: Arc::new(RwLock::new(PlayerState::Idle)),
+                gl_area: RefCell::new(None),
+                update_callback_registered: Cell::new(false),
+                pending_media_url: RefCell::new(None),
+            }),
+        })
+    }
+
+    unsafe extern "C" fn get_proc_address(ctx: *mut c_void, name: *const i8) -> *mut c_void {
+        unsafe {
+            // Get the GLArea from the context
+            let gl_area = &*(ctx as *const GLArea);
+
+            // Make the GL context current - REQUIRED for GL function resolution
+            if let Some(gl_context) = gl_area.context() {
+                gl_context.make_current();
+            }
+
+            // Convert name to string for debugging
+            let name_str = CStr::from_ptr(name).to_string_lossy();
+            debug!("get_proc_address called for: {}", name_str);
+
+            // For MPV render API, we need to return NULL for functions it's just probing
+            // and valid pointers for functions it actually needs
+
+            // MPV often calls glGetString first to check GL capabilities
+            // The segfault suggests the function pointer we're returning isn't valid
+            // Let's try returning NULL for glGetString to see if MPV can handle it
+            if name_str == "glGetString" {
+                warn!("Returning NULL for glGetString - MPV should handle this");
+                return ptr::null_mut();
+            }
+
+            // Try epoxy function first
+            let epoxy_name = format!("epoxy_{}\0", name_str);
+            let epoxy_func = libc::dlsym(libc::RTLD_DEFAULT, epoxy_name.as_ptr() as *const i8);
+
+            if !epoxy_func.is_null() {
+                debug!("Found epoxy_{} at {:p}", name_str, epoxy_func);
+                return epoxy_func;
+            }
+
+            // Try plain name
+            let plain_func = libc::dlsym(libc::RTLD_DEFAULT, name);
+            if !plain_func.is_null() {
+                debug!("Found {} at {:p}", name_str, plain_func);
+                return plain_func;
+            }
+
+            warn!("Failed to get proc address for: {}", name_str);
+            ptr::null_mut()
+        }
+    }
+
+    unsafe extern "C" fn on_mpv_render_update(ctx: *mut c_void) {
+        unsafe {
+            let gl_area = &*(ctx as *const GLArea);
+
+            // Queue a redraw on the GL area
+            let gl_area_clone = gl_area.clone();
+            glib::idle_add_local(move || {
+                gl_area_clone.queue_render();
+                glib::ControlFlow::Break
+            });
+        }
+    }
+
+    fn init_gl_render_context(&self, gl_area: &GLArea) -> Result<()> {
+        info!("MpvPlayer::init_gl_render_context() - Initializing OpenGL render context");
+
+        // Ensure GL context is current
+        gl_area.make_current();
+
+        // Check if we have a valid GL context
+        if let Some(error) = gl_area.error() {
+            error!("GLArea has an error: {:?}", error);
+            return Err(anyhow::anyhow!(
+                "GLArea has an error: {:?}, cannot initialize render context",
+                error
+            ));
+        }
+
+        // Check if GL context is actually realized
+        let gl_context = gl_area
+            .context()
+            .ok_or_else(|| anyhow::anyhow!("GLArea has no GL context"))?;
+
+        // Check GL context properties
+        gl_context.make_current();
+        let is_legacy = gl_context.is_legacy();
+        info!("GL context available - Legacy: {}", is_legacy);
+
+        // Try to get GL version - but don't call GL functions directly here
+        // They will be called through the proper get_proc_address callback
+        unsafe {
+            // Check if epoxy is available
+            let epoxy_test = libc::dlsym(
+                libc::RTLD_DEFAULT,
+                b"epoxy_get_proc_address\0".as_ptr() as *const i8,
+            );
+            info!(
+                "epoxy_get_proc_address available: {}",
+                !epoxy_test.is_null()
+            );
+
+            // Try direct epoxy function
+            let epoxy_glGetString = libc::dlsym(
+                libc::RTLD_DEFAULT,
+                b"epoxy_glGetString\0".as_ptr() as *const i8,
+            );
+            info!(
+                "epoxy_glGetString available: {}",
+                !epoxy_glGetString.is_null()
+            );
+
+            // Try plain GL function
+            let plain_glGetString =
+                libc::dlsym(libc::RTLD_DEFAULT, b"glGetString\0".as_ptr() as *const i8);
+            info!("glGetString available: {}", !plain_glGetString.is_null());
+
+            // Don't actually call GL functions here - it would crash without proper context
+            info!("GL function availability checked - will use them through MPV's callback");
+        }
+
+        info!("Proceeding with MPV render context creation");
+
+        let mpv = self.inner.mpv.borrow();
+        let mpv = mpv
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("MPV not initialized"))?;
+
+        unsafe {
+            // Get raw MPV handle
+            let mpv_handle = mpv.ctx.as_ptr();
+
+            // Prepare OpenGL render context parameters
+            let mut mpv_gl: *mut mpv_render_context = ptr::null_mut();
+
+            // Create render params
+            let api_type = CString::new("opengl").unwrap();
+            let gl_area_ptr = gl_area as *const GLArea as *mut c_void;
+
+            // Log API version first
+            info!("Setting up MPV render API with type: opengl");
+
+            let opengl_params = mpv_opengl_init_params {
+                get_proc_address: Some(Self::get_proc_address),
+                get_proc_address_ctx: gl_area_ptr,
+            };
+
+            let mut params = vec![
+                mpv_render_param {
+                    type_: mpv_render_param_type_MPV_RENDER_PARAM_API_TYPE,
+                    data: api_type.as_ptr() as *mut c_void,
+                },
+                mpv_render_param {
+                    type_: mpv_render_param_type_MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
+                    data: &opengl_params as *const _ as *mut c_void,
+                },
+                mpv_render_param {
+                    type_: mpv_render_param_type_MPV_RENDER_PARAM_INVALID,
+                    data: ptr::null_mut(),
+                },
+            ];
+
+            // Create render context
+            let result = mpv_render_context_create(&mut mpv_gl, mpv_handle, params.as_mut_ptr());
+
+            if result < 0 {
+                let error_msg = match result {
+                    -1 => "MPV_ERROR_EVENT_QUEUE_FULL",
+                    -2 => "MPV_ERROR_NOMEM",
+                    -3 => "MPV_ERROR_UNINITIALIZED",
+                    -4 => "MPV_ERROR_INVALID_PARAMETER",
+                    -5 => "MPV_ERROR_OPTION_NOT_FOUND",
+                    -6 => "MPV_ERROR_OPTION_FORMAT",
+                    -7 => "MPV_ERROR_OPTION_ERROR",
+                    -8 => "MPV_ERROR_PROPERTY_NOT_FOUND",
+                    -9 => "MPV_ERROR_PROPERTY_FORMAT",
+                    -10 => "MPV_ERROR_PROPERTY_UNAVAILABLE",
+                    -11 => "MPV_ERROR_PROPERTY_ERROR",
+                    -12 => "MPV_ERROR_COMMAND",
+                    -13 => "MPV_ERROR_LOADING_FAILED",
+                    -14 => "MPV_ERROR_AO_INIT_FAILED",
+                    -15 => "MPV_ERROR_VO_INIT_FAILED",
+                    -16 => "MPV_ERROR_NOTHING_TO_PLAY",
+                    -17 => "MPV_ERROR_UNKNOWN_FORMAT",
+                    -18 => "MPV_ERROR_UNSUPPORTED",
+                    -19 => "MPV_ERROR_NOT_IMPLEMENTED",
+                    -20 => "MPV_ERROR_GENERIC",
+                    _ => "Unknown error",
+                };
+                error!(
+                    "MPV render context creation failed: {} ({})",
+                    error_msg, result
+                );
+                return Err(anyhow::anyhow!(
+                    "Failed to create render context: {} ({})",
+                    error_msg,
+                    result
+                ));
+            }
+
+            // Store the render context
+            self.inner.mpv_gl.replace(Some(mpv_gl));
+
+            // Set up the update callback
+            if !self.inner.update_callback_registered.get() {
+                mpv_render_context_set_update_callback(
+                    mpv_gl,
+                    Some(Self::on_mpv_render_update),
+                    gl_area_ptr,
+                );
+                self.inner.update_callback_registered.set(true);
+            }
+
+            info!("MpvPlayer::init_gl_render_context() - OpenGL render context initialized");
+
+            // Load pending media if any
+            if let Some(url) = self.inner.pending_media_url.borrow_mut().take() {
+                info!("Loading pending media: {}", url);
+                if let Some(ref mpv) = *self.inner.mpv.borrow() {
+                    if let Err(e) = mpv.command("loadfile", &[&url, "replace"]) {
+                        error!("Failed to load pending media: {:?}", e);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn create_video_widget(&self) -> gtk4::Widget {
+        info!("MpvPlayer::create_video_widget() - Creating GLArea for MPV rendering");
+
+        let gl_area = GLArea::new();
+        gl_area.set_vexpand(true);
+        gl_area.set_hexpand(true);
+        gl_area.set_can_focus(true);
+        gl_area.set_auto_render(false);
+
+        // Don't request a specific version - let GTK choose what's available
+        // MPV should work with whatever GL context GTK provides
+
+        // Clone inner for use in closures
+        let inner = self.inner.clone();
+
+        // Handle realize signal - initialize GL context
+        let inner_realize = inner.clone();
+        let player_self = self.clone();
+        gl_area.connect_realize(move |gl_area| {
+            info!("GLArea realized - initializing MPV render context");
+
+            // Make GL context current
+            gl_area.make_current();
+
+            // Initialize MPV if not done
+            if inner_realize.mpv.borrow().is_none() {
+                match MpvPlayerInner::init_mpv(&inner_realize) {
+                    Ok(mpv) => {
+                        inner_realize.mpv.replace(Some(mpv));
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize MPV: {}", e);
+                        return;
+                    }
+                }
+            }
+
+            // Initialize render context
+            if let Err(e) = player_self.init_gl_render_context(gl_area) {
+                error!("Failed to initialize GL render context: {}", e);
+            }
+        });
+
+        // Handle render signal - draw video frame
+        let inner_render = inner.clone();
+        gl_area.connect_render(move |gl_area, _gl_context| {
+            // Make GL context current
+            gl_area.make_current();
+
+            // Render the current frame
+            if let Some(mpv_gl) = &*inner_render.mpv_gl.borrow() {
+                unsafe {
+                    let (width, height) = (gl_area.width(), gl_area.height());
+
+                    // Set up render params
+                    let fbo = 0i32;
+                    let flip_y = 1i32;
+
+                    let opengl_fbo = mpv_opengl_fbo {
+                        fbo,
+                        w: width,
+                        h: height,
+                        internal_format: 0,
+                    };
+
+                    let mut params = vec![
+                        mpv_render_param {
+                            type_: mpv_render_param_type_MPV_RENDER_PARAM_OPENGL_FBO,
+                            data: &opengl_fbo as *const _ as *mut c_void,
+                        },
+                        mpv_render_param {
+                            type_: mpv_render_param_type_MPV_RENDER_PARAM_FLIP_Y,
+                            data: &flip_y as *const _ as *mut c_void,
+                        },
+                        mpv_render_param {
+                            type_: mpv_render_param_type_MPV_RENDER_PARAM_INVALID,
+                            data: ptr::null_mut(),
+                        },
+                    ];
+
+                    // Render the frame
+                    mpv_render_context_render(*mpv_gl, params.as_mut_ptr());
+                }
+            }
+
+            glib::Propagation::Stop
+        });
+
+        // Handle unrealize signal - cleanup
+        let inner_unrealize = inner.clone();
+        gl_area.connect_unrealize(move |_gl_area| {
+            info!("GLArea unrealized - cleaning up MPV render context");
+
+            // Clean up render context
+            if let Some(mpv_gl) = inner_unrealize.mpv_gl.borrow_mut().take() {
+                unsafe {
+                    mpv_render_context_free(mpv_gl);
+                }
+            }
+        });
+
+        // Store the GLArea
+        self.inner.gl_area.replace(Some(gl_area.clone()));
+
+        info!("MpvPlayer::create_video_widget() - GLArea created");
+        gl_area.upcast::<gtk4::Widget>()
+    }
+
+    pub async fn load_media(&self, url: &str, _video_sink: Option<()>) -> Result<()> {
+        info!("MpvPlayer::load_media() - Loading media: {}", url);
+
+        // Update state
+        {
+            let mut state = self.inner.state.write().await;
+            *state = PlayerState::Loading;
+        }
+
+        // Check if render context is initialized
+        if self.inner.mpv_gl.borrow().is_none() {
+            warn!(
+                "MpvPlayer::load_media() - Render context not initialized yet, deferring media load"
+            );
+            // Store the URL to load later when render context is ready
+            self.inner.pending_media_url.replace(Some(url.to_string()));
+            return Ok(());
+        }
+
+        // Initialize MPV if not already done
+        if self.inner.mpv.borrow().is_none() {
+            let mpv = MpvPlayerInner::init_mpv(&self.inner)?;
+            self.inner.mpv.replace(Some(mpv));
+        }
+
+        // Load the media file
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            mpv.command("loadfile", &[url, "replace"])
+                .map_err(|e| anyhow::anyhow!("Failed to load media: {:?}", e))?;
+            info!("MpvPlayer::load_media() - Media loaded successfully");
+        } else {
+            return Err(anyhow::anyhow!("MPV not initialized"));
+        }
+
+        Ok(())
+    }
+
+    pub async fn play(&self) -> Result<()> {
+        info!("MpvPlayer::play() - Starting playback");
+
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            mpv.set_property("pause", false)
+                .map_err(|e| anyhow::anyhow!("Failed to set pause=false: {:?}", e))?;
+
+            let mut state = self.inner.state.write().await;
+            *state = PlayerState::Playing;
+            info!("MpvPlayer::play() - Playback started");
+        } else {
+            // If MPV not initialized yet, just update state - it will auto-play when loaded
+            warn!("MpvPlayer::play() - MPV not initialized yet, will auto-play when ready");
+            let mut state = self.inner.state.write().await;
+            *state = PlayerState::Playing;
+        }
+
+        Ok(())
+    }
+
+    pub async fn pause(&self) -> Result<()> {
+        debug!("MpvPlayer::pause() - Pausing playback");
+
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            mpv.set_property("pause", true)
+                .map_err(|e| anyhow::anyhow!("Failed to set pause=true: {:?}", e))?;
+
+            let mut state = self.inner.state.write().await;
+            *state = PlayerState::Paused;
+        }
+        Ok(())
+    }
+
+    pub async fn stop(&self) -> Result<()> {
+        debug!("MpvPlayer::stop() - Stopping playback");
+
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            mpv.command("stop", &[])
+                .map_err(|e| anyhow::anyhow!("Failed to stop: {:?}", e))?;
+
+            let mut state = self.inner.state.write().await;
+            *state = PlayerState::Stopped;
+        }
+        Ok(())
+    }
+
+    pub async fn seek(&self, position: Duration) -> Result<()> {
+        debug!("MpvPlayer::seek() - Seeking to {:?}", position);
+
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            let position_secs = position.as_secs_f64();
+            mpv.command("seek", &[&position_secs.to_string(), "absolute"])
+                .map_err(|e| anyhow::anyhow!("Failed to seek: {:?}", e))?;
+        }
+        Ok(())
+    }
+
+    pub async fn get_position(&self) -> Option<Duration> {
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            if let Ok(pos) = mpv.get_property::<f64>("time-pos") {
+                return Some(Duration::from_secs_f64(pos));
+            }
+        }
+        None
+    }
+
+    pub async fn get_duration(&self) -> Option<Duration> {
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            if let Ok(dur) = mpv.get_property::<f64>("duration") {
+                return Some(Duration::from_secs_f64(dur));
+            }
+        }
+        None
+    }
+
+    pub async fn set_volume(&self, volume: f64) -> Result<()> {
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            // MPV expects volume in 0-100 range
+            let mpv_volume = (volume * 100.0).clamp(0.0, 100.0);
+            mpv.set_property("volume", mpv_volume)
+                .map_err(|e| anyhow::anyhow!("Failed to set volume: {:?}", e))?;
+        }
+        Ok(())
+    }
+
+    pub fn get_video_widget(&self) -> Option<gtk4::Widget> {
+        self.inner
+            .gl_area
+            .borrow()
+            .as_ref()
+            .map(|area| area.clone().upcast())
+    }
+
+    pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            if let (Ok(width), Ok(height)) = (
+                mpv.get_property::<i64>("width"),
+                mpv.get_property::<i64>("height"),
+            ) {
+                return Some((width as i32, height as i32));
+            }
+        }
+        None
+    }
+
+    pub async fn get_state(&self) -> PlayerState {
+        self.inner.state.read().await.clone()
+    }
+
+    pub async fn get_audio_tracks(&self) -> Vec<(i32, String)> {
+        let mut tracks = Vec::new();
+
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            if let Ok(count) = mpv.get_property::<i64>("track-list/count") {
+                for i in 0..count {
+                    let type_key = format!("track-list/{}/type", i);
+                    if let Ok(track_type) = mpv.get_property::<String>(&type_key) {
+                        if track_type == "audio" {
+                            let id_key = format!("track-list/{}/id", i);
+                            let title_key = format!("track-list/{}/title", i);
+                            let lang_key = format!("track-list/{}/lang", i);
+
+                            if let Ok(id) = mpv.get_property::<i64>(&id_key) {
+                                let mut title = format!("Audio Track {}", id);
+
+                                if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
+                                    title = track_title;
+                                } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
+                                    title = format!("Audio Track {} ({})", id, lang);
+                                }
+
+                                tracks.push((id as i32, title));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        tracks
+    }
+
+    pub async fn get_subtitle_tracks(&self) -> Vec<(i32, String)> {
+        let mut tracks = Vec::new();
+
+        // Add "None" option
+        tracks.push((-1, "None".to_string()));
+
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            if let Ok(count) = mpv.get_property::<i64>("track-list/count") {
+                for i in 0..count {
+                    let type_key = format!("track-list/{}/type", i);
+                    if let Ok(track_type) = mpv.get_property::<String>(&type_key) {
+                        if track_type == "sub" {
+                            let id_key = format!("track-list/{}/id", i);
+                            let title_key = format!("track-list/{}/title", i);
+                            let lang_key = format!("track-list/{}/lang", i);
+
+                            if let Ok(id) = mpv.get_property::<i64>(&id_key) {
+                                let mut title = format!("Subtitle {}", id);
+
+                                if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
+                                    title = track_title;
+                                } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
+                                    title = format!("Subtitle {} ({})", id, lang);
+                                }
+
+                                tracks.push((id as i32, title));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        tracks
+    }
+
+    pub async fn set_audio_track(&self, track_index: i32) -> Result<()> {
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            mpv.set_property("aid", track_index as i64)
+                .map_err(|e| anyhow::anyhow!("Failed to set audio track: {:?}", e))?;
+            info!("Set audio track to {}", track_index);
+        }
+        Ok(())
+    }
+
+    pub async fn set_subtitle_track(&self, track_index: i32) -> Result<()> {
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            if track_index < 0 {
+                // Disable subtitles
+                mpv.set_property("sid", "no")
+                    .map_err(|e| anyhow::anyhow!("Failed to disable subtitles: {:?}", e))?;
+                info!("Disabled subtitles");
+            } else {
+                // Enable subtitles and set track
+                mpv.set_property("sid", track_index as i64)
+                    .map_err(|e| anyhow::anyhow!("Failed to set subtitle track: {:?}", e))?;
+                info!("Set subtitle track to {}", track_index);
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn get_current_audio_track(&self) -> i32 {
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            if let Ok(aid) = mpv.get_property::<i64>("aid") {
+                return aid as i32;
+            }
+        }
+        -1
+    }
+
+    pub async fn get_current_subtitle_track(&self) -> i32 {
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            if let Ok(sid) = mpv.get_property::<i64>("sid") {
+                return sid as i32;
+            }
+        }
+        -1
+    }
+}
+
+impl MpvPlayerInner {
+    fn init_mpv(&self) -> Result<Mpv> {
+        info!("MpvPlayerInner::init_mpv() - Creating MPV instance");
+
+        // MPV requires LC_NUMERIC to be set to "C"
+        unsafe {
+            let c_locale = CString::new("C").unwrap();
+            libc::setlocale(libc::LC_NUMERIC, c_locale.as_ptr());
+        }
+
+        let mpv =
+            Mpv::new().map_err(|e| anyhow::anyhow!("Failed to create MPV instance: {:?}", e))?;
+
+        // Check MPV version and features
+        if let Ok(version) = mpv.get_property::<String>("mpv-version") {
+            info!("MPV version: {}", version);
+        }
+        if let Ok(config) = mpv.get_property::<String>("mpv-configuration") {
+            info!("MPV configuration: {}", config);
+        }
+
+        // Configure MPV for render API
+        mpv.set_property("vo", "libmpv")
+            .map_err(|e| anyhow::anyhow!("Failed to set vo=libmpv: {:?}", e))?;
+
+        // Set basic options
+        mpv.set_property("keep-open", "yes")
+            .map_err(|e| anyhow::anyhow!("Failed to set keep-open: {:?}", e))?;
+        mpv.set_property("hwdec", "auto")
+            .map_err(|e| anyhow::anyhow!("Failed to set hwdec: {:?}", e))?;
+        mpv.set_property("input-default-bindings", false)
+            .map_err(|e| anyhow::anyhow!("Failed to set input-default-bindings: {:?}", e))?;
+        mpv.set_property("input-vo-keyboard", false)
+            .map_err(|e| anyhow::anyhow!("Failed to set input-vo-keyboard: {:?}", e))?;
+        mpv.set_property("osc", false)
+            .map_err(|e| anyhow::anyhow!("Failed to set osc: {:?}", e))?;
+        mpv.set_property("ytdl", false)
+            .map_err(|e| anyhow::anyhow!("Failed to set ytdl: {:?}", e))?;
+        mpv.set_property("load-scripts", false)
+            .map_err(|e| anyhow::anyhow!("Failed to set load-scripts: {:?}", e))?;
+
+        // Audio/subtitle preferences
+        mpv.set_property("aid", "auto")
+            .map_err(|e| anyhow::anyhow!("Failed to set aid: {:?}", e))?;
+        mpv.set_property("sid", "auto")
+            .map_err(|e| anyhow::anyhow!("Failed to set sid: {:?}", e))?;
+        mpv.set_property("alang", "eng,en")
+            .map_err(|e| anyhow::anyhow!("Failed to set alang: {:?}", e))?;
+        mpv.set_property("slang", "eng,en")
+            .map_err(|e| anyhow::anyhow!("Failed to set slang: {:?}", e))?;
+        mpv.set_property("sub-auto", "fuzzy")
+            .map_err(|e| anyhow::anyhow!("Failed to set sub-auto: {:?}", e))?;
+        mpv.set_property("audio-file-auto", "fuzzy")
+            .map_err(|e| anyhow::anyhow!("Failed to set audio-file-auto: {:?}", e))?;
+
+        // Cache settings
+        mpv.set_property("cache", true)
+            .map_err(|e| anyhow::anyhow!("Failed to set cache: {:?}", e))?;
+        mpv.set_property("demuxer-max-bytes", "50MiB")
+            .map_err(|e| anyhow::anyhow!("Failed to set demuxer-max-bytes: {:?}", e))?;
+        mpv.set_property("demuxer-max-back-bytes", "25MiB")
+            .map_err(|e| anyhow::anyhow!("Failed to set demuxer-max-back-bytes: {:?}", e))?;
+
+        // Disable OSD
+        mpv.set_property("osd-level", 0i64)
+            .map_err(|e| anyhow::anyhow!("Failed to set osd-level: {:?}", e))?;
+
+        info!("MpvPlayerInner::init_mpv() - MPV instance configured for render API");
+        Ok(mpv)
+    }
+}
+
+impl Drop for MpvPlayerInner {
+    fn drop(&mut self) {
+        // Clean up render context
+        if let Some(mpv_gl) = self.mpv_gl.borrow_mut().take() {
+            unsafe {
+                mpv_render_context_free(mpv_gl);
+            }
+        }
+    }
+}

@@ -30,6 +30,7 @@ pub struct GStreamerPlayer {
 impl GStreamerPlayer {
     pub fn new() -> Result<Self> {
         info!("GStreamerPlayer::new() - Initializing GStreamer player");
+
         // Initialize GStreamer if not already done
         match gst::init() {
             Ok(_) => info!("GStreamerPlayer::new() - GStreamer initialized successfully"),
@@ -62,6 +63,10 @@ impl GStreamerPlayer {
             "autovideosink",
             "autoaudiosink",
             "gtk4paintablesink",
+            "glimagesink",
+            "videoconvert",
+            "videoscale",
+            "capsfilter",
         ];
 
         for element in required_elements {
@@ -102,31 +107,165 @@ impl GStreamerPlayer {
         picture.set_hexpand(true);
         debug!("GStreamerPlayer::create_video_widget() - Picture widget created");
 
-        // Try to create gtk4paintablesink
-        let gtksink_result = gst::ElementFactory::make("gtk4paintablesink")
-            .name("videosink")
-            .build();
+        // Check if we should force fallback mode or use alternative sink
+        let force_fallback = std::env::var("REEL_FORCE_FALLBACK_SINK").is_ok();
+        let use_gl_sink = std::env::var("REEL_USE_GL_SINK").is_ok();
+
+        // Try to create gtk4paintablesink with proper video conversion pipeline
+        let gtksink_result = if !force_fallback && !use_gl_sink {
+            gst::ElementFactory::make("gtk4paintablesink")
+                .name("videosink")
+                .build()
+        } else if use_gl_sink {
+            info!("GStreamerPlayer::create_video_widget() - Using GL sink (REEL_USE_GL_SINK set)");
+            Err(gst::glib::bool_error!("Use GL sink"))
+        } else {
+            info!(
+                "GStreamerPlayer::create_video_widget() - Forcing fallback sink (REEL_FORCE_FALLBACK_SINK set)"
+            );
+            Err(gst::glib::bool_error!("Forced fallback"))
+        };
 
         match gtksink_result {
-            Ok(sink) => {
+            Ok(gtk_sink) => {
                 info!(
                     "GStreamerPlayer::create_video_widget() - Successfully created gtk4paintablesink"
                 );
+
+                // Create a simpler, more robust pipeline for gtk4paintablesink
+                let bin = gst::Bin::new();
+
+                // Single videoconvert with proper configuration
+                let videoconvert = gst::ElementFactory::make("videoconvert")
+                    .name("videoconvert")
+                    .build()
+                    .expect("Failed to create videoconvert");
+
+                // Configure videoconvert to handle subtitle overlays properly
+                // Disable passthrough to force conversion even if formats match
+                videoconvert.set_property_from_str("n-threads", "4");
+
+                // Add videoscale for proper scaling
+                let videoscale = gst::ElementFactory::make("videoscale")
+                    .name("videoscale")
+                    .build()
+                    .expect("Failed to create videoscale");
+
+                // Force output to RGBA - critical for gtk4paintablesink with subtitles
+                let capsfilter = gst::ElementFactory::make("capsfilter")
+                    .name("capsfilter")
+                    .build()
+                    .expect("Failed to create capsfilter");
+
+                // Force RGBA format and disable DMA-BUF to avoid YUV colorspace issues
+                // This is critical for subtitle rendering
+                let caps = gst::Caps::builder("video/x-raw")
+                    .field("format", "RGBA")
+                    .build();
+                capsfilter.set_property("caps", &caps);
+
+                // Add elements to the bin
+                bin.add(&videoconvert).expect("Failed to add videoconvert");
+                bin.add(&videoscale).expect("Failed to add videoscale");
+                bin.add(&capsfilter).expect("Failed to add capsfilter");
+                bin.add(&gtk_sink).expect("Failed to add gtk_sink");
+
+                // Link the elements
+                videoconvert
+                    .link(&videoscale)
+                    .expect("Failed to link videoconvert to videoscale");
+                videoscale
+                    .link(&capsfilter)
+                    .expect("Failed to link videoscale to capsfilter");
+                capsfilter
+                    .link(&gtk_sink)
+                    .expect("Failed to link capsfilter to gtk_sink");
+
+                // Create ghost pad for the bin
+                let sink_pad = videoconvert
+                    .static_pad("sink")
+                    .expect("Failed to get sink pad");
+                let ghost_pad =
+                    gst::GhostPad::with_target(&sink_pad).expect("Failed to create ghost pad");
+                bin.add_pad(&ghost_pad).expect("Failed to add ghost pad");
+
                 // Get the paintable from the sink and set it on the picture
-                let paintable = sink.property::<gdk::Paintable>("paintable");
+                let paintable = gtk_sink.property::<gdk::Paintable>("paintable");
                 picture.set_paintable(Some(&paintable));
-                // Store the sink for later use
-                self.video_sink.replace(Some(sink));
-                debug!("GStreamerPlayer::create_video_widget() - gtk4paintablesink configured");
+
+                // Store the bin (which includes the sink) for later use
+                self.video_sink.replace(Some(bin.upcast()));
+                debug!(
+                    "GStreamerPlayer::create_video_widget() - gtk4paintablesink with conversion pipeline configured"
+                );
             }
             Err(e) => {
                 info!(
                     "GStreamerPlayer::create_video_widget() - gtk4paintablesink not available ({}), using fallback widget",
                     e
                 );
-                // For fallback, we'll use a simple DrawingArea
-                // The actual video will be rendered using autovideosink
-                self.video_sink.replace(None);
+
+                // Try glimagesink first as it has better colorspace handling
+                let sink_result = if use_gl_sink {
+                    gst::ElementFactory::make("glimagesink")
+                        .name("glimagesink")
+                        .build()
+                } else {
+                    gst::ElementFactory::make("autovideosink")
+                        .name("autovideosink")
+                        .build()
+                };
+
+                if let Ok(video_sink) = sink_result {
+                    let bin = gst::Bin::new();
+
+                    // Create robust conversion pipeline for fallback
+                    let videoconvert = gst::ElementFactory::make("videoconvert")
+                        .name("videoconvert")
+                        .build()
+                        .expect("Failed to create videoconvert");
+
+                    // Force RGBA to handle subtitles properly
+                    let capsfilter = gst::ElementFactory::make("capsfilter")
+                        .name("capsfilter")
+                        .build()
+                        .expect("Failed to create capsfilter");
+
+                    let caps = gst::Caps::builder("video/x-raw")
+                        .field("format", "RGBA")
+                        .build();
+                    capsfilter.set_property("caps", &caps);
+
+                    bin.add(&videoconvert).expect("Failed to add videoconvert");
+                    bin.add(&capsfilter).expect("Failed to add capsfilter");
+                    bin.add(&video_sink).expect("Failed to add video sink");
+
+                    videoconvert
+                        .link(&capsfilter)
+                        .expect("Failed to link videoconvert to capsfilter");
+                    capsfilter
+                        .link(&video_sink)
+                        .expect("Failed to link capsfilter to sink");
+
+                    let sink_pad = videoconvert
+                        .static_pad("sink")
+                        .expect("Failed to get sink pad");
+                    let ghost_pad =
+                        gst::GhostPad::with_target(&sink_pad).expect("Failed to create ghost pad");
+                    bin.add_pad(&ghost_pad).expect("Failed to add ghost pad");
+
+                    self.video_sink.replace(Some(bin.upcast()));
+                    info!(
+                        "Using {} as video sink",
+                        if use_gl_sink {
+                            "glimagesink"
+                        } else {
+                            "autovideosink"
+                        }
+                    );
+                } else {
+                    self.video_sink.replace(None);
+                }
             }
         }
 
@@ -165,6 +304,67 @@ impl GStreamerPlayer {
                 .property("uri", url)
                 .build()
                 .context("Failed to create playbin element")?;
+
+            // Enable all features including text overlay
+            pb.set_property_from_str(
+                "flags",
+                "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
+            );
+
+            // Create a video filter bin to ensure proper colorspace for subtitles
+            // This prevents the green bar issue when subtitles appear
+            let filter_bin = gst::Bin::new();
+
+            // Add videoconvert to handle colorspace changes from subtitle overlay
+            if let Ok(videoconvert) = gst::ElementFactory::make("videoconvert")
+                .name("subtitle_videoconvert")
+                .build()
+            {
+                // Add capsfilter to force RGBA after subtitle compositing
+                if let Ok(capsfilter) = gst::ElementFactory::make("capsfilter")
+                    .name("subtitle_capsfilter")
+                    .build()
+                {
+                    // Force RGBA to prevent YUV issues with subtitles
+                    let caps = gst::Caps::builder("video/x-raw")
+                        .field("format", "RGBA")
+                        .build();
+                    capsfilter.set_property("caps", &caps);
+
+                    filter_bin
+                        .add(&videoconvert)
+                        .expect("Failed to add videoconvert to filter bin");
+                    filter_bin
+                        .add(&capsfilter)
+                        .expect("Failed to add capsfilter to filter bin");
+
+                    videoconvert
+                        .link(&capsfilter)
+                        .expect("Failed to link videoconvert to capsfilter");
+
+                    // Create ghost pads for the bin
+                    let sink_pad = videoconvert
+                        .static_pad("sink")
+                        .expect("Failed to get sink pad");
+                    let src_pad = capsfilter.static_pad("src").expect("Failed to get src pad");
+
+                    let ghost_sink =
+                        gst::GhostPad::with_target(&sink_pad).expect("Failed to create ghost sink");
+                    let ghost_src =
+                        gst::GhostPad::with_target(&src_pad).expect("Failed to create ghost src");
+
+                    filter_bin
+                        .add_pad(&ghost_sink)
+                        .expect("Failed to add ghost sink");
+                    filter_bin
+                        .add_pad(&ghost_src)
+                        .expect("Failed to add ghost src");
+
+                    pb.set_property("video-filter", &filter_bin);
+                    info!("Added video-filter bin to force RGBA for subtitle colorspace");
+                }
+            }
+
             info!("GStreamerPlayer::load_media() - Playbin created successfully");
             pb
         } else {
@@ -180,18 +380,45 @@ impl GStreamerPlayer {
             playbin.set_property("video-sink", sink);
             info!("GStreamerPlayer::load_media() - Video sink configured");
         } else {
-            // Try to create a fallback video sink
+            // Create a fallback video sink with proper conversion
             info!(
-                "GStreamerPlayer::load_media() - No gtk4paintablesink available, trying autovideosink"
+                "GStreamerPlayer::load_media() - No pre-configured sink, creating fallback with conversion"
             );
-            if let Ok(autosink) = gst::ElementFactory::make("autovideosink")
-                .name("videosink")
+
+            // Create a bin with videoconvert and autovideosink for proper colorspace handling
+            let bin = gst::Bin::new();
+
+            if let Ok(videoconvert) = gst::ElementFactory::make("videoconvert")
+                .name("videoconvert")
                 .build()
             {
-                playbin.set_property("video-sink", &autosink);
-                info!("GStreamerPlayer::load_media() - Autovideosink configured as fallback");
+                if let Ok(autosink) = gst::ElementFactory::make("autovideosink")
+                    .name("autovideosink")
+                    .build()
+                {
+                    bin.add(&videoconvert).expect("Failed to add videoconvert");
+                    bin.add(&autosink).expect("Failed to add autosink");
+
+                    videoconvert
+                        .link(&autosink)
+                        .expect("Failed to link videoconvert to autosink");
+
+                    let sink_pad = videoconvert
+                        .static_pad("sink")
+                        .expect("Failed to get sink pad");
+                    let ghost_pad =
+                        gst::GhostPad::with_target(&sink_pad).expect("Failed to create ghost pad");
+                    bin.add_pad(&ghost_pad).expect("Failed to add ghost pad");
+
+                    playbin.set_property("video-sink", &bin);
+                    info!(
+                        "GStreamerPlayer::load_media() - Fallback video sink with conversion configured"
+                    );
+                } else {
+                    error!("GStreamerPlayer::load_media() - Failed to create autovideosink!");
+                }
             } else {
-                error!("GStreamerPlayer::load_media() - Failed to create any video sink!");
+                error!("GStreamerPlayer::load_media() - Failed to create videoconvert!");
             }
         }
 
@@ -517,11 +744,17 @@ impl GStreamerPlayer {
         if let Some(playbin) = self.playbin.borrow().as_ref() {
             if track_index < 0 {
                 // Disable subtitles
-                playbin.set_property_from_str("flags", "video+audio");
+                playbin.set_property_from_str(
+                    "flags",
+                    "soft-colorbalance+deinterlace+soft-volume+audio+video",
+                );
                 info!("Disabled subtitles");
             } else {
                 // Enable subtitles and set track
-                playbin.set_property_from_str("flags", "video+audio+text");
+                playbin.set_property_from_str(
+                    "flags",
+                    "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
+                );
                 playbin.set_property("current-text", track_index);
                 info!("Set subtitle track to {}", track_index);
             }

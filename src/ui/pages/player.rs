@@ -8,14 +8,15 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
 use crate::backends::traits::MediaBackend;
+use crate::config::Config;
 use crate::models::MediaItem;
-use crate::player::GStreamerPlayer;
+use crate::player::Player;
 use crate::state::AppState;
 
 #[derive(Clone)]
 pub struct PlayerPage {
     widget: gtk4::Box,
-    player: Arc<RwLock<GStreamerPlayer>>,
+    player: Arc<RwLock<Player>>,
     controls: PlayerControls,
     overlay: gtk4::Overlay,
     video_container: gtk4::Box,
@@ -28,7 +29,7 @@ impl std::fmt::Debug for PlayerPage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PlayerPage")
             .field("widget", &"gtk4::Box")
-            .field("player", &"Arc<RwLock<GStreamerPlayer>>")
+            .field("player", &"Arc<RwLock<Player>>")
             .finish()
     }
 }
@@ -55,12 +56,17 @@ impl PlayerPage {
         video_container.add_css_class("video-container");
         overlay.set_child(Some(&video_container));
 
-        // Create player
-        info!("PlayerPage::new() - Creating GStreamer player");
+        // Create player based on config
+        info!("PlayerPage::new() - Creating player");
+        let config = Config::load().expect("Failed to load config");
+        info!(
+            "PlayerPage::new() - Using player backend: {}",
+            config.playback.player_backend
+        );
         let player = Arc::new(RwLock::new(
-            GStreamerPlayer::new().expect("Failed to create GStreamer player"),
+            Player::new(&config).expect("Failed to create player"),
         ));
-        info!("PlayerPage::new() - GStreamer player created successfully");
+        info!("PlayerPage::new() - Player created successfully");
 
         // Create controls
         let controls = PlayerControls::new(player.clone());
@@ -268,7 +274,7 @@ impl PlayerPage {
 
             // Load the media (sink is already set up in create_video_widget)
             debug!("PlayerPage::load_media() - Loading media into player");
-            player.load_media(&stream_info.url, None).await?;
+            player.load_media(&stream_info.url).await?;
             info!("PlayerPage::load_media() - Media loaded into player");
 
             // Update controls with media info and stream options
@@ -342,7 +348,7 @@ impl PlayerPage {
                 };
 
                 match state {
-                    crate::player::gstreamer_player::PlayerState::Stopped => {
+                    crate::player::PlayerState::Stopped => {
                         // Playback has ended, check if we should mark as watched
                         if let Some(media_item) = current_media_item.read().await.as_ref() {
                             // Get current position and duration
@@ -369,7 +375,7 @@ impl PlayerPage {
                         }
                         break; // Exit monitoring loop
                     }
-                    crate::player::gstreamer_player::PlayerState::Error(_) => {
+                    crate::player::PlayerState::Error(_) => {
                         // Playback error, exit monitoring
                         break;
                     }
@@ -398,7 +404,7 @@ struct PlayerControls {
     time_label: gtk4::Label,
     end_time_label: gtk4::Label,
     time_display_mode: Arc<RwLock<TimeDisplayMode>>,
-    player: Arc<RwLock<GStreamerPlayer>>,
+    player: Arc<RwLock<Player>>,
     is_seeking: Arc<RwLock<bool>>,
 }
 
@@ -410,7 +416,7 @@ enum TimeDisplayMode {
 }
 
 impl PlayerControls {
-    fn new(player: Arc<RwLock<GStreamerPlayer>>) -> Self {
+    fn new(player: Arc<RwLock<Player>>) -> Self {
         // Main controls container - minimalistic and tight
         let widget = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Vertical)
@@ -1023,7 +1029,7 @@ impl PlayerControls {
 
                         // Load new quality URL
                         let player = player.read().await;
-                        if let Err(e) = player.load_media(&url, None).await {
+                        if let Err(e) = player.load_media(&url).await {
                             error!("Failed to switch quality: {}", e);
                             return;
                         }
