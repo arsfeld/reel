@@ -96,8 +96,14 @@
             echo "cargo-sources.json not found, generating it..."
             ${pythonWithPkgs}/bin/python3 flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
           fi
+          
           echo "Building and installing flatpak..."
-          ${pkgs.flatpak-builder}/bin/flatpak-builder --user --install --force-clean build-dir dev.arsfeld.Reel.json
+          ${pkgs.flatpak-builder}/bin/flatpak-builder --user --install --force-clean --disable-rofiles-fuse build-dir dev.arsfeld.Reel.json
+        '';
+
+        flatpakRun = pkgs.writeShellScriptBin "flatpak-run" ''
+          echo "Running Reel flatpak..."
+          flatpak run dev.arsfeld.Reel
         '';
 
         flatpakLint = pkgs.writeShellScriptBin "flatpak-lint" ''
@@ -160,6 +166,7 @@
             flatpakUpdateSources
             flatpakBuild
             flatpakBuildInstall
+            flatpakRun
             flatpakLint
             formatCode
             clippyFix
@@ -188,6 +195,7 @@
             echo "  flatpak-update-sources - Update cargo-sources.json"
             echo "  flatpak-build         - Build the flatpak"
             echo "  flatpak-build-install - Build and install the flatpak"
+            echo "  flatpak-run           - Run the installed flatpak"
             echo "  flatpak-lint          - Lint the flatpak manifest"
             echo ""
             
