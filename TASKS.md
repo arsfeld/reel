@@ -90,6 +90,14 @@
   - [ ] Create loading states
   - [ ] Add error state displays
 
+- [ ] **Proper Settings Management**
+  - [ ] Implement GSettings for GNOME-compliant settings storage
+  - [ ] Create GSettings schema file (.gschema.xml)
+  - [ ] Replace current Config system with GSettings
+  - [ ] Auto-reload settings on change (reactive configuration)
+  - [ ] Support settings sync across instances
+  - [ ] Add settings migration from old config.toml
+
 - [x] **Server Connection UI**
   - [x] Create connection dialog with Blueprint
   - [x] Add server status indicators
@@ -111,22 +119,48 @@
 
 - [x] **Player Integration** (Completed with Dual Backend Support!)
   - [x] Initialize GStreamer player
+    - [ ] **CRITICAL BUG: Subtitle Colorspace Issue** (January 2025)
+      - **Problem**: Green/incorrect colors appear on video frames when subtitles are displayed
+      - **Symptoms**: Video shows green bars or color artifacts specifically when subtitle text appears
+      - **Root Cause Analysis** (from GSTREAMER.md research):
+        - Double colorspace conversion in both video-filter AND sink bin
+        - Incorrect pipeline ordering causing multiple YUV→RGB conversions
+        - playbin3 disabled with `if false &&` preventing modern subtitle handling
+      - **Solution Plan**:
+        - [ ] Enable playbin3 (remove `false &&` on line 479)
+        - [ ] Remove video-filter setup (lines 497-501, 531-535) - keep only sink conversion
+        - [ ] Enable QoS with `enable-qos` property
+        - [ ] Use `n-threads: 0` for automatic CPU detection
+        - [ ] Add configurable subtitle properties (font, timing offsets)
+        - [ ] Implement overlay composition approach for subtitles
+      - **Status**: Ready to implement fixes based on best practices
   - [x] **NEW: MPV Player Backend** (December 2024)
     - [x] Created alternative MPV player implementation using libmpv2
     - [x] Full feature parity with GStreamer player
     - [x] Configurable player backend via config.toml
     - [x] Wayland-native rendering support
     - [x] Audio/subtitle track selection
-    - [ ] **MPV Render API Integration** (January 2025 - IN PROGRESS)
+    - [x] **MPV Render API Integration** (January 2025 - WORKING!)
       - [x] Implemented GLArea-based rendering with libmpv2-sys
       - [x] Replaced dmabuf-wayland with vo=libmpv for embedded rendering
-      - [x] OpenGL context integration via dlsym for GL function loading
-      - [ ] **CRITICAL BLOCKER**: MPV_ERROR_UNSUPPORTED (-18) on render context creation
-        - Epoxy GL functions found but crash when called by MPV
-        - `epoxy_glGetString` exists but segfaults when MPV calls it
-        - Returning NULL for glGetString causes MPV to fail with UNSUPPORTED
-        - Need alternative approach for GL function loading
-      - [ ] Proper frame rendering in GTK widget (blocked by render context issue)
+      - [x] OpenGL context integration via eglGetProcAddress for GL function loading
+      - [x] **RESOLVED**: MPV_ERROR_UNSUPPORTED - Fixed by using eglGetProcAddress instead of dlsym
+      - [x] MPV render context successfully initializes
+      - [x] Audio playback working correctly
+      - [x] MPV successfully loading video (confirmed 1920x800 resolution)
+      - [x] mpv_render_context_render() succeeding without errors
+      - [x] **RESOLVED**: Segmentation faults - Fixed by reverting Epoxy functions and delayed media loading
+      - [x] Added MPV debug logging (terminal output and gpu-debug enabled)
+      - [x] **RESOLVED**: VIDEO RENDERING WORKING!
+        - Fixed by querying GTK's actual framebuffer (FBO 1)
+        - Using eglGetProcAddress to get GL functions
+        - Properly calling attach_buffers() before rendering
+        - mpv_render_context_render() succeeds with correct FBO
+      - [ ] **Performance Issues**:
+        - **Rendering feels slow/laggy** - Timing issues need investigation
+        - May need to optimize render callback frequency
+        - Consider reducing unnecessary GL state queries
+        - Investigate if 100ms timer interval is too slow
   - [x] Load and play video streams
   - [x] Implement basic controls (play/pause/seek)
   - [x] Add immersive playback mode with auto-hiding controls
@@ -505,18 +539,38 @@ window.sync_and_update_libraries(backend_id, backend)
 ## Known Issues & Troubleshooting
 
 ### Current Issues
+- [ ] **GStreamer Subtitle Rendering Issue (CRITICAL)**:
+  - **Status**: Subtitle overlay causes color conversion artifacts
+  - **Problem**: Green bars/incorrect colors appear when subtitles are displayed
+  - **Attempted Fixes**:
+    - Implemented video-filter for RGBA conversion
+    - Added glsinkbin wrapper for GL handling  
+    - Used videoconvertscale for optimized conversion
+    - Fell back to regular playbin from playbin3
+  - **Current State**: Issue persists, appears to be YUV→RGB conversion problem during subtitle compositing
+  - **Workaround**: Users can disable subtitles or use MPV player backend
 - [ ] **MPV Integration Issue (CRITICAL)**: 
-  - **Status**: Render API integration failing with MPV_ERROR_UNSUPPORTED
-  - **Problem**: Epoxy GL functions segfault when called by MPV
-  - **Attempted Solutions**:
-    1. Direct dlsym for epoxy functions - Functions found but crash
-    2. Making GL context current in callback - No effect
-    3. Returning NULL for problematic functions - MPV fails
+  - **Status**: MPV renders successfully but video is BLACK
+  - **Problem**: Video frames render but don't display in GLArea widget
+  - **Completed Solutions**:
+    1. ✅ Use eglGetProcAddress instead of dlsym - Fixed initialization
+    2. ✅ Check GL state before/after render (glGetError) - No errors now
+    3. ✅ Added glFlush/glFinish after render - Ensures GL commands execute
+    4. ✅ Fixed GL_INVALID_FRAMEBUFFER_OPERATION error
+    5. ✅ Fixed segmentation faults with proper timing
+  - **Current State**:
+    - MPV initializes successfully
+    - Video loads and dimensions are correct (1918x802)
+    - mpv_render_context_render() succeeds continuously
+    - Audio plays correctly
+    - **BUT VIDEO IS STILL BLACK**
   - **Next Steps to Try**:
-    1. Use eglGetProcAddress instead of dlsym
-    2. Create minimal C test case to verify MPV render API works
-    3. Check if GTK4's GL context is compatible with MPV's requirements
-    4. Consider using GStreamer gtksink as fallback
+    1. Try getting actual FBO ID from GTK instead of using 0
+    2. Test with different OpenGL context versions
+    3. Investigate if GTK4 needs special handling for custom GL rendering
+    4. Check if we need to bind specific textures or buffers
+    5. Create minimal C test case to verify MPV render API works
+    6. Consider using GStreamer gtksink as fallback if all else fails
   - GStreamer player works correctly embedded (temporary workaround)
 - [ ] **Homepage Issues** (CRITICAL):
   - [ ] **Horizontal scrolling broken**: Scrolling horizontally on homepage sections doesn't trigger image loading

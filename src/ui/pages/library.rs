@@ -388,8 +388,20 @@ impl LibraryView {
 
                 // Defer initial card creation to avoid blocking
                 let create_initial = create_cards_batch.clone();
+                let weak_self = self.downgrade();
                 glib::idle_add_local_once(move || {
                     create_initial(0, INITIAL_CARDS_TO_CREATE);
+
+                    // Load initial images after cards are created
+                    if let Some(view) = weak_self.upgrade() {
+                        // Small delay to ensure cards are fully rendered
+                        glib::timeout_add_local_once(
+                            std::time::Duration::from_millis(50),
+                            move || {
+                                view.batch_load_visible_cards(0, INITIAL_IMAGES_TO_LOAD);
+                            },
+                        );
+                    }
                 });
 
                 // Show content
@@ -407,9 +419,6 @@ impl LibraryView {
                         items_rc.len(),
                     );
                 }
-
-                // Load initial images immediately since they're fast
-                self.batch_load_visible_cards(0, INITIAL_IMAGES_TO_LOAD);
             }
         }
     }

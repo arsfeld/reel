@@ -28,7 +28,7 @@ template $ShowDetailsPage : Box {
         // Gradient overlay for better text readability
         [overlay]
         Box gradient_overlay {
-          styles ["movie-backdrop-gradient"]
+          styles ["show-backdrop-overlay"]
           height-request: 500;
         }
         
@@ -48,17 +48,17 @@ template $ShowDetailsPage : Box {
             
             // Show poster with enhanced styling
             Box poster_container {
-              styles ["movie-poster-container"]
+              styles ["show-poster-container"]
               
               Overlay {
                 Frame {
                   width-request: 300;
                   height-request: 450;
-                  styles ["movie-poster-frame"]
+                  styles ["show-poster-frame"]
                   
                   Picture show_poster {
                     content-fit: cover;
-                    styles ["movie-poster"]
+                    styles ["show-poster"]
                   }
                 }
                 
@@ -69,7 +69,7 @@ template $ShowDetailsPage : Box {
                   halign: center;
                   spacing: 12;
                   visible: true;
-                  styles ["movie-poster-placeholder"]
+                  styles ["show-poster-placeholder"]
                   
                   Image {
                     icon-name: "video-display-symbolic";
@@ -155,6 +155,7 @@ template $ShowDetailsPage : Box {
                 column-spacing: 8;
                 row-spacing: 8;
                 margin-top: 12;
+                styles ["genres_box"]
               }
               
               // Action buttons and season selector
@@ -176,7 +177,7 @@ template $ShowDetailsPage : Box {
                   
                   DropDown season_dropdown {
                     enable-search: false;
-                    styles ["flat"]
+                    styles ["flat", "season_dropdown"]
                   }
                 }
                 
@@ -187,7 +188,7 @@ template $ShowDetailsPage : Box {
                 }
                 
                 Button mark_watched_button {
-                  styles ["pill"]
+                  styles ["pill", "mark_watched_button"]
                   
                   Box {
                     orientation: horizontal;
@@ -215,6 +216,7 @@ template $ShowDetailsPage : Box {
         margin-end: 32;
         margin-bottom: 32;
         spacing: 16;
+        styles ["episodes_section"]
         
         // Episodes header
         Box episodes_header {
@@ -238,7 +240,7 @@ template $ShowDetailsPage : Box {
           vscrollbar-policy: never;
           height-request: 320;
           vexpand: false;
-          styles ["card"]
+          styles ["episodes_carousel"]
           
           Box episodes_box {
             orientation: horizontal;
@@ -247,6 +249,7 @@ template $ShowDetailsPage : Box {
             margin-bottom: 16;
             margin-start: 16;
             margin-end: 16;
+            styles ["episodes_box"]
           }
         }
       }

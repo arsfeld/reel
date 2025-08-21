@@ -926,11 +926,6 @@ impl PlexApi {
 
     /// Parse a generic Plex metadata item into a MediaItem
     fn parse_media_item(&self, meta: PlexGenericMetadata) -> Result<MediaItem> {
-        debug!(
-            "PlexApi::parse_media_item() - Parsing item: type={:?}, title={}, key={}",
-            meta.type_, meta.title, meta.rating_key
-        );
-
         match meta.type_.as_deref() {
             Some("movie") => {
                 let duration_ms = meta.duration.unwrap_or(0);
@@ -941,11 +936,6 @@ impl PlexApi {
 
                 let poster_url = meta.thumb.map(|t| self.build_image_url(&t));
                 let backdrop_url = meta.art.map(|a| self.build_image_url(&a));
-
-                debug!(
-                    "  Movie: poster_url={:?}, backdrop_url={:?}",
-                    poster_url, backdrop_url
-                );
 
                 let movie = Movie {
                     id: meta.rating_key,
@@ -982,11 +972,6 @@ impl PlexApi {
             Some("show") => {
                 let poster_url = meta.thumb.map(|t| self.build_image_url(&t));
                 let backdrop_url = meta.art.map(|a| self.build_image_url(&a));
-
-                debug!(
-                    "  Show: poster_url={:?}, backdrop_url={:?}",
-                    poster_url, backdrop_url
-                );
 
                 let show = Show {
                     id: meta.rating_key,

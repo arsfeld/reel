@@ -267,9 +267,10 @@ impl ShowDetailsPage {
     async fn display_show_info(&self, show: &Show) {
         let imp = self.imp();
 
-        // Load backdrop image
+        // Load backdrop image with enhanced styling
         if let Some(backdrop_url) = &show.backdrop_url {
             let backdrop_picture = imp.show_backdrop.clone();
+            backdrop_picture.add_css_class("show-backdrop");
             let url = backdrop_url.clone();
 
             glib::spawn_future_local(async move {
@@ -284,10 +285,12 @@ impl ShowDetailsPage {
             });
         }
 
-        // Load poster image
+        // Load poster image with enhanced 3D effect
         if let Some(poster_url) = &show.poster_url {
             let picture = imp.show_poster.clone();
+            picture.add_css_class("show-poster");
             let placeholder = imp.poster_placeholder.clone();
+            placeholder.add_css_class("show-poster-placeholder");
             let url = poster_url.clone();
 
             glib::spawn_future_local(async move {
@@ -343,12 +346,12 @@ impl ShowDetailsPage {
 
         for genre in &show.genres {
             let genre_chip = adw::Bin::builder()
-                .css_classes(vec!["card", "compact"])
+                .css_classes(vec!["card", "compact", "genre-chip"])
                 .build();
 
             let genre_label = gtk4::Label::builder()
                 .label(genre)
-                .css_classes(vec!["caption"])
+                .css_classes(vec!["caption", "genre-label"])
                 .margin_top(6)
                 .margin_bottom(6)
                 .margin_start(12)
@@ -410,7 +413,7 @@ impl ShowDetailsPage {
 
         // Create episode card with enhanced styling
         let card = gtk4::Button::builder()
-            .css_classes(vec!["card", "episode-card"])
+            .css_classes(vec!["card", "episode-card", "flat"])
             .width_request(320)
             .build();
 
@@ -421,6 +424,7 @@ impl ShowDetailsPage {
 
         // Episode thumbnail with overlay
         let overlay = gtk4::Overlay::new();
+        overlay.add_css_class("episode-thumbnail-overlay");
 
         let thumbnail_frame = gtk4::Frame::builder()
             .height_request(180) // 16:9 aspect ratio for 320px width
@@ -429,6 +433,7 @@ impl ShowDetailsPage {
 
         let thumbnail = gtk4::Picture::builder()
             .content_fit(gtk4::ContentFit::Cover)
+            .css_classes(vec!["episode-picture"])
             .build();
 
         // Load episode thumbnail if available
@@ -462,18 +467,24 @@ impl ShowDetailsPage {
             .build();
         overlay.add_overlay(&episode_badge);
 
-        // Watched indicator
+        // Watched indicator - checkmark with background
         if episode.view_count > 0 {
-            let watched_icon = gtk4::Image::builder()
-                .icon_name("emblem-default-symbolic")
-                .css_classes(vec!["success", "osd"])
+            let watched_container = gtk4::Box::builder()
+                .css_classes(vec!["episode-watched-container"])
                 .halign(gtk4::Align::End)
                 .valign(gtk4::Align::Start)
-                .margin_top(8)
-                .margin_end(8)
-                .pixel_size(24)
+                .margin_top(10)
+                .margin_end(10)
                 .build();
-            overlay.add_overlay(&watched_icon);
+
+            let watched_icon = gtk4::Image::builder()
+                .icon_name("object-select-symbolic")
+                .css_classes(vec!["episode-watched-icon"])
+                .pixel_size(16)
+                .build();
+
+            watched_container.append(&watched_icon);
+            overlay.add_overlay(&watched_container);
         }
 
         // Progress bar if partially watched
@@ -501,7 +512,7 @@ impl ShowDetailsPage {
         let play_icon = gtk4::Image::builder()
             .icon_name("media-playback-start-symbolic")
             .pixel_size(48)
-            .css_classes(vec!["osd"])
+            .css_classes(vec!["osd", "play-icon"])
             .build();
         play_overlay.append(&play_icon);
         overlay.add_overlay(&play_overlay);

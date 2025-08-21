@@ -56,7 +56,7 @@ impl PlayerPage {
         video_container.add_css_class("video-container");
         overlay.set_child(Some(&video_container));
 
-        // Create player based on config
+        // Create player based on config - reload from disk to get latest settings
         info!("PlayerPage::new() - Creating player");
         let config = Config::load().expect("Failed to load config");
         info!(
