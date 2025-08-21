@@ -1410,27 +1410,26 @@ impl ReelMainWindow {
             imp.content_stack.borrow().as_ref().unwrap().clone()
         };
 
-        // Create or get player page
-        debug!("MainWindow::show_player() - Getting or creating player page");
-        let player_page = {
-            let existing_page = imp.player_page.borrow();
-            if existing_page.is_some() {
-                debug!("MainWindow::show_player() - Using existing player page");
-            }
-            existing_page.as_ref().cloned()
+        // Always create a new player page to ensure we use the latest backend setting
+        debug!("MainWindow::show_player() - Creating fresh player page");
+
+        // Clear any existing player page first
+        if let Some(existing_page) = imp.player_page.borrow().as_ref() {
+            debug!("MainWindow::show_player() - Removing existing player page from stack");
+            content_stack.remove(existing_page.widget());
         }
-        .unwrap_or_else(|| {
-            info!("MainWindow::show_player() - Creating new player page");
-            let page = crate::ui::pages::PlayerPage::new(state.clone());
-            imp.player_page.replace(Some(page.clone()));
+        imp.player_page.replace(None);
 
-            // Add to content stack
-            debug!("MainWindow::show_player() - Adding player page to content stack");
-            content_stack.add_named(page.widget(), Some("player"));
-            info!("MainWindow::show_player() - Player page added to stack with name 'player'");
+        info!("MainWindow::show_player() - Creating new player page with current backend");
+        let page = crate::ui::pages::PlayerPage::new(state.clone());
+        imp.player_page.replace(Some(page.clone()));
 
-            page
-        });
+        // Add to content stack
+        debug!("MainWindow::show_player() - Adding player page to content stack");
+        content_stack.add_named(page.widget(), Some("player"));
+        info!("MainWindow::show_player() - Player page added to stack with name 'player'");
+
+        let player_page = page;
 
         // Update the content page title first
         imp.content_page.set_title(media_item.title());

@@ -9,6 +9,7 @@ use crate::backends::{
     BackendManager,
     traits::{BackendInfo, BackendType},
 };
+use crate::config::Config;
 use crate::state::AppState;
 
 mod imp {
@@ -91,15 +92,13 @@ impl PreferencesWindow {
             .model(&gtk4::StringList::new(&["GStreamer", "MPV"]))
             .build();
 
-        // Set current selection based on config
-        if let Some(state) = self.imp().state.borrow().as_ref() {
-            let config = state.config.as_ref();
-            let selected_index = match config.playback.player_backend.as_str() {
-                "mpv" => 1,
-                _ => 0, // Default to GStreamer
-            };
-            player_backend_row.set_selected(selected_index);
-        }
+        // Set current selection based on config - load fresh from disk to get latest value
+        let config = Config::load().unwrap_or_default();
+        let selected_index = match config.playback.player_backend.as_str() {
+            "mpv" => 1,
+            _ => 0, // Default to GStreamer
+        };
+        player_backend_row.set_selected(selected_index);
 
         playback_group.add(&player_backend_row);
         general_page.add(&playback_group);
@@ -453,18 +452,46 @@ impl PreferencesWindow {
     fn apply_player_backend(&self, backend: &str) {
         info!("Applying player backend: {}", backend);
 
-        // Save player backend preference
-        let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        let mut config = state.config.as_ref().clone();
+        // Save player backend preference - load current config from disk
+        let mut config = Config::load().unwrap_or_default();
+        let old_backend = config.playback.player_backend.clone();
         config.playback.player_backend = backend.to_string();
+
         if let Err(e) = config.save() {
             error!("Failed to save player backend preference: {}", e);
+            return;
         }
 
-        // Note: Application restart may be required for the change to take effect
-        info!(
-            "Player backend changed to '{}'. Restart may be required.",
-            backend
-        );
+        // Only notify if the backend actually changed
+        if old_backend != backend {
+            info!(
+                "Player backend changed from '{}' to '{}'",
+                old_backend, backend
+            );
+
+            // Show a toast notification
+            if let Some(parent) = self
+                .transient_for()
+                .and_then(|w| w.downcast::<adw::ApplicationWindow>().ok())
+            {
+                let toast = adw::Toast::builder()
+                    .title(format!(
+                        "Player backend changed to {}",
+                        if backend == "mpv" { "MPV" } else { "GStreamer" }
+                    ))
+                    .timeout(3)
+                    .build();
+
+                // Find the toast overlay in the main window
+                if let Some(content) = parent
+                    .content()
+                    .and_then(|w| w.downcast::<adw::ToastOverlay>().ok())
+                {
+                    content.add_toast(toast);
+                } else {
+                    info!("Player backend will be used for next playback");
+                }
+            }
+        }
     }
 }
