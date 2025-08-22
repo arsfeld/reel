@@ -221,14 +221,6 @@ impl ShowDetailsPage {
             gtk4::StringList::new(&season_labels.iter().map(|s| s.as_str()).collect::<Vec<_>>());
         imp.season_dropdown.set_model(Some(&string_list));
 
-        // Select first season if available
-        let first_season_num = if !show.seasons.is_empty() {
-            imp.season_dropdown.set_selected(0);
-            show.seasons.first().map(|s| s.season_number)
-        } else {
-            None
-        };
-
         // Load everything else asynchronously
         let page_weak = self.downgrade();
         let show_clone = show.clone();
@@ -243,14 +235,30 @@ impl ShowDetailsPage {
                 // Display show info
                 page.display_show_info(&show_clone).await;
 
-                // Check again before loading episodes
+                // Check again before finding next episode
                 if *page.imp().load_generation.borrow() != generation {
                     return;
                 }
 
-                // Load first season episodes if available
-                if let Some(season_num) = first_season_num {
-                    page.load_episodes(season_num).await;
+                // Find the season with the next unwatched episode
+                let target_season = page.find_next_unwatched_season(&show_clone).await;
+
+                // Select the appropriate season
+                if let Some((season_index, season_num)) = target_season {
+                    page.imp().season_dropdown.set_selected(season_index as u32);
+                    page.imp().current_season.replace(Some(season_num));
+
+                    // Load episodes for the selected season
+                    page.load_episodes_with_highlight(season_num).await;
+                } else if !show_clone.seasons.is_empty() {
+                    // No unwatched episodes found, default to first season
+                    page.imp().season_dropdown.set_selected(0);
+                    let first_season_num = show_clone
+                        .seasons
+                        .first()
+                        .map(|s| s.season_number)
+                        .unwrap_or(1);
+                    page.load_episodes(first_season_num).await;
                 }
 
                 // Check again before updating UI
@@ -390,7 +398,7 @@ impl ShowDetailsPage {
 
                             // Add episode cards
                             for episode in episodes {
-                                self.add_episode_card(episode);
+                                self.add_episode_card(episode, false);
                             }
                         }
                         Err(e) => {
@@ -408,12 +416,125 @@ impl ShowDetailsPage {
         }
     }
 
-    fn add_episode_card(&self, episode: Episode) {
+    async fn find_next_unwatched_season(&self, show: &Show) -> Option<(usize, u32)> {
+        let imp = self.imp();
+
+        if let Some(state) = imp.state.borrow().as_ref() {
+            let backend_manager = state.backend_manager.read().await;
+            if let Some((_, backend)) = backend_manager.get_active_backend() {
+                // Check each season for unwatched episodes
+                for (index, season) in show.seasons.iter().enumerate() {
+                    match backend.get_episodes(&show.id, season.season_number).await {
+                        Ok(episodes) => {
+                            // Check if this season has any unwatched episodes
+                            if episodes.iter().any(|ep| ep.view_count == 0) {
+                                info!(
+                                    "Found unwatched episodes in season {}",
+                                    season.season_number
+                                );
+                                return Some((index, season.season_number));
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to get episodes for season {}: {}",
+                                season.season_number, e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    async fn load_episodes_with_highlight(&self, season_number: u32) {
+        info!(
+            "Loading episodes for season {} with highlight",
+            season_number
+        );
+
+        let imp = self.imp();
+
+        // Clear existing episodes
+        self.clear_episodes();
+
+        // Store current season
+        imp.current_season.replace(Some(season_number));
+
+        // Get the show
+        if let Some(show) = imp.current_show.borrow().as_ref() {
+            // Get backend and fetch episodes
+            if let Some(state) = imp.state.borrow().as_ref() {
+                let backend_manager = state.backend_manager.read().await;
+                if let Some((_, backend)) = backend_manager.get_active_backend() {
+                    match backend.get_episodes(&show.id, season_number).await {
+                        Ok(episodes) => {
+                            // Update episode count
+                            imp.episodes_count_label
+                                .set_text(&format!("{} episodes", episodes.len()));
+
+                            // Find the first unwatched episode
+                            let first_unwatched_index =
+                                episodes.iter().position(|ep| ep.view_count == 0);
+
+                            // Add episode cards with highlight flag
+                            for (index, episode) in episodes.into_iter().enumerate() {
+                                let should_highlight = first_unwatched_index == Some(index);
+                                self.add_episode_card(episode, should_highlight);
+                            }
+
+                            // Scroll to the highlighted episode after a brief delay to ensure layout
+                            if first_unwatched_index.is_some() {
+                                let episodes_carousel = imp.episodes_carousel.clone();
+                                glib::timeout_add_local_once(
+                                    std::time::Duration::from_millis(100),
+                                    move || {
+                                        // Scroll to show the highlighted episode
+                                        let adjustment = episodes_carousel.hadjustment();
+                                        // Calculate approximate position (320px card width + spacing)
+                                        let card_width = 330.0; // 320px + spacing
+                                        let target_position =
+                                            first_unwatched_index.unwrap() as f64 * card_width;
+
+                                        // Center the card if possible
+                                        let viewport_width = adjustment.page_size();
+                                        let centered_position = (target_position
+                                            - viewport_width / 2.0
+                                            + card_width / 2.0)
+                                            .max(0.0);
+
+                                        adjustment.set_value(centered_position);
+                                    },
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to load episodes: {}", e);
+                            // Show error message
+                            let error_label = gtk4::Label::builder()
+                                .label(format!("Failed to load episodes: {}", e))
+                                .css_classes(vec!["error"])
+                                .build();
+                            imp.episodes_box.append(&error_label);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn add_episode_card(&self, episode: Episode, should_highlight: bool) {
         let imp = self.imp();
 
         // Create episode card with enhanced styling
+        let mut card_classes = vec!["card", "episode-card", "flat"];
+        if should_highlight {
+            card_classes.push("next-unwatched");
+        }
         let card = gtk4::Button::builder()
-            .css_classes(vec!["card", "episode-card", "flat"])
+            .css_classes(card_classes)
             .width_request(320)
             .build();
 
