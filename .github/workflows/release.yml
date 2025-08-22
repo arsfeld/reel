@@ -34,6 +34,59 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
       
+      - name: Check if release exists
+        id: check_release
+        run: |
+          if gh release view ${{ steps.get_version.outputs.version }} &>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Release already exists for ${{ steps.get_version.outputs.version }}"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "No release found for ${{ steps.get_version.outputs.version }}"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+      
+      - name: Generate release notes with Claude
+        id: generate_notes
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          # Get the previous tag
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${{ steps.get_version.outputs.version }}^ 2>/dev/null || echo "")
+          
+          # Get commit messages between tags
+          if [ -n "$PREVIOUS_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s" $PREVIOUS_TAG..${{ steps.get_version.outputs.version }})
+          else
+            COMMITS=$(git log --pretty=format:"- %s" --max-count=20)
+          fi
+          
+          # Install Claude CLI if not already installed
+          if ! command -v claude &> /dev/null; then
+            npm install -g @anthropic-ai/claude-cli
+          fi
+          
+          # Generate release notes with Claude
+          RELEASE_NOTES=$(cat <<EOF | claude --oauth-token "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" --no-markdown
+          Based on these git commits, generate a concise "What's New" section for release notes. 
+          Format as bullet points, group similar changes, and make it user-friendly (not just commit messages).
+          Focus on features, improvements, and fixes that users care about.
+          Keep it to 5-7 bullet points maximum.
+          
+          Commits:
+          $COMMITS
+          
+          Output only the bullet points, no headers or extra text.
+          EOF
+          )
+          
+          # Save to output (escape newlines for GitHub Actions)
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -42,64 +95,64 @@ jobs:
           name: Reel ${{ steps.get_version.outputs.version }}
           draft: true
           prerelease: false
-          body: |
-            # Reel ${{ steps.get_version.outputs.version }}
-            
-            ## What's New
-            - 
-            
-            ## Downloads
-            - **Linux Tarball**: `reel-linux-x86_64.tar.gz` - Extract and run `./reel`
-            - **Debian/Ubuntu**: `reel-*-amd64.deb` - Install with `sudo dpkg -i reel-*.deb`
-            - **Fedora/RHEL**: `reel-*-x86_64.rpm` - Install with `sudo rpm -i reel-*.rpm`
-            - **AppImage**: `reel-*-x86_64.AppImage` - Portable, runs on most Linux distributions
-            - **macOS**: `reel-macos-universal.dmg` - Mount and drag to Applications
-            - **Windows**: `reel-windows-x86_64.zip` - Extract and run `reel.exe`
-            
-            ## Installation
-            
-            ### Linux
-            
-            #### AppImage (Recommended - Universal)
-            ```bash
-            chmod +x reel-*-x86_64.AppImage
-            ./reel-*-x86_64.AppImage
-            ```
-            
-            #### Debian/Ubuntu
-            ```bash
-            sudo dpkg -i reel-*-amd64.deb
-            sudo apt-get install -f  # Install dependencies if needed
-            ```
-            
-            #### Fedora/RHEL/openSUSE
-            ```bash
-            sudo rpm -i reel-*-x86_64.rpm
-            # or
-            sudo dnf install ./reel-*-x86_64.rpm
-            ```
-            
-            #### Manual Installation
-            ```bash
-            tar -xzf reel-linux-x86_64.tar.gz
-            chmod +x reel
-            ./reel
-            ```
-            
-            ### macOS
-            1. Download the DMG file
-            2. Double-click to mount
-            3. Drag Reel to Applications folder
-            
-            ### Windows
-            1. Download the ZIP file
-            2. Extract to desired location
-            3. Run `reel.exe`
-            
-            ## System Requirements
-            - GTK4 and libadwaita
-            - GStreamer with common plugins
-            - 64-bit operating system
+          # Only set body if release doesn't exist
+          body: ${{ steps.check_release.outputs.exists == 'false' && format('# Reel {0}
+
+## What''s New
+{1}
+
+## Downloads
+- **Linux Tarball**: `reel-linux-x86_64.tar.gz` - Extract and run `./reel`
+- **Debian/Ubuntu**: `reel-*-amd64.deb` - Install with `sudo dpkg -i reel-*.deb`
+- **Fedora/RHEL**: `reel-*-x86_64.rpm` - Install with `sudo rpm -i reel-*.rpm`
+- **AppImage**: `reel-*-x86_64.AppImage` - Portable, runs on most Linux distributions
+- **macOS**: `reel-macos-universal.dmg` - Mount and drag to Applications
+- **Windows**: `reel-windows-x86_64.zip` - Extract and run `reel.exe`
+
+## Installation
+
+### Linux
+
+#### AppImage (Recommended - Universal)
+```bash
+chmod +x reel-*-x86_64.AppImage
+./reel-*-x86_64.AppImage
+```
+
+#### Debian/Ubuntu
+```bash
+sudo dpkg -i reel-*-amd64.deb
+sudo apt-get install -f  # Install dependencies if needed
+```
+
+#### Fedora/RHEL/openSUSE
+```bash
+sudo rpm -i reel-*-x86_64.rpm
+# or
+sudo dnf install ./reel-*-x86_64.rpm
+```
+
+#### Manual Installation
+```bash
+tar -xzf reel-linux-x86_64.tar.gz
+chmod +x reel
+./reel
+```
+
+### macOS
+1. Download the DMG file
+2. Double-click to mount
+3. Drag Reel to Applications folder
+
+### Windows
+1. Download the ZIP file
+2. Extract to desired location
+3. Run `reel.exe`
+
+## System Requirements
+- GTK4 and libadwaita
+- GStreamer with common plugins
+- 64-bit operating system', steps.get_version.outputs.version, steps.generate_notes.outputs.notes || '- ') || '' }}
 
   build-linux:
     needs: create-release
