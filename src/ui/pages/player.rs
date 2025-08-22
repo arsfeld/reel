@@ -1337,8 +1337,10 @@ impl PlayerPage {
                             let backend_manager = state.backend_manager.read().await;
                             if let Some((_, backend)) = backend_manager.get_active_backend() {
                                 // Update progress on server
-                                if let Err(e) =
-                                    backend.update_progress(media_item.id(), position).await
+                                let duration = media_item.duration().unwrap_or(Duration::ZERO);
+                                if let Err(e) = backend
+                                    .update_progress(media_item.id(), position, duration)
+                                    .await
                                 {
                                     debug!("Failed to sync playback position: {}", e);
                                 } else {
@@ -1373,7 +1375,11 @@ impl PlayerPage {
                 let backend_manager = self.state.backend_manager.read().await;
                 if let Some((_, backend)) = backend_manager.get_active_backend() {
                     // Update progress on server
-                    if let Err(e) = backend.update_progress(media_item.id(), position).await {
+                    let duration = media_item.duration().unwrap_or(Duration::ZERO);
+                    if let Err(e) = backend
+                        .update_progress(media_item.id(), position, duration)
+                        .await
+                    {
                         error!("Failed to sync final playback position: {}", e);
                     } else {
                         info!("Synced final playback position: {:?}", position);

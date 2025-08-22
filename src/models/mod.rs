@@ -278,6 +278,14 @@ impl MediaItem {
             _ => None,
         }
     }
+
+    pub fn duration(&self) -> Option<Duration> {
+        match self {
+            MediaItem::Movie(m) => Some(m.duration),
+            MediaItem::Episode(e) => Some(e.duration),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
