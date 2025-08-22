@@ -5,11 +5,11 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, error, info, warn};
 
 use crate::models::{
-    Episode, HomeSection, HomeSectionType, Library, LibraryType, MediaItem, Movie, QualityOption,
-    Resolution, Season, Show, StreamInfo,
+    ChapterMarker, ChapterType, Episode, HomeSection, HomeSectionType, Library, LibraryType,
+    MediaItem, Movie, QualityOption, Resolution, Season, Show, StreamInfo,
 };
 use crate::services::cache::CacheManager;
 
@@ -21,6 +21,7 @@ const PLEX_HEADERS: &[(&str, &str)] = &[
     ("Accept", "application/json"),
 ];
 
+#[derive(Clone)]
 pub struct PlexApi {
     client: reqwest::Client,
     base_url: String,
@@ -153,6 +154,8 @@ impl PlexApi {
                         .last_viewed_at
                         .and_then(|ts| DateTime::from_timestamp(ts, 0)),
                     playback_position: meta.view_offset.map(Duration::from_millis),
+                    intro_marker: None,   // Will be fetched when playing
+                    credits_marker: None, // Will be fetched when playing
                 }
             })
             .collect();
@@ -279,6 +282,15 @@ impl PlexApi {
                         && duration_ms > 0
                         && meta.view_offset.unwrap_or(0) as f64 / duration_ms as f64 > 0.9);
 
+                // Note: We can't fetch markers here in a sync context
+                // They would need to be fetched separately after episodes are loaded
+                let intro_marker = None;
+                let credits_marker = None;
+                debug!(
+                    "Episode {} - markers will need separate fetch (can't await in map)",
+                    meta.rating_key
+                );
+
                 Episode {
                     id: meta.rating_key,
                     title: meta.title,
@@ -299,6 +311,8 @@ impl PlexApi {
                     playback_position: meta.view_offset.map(Duration::from_millis),
                     show_title: None, // Show title not available in this context
                     show_poster_url: None, // Show poster not available in this context
+                    intro_marker,
+                    credits_marker,
                 }
             })
             .collect();
@@ -405,25 +419,129 @@ impl PlexApi {
     }
 
     /// Update playback progress
-    pub async fn update_progress(&self, media_id: &str, position: Duration) -> Result<()> {
-        let url = format!("{}/:/timeline", self.base_url);
+    /// Note: state should be "playing" for active playback or "paused" when paused
+    pub async fn update_progress(
+        &self,
+        media_id: &str,
+        position: Duration,
+        duration: Duration,
+    ) -> Result<()> {
+        self.update_progress_with_state(media_id, position, duration, "playing")
+            .await
+    }
+
+    /// Update playback progress with explicit state
+    pub async fn update_progress_with_state(
+        &self,
+        media_id: &str,
+        position: Duration,
+        duration: Duration,
+        state: &str,
+    ) -> Result<()> {
+        // For simple progress tracking without a playQueue, we can update the viewOffset directly
+        // by "scrobbling" with the current position
         let position_ms = position.as_millis() as u64;
+
+        // If we're more than 90% through, mark as watched
+        let duration_ms = duration.as_millis() as u64;
+        if duration_ms > 0 && position_ms > (duration_ms * 9 / 10) {
+            debug!("Position is >90% of duration, marking as watched");
+            return self.mark_watched(media_id).await;
+        }
+
+        // Otherwise update the viewOffset
+        let url = format!("{}/library/metadata/{}", self.base_url, media_id);
+
+        debug!(
+            "Updating viewOffset for media_id: {}, position: {}ms via PUT request",
+            media_id, position_ms
+        );
+
+        let params = [("viewOffset", position_ms.to_string())];
+
+        debug!("ViewOffset update URL: {}", url);
+        debug!("ViewOffset update params: {:?}", params);
+
+        // First, let's try the scrobble endpoint with the position
+        // The scrobble endpoint is specifically designed for updating playback progress
+        let scrobble_url = format!("{}/:/scrobble", self.base_url);
+
+        debug!(
+            "Trying scrobble endpoint to update progress - media_id: {}, position: {}ms",
+            media_id, position_ms
+        );
+
+        let scrobble_params = [
+            ("key", media_id.to_string()),
+            ("identifier", "com.plexapp.plugins.library".to_string()),
+            ("time", position_ms.to_string()),
+        ];
 
         let response = self
             .client
-            .get(&url)
+            .get(&scrobble_url)
             .header("X-Plex-Token", &self.auth_token)
-            .query(&[
-                ("ratingKey", media_id),
-                ("key", &format!("/library/metadata/{}", media_id)),
-                ("state", "playing"),
-                ("time", &position_ms.to_string()),
-            ])
+            .query(&scrobble_params)
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            return Err(anyhow!("Failed to update progress: {}", response.status()));
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "No body".to_string());
+
+        if !status.is_success() {
+            error!(
+                "Scrobble update failed - Status: {}, Body: {}, URL: {}, Params: {:?}",
+                status, body, scrobble_url, scrobble_params
+            );
+
+            // Fall back to timeline endpoint with minimal parameters
+            warn!("Falling back to timeline endpoint");
+            let timeline_url = format!("{}/:/timeline", self.base_url);
+
+            let timeline_params = [
+                ("key", format!("/library/metadata/{}", media_id)),
+                ("ratingKey", media_id.to_string()),
+                ("state", state.to_string()),
+                ("time", position_ms.to_string()),
+                ("duration", duration.as_millis().to_string()),
+            ];
+
+            let timeline_response = self
+                .client
+                .get(&timeline_url)
+                .header("X-Plex-Token", &self.auth_token)
+                .header("X-Plex-Client-Identifier", "reel-player")
+                .header("X-Plex-Product", "Reel")
+                .header("X-Plex-Version", "0.1.0")
+                .header("X-Plex-Platform", "Linux")
+                .query(&timeline_params)
+                .send()
+                .await?;
+
+            if !timeline_response.status().is_success() {
+                let timeline_body = timeline_response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "No body".to_string());
+                error!(
+                    "Timeline update also failed - Status: {}, Body: {}",
+                    timeline_response.status(),
+                    timeline_body
+                );
+                return Err(anyhow!(
+                    "Failed to update progress via both scrobble and timeline"
+                ));
+            }
+
+            debug!("Timeline update successful as fallback");
+        } else {
+            debug!(
+                "Scrobble update successful for media_id: {} - Response: {}",
+                media_id, body
+            );
         }
 
         Ok(())
@@ -966,6 +1084,8 @@ impl PlexApi {
                         .last_viewed_at
                         .map(|ts| DateTime::from_timestamp(ts, 0).unwrap()),
                     playback_position: meta.view_offset.map(Duration::from_millis),
+                    intro_marker: None,   // Will be fetched when playing
+                    credits_marker: None, // Will be fetched when playing
                 };
                 Ok(MediaItem::Movie(movie))
             }
@@ -1011,6 +1131,8 @@ impl PlexApi {
                     || (meta.view_offset.unwrap_or(0) as f64 / duration_ms.max(1) as f64) > 0.9;
 
                 let episode = Episode {
+                    intro_marker: None,
+                    credits_marker: None,
                     id: meta.rating_key,
                     title: meta.title,
                     season_number: meta.parent_index.unwrap_or(0),
@@ -1062,9 +1184,121 @@ impl PlexApi {
             )
         }
     }
+
+    /// Fetch intro and credit markers for any media (episode or movie)
+    pub async fn fetch_episode_markers(
+        &self,
+        rating_key: &str,
+    ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
+        // Include additional parameters to ensure markers are returned
+        // includeChapters=1 ensures chapter/marker data is included
+        info!("Fetching markers for media ID: {}", rating_key);
+        let url = format!(
+            "{}/library/metadata/{}?includeChapters=1&includeMarkers=1&includeOnDeck=1&includeRelated=1&includeExtras=1&includeGeolocation=1&X-Plex-Token={}",
+            self.base_url, rating_key, self.auth_token
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .header("X-Plex-Token", &self.auth_token)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            warn!(
+                "Failed to fetch markers for episode {}: {}",
+                rating_key,
+                response.status()
+            );
+            return Ok((None, None));
+        }
+
+        let response_text = response.text().await?;
+
+        // Try to parse the response
+        let data: PlexMetadataResponse = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to parse Plex metadata response: {}", e);
+                return Ok((None, None));
+            }
+        };
+
+        let mut intro_marker = None;
+        let mut credits_marker = None;
+
+        if let Some(metadata) = data.media_container.metadata.first() {
+            if let Some(markers) = &metadata.marker {
+                info!(
+                    "Found {} markers for media ID: {}",
+                    markers.len(),
+                    rating_key
+                );
+                for marker in markers.iter() {
+                    info!(
+                        "Marker type: '{}', start: {}ms, end: {}ms",
+                        marker.type_, marker.start_time_offset, marker.end_time_offset
+                    );
+                    match marker.type_.as_str() {
+                        "intro" => {
+                            intro_marker = Some(ChapterMarker {
+                                start_time: Duration::from_millis(marker.start_time_offset),
+                                end_time: Duration::from_millis(marker.end_time_offset),
+                                marker_type: ChapterType::Intro,
+                            });
+                        }
+                        "credits" => {
+                            credits_marker = Some(ChapterMarker {
+                                start_time: Duration::from_millis(marker.start_time_offset),
+                                end_time: Duration::from_millis(marker.end_time_offset),
+                                marker_type: ChapterType::Credits,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                info!("No markers found for media ID: {}", rating_key);
+            }
+        } else {
+            warn!("No metadata found in response for media ID: {}", rating_key);
+        }
+
+        Ok((intro_marker, credits_marker))
+    }
 }
 
 // Plex API Response Types
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct PlexMetadataResponse {
+    media_container: PlexMetadataContainer,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlexMetadataContainer {
+    #[serde(rename = "Metadata", default)]
+    metadata: Vec<PlexMetadataWithMarkers>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlexMetadataWithMarkers {
+    #[serde(rename = "Marker", default)]
+    marker: Option<Vec<PlexMarker>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlexMarker {
+    #[serde(rename = "type")]
+    type_: String,
+    #[serde(rename = "startTimeOffset")]
+    start_time_offset: u64,
+    #[serde(rename = "endTimeOffset")]
+    end_time_offset: u64,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]

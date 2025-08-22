@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 use crate::models::{
-    Credentials, Episode, HomeSection, Library, MediaItem, Movie, MusicAlbum, MusicTrack, Photo,
-    Show, StreamInfo, User,
+    ChapterMarker, Credentials, Episode, HomeSection, Library, MediaItem, Movie, MusicAlbum,
+    MusicTrack, Photo, Show, StreamInfo, User,
 };
 
 #[async_trait]
@@ -32,7 +32,12 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
 
     async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo>;
 
-    async fn update_progress(&self, media_id: &str, position: Duration) -> Result<()>;
+    async fn update_progress(
+        &self,
+        media_id: &str,
+        position: Duration,
+        duration: Duration,
+    ) -> Result<()>;
 
     async fn mark_watched(&self, media_id: &str) -> Result<()>;
 
@@ -47,6 +52,33 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
         // Default implementation returns empty sections
         // Backends should override this to provide homepage data
         Ok(Vec::new())
+    }
+
+    /// Fetch intro and credits markers for an episode
+    async fn fetch_episode_markers(
+        &self,
+        episode_id: &str,
+    ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
+        // Default implementation returns no markers
+        // Only Plex backend currently implements this
+        Ok((None, None))
+    }
+
+    /// Fetch intro and credits markers for any media (movie or episode)
+    async fn fetch_media_markers(
+        &self,
+        media_id: &str,
+    ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
+        // Default implementation returns no markers
+        // Backends should override this to provide marker functionality
+        Ok((None, None))
+    }
+
+    /// Find the next episode after the given episode
+    async fn find_next_episode(&self, current_episode: &Episode) -> Result<Option<Episode>> {
+        // Default implementation returns None
+        // Backends should override this to provide next episode functionality
+        Ok(None)
     }
 
     // Generic media item fetching for all library types

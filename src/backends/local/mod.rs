@@ -114,7 +114,12 @@ impl MediaBackend for LocalBackend {
         })
     }
 
-    async fn update_progress(&self, _media_id: &str, _position: Duration) -> Result<()> {
+    async fn update_progress(
+        &self,
+        _media_id: &str,
+        _position: Duration,
+        _duration: Duration,
+    ) -> Result<()> {
         // TODO: Store progress locally
         todo!("Local progress tracking not yet implemented")
     }

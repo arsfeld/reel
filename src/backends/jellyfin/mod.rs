@@ -98,7 +98,12 @@ impl MediaBackend for JellyfinBackend {
         todo!("Getting stream URL not yet implemented")
     }
 
-    async fn update_progress(&self, _media_id: &str, _position: Duration) -> Result<()> {
+    async fn update_progress(
+        &self,
+        _media_id: &str,
+        _position: Duration,
+        _duration: Duration,
+    ) -> Result<()> {
         // TODO: Implement updating playback progress in Jellyfin
         todo!("Updating progress not yet implemented")
     }

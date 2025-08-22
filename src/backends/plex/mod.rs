@@ -1,7 +1,7 @@
 mod api;
 mod auth;
 
-use api::PlexApi;
+pub use api::PlexApi;
 pub use auth::{PlexAuth, PlexConnection, PlexPin, PlexServer};
 
 use anyhow::{Result, anyhow};
@@ -13,9 +13,10 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tracing::{debug, error, info};
 
 use super::traits::{MediaBackend, SearchResults};
-use crate::models::{Credentials, Episode, Library, Movie, Show, StreamInfo, User};
+use crate::models::{ChapterMarker, Credentials, Episode, Library, Movie, Show, StreamInfo, User};
 use crate::services::cache::CacheManager;
 
 pub struct PlexBackend {
@@ -72,6 +73,10 @@ impl PlexBackend {
 
     pub async fn get_server_info(&self) -> Option<ServerInfo> {
         self.server_info.read().await.clone()
+    }
+
+    pub async fn get_api_client(&self) -> Option<PlexApi> {
+        self.api.read().await.clone()
     }
 
     /// Check if the server is reachable without blocking for too long
@@ -635,9 +640,14 @@ impl MediaBackend for PlexBackend {
         api.get_stream_url(media_id).await
     }
 
-    async fn update_progress(&self, media_id: &str, position: Duration) -> Result<()> {
+    async fn update_progress(
+        &self,
+        media_id: &str,
+        position: Duration,
+        duration: Duration,
+    ) -> Result<()> {
         let api = self.get_api().await?;
-        api.update_progress(media_id, position).await
+        api.update_progress(media_id, position, duration).await
     }
 
     async fn mark_watched(&self, media_id: &str) -> Result<()> {
@@ -724,6 +734,40 @@ impl MediaBackend for PlexBackend {
 
     async fn supports_offline(&self) -> bool {
         true // Plex supports offline functionality
+    }
+
+    async fn fetch_episode_markers(
+        &self,
+        episode_id: &str,
+    ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
+        let api = self.get_api().await?;
+        api.fetch_episode_markers(episode_id).await
+    }
+
+    async fn fetch_media_markers(
+        &self,
+        media_id: &str,
+    ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
+        // Plex uses the same API endpoint for both movies and episodes
+        let api = self.get_api().await?;
+        api.fetch_episode_markers(media_id).await
+    }
+
+    async fn find_next_episode(&self, current_episode: &Episode) -> Result<Option<Episode>> {
+        let api = self.get_api().await?;
+
+        // For now, return None as we need to implement the logic to find the show
+        // and get the next episode. This is a placeholder implementation.
+        // TODO: Implement proper next episode finding logic
+
+        info!(
+            "Finding next episode after S{:02}E{:02} - {}",
+            current_episode.season_number, current_episode.episode_number, current_episode.title
+        );
+
+        // For now, return None - this will show "No next episode available"
+        // until we implement the full logic
+        Ok(None)
     }
 }
 
