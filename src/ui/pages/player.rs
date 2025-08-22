@@ -27,6 +27,8 @@ pub struct PlayerPage {
     state: Arc<AppState>,
     hover_controller: Rc<gtk4::EventControllerMotion>,
     inhibit_cookie: Arc<RwLock<Option<u32>>>,
+    position_sync_timer: Arc<RwLock<Option<glib::SourceId>>>,
+    last_synced_position: Arc<RwLock<Option<Duration>>>,
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -325,6 +327,8 @@ impl PlayerPage {
             state,
             hover_controller: hover_controller_rc,
             inhibit_cookie,
+            position_sync_timer: Arc::new(RwLock::new(None)),
+            last_synced_position: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -389,6 +393,19 @@ impl PlayerPage {
             player.load_media(&stream_info.url).await?;
             info!("PlayerPage::load_media() - Media loaded into player");
 
+            // Check if we should resume from a previous position
+            let resume_position = media_item.playback_position();
+            if let Some(position) = resume_position {
+                // Only resume if position is more than 10 seconds and less than 90% of duration
+                if position > Duration::from_secs(10) {
+                    info!("Resuming playback from position: {:?}", position);
+                    // Seek to the saved position
+                    if let Err(e) = player.seek(position).await {
+                        error!("Failed to seek to resume position: {}", e);
+                    }
+                }
+            }
+
             // Update controls with media info and stream options
             debug!("PlayerPage::load_media() - Updating controls with media info");
             self.controls
@@ -399,6 +416,9 @@ impl PlayerPage {
             debug!("PlayerPage::load_media() - Starting playback");
             player.play().await?;
             info!("PlayerPage::load_media() - Playback started successfully");
+
+            // Start position sync timer
+            self.start_position_sync_timer().await;
 
             // Update play button to show pause icon since we're now playing
             self.controls
@@ -447,6 +467,13 @@ impl PlayerPage {
 
     pub async fn stop(&self) {
         debug!("PlayerPage::stop() - Stopping player");
+
+        // Sync final position before stopping
+        self.sync_playback_position().await;
+
+        // Stop the position sync timer
+        self.stop_position_sync_timer().await;
+
         let player = self.player.read().await;
         if let Err(e) = player.stop().await {
             error!("PlayerPage::stop() - Failed to stop player: {}", e);
@@ -637,6 +664,93 @@ impl PlayerPage {
                 }
             }
         });
+    }
+
+    async fn start_position_sync_timer(&self) {
+        // Stop any existing timer
+        self.stop_position_sync_timer().await;
+
+        let player = self.player.clone();
+        let state = self.state.clone();
+        let current_media_item = self.current_media_item.clone();
+        let last_synced_position = self.last_synced_position.clone();
+        let timer_ref = self.position_sync_timer.clone();
+
+        // Start a timer to sync position every 10 seconds
+        let timer_id = glib::timeout_add_local(Duration::from_secs(10), move || {
+            let player = player.clone();
+            let state = state.clone();
+            let current_media_item = current_media_item.clone();
+            let last_synced_position = last_synced_position.clone();
+
+            glib::spawn_future_local(async move {
+                // Get current position
+                let player = player.read().await;
+                if let Some(position) = player.get_position().await {
+                    // Only sync if position has changed significantly (> 5 seconds)
+                    let last_pos = *last_synced_position.read().await;
+                    let should_sync = match last_pos {
+                        None => true,
+                        Some(last) => {
+                            let diff = if position > last {
+                                position - last
+                            } else {
+                                last - position
+                            };
+                            diff > Duration::from_secs(5)
+                        }
+                    };
+
+                    if should_sync {
+                        // Get media item and backend
+                        if let Some(media_item) = &*current_media_item.read().await {
+                            let backend_manager = state.backend_manager.read().await;
+                            if let Some((_, backend)) = backend_manager.get_active_backend() {
+                                // Update progress on server
+                                if let Err(e) =
+                                    backend.update_progress(media_item.id(), position).await
+                                {
+                                    debug!("Failed to sync playback position: {}", e);
+                                } else {
+                                    debug!("Synced playback position: {:?}", position);
+                                    *last_synced_position.write().await = Some(position);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            glib::ControlFlow::Continue
+        });
+
+        *timer_ref.write().await = Some(timer_id);
+        info!("Started playback position sync timer");
+    }
+
+    async fn stop_position_sync_timer(&self) {
+        if let Some(timer_id) = self.position_sync_timer.write().await.take() {
+            timer_id.remove();
+            info!("Stopped playback position sync timer");
+        }
+    }
+
+    async fn sync_playback_position(&self) {
+        // Get current position and sync immediately
+        let player = self.player.read().await;
+        if let Some(position) = player.get_position().await {
+            if let Some(media_item) = &*self.current_media_item.read().await {
+                let backend_manager = self.state.backend_manager.read().await;
+                if let Some((_, backend)) = backend_manager.get_active_backend() {
+                    // Update progress on server
+                    if let Err(e) = backend.update_progress(media_item.id(), position).await {
+                        error!("Failed to sync final playback position: {}", e);
+                    } else {
+                        info!("Synced final playback position: {:?}", position);
+                    }
+                }
+            }
+        }
     }
 }
 

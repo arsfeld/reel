@@ -409,21 +409,35 @@ impl PlexApi {
         let url = format!("{}/:/timeline", self.base_url);
         let position_ms = position.as_millis() as u64;
 
+        // Plex timeline requires more complete headers for proper tracking
         let response = self
             .client
             .get(&url)
             .header("X-Plex-Token", &self.auth_token)
+            .header("X-Plex-Client-Identifier", "reel")
+            .header("X-Plex-Product", "Reel")
+            .header("X-Plex-Version", "0.1.0")
+            .header("X-Plex-Platform", "Linux")
             .query(&[
                 ("ratingKey", media_id),
                 ("key", &format!("/library/metadata/{}", media_id)),
+                ("identifier", "com.plexapp.plugins.library"),
                 ("state", "playing"),
                 ("time", &position_ms.to_string()),
+                ("duration", "0"), // Duration of the media, 0 means let server determine
+                ("playbackTime", &position_ms.to_string()),
             ])
             .send()
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Failed to update progress: {}", response.status()));
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            debug!("Timeline update response: {} - {}", status, text);
+            // Timeline endpoint often returns 200 with empty response, which is OK
+            if status != 200 {
+                return Err(anyhow!("Failed to update progress: {}", status));
+            }
         }
 
         Ok(())
