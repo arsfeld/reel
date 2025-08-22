@@ -242,7 +242,7 @@ fn default_language() -> String {
     "system".to_string()
 }
 fn default_player_backend() -> String {
-    "gstreamer".to_string()
+    "mpv".to_string()
 }
 fn default_true() -> bool {
     true

@@ -16,8 +16,8 @@ pub enum PlayerBackend {
 impl From<&str> for PlayerBackend {
     fn from(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "mpv" => PlayerBackend::Mpv,
-            _ => PlayerBackend::GStreamer, // Default to GStreamer
+            "gstreamer" => PlayerBackend::GStreamer,
+            _ => PlayerBackend::Mpv, // Default to MPV
         }
     }
 }
