@@ -1,4 +1,5 @@
 use chrono;
+use gdk::prelude::ToplevelExt;
 use gtk4::{self, gdk, gio, glib, prelude::*};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -23,6 +24,8 @@ pub struct PlayerPage {
     current_stream_info: Arc<RwLock<Option<crate::models::StreamInfo>>>,
     current_media_item: Arc<RwLock<Option<MediaItem>>>,
     state: Arc<AppState>,
+    hover_controller: Rc<gtk4::EventControllerMotion>,
+    inhibit_cookie: Arc<RwLock<Option<u32>>>,
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -48,6 +51,8 @@ impl PlayerPage {
         let overlay = gtk4::Overlay::new();
         overlay.set_vexpand(true);
         overlay.set_hexpand(true);
+        overlay.set_can_focus(true);
+        overlay.set_focusable(true);
 
         // Video container
         let video_container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
@@ -68,8 +73,11 @@ impl PlayerPage {
         ));
         info!("PlayerPage::new() - Player created successfully");
 
+        // Create inhibit cookie that will be shared with controls
+        let inhibit_cookie = Arc::new(RwLock::new(None));
+
         // Create controls
-        let controls = PlayerControls::new(player.clone());
+        let controls = PlayerControls::new(player.clone(), inhibit_cookie.clone());
         controls.widget.set_valign(gtk4::Align::End);
         controls.widget.set_margin_bottom(20);
         // Hide controls by default - they'll show on mouse movement
@@ -85,17 +93,16 @@ impl PlayerPage {
         hover_controller.connect_motion(move |_, _, _| {
             // Show controls
             controls_widget.set_visible(true);
-            controls_widget.add_css_class("osd");
 
             // Cancel previous timer if exists
             if let Some(timer_id) = hide_timer_clone.borrow_mut().take() {
                 timer_id.remove();
             }
 
-            // Hide again after 3 seconds of no movement
+            // Hide again after 2 seconds of no movement
             let controls_widget_inner = controls_widget.clone();
             let hide_timer_inner = hide_timer_clone.clone();
-            let timer_id = glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
+            let timer_id = glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
                 controls_widget_inner.set_visible(false);
                 // Clear the timer reference since it's done
                 hide_timer_inner.borrow_mut().take();
@@ -104,8 +111,8 @@ impl PlayerPage {
             hide_timer_clone.borrow_mut().replace(timer_id);
         });
 
-        // Add controller to the overlay (covers the whole video area)
-        overlay.add_controller(hover_controller);
+        // Store the hover controller as we'll add it after playback starts
+        let hover_controller_rc = Rc::new(hover_controller);
 
         // Add keyboard event controller for fullscreen and playback controls
         let key_controller = gtk4::EventControllerKey::new();
@@ -116,6 +123,7 @@ impl PlayerPage {
             match keyval {
                 // F or F11 for fullscreen toggle
                 gdk::Key::f | gdk::Key::F | gdk::Key::F11 => {
+                    // This needs to be handled differently since we can't call self methods here
                     if let Some(widget) = controller.widget()
                         && let Some(window) = widget
                             .root()
@@ -126,11 +134,13 @@ impl PlayerPage {
                             controls_for_key
                                 .fullscreen_button
                                 .set_icon_name("view-fullscreen-symbolic");
+                            overlay_for_key.remove_css_class("fullscreen");
                         } else {
                             window.fullscreen();
                             controls_for_key
                                 .fullscreen_button
                                 .set_icon_name("view-restore-symbolic");
+                            overlay_for_key.add_css_class("fullscreen");
                         }
                     }
                     glib::Propagation::Stop
@@ -147,6 +157,7 @@ impl PlayerPage {
                         controls_for_key
                             .fullscreen_button
                             .set_icon_name("view-fullscreen-symbolic");
+                        overlay_for_key.remove_css_class("fullscreen");
                     }
                     glib::Propagation::Stop
                 }
@@ -176,7 +187,7 @@ impl PlayerPage {
                     glib::spawn_future_local(async move {
                         let player = player.read().await;
                         if let Some(position) = player.get_position().await {
-                            let new_position = position + Duration::from_secs(10);
+                            let new_position = position + Duration::from_secs(30);
                             if let Err(e) = player.seek(new_position).await {
                                 error!("Failed to seek forward: {}", e);
                             }
@@ -193,12 +204,86 @@ impl PlayerPage {
                     }
                     glib::Propagation::Stop
                 }
+                // Q to quit the application
+                gdk::Key::q | gdk::Key::Q => {
+                    if let Some(widget) = controller.widget()
+                        && let Some(window) = widget
+                            .root()
+                            .and_then(|r| r.downcast::<gtk4::Window>().ok())
+                    {
+                        window.close();
+                    }
+                    glib::Propagation::Stop
+                }
                 _ => glib::Propagation::Proceed,
             }
         });
 
         // Add key controller to the overlay
         overlay.add_controller(key_controller);
+
+        // Add double-click gesture for fullscreen toggle
+        let double_click_gesture = gtk4::GestureClick::new();
+        double_click_gesture.set_button(gdk::BUTTON_PRIMARY);
+        let controls_for_double_click = controls.clone();
+        let overlay_for_double_click = overlay.clone();
+
+        double_click_gesture.connect_pressed(move |gesture, n_press, _x, _y| {
+            if n_press == 2 {
+                // Double-click detected
+                if let Some(widget) = gesture.widget()
+                    && let Some(window) = widget
+                        .root()
+                        .and_then(|r| r.downcast::<gtk4::Window>().ok())
+                {
+                    if window.is_fullscreen() {
+                        window.unfullscreen();
+                        controls_for_double_click
+                            .fullscreen_button
+                            .set_icon_name("view-fullscreen-symbolic");
+                        overlay_for_double_click.remove_css_class("fullscreen");
+                    } else {
+                        window.fullscreen();
+                        controls_for_double_click
+                            .fullscreen_button
+                            .set_icon_name("view-restore-symbolic");
+                        overlay_for_double_click.add_css_class("fullscreen");
+                    }
+                }
+            }
+        });
+
+        video_container.add_controller(double_click_gesture);
+
+        // Add drag gesture for moving the window - attach to video container, not overlay
+        let drag_gesture = gtk4::GestureDrag::new();
+        drag_gesture.set_button(gdk::BUTTON_PRIMARY); // Left mouse button
+        drag_gesture.set_propagation_phase(gtk4::PropagationPhase::Bubble);
+
+        drag_gesture.connect_drag_begin(|gesture, start_x, start_y| {
+            if let Some(widget) = gesture.widget()
+                && let Some(window) = widget
+                    .root()
+                    .and_then(|r| r.downcast::<gtk4::Window>().ok())
+            {
+                // Start the window drag operation
+                if let Some(surface) = window.surface() {
+                    if let Some(toplevel) = surface.downcast_ref::<gdk::Toplevel>() {
+                        if let Some(device) = gesture.device() {
+                            toplevel.begin_move(
+                                &device,
+                                gdk::BUTTON_PRIMARY as i32,
+                                start_x,
+                                start_y,
+                                gtk4::gdk::CURRENT_TIME,
+                            );
+                        }
+                    }
+                }
+            }
+        });
+
+        video_container.add_controller(drag_gesture);
 
         widget.append(&overlay);
 
@@ -213,6 +298,8 @@ impl PlayerPage {
             current_stream_info: Arc::new(RwLock::new(None)),
             current_media_item: Arc::new(RwLock::new(None)),
             state,
+            hover_controller: hover_controller_rc,
+            inhibit_cookie,
         }
     }
 
@@ -288,6 +375,25 @@ impl PlayerPage {
             player.play().await?;
             info!("PlayerPage::load_media() - Playback started successfully");
 
+            // Update play button to show pause icon since we're now playing
+            self.controls
+                .play_button
+                .set_icon_name("media-playback-pause-symbolic");
+
+            // Add the hover controller after a delay to prevent initial control flash
+            let overlay = self.overlay.clone();
+            let hover_controller = self.hover_controller.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(1000), move || {
+                overlay.add_controller(hover_controller.as_ref().clone());
+                glib::ControlFlow::Break
+            });
+
+            // Grab focus on the overlay to ensure keyboard shortcuts work
+            self.overlay.grab_focus();
+
+            // Inhibit suspend/screensaver while playing
+            self.inhibit_suspend().await;
+
             // Populate track menus after playback starts (requires Playing state)
             // Add a small delay to ensure the playbin has discovered all tracks
             let controls = self.controls.clone();
@@ -322,6 +428,9 @@ impl PlayerPage {
         } else {
             info!("PlayerPage::stop() - Player stopped");
         }
+
+        // Remove suspend/screensaver inhibit when stopping
+        self.uninhibit_suspend().await;
     }
 
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
@@ -329,7 +438,125 @@ impl PlayerPage {
         player.get_video_dimensions().await
     }
 
-    fn monitor_playback_completion(&self, backend_id: String, backend: Arc<dyn MediaBackend>) {
+    pub fn toggle_fullscreen(&self) {
+        if let Some(window) = self
+            .widget
+            .root()
+            .and_then(|r| r.downcast::<gtk4::Window>().ok())
+        {
+            if window.is_fullscreen() {
+                self.exit_fullscreen(&window);
+            } else {
+                self.enter_fullscreen(&window);
+            }
+        }
+    }
+
+    fn enter_fullscreen(&self, window: &gtk4::Window) {
+        window.fullscreen();
+        self.controls
+            .fullscreen_button
+            .set_icon_name("view-restore-symbolic");
+
+        // Add fullscreen CSS class for special styling
+        self.widget.add_css_class("fullscreen");
+        self.overlay.add_css_class("fullscreen");
+
+        // Hide cursor after inactivity in fullscreen
+        self.setup_cursor_hiding();
+    }
+
+    fn exit_fullscreen(&self, window: &gtk4::Window) {
+        window.unfullscreen();
+        self.controls
+            .fullscreen_button
+            .set_icon_name("view-fullscreen-symbolic");
+
+        // Remove fullscreen CSS class
+        self.widget.remove_css_class("fullscreen");
+        self.overlay.remove_css_class("fullscreen");
+
+        // Show cursor
+        if let Some(cursor) = gdk::Cursor::from_name("default", None) {
+            self.widget.set_cursor(Some(&cursor));
+        }
+    }
+
+    fn setup_cursor_hiding(&self) {
+        // Hide cursor when idle in fullscreen
+        let widget = self.widget.clone();
+        glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
+            if let Some(window) = widget
+                .root()
+                .and_then(|r| r.downcast::<gtk4::Window>().ok())
+            {
+                if window.is_fullscreen() {
+                    // Create blank cursor to hide it
+                    let _display = widget.display();
+                    if let Ok(texture) =
+                        gdk::Texture::from_bytes(&glib::Bytes::from_static(&[0u8; 64]))
+                    {
+                        let cursor = gdk::Cursor::from_texture(&texture, 0, 0, None);
+                        widget.set_cursor(Some(&cursor));
+                    }
+                    glib::ControlFlow::Continue
+                } else {
+                    glib::ControlFlow::Break
+                }
+            } else {
+                glib::ControlFlow::Break
+            }
+        });
+    }
+
+    async fn inhibit_suspend(&self) {
+        // Uninhibit any existing inhibit first
+        self.uninhibit_suspend().await;
+
+        if let Some(window) = self
+            .widget
+            .root()
+            .and_then(|r| r.downcast::<gtk4::Window>().ok())
+        {
+            if let Some(app) = window
+                .application()
+                .and_then(|a| a.downcast::<gtk4::Application>().ok())
+            {
+                // Inhibit suspend and idle with reason
+                let cookie = app.inhibit(
+                    Some(&window),
+                    gtk4::ApplicationInhibitFlags::SUSPEND | gtk4::ApplicationInhibitFlags::IDLE,
+                    Some("Playing video"),
+                );
+
+                *self.inhibit_cookie.write().await = Some(cookie);
+                info!("Inhibited system suspend/screensaver (cookie: {})", cookie);
+            }
+        }
+    }
+
+    async fn uninhibit_suspend(&self) {
+        if let Some(cookie) = self.inhibit_cookie.write().await.take() {
+            if let Some(window) = self
+                .widget
+                .root()
+                .and_then(|r| r.downcast::<gtk4::Window>().ok())
+            {
+                if let Some(app) = window
+                    .application()
+                    .and_then(|a| a.downcast::<gtk4::Application>().ok())
+                {
+                    app.uninhibit(cookie);
+                    info!(
+                        "Removed system suspend/screensaver inhibit (cookie: {})",
+                        cookie
+                    );
+                }
+            }
+        }
+    }
+
+    fn monitor_playback_completion(&self, _backend_id: String, backend: Arc<dyn MediaBackend>) {
         let player = self.player.clone();
         let current_media_item = self.current_media_item.clone();
 
@@ -406,6 +633,7 @@ struct PlayerControls {
     time_display_mode: Arc<RwLock<TimeDisplayMode>>,
     player: Arc<RwLock<Player>>,
     is_seeking: Arc<RwLock<bool>>,
+    inhibit_cookie: Arc<RwLock<Option<u32>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -416,7 +644,7 @@ enum TimeDisplayMode {
 }
 
 impl PlayerControls {
-    fn new(player: Arc<RwLock<Player>>) -> Self {
+    fn new(player: Arc<RwLock<Player>>, inhibit_cookie: Arc<RwLock<Option<u32>>>) -> Self {
         // Main controls container - minimalistic and tight
         let widget = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Vertical)
@@ -475,6 +703,21 @@ impl PlayerControls {
             
             .player-controls button.circular {
                 border-radius: 50%;
+            }
+            
+            /* Fullscreen styling */
+            .fullscreen {
+                background-color: black;
+            }
+            
+            .fullscreen .video-container {
+                background-color: black;
+            }
+            
+            .fullscreen .player-controls {
+                margin-bottom: 40px;
+                width: 80%;
+                max-width: 1200px;
             }",
         );
 
@@ -532,7 +775,7 @@ impl PlayerControls {
         // Left section: Volume control
         let left_section = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Horizontal)
-            .hexpand(true)
+            .width_request(150)
             .halign(gtk4::Align::Start)
             .spacing(4)
             .build();
@@ -550,6 +793,7 @@ impl PlayerControls {
             .orientation(gtk4::Orientation::Horizontal)
             .spacing(4)
             .halign(gtk4::Align::Center)
+            .hexpand(true)
             .build();
 
         // Rewind button (seek backward 10s)
@@ -573,7 +817,7 @@ impl PlayerControls {
         // Right section: Track selection and fullscreen
         let right_section = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Horizontal)
-            .hexpand(true)
+            .width_request(150)
             .halign(gtk4::Align::End)
             .spacing(2)
             .build();
@@ -625,6 +869,7 @@ impl PlayerControls {
             time_display_mode: Arc::new(RwLock::new(TimeDisplayMode::TotalDuration)),
             player: player.clone(),
             is_seeking: Arc::new(RwLock::new(false)),
+            inhibit_cookie,
         };
 
         // Set up click handler for end time label to cycle display modes
@@ -654,25 +899,33 @@ impl PlayerControls {
     fn setup_handlers(&self) {
         let player = self.player.clone();
         let button = self.play_button.clone();
+        let inhibit_cookie = self.inhibit_cookie.clone();
 
         // Play/pause button
-        self.play_button.connect_clicked(move |_| {
+        self.play_button.connect_clicked(move |btn| {
             let player = player.clone();
             let button = button.clone();
+            let inhibit_cookie = inhibit_cookie.clone();
+            let widget = btn.clone().upcast::<gtk4::Widget>();
             glib::spawn_future_local(async move {
                 let player = player.read().await;
-                // Toggle play/pause
-                // This is simplified - you'd check the actual state
+                // Toggle play/pause and manage inhibit
                 if button.icon_name() == Some("media-playback-start-symbolic".into()) {
                     if let Err(e) = player.play().await {
                         error!("Failed to play: {}", e);
                     }
                     button.set_icon_name("media-playback-pause-symbolic");
+
+                    // Re-inhibit suspend when resuming playback
+                    Self::inhibit_suspend_static(&widget, inhibit_cookie).await;
                 } else {
                     if let Err(e) = player.pause().await {
                         error!("Failed to pause: {}", e);
                     }
                     button.set_icon_name("media-playback-start-symbolic");
+
+                    // Remove inhibit when pausing
+                    Self::uninhibit_suspend_static(&widget, inhibit_cookie).await;
                 }
             });
         });
@@ -763,9 +1016,29 @@ impl PlayerControls {
                 if window.is_fullscreen() {
                     window.unfullscreen();
                     button.set_icon_name("view-fullscreen-symbolic");
+                    // Remove fullscreen class from parent containers
+                    if let Some(parent) = button.parent() {
+                        let mut widget = Some(parent);
+                        while let Some(w) = widget {
+                            if w.has_css_class("fullscreen") {
+                                w.remove_css_class("fullscreen");
+                            }
+                            widget = w.parent();
+                        }
+                    }
                 } else {
                     window.fullscreen();
                     button.set_icon_name("view-restore-symbolic");
+                    // Add fullscreen class to parent containers
+                    if let Some(parent) = button.parent() {
+                        let mut widget = Some(parent);
+                        while let Some(w) = widget {
+                            if w.has_css_class("player-page") || w.is::<gtk4::Overlay>() {
+                                w.add_css_class("fullscreen");
+                            }
+                            widget = w.parent();
+                        }
+                    }
                 }
             }
         });
@@ -859,7 +1132,7 @@ impl PlayerControls {
         // Create audio tracks menu
         let audio_menu = gio::Menu::new();
         let audio_tracks = self.player.read().await.get_audio_tracks().await;
-        let current_audio = self.player.read().await.get_current_audio_track().await;
+        let _current_audio = self.player.read().await.get_current_audio_track().await;
 
         debug!(
             "PlayerControls::populate_track_menus() - Found {} audio tracks",
@@ -886,7 +1159,7 @@ impl PlayerControls {
         // Create subtitle tracks menu
         let subtitle_menu = gio::Menu::new();
         let subtitle_tracks = self.player.read().await.get_subtitle_tracks().await;
-        let current_subtitle = self.player.read().await.get_current_subtitle_track().await;
+        let _current_subtitle = self.player.read().await.get_current_subtitle_track().await;
 
         debug!(
             "PlayerControls::populate_track_menus() - Found {} subtitle tracks",
@@ -975,6 +1248,60 @@ impl PlayerControls {
             }
 
             window.insert_action_group("player", Some(&action_group));
+        }
+    }
+
+    async fn inhibit_suspend_static(
+        widget: &gtk4::Widget,
+        inhibit_cookie: Arc<RwLock<Option<u32>>>,
+    ) {
+        // Uninhibit any existing inhibit first
+        Self::uninhibit_suspend_static(widget, inhibit_cookie.clone()).await;
+
+        if let Some(window) = widget
+            .root()
+            .and_then(|r| r.downcast::<gtk4::Window>().ok())
+        {
+            if let Some(app) = window
+                .application()
+                .and_then(|a| a.downcast::<gtk4::Application>().ok())
+            {
+                // Inhibit suspend and idle with reason
+                let cookie = app.inhibit(
+                    Some(&window),
+                    gtk4::ApplicationInhibitFlags::SUSPEND | gtk4::ApplicationInhibitFlags::IDLE,
+                    Some("Playing video"),
+                );
+
+                *inhibit_cookie.write().await = Some(cookie);
+                info!(
+                    "Inhibited system suspend/screensaver from controls (cookie: {})",
+                    cookie
+                );
+            }
+        }
+    }
+
+    async fn uninhibit_suspend_static(
+        widget: &gtk4::Widget,
+        inhibit_cookie: Arc<RwLock<Option<u32>>>,
+    ) {
+        if let Some(cookie) = inhibit_cookie.write().await.take() {
+            if let Some(window) = widget
+                .root()
+                .and_then(|r| r.downcast::<gtk4::Window>().ok())
+            {
+                if let Some(app) = window
+                    .application()
+                    .and_then(|a| a.downcast::<gtk4::Application>().ok())
+                {
+                    app.uninhibit(cookie);
+                    info!(
+                        "Removed system suspend/screensaver inhibit from controls (cookie: {})",
+                        cookie
+                    );
+                }
+            }
         }
     }
 
