@@ -10,6 +10,7 @@ use tracing::{debug, error, info};
 
 use crate::backends::traits::MediaBackend;
 use crate::config::Config;
+use crate::constants::PLAYER_CONTROLS_HIDE_DELAY_SECS;
 use crate::models::MediaItem;
 use crate::player::Player;
 use crate::state::AppState;
@@ -84,30 +85,52 @@ impl PlayerPage {
         controls.widget.set_visible(false);
         overlay.add_overlay(&controls.widget);
 
-        // Set up hover detection for showing/hiding controls
+        // Set up hover detection for showing/hiding controls with fade animation
         let controls_widget = controls.widget.clone();
         let hide_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
         let hover_controller = gtk4::EventControllerMotion::new();
 
         let hide_timer_clone = hide_timer.clone();
         hover_controller.connect_motion(move |_, _, _| {
-            // Show controls
+            // Fade in controls quickly (200ms)
             controls_widget.set_visible(true);
+            controls_widget.set_opacity(1.0);
 
             // Cancel previous timer if exists
             if let Some(timer_id) = hide_timer_clone.borrow_mut().take() {
                 timer_id.remove();
             }
 
-            // Hide again after 2 seconds of no movement
+            // Hide again after configured delay of no movement
             let controls_widget_inner = controls_widget.clone();
             let hide_timer_inner = hide_timer_clone.clone();
-            let timer_id = glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
-                controls_widget_inner.set_visible(false);
-                // Clear the timer reference since it's done
-                hide_timer_inner.borrow_mut().take();
-                glib::ControlFlow::Break
-            });
+            let timer_id = glib::timeout_add_local(
+                std::time::Duration::from_secs(PLAYER_CONTROLS_HIDE_DELAY_SECS),
+                move || {
+                    // Fade out animation
+                    let fade_start_time = std::time::Instant::now();
+                    let controls_for_fade = controls_widget_inner.clone();
+
+                    glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+                        let elapsed = fade_start_time.elapsed().as_millis() as f64;
+                        let fade_duration = 200.0; // 200ms fade out
+
+                        if elapsed >= fade_duration {
+                            controls_for_fade.set_opacity(0.0);
+                            controls_for_fade.set_visible(false);
+                            glib::ControlFlow::Break
+                        } else {
+                            let opacity = 1.0 - (elapsed / fade_duration);
+                            controls_for_fade.set_opacity(opacity);
+                            glib::ControlFlow::Continue
+                        }
+                    });
+
+                    // Clear the timer reference since it's done
+                    hide_timer_inner.borrow_mut().take();
+                    glib::ControlFlow::Break
+                },
+            );
             hide_timer_clone.borrow_mut().replace(timer_id);
         });
 
@@ -255,12 +278,13 @@ impl PlayerPage {
 
         video_container.add_controller(double_click_gesture);
 
-        // Add drag gesture for moving the window - attach to video container, not overlay
+        // Add drag gesture for moving the window - only on video container, not overlay
+        // This prevents it from interfering with control buttons
         let drag_gesture = gtk4::GestureDrag::new();
         drag_gesture.set_button(gdk::BUTTON_PRIMARY); // Left mouse button
-        drag_gesture.set_propagation_phase(gtk4::PropagationPhase::Bubble);
 
         drag_gesture.connect_drag_begin(|gesture, start_x, start_y| {
+            // Only start window drag if we're not over a button
             if let Some(widget) = gesture.widget()
                 && let Some(window) = widget
                     .root()
@@ -283,6 +307,7 @@ impl PlayerPage {
             }
         });
 
+        // Add to video_container, not overlay - this way controls remain clickable
         video_container.add_controller(drag_gesture);
 
         widget.append(&overlay);
@@ -670,18 +695,36 @@ impl PlayerControls {
                 box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
             }
             
+            /* Single progress bar with clean styling */
             .player-controls .progress-bar {
-                min-height: 4px;
+                min-height: 6px;
             }
             
             .player-controls .progress-bar trough {
-                background-color: rgba(255, 255, 255, 0.2);
-                border-radius: 2px;
+                background-color: rgba(255, 255, 255, 0.15);
+                border-radius: 3px;
+                min-height: 6px;
             }
             
             .player-controls .progress-bar highlight {
                 background-color: rgba(255, 255, 255, 0.9);
-                border-radius: 2px;
+                border-radius: 3px;
+                min-height: 6px;
+            }
+            
+            .player-controls .progress-bar slider {
+                min-width: 12px;
+                min-height: 12px;
+                background-color: white;
+                border-radius: 50%;
+                margin: -3px 0;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+            }
+            
+            .player-controls .progress-bar:hover slider {
+                min-width: 14px;
+                min-height: 14px;
+                margin: -4px 0;
             }
             
             .player-controls .dim-label {
@@ -745,11 +788,12 @@ impl PlayerControls {
         time_label.set_width_request(45);
         progress_container.append(&time_label);
 
-        // Progress bar
+        // Simple single progress bar
         let progress_bar = gtk4::Scale::with_range(gtk4::Orientation::Horizontal, 0.0, 100.0, 0.1);
         progress_bar.set_draw_value(false);
         progress_bar.add_css_class("progress-bar");
         progress_bar.set_hexpand(true);
+
         progress_container.append(&progress_bar);
 
         // End time label (right side) - clickable to cycle modes
@@ -1074,6 +1118,9 @@ impl PlayerControls {
                         let progress = (position.as_secs_f64() / duration.as_secs_f64()) * 100.0;
                         progress_bar.set_value(progress);
                     }
+
+                    // No need to show buffer info - MPV always maintains ~10 seconds
+                    // which is not useful to display
 
                     // Update current time label (always shows current position)
                     let pos_str = format_duration(position);

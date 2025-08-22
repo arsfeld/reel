@@ -1203,4 +1203,11 @@ impl GStreamerPlayer {
             -1
         }
     }
+
+    pub async fn get_buffer_percentage(&self) -> Option<f64> {
+        // GStreamer buffering is complex and varies by pipeline
+        // For streaming content, it's usually a small fixed buffer
+        // Not particularly useful to display, so returning None
+        None
+    }
 }

@@ -192,4 +192,11 @@ impl Player {
             Player::Mpv(p) => p.get_current_subtitle_track().await,
         }
     }
+
+    pub async fn get_buffer_percentage(&self) -> Option<f64> {
+        match self {
+            Player::GStreamer(p) => p.get_buffer_percentage().await,
+            Player::Mpv(p) => p.get_buffer_percentage().await,
+        }
+    }
 }

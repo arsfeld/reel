@@ -785,6 +785,12 @@ impl MpvPlayer {
         }
         -1
     }
+
+    pub async fn get_buffer_percentage(&self) -> Option<f64> {
+        // MPV maintains a fixed ~10 second buffer, which isn't useful to display
+        // This method is kept for compatibility but returns None
+        None
+    }
 }
 
 impl MpvPlayerInner {

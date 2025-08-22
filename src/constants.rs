@@ -10,6 +10,9 @@ pub const SCROLL_DEBOUNCE_MS: u64 = 30; // Delay for scroll event debouncing (ms
 pub const CARD_BATCH_SIZE: usize = 48; // Max cards to create in one batch (doubled)
 pub const IMAGE_VIEWPORT_BUFFER: f64 = 600.0; // Pixels to load outside viewport (doubled)
 
+// Player UI constants
+pub const PLAYER_CONTROLS_HIDE_DELAY_SECS: u64 = 2; // Seconds before hiding player controls on inactivity
+
 // Homepage specific constants
 pub const HOME_INITIAL_CARDS_PER_SECTION: usize = 12; // Initial cards per section on homepage
 pub const HOME_INITIAL_IMAGES_PER_SECTION: usize = 10; // Initial images to load per section

@@ -33,4 +33,5 @@ pub trait MediaPlayer: Send {
     async fn set_subtitle_track(&self, track_index: i32) -> Result<()>;
     async fn get_current_audio_track(&self) -> i32;
     async fn get_current_subtitle_track(&self) -> i32;
+    async fn get_buffer_percentage(&self) -> Option<f64>;
 }
