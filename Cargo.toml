@@ -2,7 +2,7 @@
 name = "reel"
 version = "0.1.0"
 edition = "2024"
-authors = ["Your Name <you@example.com>"]
+authors = ["Alexandre Rosenfeld <alex@rosenfeld.one>"]
 license = "GPL-3.0-or-later"
 description = "A modern, native media player for the GNOME desktop"
 repository = "https://github.com/arsfeld/reel"
@@ -83,3 +83,34 @@ strip = true
 [profile.dev]
 opt-level = 0
 debug = true
+
+# Debian package configuration for cargo-deb
+[package.metadata.deb]
+maintainer = "Alexandre Rosenfeld <alex@rosenfeld.one>"
+copyright = "2025, Alexandre Rosenfeld <alex@rosenfeld.one>"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+Reel is a modern, offline-first media player for the GNOME desktop that provides \
+a premium media consumption experience with support for multiple backends including \
+Plex, Jellyfin, and local files. Features include hardware-accelerated playback, \
+seamless background synchronization, and a beautiful GTK4/libadwaita interface."""
+depends = "$auto, libgtk-4-1, libadwaita-1-0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav, libmpv2"
+section = "video"
+priority = "optional"
+assets = [
+    ["target/release/reel", "usr/bin/", "755"],
+    ["data/dev.arsfeld.Reel.desktop", "usr/share/applications/", "644"],
+    ["data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["README.md", "usr/share/doc/reel/README", "644"],
+]
+
+# RPM package configuration for cargo-generate-rpm  
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/reel", dest = "/usr/bin/reel", mode = "755" },
+    { source = "data/dev.arsfeld.Reel.desktop", dest = "/usr/share/applications/dev.arsfeld.Reel.desktop", mode = "644" },
+    { source = "data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg", dest = "/usr/share/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/reel/README.md", mode = "644", doc = true },
+]
+auto-req = "disabled"  # We'll specify requirements manually
+requires = { gtk4 = "*", libadwaita = "*", gstreamer1 = "*", gstreamer1-plugins-base = "*", gstreamer1-plugins-good = "*", gstreamer1-plugins-bad-free = "*", gstreamer1-plugins-ugly-free = "*", gstreamer1-libav = "*", mpv-libs = "*" }
