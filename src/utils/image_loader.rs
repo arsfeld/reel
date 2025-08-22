@@ -4,14 +4,13 @@ use gtk4::gdk_pixbuf::Pixbuf;
 use gtk4::{gdk, gio, glib, prelude::*};
 use lru::LruCache;
 use reqwest::Client;
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 use tokio::fs;
-use tokio::sync::{RwLock, Semaphore, oneshot};
+use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, info, trace};
 
 use crate::constants::*;
@@ -58,12 +57,7 @@ struct CacheEntry {
     access_count: u32,
 }
 
-/// Represents a pending download with multiple waiters
-struct PendingDownload {
-    waiters: Vec<oneshot::Sender<Result<Vec<u8>>>>,
-}
-
-/// Image loader with request coalescing and LRU cache
+/// Image loader with LRU cache
 pub struct ImageLoader {
     client: Client,
     cache_dir: PathBuf,
@@ -72,7 +66,6 @@ pub struct ImageLoader {
     max_cache_size: u64,
     download_semaphore: Arc<Semaphore>,
     active_downloads: Arc<AtomicUsize>,
-    pending_downloads: Arc<RwLock<HashMap<String, PendingDownload>>>,
 }
 
 impl ImageLoader {
@@ -115,7 +108,6 @@ impl ImageLoader {
             max_cache_size: MEMORY_CACHE_MAX_MB * 1024 * 1024,
             download_semaphore: Arc::new(Semaphore::new(CONCURRENT_DOWNLOADS)),
             active_downloads: Arc::new(AtomicUsize::new(0)),
-            pending_downloads: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -173,51 +165,10 @@ impl ImageLoader {
         Ok(texture)
     }
 
-    /// Download with request coalescing to prevent duplicate downloads
+    /// Download with request coalescing to prevent duplicate downloads - simplified
     async fn download_with_coalescing(&self, url: &str) -> Result<Vec<u8>> {
-        let url_key = url.to_string();
-
-        // Check if download is already in progress
-        {
-            let mut pending = self.pending_downloads.write().await;
-            if let Some(entry) = pending.get_mut(&url_key) {
-                // Create a channel to wait for the result
-                let (tx, rx) = oneshot::channel();
-                entry.waiters.push(tx);
-                drop(pending); // Release lock before waiting
-
-                debug!("Coalescing request for {}", url);
-                return rx.await.map_err(|_| anyhow!("Download cancelled"))?;
-            } else {
-                // Start new download
-                pending.insert(
-                    url_key.clone(),
-                    PendingDownload {
-                        waiters: Vec::new(),
-                    },
-                );
-            }
-        }
-
-        // Perform the actual download
-        let result = self.download_image(url).await;
-
-        // Notify all waiters
-        {
-            let mut pending = self.pending_downloads.write().await;
-            if let Some(entry) = pending.remove(&url_key) {
-                for waiter in entry.waiters {
-                    let _ = waiter.send(
-                        result
-                            .as_ref()
-                            .map(|v| v.clone())
-                            .map_err(|e| anyhow::anyhow!(e.to_string())),
-                    );
-                }
-            }
-        }
-
-        result
+        // Just download directly - the semaphore will control concurrency
+        self.download_image(url).await
     }
 
     /// Download image with improved error handling
@@ -350,7 +301,7 @@ impl ImageLoader {
         self.load_image(url, target_size).await
     }
 
-    /// Batch load multiple images efficiently
+    /// Batch load multiple images efficiently - simplified version
     pub async fn batch_load(
         &self,
         requests: Vec<(String, ImageSize)>,
@@ -358,162 +309,29 @@ impl ImageLoader {
         let start_time = Instant::now();
         let total_requests = requests.len();
 
-        // First, check what's already in cache
-        let mut cached_results = HashMap::new();
-        let mut to_download = Vec::new();
+        // Process each request individually but concurrently
+        let mut tasks = Vec::new();
 
-        for (idx, (url, size)) in requests.iter().enumerate() {
-            let cache_key = format!("{}_{:?}", url, size);
-
-            // Check memory cache
-            {
-                let mut cache = self.memory_cache.write().await;
-                if let Some(entry) = cache.get_mut(&cache_key) {
-                    entry.last_accessed = Instant::now();
-                    entry.access_count += 1;
-                    cached_results.insert(idx, Ok(entry.texture.clone()));
-                    continue;
-                }
-            }
-
-            // Check disk cache
-            let file_cache_key = self.generate_cache_key(url, *size);
-            let cache_path = self.get_cache_path(&file_cache_key, *size);
-
-            if cache_path.exists()
-                && let Ok(texture) = self.load_from_file(&cache_path).await
-            {
-                cached_results.insert(idx, Ok(texture.clone()));
-                // Add to memory cache in background
-                let cache_key_clone = cache_key.clone();
-                let texture_clone = texture.clone();
-                let self_clone = self.clone();
-                tokio::spawn(async move {
-                    self_clone
-                        .add_to_memory_cache(cache_key_clone, texture_clone)
-                        .await;
-                });
-                continue;
-            }
-
-            // Need to download
-            to_download.push((idx, url.clone(), *size));
+        for (url, size) in requests {
+            let self_clone = self.clone();
+            tasks.push(tokio::spawn(async move {
+                self_clone.load_image(&url, size).await
+            }));
         }
 
-        // Use trace for fully cached batches, debug for downloads
-        if to_download.is_empty() {
-            trace!(
-                "Batch load: {} cached, {} to download out of {} total",
-                cached_results.len(),
-                to_download.len(),
-                total_requests
-            );
-        } else {
-            debug!(
-                "Batch load: {} cached, {} to download out of {} total",
-                cached_results.len(),
-                to_download.len(),
-                total_requests
-            );
-        }
+        // Wait for all tasks to complete
+        let results = join_all(tasks).await;
 
-        // Group downloads by priority (size)
-        let mut high_priority = Vec::new();
-        let mut medium_priority = Vec::new();
-        let mut low_priority = Vec::new();
-
-        for (idx, url, size) in &to_download {
-            match size {
-                ImageSize::Small => high_priority.push((*idx, url.clone(), *size)),
-                ImageSize::Medium => medium_priority.push((*idx, url.clone(), *size)),
-                _ => low_priority.push((*idx, url.clone(), *size)),
-            }
-        }
-
-        // Process downloads in priority order with controlled concurrency
-        let mut download_results = HashMap::new();
-
-        // Process high priority first (small images)
-        if !high_priority.is_empty() {
-            let results = self.batch_download_group(high_priority).await;
-            download_results.extend(results);
-        }
-
-        // Then medium priority
-        if !medium_priority.is_empty() {
-            let results = self.batch_download_group(medium_priority).await;
-            download_results.extend(results);
-        }
-
-        // Finally low priority
-        if !low_priority.is_empty() {
-            let results = self.batch_download_group(low_priority).await;
-            download_results.extend(results);
-        }
-
-        // Combine all results in original order
-        let mut final_results = Vec::with_capacity(requests.len());
-        for idx in 0..requests.len() {
-            if let Some(result) = cached_results.remove(&idx) {
-                final_results.push(result);
-            } else if let Some(result) = download_results.remove(&idx) {
-                final_results.push(result);
-            } else {
-                final_results.push(Err(anyhow!("Failed to load image")));
-            }
-        }
-
-        // Use appropriate log level based on whether downloads occurred
-        if to_download.is_empty() {
-            trace!(
-                "Batch loaded {} images in {}ms (all cached)",
-                total_requests,
-                start_time.elapsed().as_millis()
-            );
-        } else {
-            info!(
-                "Batch loaded {} images in {}ms ({} cached, {} downloaded)",
-                total_requests,
-                start_time.elapsed().as_millis(),
-                total_requests - to_download.len(),
-                to_download.len()
-            );
-        }
+        // Convert JoinHandle results to texture results
+        let final_results: Vec<Result<gdk::Texture>> = results
+            .into_iter()
+            .map(|join_result| match join_result {
+                Ok(texture_result) => texture_result,
+                Err(e) => Err(anyhow!("Task failed: {}", e)),
+            })
+            .collect();
 
         final_results
-    }
-
-    /// Download a group of images with controlled concurrency
-    async fn batch_download_group(
-        &self,
-        group: Vec<(usize, String, ImageSize)>,
-    ) -> HashMap<usize, Result<gdk::Texture>> {
-        let mut results = HashMap::new();
-
-        // Process in chunks to avoid overwhelming the system
-        const CHUNK_SIZE: usize = 10;
-        for chunk in group.chunks(CHUNK_SIZE) {
-            let mut tasks = Vec::new();
-
-            for (idx, url, size) in chunk {
-                let self_clone = self.clone();
-                let url = url.clone();
-                let size = *size;
-                let idx = *idx;
-
-                tasks.push(tokio::spawn(async move {
-                    (idx, self_clone.load_image(&url, size).await)
-                }));
-            }
-
-            // Wait for this chunk to complete
-            let chunk_results = join_all(tasks).await;
-            for (idx, texture_result) in chunk_results.into_iter().flatten() {
-                results.insert(idx, texture_result);
-            }
-        }
-
-        results
     }
 
     /// Preload images based on predicted scroll
@@ -563,18 +381,8 @@ impl ImageLoader {
         }
 
         if !to_load.is_empty() {
-            debug!(
-                "Warming cache with {} images ({} already cached)",
-                to_load.len(),
-                total - to_load.len()
-            );
             let _ = self.batch_load(to_load).await;
         }
-
-        debug!(
-            "Cache warm-up completed in {}ms",
-            start_time.elapsed().as_millis()
-        );
     }
 
     /// Batch check if images are cached
@@ -674,7 +482,7 @@ impl ImageLoader {
             disk_entries,
             disk_size_bytes: disk_size,
             active_downloads: self.active_downloads.load(Ordering::Relaxed),
-            pending_requests: self.pending_downloads.read().await.len(),
+            pending_requests: 0, // No longer tracking pending requests separately
         }
     }
 }
@@ -689,7 +497,6 @@ impl Clone for ImageLoader {
             max_cache_size: self.max_cache_size,
             download_semaphore: self.download_semaphore.clone(),
             active_downloads: self.active_downloads.clone(),
-            pending_downloads: self.pending_downloads.clone(),
         }
     }
 }

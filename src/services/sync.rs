@@ -2,12 +2,15 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::backends::traits::MediaBackend;
 use crate::models::{Library, MediaItem, Movie, Show};
 use crate::services::cache::CacheManager;
+use crate::utils::image_loader::{ImageLoader, ImageSize};
 
 #[derive(Debug, Clone)]
 pub enum SyncType {
@@ -46,6 +49,9 @@ pub struct SyncResult {
 pub struct SyncManager {
     cache: Arc<CacheManager>,
     sync_status: Arc<RwLock<HashMap<String, SyncStatus>>>,
+    image_loader: Arc<ImageLoader>,
+    poster_download_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    poster_download_cancel: Arc<Mutex<CancellationToken>>,
 }
 
 impl SyncManager {
@@ -53,6 +59,9 @@ impl SyncManager {
         Self {
             cache,
             sync_status: Arc::new(RwLock::new(HashMap::new())),
+            image_loader: Arc::new(ImageLoader::new().expect("Failed to create ImageLoader")),
+            poster_download_handle: Arc::new(Mutex::new(None)),
+            poster_download_cancel: Arc::new(Mutex::new(CancellationToken::new())),
         }
     }
 
@@ -65,6 +74,9 @@ impl SyncManager {
         let start_time = std::time::Instant::now();
         let mut errors = Vec::new();
         let mut items_synced = 0;
+
+        // Cancel any existing background poster downloads
+        self.cancel_background_downloads().await;
 
         // Update sync status
         {
@@ -262,6 +274,9 @@ impl SyncManager {
             _ => {}
         }
 
+        // Start background poster downloads after caching items
+        self.download_posters_background(&items).await;
+
         Ok(())
     }
 
@@ -313,5 +328,160 @@ impl SyncManager {
             .await
             .unwrap_or_default()
             .len()
+    }
+
+    /// Extract poster URLs from media items
+    fn extract_poster_urls(&self, items: &[MediaItem]) -> Vec<(String, ImageSize)> {
+        let mut urls = Vec::new();
+
+        for item in items {
+            let poster_url = match item {
+                MediaItem::Movie(m) => m.poster_url.as_ref(),
+                MediaItem::Show(s) => s.poster_url.as_ref(),
+                MediaItem::Episode(e) => e.show_poster_url.as_ref().or(e.thumbnail_url.as_ref()),
+                MediaItem::MusicAlbum(a) => a.cover_url.as_ref(),
+                MediaItem::MusicTrack(t) => t.cover_url.as_ref(),
+                MediaItem::Photo(p) => p.thumbnail_url.as_ref(),
+            };
+
+            if let Some(url) = poster_url {
+                // Download small size for list views by default
+                urls.push((url.clone(), ImageSize::Small));
+            }
+
+            // Also get backdrop URLs for movies and shows
+            match item {
+                MediaItem::Movie(m) => {
+                    if let Some(backdrop) = &m.backdrop_url {
+                        urls.push((backdrop.clone(), ImageSize::Medium));
+                    }
+                }
+                MediaItem::Show(s) => {
+                    if let Some(backdrop) = &s.backdrop_url {
+                        urls.push((backdrop.clone(), ImageSize::Medium));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        urls
+    }
+
+    /// Download posters in background with low priority
+    async fn download_posters_background(&self, items: &[MediaItem]) {
+        let all_urls = self.extract_poster_urls(items);
+
+        if all_urls.is_empty() {
+            return;
+        }
+
+        // Check which images are not already cached
+        let cached_status = self.image_loader.batch_check_cached(all_urls.clone()).await;
+        let urls_to_download: Vec<(String, ImageSize)> = all_urls
+            .into_iter()
+            .zip(cached_status.iter())
+            .filter_map(
+                |(url_size, &is_cached)| {
+                    if !is_cached { Some(url_size) } else { None }
+                },
+            )
+            .collect();
+
+        if urls_to_download.is_empty() {
+            info!(
+                "All {} posters already cached, skipping background download",
+                cached_status.len()
+            );
+            return;
+        }
+
+        info!(
+            "Starting background download of {} posters ({} already cached)",
+            urls_to_download.len(),
+            cached_status.len() - urls_to_download.len()
+        );
+
+        // Cancel any existing download and create a new cancellation token
+        self.cancel_background_downloads().await;
+
+        // Create a new cancellation token for this download session
+        let cancel_token = CancellationToken::new();
+        {
+            let mut cancel_guard = self.poster_download_cancel.lock().await;
+            *cancel_guard = cancel_token.clone();
+        }
+
+        // Clone what we need for the background task
+        let image_loader = self.image_loader.clone();
+
+        // Spawn a low-priority background task
+        let handle = tokio::spawn(async move {
+            // Add a small delay to let UI operations take priority
+            tokio::select! {
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {},
+                _ = cancel_token.cancelled() => {
+                    info!("Background poster download cancelled before starting");
+                    return;
+                }
+            }
+
+            // Process in small batches to avoid overwhelming the system
+            const BATCH_SIZE: usize = 10;
+            let mut downloaded_count = 0;
+
+            for chunk in urls_to_download.chunks(BATCH_SIZE) {
+                // Check for cancellation before processing each batch
+                if cancel_token.is_cancelled() {
+                    info!(
+                        "Background poster download cancelled after {} downloads",
+                        downloaded_count
+                    );
+                    return;
+                }
+
+                let chunk_vec: Vec<(String, ImageSize)> = chunk.to_vec();
+                let batch_size = chunk_vec.len();
+
+                // Use warm_cache which will only download images not already cached
+                // This provides additional safety against duplicate downloads
+                image_loader.warm_cache(chunk_vec).await;
+                downloaded_count += batch_size;
+
+                // Small delay between batches to keep priority low
+                tokio::select! {
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)) => {},
+                    _ = cancel_token.cancelled() => {
+                        info!("Background poster download cancelled after {} downloads", downloaded_count);
+                        return;
+                    }
+                }
+            }
+
+            info!(
+                "Completed background poster downloads: {} images",
+                downloaded_count
+            );
+        });
+
+        // Store the handle so we can cancel it later if needed
+        let mut handle_guard = self.poster_download_handle.lock().await;
+        *handle_guard = Some(handle);
+    }
+
+    /// Cancel any existing background poster downloads
+    async fn cancel_background_downloads(&self) {
+        // Signal cancellation
+        {
+            let cancel_guard = self.poster_download_cancel.lock().await;
+            cancel_guard.cancel();
+        }
+
+        // Wait for the task to complete if it exists
+        let mut handle_guard = self.poster_download_handle.lock().await;
+        if let Some(handle) = handle_guard.take() {
+            // Give it a moment to cancel gracefully
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(1), handle).await;
+        }
     }
 }

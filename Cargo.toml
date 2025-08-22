@@ -26,6 +26,7 @@ libmpv2-sys = "4.0"
 
 # Async runtime
 tokio = { version = "1.47", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 futures = "0.3"
 

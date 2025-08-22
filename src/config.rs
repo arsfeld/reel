@@ -47,6 +47,27 @@ pub struct PlaybackConfig {
 
     #[serde(default = "default_true")]
     pub skip_intro: bool,
+
+    #[serde(default = "default_true")]
+    pub skip_credits: bool,
+
+    #[serde(default = "default_true")]
+    pub auto_play_next: bool,
+
+    #[serde(default = "default_auto_play_delay")]
+    pub auto_play_delay: u64,
+
+    #[serde(default = "default_false")]
+    pub mpv_verbose_logging: bool,
+
+    #[serde(default = "default_cache_size_mb")]
+    pub mpv_cache_size_mb: u32,
+
+    #[serde(default = "default_cache_backbuffer_mb")]
+    pub mpv_cache_backbuffer_mb: u32,
+
+    #[serde(default = "default_cache_secs")]
+    pub mpv_cache_secs: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,6 +241,13 @@ impl Default for PlaybackConfig {
             default_subtitle: default_subtitle(),
             default_audio: default_audio(),
             skip_intro: default_true(),
+            skip_credits: default_true(),
+            auto_play_next: default_true(),
+            auto_play_delay: default_auto_play_delay(),
+            mpv_verbose_logging: default_false(),
+            mpv_cache_size_mb: default_cache_size_mb(),
+            mpv_cache_backbuffer_mb: default_cache_backbuffer_mb(),
+            mpv_cache_secs: default_cache_secs(),
         }
     }
 }
@@ -264,4 +292,22 @@ fn default_cache_size() -> u64 {
 }
 fn default_plex_url() -> String {
     "https://plex.tv".to_string()
+}
+fn default_auto_play_delay() -> u64 {
+    10 // 10 seconds countdown
+}
+fn default_false() -> bool {
+    false
+}
+
+fn default_cache_size_mb() -> u32 {
+    1500 // 1.5GB for ~15-30 min of 1080p/4K content
+}
+
+fn default_cache_backbuffer_mb() -> u32 {
+    500 // 500MB for backward seeking
+}
+
+fn default_cache_secs() -> u32 {
+    1800 // 30 minutes default
 }

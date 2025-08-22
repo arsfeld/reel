@@ -117,6 +117,26 @@
   - [x] Add subtitle/audio track selection (implemented in both players)
   - [ ] Create playback decision engine
 
+- [x] **Skip Intro/Credits & Auto-Play** (January 2025)
+  - [x] Implemented Plex chapter marker detection (intro/credits)
+  - [x] Added skip intro button overlay during intro segments
+  - [x] Added skip credits button overlay during credits
+  - [x] Fetch markers from Plex API `/library/metadata/{id}` endpoint
+  - [x] Only show skip buttons when actual markers exist (no fallback timings)
+  - [x] Auto-play next episode with picture-in-picture preview
+  - [x] PiP shows current episode at 320x180 while displaying next episode info
+  - [x] Countdown timer with Play Now and Cancel buttons
+  - [x] Configuration options: skip_intro, skip_credits, auto_play_next, auto_play_delay
+  - [x] Added ChapterMarker and ChapterType to data models
+  - [x] Integrated marker fetching into MediaBackend trait
+  - [x] CSS styling for pill-shaped skip buttons and auto-play overlay
+  - [x] **Fixed marker parsing** - Corrected Plex API deserialization (January 2025)
+  - [x] **Fixed marker API call** - Added includeChapters=1 parameter to ensure markers are returned (January 2025)
+  - [ ] **UI Improvements Needed**:
+    - [ ] Move skip intro button to bottom-right corner (currently top-right)
+    - [ ] Clean up verbose debug logging for markers
+  - [ ] Actual next episode loading (infrastructure complete, needs show ID lookup)
+
 - [x] **Player Integration** (Completed with Dual Backend Support!)
   - [x] **MPV Player Backend** (DEFAULT - January 2025)
     - [x] Created alternative MPV player implementation using libmpv2
@@ -559,7 +579,7 @@ window.sync_and_update_libraries(backend_id, backend)
    - [x] Generate stream URLs from Plex
    - [x] Implement basic video playback
    - [x] Add playback controls overlay
-   - [ ] Track playback progress (partially done - position tracking works, needs to save to server)
+   - [x] Track playback progress (COMPLETED - syncs position to Plex server via viewOffset)
 
 ## Testing Checklist
 - [ ] Test with local Plex server
@@ -592,10 +612,14 @@ window.sync_and_update_libraries(backend_id, backend)
   - **Workaround**: Use MPV player backend (now default) which has no subtitle issues
 - [ ] **Homepage Issues** (CRITICAL):
   - [ ] **Horizontal scrolling broken**: Scrolling horizontally on homepage sections doesn't trigger image loading
-  - [ ] **Continue Watching completely broken**: 
-    - Thumbnails don't load at all
-    - Items don't open when clicked (navigation broken)
-  - [ ] **Scroll handler not working**: The connect_hadjustment_notify handler doesn't properly detect scroll events
+    - The hadjustment().connect_value_changed handler fires but images don't load
+    - Initial images load on section creation but scrolling right shows blank cards
+    - Likely related to the batch_load_visible_cards or trigger_load methods
+    - Cards are created but MediaCard.trigger_load() may not be working properly
+  - [ ] **Continue Watching section issues**: 
+    - Thumbnails may not load consistently
+    - Navigation to player/details needs verification
+  - [ ] **Scroll handler improvements needed**: The horizontal scroll detection and image loading coordination needs fixing
 - [ ] **Music/Photo Libraries**: Views not yet implemented
 - [ ] **Jellyfin Backend**: Integration pending implementation
 - [ ] **Local Files Backend**: File browser not yet implemented
@@ -637,6 +661,7 @@ window.sync_and_update_libraries(backend_id, backend)
 - ✅ **Show Details Page Enhanced**: Completely redesigned with modern dropdown season selector and horizontal episode carousel
 - ✅ **Episode Thumbnails**: Added episode thumbnail support with play icon fallbacks
 - ✅ **Enhanced Episode Cards**: Cards show episode number, duration, watch status, and progress indicators
+- ✅ **Episode Markers Not Loading**: Fixed Plex API marker deserialization - changed from camelCase to explicit field mappings
 
 ## MPV Render API Integration Plan
 
