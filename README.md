@@ -113,8 +113,10 @@ See [TASKS.md](TASKS.md) for the detailed development roadmap.
 - **Media Browsing & Playback**
   - Complete movie and TV show libraries with grid views
   - Cinematic detail pages with backdrop images and metadata
-  - GStreamer-based video playback with hardware acceleration
+  - **MPV player backend (default)** - Superior performance with no subtitle issues
+  - GStreamer player backend (secondary) - Available but has subtitle color artifacts
   - Immersive player with auto-hiding controls
+  - Audio/subtitle track selection
   - Watch status tracking and progress indicators
   - Continue watching and recently added sections
 
@@ -132,19 +134,16 @@ See [TASKS.md](TASKS.md) for the detailed development roadmap.
   - Library visibility management
   - Modern Blueprint-based UI with GNOME HIG compliance
   - Smooth transitions and loading states
+  - **Fullscreen playback support** - F11, double-click, and cursor auto-hiding
+  - **Advanced player controls** - Keyboard shortcuts, window dragging, time display modes
 
 ### 🔧 In Development
-- Fullscreen playback mode
 - Playback position syncing to server
 - Advanced filtering (genre, year, rating)
 - Search functionality
+- Music and photo library support
+- Settings management with GSettings
 
-### 📋 Roadmap
-- **v0.2.0** - Jellyfin backend integration
-- **v0.3.0** - Local file support with metadata providers
-- **v0.4.0** - Offline download manager
-- **v0.5.0** - Music library support
-- **v1.0.0** - Stable release with complete feature set
 
 ## 🛠️ Tech Stack
 
@@ -153,7 +152,7 @@ See [TASKS.md](TASKS.md) for the detailed development roadmap.
 - **Async Runtime**: [Tokio](https://tokio.rs/)
 - **Database**: SQLite with [SQLx](https://github.com/launchbadge/sqlx)
 - **HTTP Client**: [Reqwest](https://github.com/seanmonstar/reqwest)
-- **Video Playback**: GStreamer via [gstreamer-rs](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
+- **Video Playback**: MPV (default) via libmpv2, GStreamer (secondary) via [gstreamer-rs](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
 - **Serialization**: [Serde](https://serde.rs/)
 
 ## 🤝 Contributing

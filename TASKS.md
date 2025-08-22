@@ -118,7 +118,14 @@
   - [ ] Create playback decision engine
 
 - [x] **Player Integration** (Completed with Dual Backend Support!)
-  - [x] Initialize GStreamer player
+  - [x] **MPV Player Backend** (DEFAULT - January 2025)
+    - [x] Created alternative MPV player implementation using libmpv2
+    - [x] Full feature parity with GStreamer player
+    - [x] **MPV is now the default player** due to superior performance and no subtitle issues
+    - [x] Wayland-native rendering support
+    - [x] Audio/subtitle track selection
+    - [x] No color correction issues with subtitles (unlike GStreamer)
+  - [x] Initialize GStreamer player (SECONDARY - Has Issues)
     - [ ] **CRITICAL BUG: Subtitle Colorspace Issue** (January 2025)
       - **Problem**: Green/incorrect colors appear on video frames when subtitles are displayed
       - **Symptoms**: Video shows green bars or color artifacts specifically when subtitle text appears
@@ -133,13 +140,7 @@
         - [ ] Use `n-threads: 0` for automatic CPU detection
         - [ ] Add configurable subtitle properties (font, timing offsets)
         - [ ] Implement overlay composition approach for subtitles
-      - **Status**: Ready to implement fixes based on best practices
-  - [x] **NEW: MPV Player Backend** (December 2024)
-    - [x] Created alternative MPV player implementation using libmpv2
-    - [x] Full feature parity with GStreamer player
-    - [x] Configurable player backend via config.toml
-    - [x] Wayland-native rendering support
-    - [x] Audio/subtitle track selection
+      - **Status**: GStreamer remains available but MPV is recommended until fixes are implemented
     - [x] **MPV Render API Integration** (January 2025 - WORKING!)
       - [x] Implemented GLArea-based rendering with libmpv2-sys
       - [x] Replaced dmabuf-wayland with vo=libmpv for embedded rendering
@@ -156,11 +157,14 @@
         - Using eglGetProcAddress to get GL functions
         - Properly calling attach_buffers() before rendering
         - mpv_render_context_render() succeeds with correct FBO
-      - [ ] **Performance Issues**:
-        - **Rendering feels slow/laggy** - Timing issues need investigation
-        - May need to optimize render callback frequency
-        - Consider reducing unnecessary GL state queries
-        - Investigate if 100ms timer interval is too slow
+      - [x] **Performance Issues RESOLVED** (January 2025):
+        - **Optimized render callback** - Now frame-driven instead of timer-driven
+        - **Reduced GL state queries** - Cached FBO and GL function pointers
+        - **Improved timing** - Adaptive 16ms timer only when playing (60 FPS)
+        - **Added performance metrics** - FPS tracking for debugging
+        - **Cached proc addresses** - GL function lookups now cached
+        - **Better MPV settings** - Optimized for lower latency rendering
+        - **Increased cache buffers** - Better for 4K content and seeking
   - [x] Load and play video streams
   - [x] Implement basic controls (play/pause/seek)
   - [x] Add immersive playback mode with auto-hiding controls
@@ -169,7 +173,26 @@
   - [x] Implement hover-based UI controls (header and player controls)
   - [x] Add window resizing to match video aspect ratio
   - [x] Create overlay header bar that doesn't affect video layout
-  - [ ] Add fullscreen support (partial - button exists but needs implementation)
+  - [x] **Add fullscreen support** (COMPLETED - January 2025)
+    - [x] F/F11 keys toggle fullscreen
+    - [x] Double-click on video toggles fullscreen
+    - [x] Fullscreen button in controls
+    - [x] Proper CSS styling for fullscreen mode
+    - [x] Cursor auto-hiding in fullscreen after 3 seconds
+    - [x] Escape key exits fullscreen
+  - [x] **Enhanced Player Controls** (January 2025)
+    - [x] Fixed play/pause button centering
+    - [x] Fixed initial play button state (shows pause when playing)
+    - [x] Reduced controls auto-hide timeout to 2 seconds
+    - [x] Fixed arrow keys for seeking (±10 seconds)
+    - [x] Controls start hidden with 1 second delay before mouse activation
+    - [x] Added Q key to quit application
+    - [x] Click and drag on video to move window
+    - [x] Time display modes (duration/remaining/end time) - click to cycle
+  - [x] **System Integration** (January 2025)
+    - [x] Inhibit system suspend/screensaver when playing video
+    - [x] Remove inhibit when paused or stopped
+    - [x] Proper cleanup on application exit
 
 ### 📺 Watched/Unwatched Tracking (COMPLETED!)
 - [x] **Data Model & Storage**
@@ -327,6 +350,17 @@ window.sync_and_update_libraries("plex", backend)
 let backend_id = state.backend_manager.get_active_id();
 window.sync_and_update_libraries(backend_id, backend)
 ```
+
+## Player Backend Status (January 2025)
+
+**MPV is now the default player backend** due to:
+- ✅ **Complete video rendering** - Works perfectly with GTK4 GLArea integration  
+- ✅ **No subtitle issues** - Subtitles render correctly without color artifacts
+- ✅ **Superior performance** - Optimized rendering with cached GL functions
+- ✅ **Full feature parity** - All player features working (play/pause/seek/tracks)
+- ✅ **Wayland support** - Native Wayland rendering without window embedding issues
+
+**GStreamer remains available** but has known subtitle color correction issues that affect user experience. Users can still switch to GStreamer via config if needed, but MPV is recommended.
 
 ## Current Priority Tasks
 
@@ -539,7 +573,14 @@ window.sync_and_update_libraries(backend_id, backend)
 ## Known Issues & Troubleshooting
 
 ### Current Issues
-- [ ] **GStreamer Subtitle Rendering Issue (CRITICAL)**:
+- [x] **MPV Player (DEFAULT - FULLY WORKING)**:
+  - **Status**: ✅ All issues resolved, working perfectly
+  - **Video rendering**: Working with GLArea integration
+  - **Audio/Subtitles**: Full support with no color issues
+  - **Performance**: Optimized with cached GL functions and frame-based rendering
+  - **MPV is now the default and recommended player backend**
+
+- [ ] **GStreamer Subtitle Rendering Issue (SECONDARY PLAYER)**:
   - **Status**: Subtitle overlay causes color conversion artifacts
   - **Problem**: Green bars/incorrect colors appear when subtitles are displayed
   - **Attempted Fixes**:
@@ -548,30 +589,7 @@ window.sync_and_update_libraries(backend_id, backend)
     - Used videoconvertscale for optimized conversion
     - Fell back to regular playbin from playbin3
   - **Current State**: Issue persists, appears to be YUV→RGB conversion problem during subtitle compositing
-  - **Workaround**: Users can disable subtitles or use MPV player backend
-- [ ] **MPV Integration Issue (CRITICAL)**: 
-  - **Status**: MPV renders successfully but video is BLACK
-  - **Problem**: Video frames render but don't display in GLArea widget
-  - **Completed Solutions**:
-    1. ✅ Use eglGetProcAddress instead of dlsym - Fixed initialization
-    2. ✅ Check GL state before/after render (glGetError) - No errors now
-    3. ✅ Added glFlush/glFinish after render - Ensures GL commands execute
-    4. ✅ Fixed GL_INVALID_FRAMEBUFFER_OPERATION error
-    5. ✅ Fixed segmentation faults with proper timing
-  - **Current State**:
-    - MPV initializes successfully
-    - Video loads and dimensions are correct (1918x802)
-    - mpv_render_context_render() succeeds continuously
-    - Audio plays correctly
-    - **BUT VIDEO IS STILL BLACK**
-  - **Next Steps to Try**:
-    1. Try getting actual FBO ID from GTK instead of using 0
-    2. Test with different OpenGL context versions
-    3. Investigate if GTK4 needs special handling for custom GL rendering
-    4. Check if we need to bind specific textures or buffers
-    5. Create minimal C test case to verify MPV render API works
-    6. Consider using GStreamer gtksink as fallback if all else fails
-  - GStreamer player works correctly embedded (temporary workaround)
+  - **Workaround**: Use MPV player backend (now default) which has no subtitle issues
 - [ ] **Homepage Issues** (CRITICAL):
   - [ ] **Horizontal scrolling broken**: Scrolling horizontally on homepage sections doesn't trigger image loading
   - [ ] **Continue Watching completely broken**: 
