@@ -1,3 +1,67 @@
+/* Skip button styles for intro/credits */
+.osd.pill {
+    background-color: rgba(0, 0, 0, 0.8);
+    border-radius: 20px;
+    padding: 10px 20px;
+    color: white;
+    font-weight: bold;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    transition: all 200ms ease;
+}
+
+.osd.pill:hover {
+    background-color: rgba(0, 0, 0, 0.9);
+    border-color: rgba(255, 255, 255, 0.5);
+    transform: scale(1.05);
+}
+
+/* Auto-play overlay styles */
+.auto-play-overlay {
+    background-color: rgba(0, 0, 0, 0.95);
+    border-radius: 12px;
+    padding: 30px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* Picture-in-picture container */
+.pip-container {
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    overflow: hidden;
+    background-color: black;
+}
+
+.pip-container video,
+.pip-container .video-widget {
+    border-radius: 6px;
+}
+
+/* Next episode info */
+.next-episode-info {
+    padding: 0 20px;
+}
+
+.next-episode-info .title-2 {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.next-episode-info .title-1 {
+    color: white;
+    font-size: 20px;
+    font-weight: bold;
+    margin-top: 8px;
+}
+
+.next-episode-info .dim-label {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 14px;
+    margin-top: 8px;
+}
+
 /* Media card styles */
 .card {
   border-radius: 8px;

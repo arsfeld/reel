@@ -278,40 +278,15 @@ impl LibraryView {
         // Store all media items
         self.imp().all_media_items.replace(media_items.clone());
 
-        // Preload initial images in background since they're fast now
-        let items_clone = media_items.clone();
-        let weak_self = self.downgrade();
-        glib::spawn_future_local(async move {
-            if let Some(view) = weak_self.upgrade() {
-                view.preload_initial_images(&items_clone).await;
-            }
-        });
-
         // Apply filters and display items
+        // Removed predictive preloading - cards will load images on-demand
         self.apply_filters();
     }
 
     async fn preload_initial_images(&self, items: &[MediaItem]) {
-        let size = *self.imp().current_view_size.borrow();
-        let urls_to_preload: Vec<(String, ImageSize)> = items
-            .iter()
-            .take(60) // Preload more items since thumbnails are fast
-            .filter_map(|item| {
-                let url = match item {
-                    MediaItem::Movie(m) => m.poster_url.as_ref(),
-                    MediaItem::Show(s) => s.poster_url.as_ref(),
-                    _ => None,
-                }?;
-                Some((url.clone(), size))
-            })
-            .collect();
-
-        IMAGE_LOADER
-            .predictive_preload(
-                urls_to_preload,
-                crate::utils::image_loader::PreloadPriority::High,
-            )
-            .await;
+        // Simplified: removed predictive preloading as it may cause issues
+        // Images will load on-demand through trigger_load() instead
+        trace!("Skipping predictive preload for {} items", items.len());
     }
 
     fn display_media_items(&self, items: Vec<MediaItem>) {
@@ -392,13 +367,18 @@ impl LibraryView {
                 glib::idle_add_local_once(move || {
                     create_initial(0, INITIAL_CARDS_TO_CREATE);
 
-                    // Load initial images after cards are created
+                    // Simplified: trigger load directly on created cards
                     if let Some(view) = weak_self.upgrade() {
-                        // Small delay to ensure cards are fully rendered
                         glib::timeout_add_local_once(
-                            std::time::Duration::from_millis(50),
+                            std::time::Duration::from_millis(100),
                             move || {
-                                view.batch_load_visible_cards(0, INITIAL_IMAGES_TO_LOAD);
+                                // Trigger load on initial visible cards
+                                let cards = view.imp().cards_by_index.borrow();
+                                for i in 0..INITIAL_IMAGES_TO_LOAD.min(cards.len()) {
+                                    if let Some(card) = cards.get(&i) {
+                                        card.trigger_load(ImageSize::Medium);
+                                    }
+                                }
                             },
                         );
                     }
@@ -573,50 +553,19 @@ impl LibraryView {
         self.imp().filter_manager.borrow()
     }
 
-    /// Batch load images for visible cards
+    /// Simplified: Just trigger load on visible cards
     fn batch_load_visible_cards(&self, start_idx: usize, end_idx: usize) {
-        let filtered_items = self.imp().filtered_items.borrow();
         let cards_by_index = self.imp().cards_by_index.borrow();
         let current_size = *self.imp().current_view_size.borrow();
 
-        // Collect URLs for batch loading
-        let mut batch_requests = Vec::new();
-        let items_to_load =
-            &filtered_items[start_idx.min(filtered_items.len())..end_idx.min(filtered_items.len())];
-
-        for (i, item) in items_to_load.iter().enumerate() {
-            let index = start_idx + i;
-
-            // Trigger load on the card if it exists
-            if let Some(card) = cards_by_index.get(&index) {
+        // Simply trigger load on each visible card
+        for i in start_idx..end_idx {
+            if let Some(card) = cards_by_index.get(&i) {
                 card.trigger_load(current_size);
             }
-
-            // Also prepare for batch loading
-            if let Some(url) = match item {
-                MediaItem::Movie(m) => m.poster_url.as_ref(),
-                MediaItem::Show(s) => s.poster_url.as_ref(),
-                MediaItem::Episode(e) => e.thumbnail_url.as_ref().or(e.show_poster_url.as_ref()),
-                _ => None,
-            } {
-                batch_requests.push((url.clone(), current_size));
-            }
         }
 
-        if !batch_requests.is_empty() {
-            // Only log at trace level to reduce noise
-            trace!(
-                "Batch loading {} images for library (indices {}-{})",
-                batch_requests.len(),
-                start_idx,
-                end_idx
-            );
-
-            // Load images in background - the image loader will handle deduplication
-            glib::spawn_future_local(async move {
-                let _ = IMAGE_LOADER.batch_load(batch_requests).await;
-            });
-        }
+        trace!("Triggered load for cards {}-{}", start_idx, end_idx);
     }
 
     fn setup_progressive_loading_with_batch(
@@ -904,16 +853,9 @@ impl MediaCard {
     }
 
     fn set_placeholder_image(&self, picture: &gtk4::Picture) {
-        let icon_theme = gtk4::IconTheme::for_display(&self.display());
-        let icon = icon_theme.lookup_icon(
-            "video-x-generic-symbolic",
-            &[],
-            64,
-            1,
-            gtk4::TextDirection::Ltr,
-            gtk4::IconLookupFlags::empty(),
-        );
-        picture.set_paintable(Some(&icon));
+        // Don't set any icon - just leave it empty for a cleaner look
+        // The rounded poster frame with gradient overlay will be enough
+        picture.set_paintable(None::<&gdk::Paintable>);
     }
 
     fn update_content(&self, media_item: MediaItem) {
@@ -1086,24 +1028,6 @@ impl MediaCard {
                                 let imp = card.imp();
                                 *imp.image_loaded.borrow_mut() = true;
                                 *imp.image_loading.borrow_mut() = false;
-
-                                debug!(
-                                    "Loaded {} image for '{}' ({}x{} px)",
-                                    match size {
-                                        ImageSize::Small => "small",
-                                        ImageSize::Medium => "medium",
-                                        ImageSize::Large => "large",
-                                        ImageSize::Original => "original",
-                                    },
-                                    card.imp()
-                                        .media_item
-                                        .borrow()
-                                        .as_ref()
-                                        .map(|m| m.title())
-                                        .unwrap_or("unknown"),
-                                    texture.width(),
-                                    texture.height()
-                                );
                             }
                         });
                     }

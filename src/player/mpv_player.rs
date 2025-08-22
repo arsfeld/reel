@@ -1,3 +1,4 @@
+use crate::config::Config;
 use anyhow::Result;
 use gtk4::GLArea;
 use gtk4::{self, glib, prelude::*};
@@ -9,6 +10,7 @@ use std::ffi::{CStr, CString, c_void};
 use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -39,6 +41,10 @@ struct MpvPlayerInner {
     render_count: Arc<AtomicU64>,
     cached_fbo: Cell<i32>,
     timer_handle: RefCell<Option<glib::SourceId>>,
+    verbose_logging: bool,
+    seek_pending: Arc<Mutex<Option<(f64, Instant)>>>,
+    seek_timer: RefCell<Option<glib::SourceId>>,
+    last_seek_target: Arc<Mutex<Option<f64>>>,
 }
 
 #[derive(Clone)]
@@ -51,7 +57,16 @@ unsafe impl Sync for MpvPlayer {}
 
 impl MpvPlayer {
     pub fn new() -> Result<Self> {
-        info!("MpvPlayer::new() - Initializing MPV GL player");
+        // Try to load config to get verbose logging setting
+        let verbose_logging = Config::load()
+            .ok()
+            .map(|c| c.playback.mpv_verbose_logging)
+            .unwrap_or(false);
+
+        info!(
+            "Initializing MPV player (verbose_logging: {})",
+            verbose_logging
+        );
 
         Ok(Self {
             inner: Rc::new(MpvPlayerInner {
@@ -66,6 +81,10 @@ impl MpvPlayer {
                 render_count: Arc::new(AtomicU64::new(0)),
                 cached_fbo: Cell::new(-1),
                 timer_handle: RefCell::new(None),
+                verbose_logging,
+                seek_pending: Arc::new(Mutex::new(None)),
+                seek_timer: RefCell::new(None),
+                last_seek_target: Arc::new(Mutex::new(None)),
             }),
         })
     }
@@ -156,7 +175,7 @@ impl MpvPlayer {
     }
 
     fn init_gl_render_context(&self, gl_area: &GLArea) -> Result<()> {
-        info!("MpvPlayer::init_gl_render_context() - Initializing OpenGL render context");
+        info!("Initializing OpenGL render context");
 
         // Ensure GL context is current
         gl_area.make_current();
@@ -178,9 +197,7 @@ impl MpvPlayer {
         // Check GL context properties
         gl_context.make_current();
         let is_legacy = gl_context.is_legacy();
-        info!("GL context available - Legacy: {}", is_legacy);
-
-        info!("Proceeding with MPV render context creation");
+        debug!("GL context available - Legacy: {}", is_legacy);
 
         let mpv = self.inner.mpv.borrow();
         let mpv = mpv
@@ -199,7 +216,7 @@ impl MpvPlayer {
             let gl_area_ptr = gl_area as *const GLArea as *mut c_void;
 
             // Log API version first
-            info!("Setting up MPV render API with type: opengl");
+            debug!("Setting up MPV render API with type: opengl");
 
             let opengl_params = mpv_opengl_init_params {
                 get_proc_address: Some(Self::get_proc_address),
@@ -283,16 +300,16 @@ impl MpvPlayer {
                 self.inner.update_callback_registered.set(true);
             }
 
-            info!("MpvPlayer::init_gl_render_context() - OpenGL render context initialized");
+            info!("OpenGL render context initialized");
 
             // Load pending media if any - do this after a small delay to ensure context is ready
             if let Some(url) = self.inner.pending_media_url.borrow_mut().take() {
-                info!("Loading pending media: {}", url);
+                debug!("Loading pending media: {}", url);
                 let inner_clone = self.inner.clone();
                 let url_clone = url.clone();
                 glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
                     if let Some(ref mpv) = *inner_clone.mpv.borrow() {
-                        info!("Actually loading media now: {}", url_clone);
+                        debug!("Actually loading media now: {}", url_clone);
                         if let Err(e) = mpv.command("loadfile", &[&url_clone, "replace"]) {
                             error!("Failed to load pending media: {:?}", e);
                         }
@@ -305,7 +322,7 @@ impl MpvPlayer {
     }
 
     pub fn create_video_widget(&self) -> gtk4::Widget {
-        info!("MpvPlayer::create_video_widget() - Creating GLArea for MPV rendering");
+        debug!("Creating GLArea for MPV rendering");
 
         let gl_area = GLArea::new();
         gl_area.set_vexpand(true);
@@ -324,7 +341,7 @@ impl MpvPlayer {
         let inner_realize = inner.clone();
         let player_self = self.clone();
         gl_area.connect_realize(move |gl_area| {
-            info!("GLArea realized - initializing MPV render context");
+            debug!("GLArea realized - initializing MPV render context");
 
             // Make GL context current
             gl_area.make_current();
@@ -359,18 +376,23 @@ impl MpvPlayer {
             let elapsed = now.duration_since(*inner_render.last_render_time.borrow());
             inner_render.last_render_time.replace(now);
 
-            let render_count = inner_render.render_count.fetch_add(1, Ordering::Relaxed);
-            if render_count % 60 == 0 {
-                let fps = if elapsed.as_millis() > 0 {
-                    1000.0 / elapsed.as_millis() as f64
-                } else {
-                    0.0
-                };
-                debug!(
-                    "Render performance: {:.1} FPS ({}ms frame time)",
-                    fps,
-                    elapsed.as_millis()
-                );
+            // Only log render performance in verbose mode
+            if inner_render.verbose_logging {
+                let render_count = inner_render.render_count.fetch_add(1, Ordering::Relaxed);
+                if render_count % 60 == 0 {
+                    let fps = if elapsed.as_millis() > 0 {
+                        1000.0 / elapsed.as_millis() as f64
+                    } else {
+                        0.0
+                    };
+                    debug!(
+                        "Render performance: {:.1} FPS ({}ms frame time)",
+                        fps,
+                        elapsed.as_millis()
+                    );
+                }
+            } else {
+                inner_render.render_count.fetch_add(1, Ordering::Relaxed);
             }
 
             // Render the current frame
@@ -486,7 +508,7 @@ impl MpvPlayer {
         // Handle unrealize signal - cleanup
         let inner_unrealize = inner.clone();
         gl_area.connect_unrealize(move |_gl_area| {
-            info!("GLArea unrealized - cleaning up MPV render context");
+            debug!("GLArea unrealized - cleaning up MPV render context");
 
             // Clean up render context
             if let Some(mpv_gl) = inner_unrealize.mpv_gl.borrow_mut().take() {
@@ -505,13 +527,17 @@ impl MpvPlayer {
         let timer_id = glib::timeout_add_local(Duration::from_millis(16), move || {
             // Only render if we have a context and video is playing
             if inner_timer.mpv_gl.borrow().is_some() {
-                // Check if we're actually playing
+                // Check if we're actually playing and not seeking
                 if let Some(ref mpv) = *inner_timer.mpv.borrow() {
-                    if let Ok(paused) = mpv.get_property::<bool>("pause") {
-                        if !paused {
-                            // Only queue render if no frame is pending
-                            if !inner_timer.frame_pending.load(Ordering::Acquire) {
-                                gl_area_timer.queue_render();
+                    // Check if we're seeking - if so, skip automatic render
+                    let is_seeking = inner_timer.seek_pending.lock().unwrap().is_some();
+                    if !is_seeking {
+                        if let Ok(paused) = mpv.get_property::<bool>("pause") {
+                            if !paused {
+                                // Only queue render if no frame is pending
+                                if !inner_timer.frame_pending.load(Ordering::Acquire) {
+                                    gl_area_timer.queue_render();
+                                }
                             }
                         }
                     }
@@ -523,12 +549,12 @@ impl MpvPlayer {
         // Store timer handle so we can cancel it on cleanup
         self.inner.timer_handle.replace(Some(timer_id));
 
-        info!("MpvPlayer::create_video_widget() - GLArea created with adaptive rendering");
+        debug!("GLArea created with adaptive rendering");
         gl_area.upcast::<gtk4::Widget>()
     }
 
     pub async fn load_media(&self, url: &str, _video_sink: Option<()>) -> Result<()> {
-        info!("MpvPlayer::load_media() - Loading media: {}", url);
+        info!("Loading media: {}", url);
 
         // Update state
         {
@@ -556,7 +582,7 @@ impl MpvPlayer {
         if let Some(ref mpv) = *self.inner.mpv.borrow() {
             mpv.command("loadfile", &[url, "replace"])
                 .map_err(|e| anyhow::anyhow!("Failed to load media: {:?}", e))?;
-            info!("MpvPlayer::load_media() - Media loaded successfully");
+            debug!("Media loaded successfully");
         } else {
             return Err(anyhow::anyhow!("MPV not initialized"));
         }
@@ -565,7 +591,7 @@ impl MpvPlayer {
     }
 
     pub async fn play(&self) -> Result<()> {
-        info!("MpvPlayer::play() - Starting playback");
+        debug!("Starting playback");
 
         if let Some(ref mpv) = *self.inner.mpv.borrow() {
             mpv.set_property("pause", false)
@@ -573,7 +599,7 @@ impl MpvPlayer {
 
             let mut state = self.inner.state.write().await;
             *state = PlayerState::Playing;
-            info!("MpvPlayer::play() - Playback started");
+            debug!("Playback started");
         } else {
             // If MPV not initialized yet, just update state - it will auto-play when loaded
             warn!("MpvPlayer::play() - MPV not initialized yet, will auto-play when ready");
@@ -613,17 +639,83 @@ impl MpvPlayer {
     pub async fn seek(&self, position: Duration) -> Result<()> {
         debug!("MpvPlayer::seek() - Seeking to {:?}", position);
 
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
-            let position_secs = position.as_secs_f64();
-            mpv.command("seek", &[&position_secs.to_string(), "absolute"])
-                .map_err(|e| anyhow::anyhow!("Failed to seek: {:?}", e))?;
+        let position_secs = position.as_secs_f64();
+
+        // Update the last seek target for position tracking
+        {
+            let mut last_target = self.inner.last_seek_target.lock().unwrap();
+            *last_target = Some(position_secs);
         }
+
+        // Store the pending seek position
+        {
+            let mut pending = self.inner.seek_pending.lock().unwrap();
+            *pending = Some((position_secs, Instant::now()));
+        }
+
+        // Cancel any existing seek timer
+        if let Some(timer) = self.inner.seek_timer.borrow_mut().take() {
+            timer.remove();
+        }
+
+        // Clone references needed for the closure
+        let inner = self.inner.clone();
+        let seek_pending = self.inner.seek_pending.clone();
+        let last_seek_target = self.inner.last_seek_target.clone();
+
+        // Very short delay for coalescing (5ms)
+        let timer_id = glib::timeout_add_local_once(Duration::from_millis(5), move || {
+            // Get the latest seek position
+            let seek_pos = {
+                let mut pending = seek_pending.lock().unwrap();
+                pending.take()
+            };
+
+            if let Some((pos, _timestamp)) = seek_pos {
+                if let Some(ref mpv) = *inner.mpv.borrow() {
+                    // Use keyframe seeking for speed
+                    if let Err(e) = mpv.command("seek", &[&pos.to_string(), "absolute"]) {
+                        error!("Failed to seek: {:?}", e);
+                        // Clear last seek target on error
+                        let mut last_target = last_seek_target.lock().unwrap();
+                        *last_target = None;
+                    } else {
+                        // Force a frame update after seeking
+                        if let Some(gl_area) = &*inner.gl_area.borrow() {
+                            gl_area.queue_render();
+                        }
+                    }
+                }
+            }
+
+            // Clear the timer reference
+            inner.seek_timer.replace(None);
+        });
+
+        self.inner.seek_timer.replace(Some(timer_id));
         Ok(())
     }
 
     pub async fn get_position(&self) -> Option<Duration> {
+        // If we have a pending seek, return that as the effective position
+        {
+            let last_target = self.inner.last_seek_target.lock().unwrap();
+            if let Some(target_pos) = *last_target {
+                // Check if the seek is recent (within 100ms)
+                if let Some((_, timestamp)) = *self.inner.seek_pending.lock().unwrap() {
+                    if timestamp.elapsed() < Duration::from_millis(100) {
+                        return Some(Duration::from_secs_f64(target_pos));
+                    }
+                }
+            }
+        }
+
+        // Otherwise return the actual position
         if let Some(ref mpv) = *self.inner.mpv.borrow() {
             if let Ok(pos) = mpv.get_property::<f64>("time-pos") {
+                // Clear the last seek target since we're at the actual position now
+                let mut last_target = self.inner.last_seek_target.lock().unwrap();
+                *last_target = None;
                 return Some(Duration::from_secs_f64(pos));
             }
         }
@@ -746,7 +838,7 @@ impl MpvPlayer {
         if let Some(ref mpv) = *self.inner.mpv.borrow() {
             mpv.set_property("aid", track_index as i64)
                 .map_err(|e| anyhow::anyhow!("Failed to set audio track: {:?}", e))?;
-            info!("Set audio track to {}", track_index);
+            debug!("Set audio track to {}", track_index);
         }
         Ok(())
     }
@@ -757,12 +849,12 @@ impl MpvPlayer {
                 // Disable subtitles
                 mpv.set_property("sid", "no")
                     .map_err(|e| anyhow::anyhow!("Failed to disable subtitles: {:?}", e))?;
-                info!("Disabled subtitles");
+                debug!("Disabled subtitles");
             } else {
                 // Enable subtitles and set track
                 mpv.set_property("sid", track_index as i64)
                     .map_err(|e| anyhow::anyhow!("Failed to set subtitle track: {:?}", e))?;
-                info!("Set subtitle track to {}", track_index);
+                debug!("Set subtitle track to {}", track_index);
             }
         }
         Ok(())
@@ -795,7 +887,10 @@ impl MpvPlayer {
 
 impl MpvPlayerInner {
     fn init_mpv(&self) -> Result<Mpv> {
-        info!("MpvPlayerInner::init_mpv() - Creating MPV instance");
+        info!("Creating MPV instance");
+
+        // Load configuration for cache settings
+        let config = Config::load().unwrap_or_default();
 
         // MPV requires LC_NUMERIC to be set to "C"
         unsafe {
@@ -806,42 +901,50 @@ impl MpvPlayerInner {
         let mpv =
             Mpv::new().map_err(|e| anyhow::anyhow!("Failed to create MPV instance: {:?}", e))?;
 
-        // Enable verbose logging for debugging
-        // Note: log-level might not be available in all MPV builds
-        let _ = mpv.set_property("log-level", "debug");
+        // Set log level - this needs to be set before other properties
+        if self.verbose_logging {
+            let _ = mpv.set_property("msg-level", "all=debug");
+        } else {
+            let _ = mpv.set_property("msg-level", "all=info");
+        }
 
-        // Enable terminal output for debugging (logs will go to console)
-        let _ = mpv.set_property("terminal", true);
-        let _ = mpv.set_property("msg-level", "all=debug");
-
-        // Also try msg-color for colored output
-        let _ = mpv.set_property("msg-color", false);
-
-        // Check MPV version and features
+        // Always log MPV version as it's useful for debugging
         if let Ok(version) = mpv.get_property::<String>("mpv-version") {
             info!("MPV version: {}", version);
         }
-        if let Ok(config) = mpv.get_property::<String>("mpv-configuration") {
-            info!("MPV configuration: {}", config);
+        // Only log configuration in verbose mode
+        if self.verbose_logging {
+            if let Ok(config) = mpv.get_property::<String>("mpv-configuration") {
+                debug!("MPV configuration: {}", config);
+            }
         }
 
         // Configure MPV for render API with performance optimizations
         mpv.set_property("vo", "libmpv")
             .map_err(|e| anyhow::anyhow!("Failed to set vo=libmpv: {:?}", e))?;
 
-        // Disable debug options in production for better performance
-        #[cfg(debug_assertions)]
-        {
+        // Only enable GPU debug options if verbose logging is enabled
+        if self.verbose_logging {
             let _ = mpv.set_property("gpu-debug", true);
             let _ = mpv.set_property("opengl-debug", true);
         }
 
-        // Performance optimizations
+        // Performance optimizations - improved for seeking
         mpv.set_property("video-sync", "audio")
             .map_err(|e| anyhow::anyhow!("Failed to set video-sync: {:?}", e))?;
         mpv.set_property("interpolation", false)
             .map_err(|e| anyhow::anyhow!("Failed to set interpolation: {:?}", e))?;
         mpv.set_property("opengl-swapinterval", 1).unwrap_or(()); // May not be available on all systems
+
+        // Seek optimization settings - prioritize speed
+        mpv.set_property("hr-seek", "no") // Disable HR seeking for speed
+            .map_err(|e| anyhow::anyhow!("Failed to set hr-seek: {:?}", e))?;
+        mpv.set_property("hr-seek-framedrop", true) // Allow frame drops for smoother seeking
+            .map_err(|e| anyhow::anyhow!("Failed to set hr-seek-framedrop: {:?}", e))?;
+        mpv.set_property("index", "default") // Use index for faster seeking
+            .map_err(|e| anyhow::anyhow!("Failed to set index: {:?}", e))?;
+        mpv.set_property("force-seekable", true) // Force seekable even for streams
+            .unwrap_or(());
 
         // Set basic options
         mpv.set_property("keep-open", "yes")
@@ -873,23 +976,52 @@ impl MpvPlayerInner {
         mpv.set_property("audio-file-auto", "fuzzy")
             .map_err(|e| anyhow::anyhow!("Failed to set audio-file-auto: {:?}", e))?;
 
-        // Optimized cache settings for smoother playback
+        // Aggressive cache settings - cache entire episodes when possible (configurable)
         mpv.set_property("cache", true)
             .map_err(|e| anyhow::anyhow!("Failed to set cache: {:?}", e))?;
-        mpv.set_property("cache-secs", 10) // Buffer 10 seconds ahead
+        mpv.set_property("cache-secs", config.playback.mpv_cache_secs as i64)
             .map_err(|e| anyhow::anyhow!("Failed to set cache-secs: {:?}", e))?;
-        mpv.set_property("demuxer-max-bytes", "150MiB") // Increased for 4K content
+        mpv.set_property("cache-pause-initial", false) // Don't pause initially for cache
+            .map_err(|e| anyhow::anyhow!("Failed to set cache-pause-initial: {:?}", e))?;
+        mpv.set_property("cache-pause-wait", 0.1) // Resume very quickly after cache runs out
+            .map_err(|e| anyhow::anyhow!("Failed to set cache-pause-wait: {:?}", e))?;
+
+        // Configurable cache sizes
+        let cache_size = format!("{}MiB", config.playback.mpv_cache_size_mb);
+        let backbuffer_size = format!("{}MiB", config.playback.mpv_cache_backbuffer_mb);
+
+        mpv.set_property("demuxer-max-bytes", cache_size.as_str())
             .map_err(|e| anyhow::anyhow!("Failed to set demuxer-max-bytes: {:?}", e))?;
-        mpv.set_property("demuxer-max-back-bytes", "75MiB") // Increased for better seeking
+        mpv.set_property("demuxer-max-back-bytes", backbuffer_size.as_str())
             .map_err(|e| anyhow::anyhow!("Failed to set demuxer-max-back-bytes: {:?}", e))?;
-        mpv.set_property("demuxer-readahead-secs", 10) // Read ahead 10 seconds
-            .map_err(|e| anyhow::anyhow!("Failed to set demuxer-readahead-secs: {:?}", e))?;
+        mpv.set_property(
+            "demuxer-readahead-secs",
+            config.playback.mpv_cache_secs as i64,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to set demuxer-readahead-secs: {:?}", e))?;
+
+        info!(
+            "MPV cache configured: {}MB forward, {}MB backward, up to {} minutes buffering",
+            config.playback.mpv_cache_size_mb,
+            config.playback.mpv_cache_backbuffer_mb,
+            config.playback.mpv_cache_secs / 60
+        );
+
+        // Additional cache optimizations
+        mpv.set_property("demuxer-seekable-cache", true) // Enable seekable cache
+            .map_err(|e| anyhow::anyhow!("Failed to set demuxer-seekable-cache: {:?}", e))?;
+        mpv.set_property("cache-on-disk", false) // Keep cache in RAM for speed
+            .map_err(|e| anyhow::anyhow!("Failed to set cache-on-disk: {:?}", e))?;
+        mpv.set_property("demuxer-donate-buffer", true) // Allow demuxer to use all available cache
+            .unwrap_or(());
+        mpv.set_property("stream-buffer-size", "512KiB") // Larger network buffer
+            .unwrap_or(());
 
         // Disable OSD
         mpv.set_property("osd-level", 0i64)
             .map_err(|e| anyhow::anyhow!("Failed to set osd-level: {:?}", e))?;
 
-        info!("MpvPlayerInner::init_mpv() - MPV instance configured for render API");
+        info!("MPV instance configured");
         Ok(mpv)
     }
 }
@@ -899,6 +1031,11 @@ impl Drop for MpvPlayerInner {
         // Cancel the timer if it's running
         if let Some(timer_id) = self.timer_handle.borrow_mut().take() {
             timer_id.remove();
+        }
+
+        // Cancel the seek timer if it's running
+        if let Some(seek_timer) = self.seek_timer.borrow_mut().take() {
+            seek_timer.remove();
         }
 
         // Clean up render context

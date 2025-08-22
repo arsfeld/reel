@@ -46,6 +46,8 @@ pub struct Movie {
     pub view_count: u32,
     pub last_watched_at: Option<DateTime<Utc>>,
     pub playback_position: Option<Duration>,
+    pub intro_marker: Option<ChapterMarker>, // Intro/opening credits marker
+    pub credits_marker: Option<ChapterMarker>, // End credits marker
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,8 +91,25 @@ pub struct Episode {
     pub view_count: u32,
     pub last_watched_at: Option<DateTime<Utc>>,
     pub playback_position: Option<Duration>,
-    pub show_title: Option<String>,      // Parent show name
-    pub show_poster_url: Option<String>, // Parent show poster URL
+    pub show_title: Option<String>,            // Parent show name
+    pub show_poster_url: Option<String>,       // Parent show poster URL
+    pub intro_marker: Option<ChapterMarker>,   // Intro/opening credits marker
+    pub credits_marker: Option<ChapterMarker>, // End credits marker
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChapterMarker {
+    pub start_time: Duration,
+    pub end_time: Duration,
+    pub marker_type: ChapterType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ChapterType {
+    Intro,
+    Credits,
+    Recap,
+    Preview,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

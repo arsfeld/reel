@@ -24,6 +24,14 @@ mod imp {
         pub on_media_selected: RefCell<Option<Box<dyn Fn(&MediaItem)>>>,
         pub image_loader: RefCell<Option<Arc<ImageLoader>>>,
         pub section_cards: RefCell<HashMap<String, Vec<gtk4::Widget>>>,
+        pub section_widgets: RefCell<HashMap<String, SectionWidgets>>,
+    }
+
+    pub struct SectionWidgets {
+        pub container: gtk4::Box,
+        pub items_box: gtk4::Box,
+        pub scrolled: gtk4::ScrolledWindow,
+        pub cards: Vec<gtk4::Widget>,
     }
 
     impl std::fmt::Debug for HomePage {
@@ -122,9 +130,7 @@ impl HomePage {
                         info!("Loaded {} homepage sections", sections.len());
                         glib::idle_add_local_once(move || {
                             if let Some(page) = page_weak.upgrade() {
-                                // Update UI with sections
-                                page.imp().sections.replace(sections.clone());
-                                page.display_sections(sections);
+                                page.sync_sections(sections);
                             }
                         });
                     }
@@ -136,6 +142,273 @@ impl HomePage {
         });
     }
 
+    fn sync_sections(&self, new_sections: Vec<HomeSection>) {
+        let imp = self.imp();
+        let main_box = &imp.main_box;
+        let mut section_widgets = imp.section_widgets.borrow_mut();
+        let old_sections = imp.sections.borrow();
+
+        // Build a set of new section IDs for quick lookup
+        let new_section_ids: Vec<String> = new_sections.iter().map(|s| s.id.clone()).collect();
+
+        // Remove sections that no longer exist
+        let mut to_remove = Vec::new();
+        for old_id in section_widgets.keys() {
+            if !new_section_ids.contains(old_id) {
+                to_remove.push(old_id.clone());
+            }
+        }
+        for id in to_remove {
+            if let Some(widgets) = section_widgets.remove(&id) {
+                main_box.remove(&widgets.container);
+            }
+        }
+
+        // Update or create sections
+        for (index, section) in new_sections.iter().enumerate() {
+            if section.items.is_empty() {
+                continue;
+            }
+
+            if let Some(widgets) = section_widgets.get(&section.id) {
+                // Section exists - update its items if needed
+                let old_section = old_sections.iter().find(|s| s.id == section.id);
+                if let Some(old) = old_section {
+                    if !Self::items_equal(&old.items, &section.items) {
+                        self.update_section_items(widgets, section);
+                    }
+                }
+
+                // Ensure it's at the right position by moving to end
+                // (GTK doesn't have reorder_child_after in GTK4)
+                main_box.remove(&widgets.container);
+                main_box.append(&widgets.container);
+            } else {
+                // New section - create it
+                let widgets = self.create_section_widget(section);
+                main_box.append(&widgets.container);
+                section_widgets.insert(section.id.clone(), widgets);
+            }
+        }
+
+        // Update stored sections
+        drop(old_sections);
+        imp.sections.replace(new_sections);
+
+        // Show empty state if no sections
+        if section_widgets.is_empty() {
+            while let Some(child) = main_box.first_child() {
+                main_box.remove(&child);
+            }
+
+            let empty_state = adw::StatusPage::builder()
+                .icon_name("folder-symbolic")
+                .title("No Content Available")
+                .description("Connect to a media server to see your content here")
+                .build();
+
+            main_box.append(&empty_state);
+        }
+    }
+
+    fn items_equal(items1: &[MediaItem], items2: &[MediaItem]) -> bool {
+        if items1.len() != items2.len() {
+            return false;
+        }
+        items1.iter().zip(items2.iter()).all(|(a, b)| {
+            // Compare by ID to check if same item
+            match (a, b) {
+                (MediaItem::Movie(m1), MediaItem::Movie(m2)) => m1.id == m2.id,
+                (MediaItem::Show(s1), MediaItem::Show(s2)) => s1.id == s2.id,
+                (MediaItem::Episode(e1), MediaItem::Episode(e2)) => e1.id == e2.id,
+                _ => false,
+            }
+        })
+    }
+
+    fn update_section_items(&self, widgets: &imp::SectionWidgets, section: &HomeSection) {
+        // For now, just recreate the items - could be optimized further
+        // to reuse existing cards where possible
+        let items_box = &widgets.items_box;
+
+        // Clear existing items
+        while let Some(child) = items_box.first_child() {
+            items_box.remove(&child);
+        }
+
+        // Add new items
+        for item in &section.items[..section.items.len().min(20)] {
+            let card = self.create_media_card(item);
+            items_box.append(&card);
+        }
+
+        // Trigger load on visible items
+        glib::timeout_add_local_once(std::time::Duration::from_millis(100), {
+            let items_box = items_box.clone();
+            move || {
+                let mut child = items_box.first_child();
+                let mut count = 0;
+                while let Some(widget) = child {
+                    if count >= HOME_INITIAL_IMAGES_PER_SECTION {
+                        break;
+                    }
+                    if let Some(media_card) = widget.downcast_ref::<super::library::MediaCard>() {
+                        media_card.trigger_load(ImageSize::Small);
+                    }
+                    child = widget.next_sibling();
+                    count += 1;
+                }
+            }
+        });
+    }
+
+    fn create_section_widget(&self, section: &HomeSection) -> imp::SectionWidgets {
+        // This is essentially the old display_sections code for a single section
+        // but returning the widgets for tracking
+
+        let section_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(12)
+            .build();
+
+        // Create section header
+        let header_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .build();
+
+        let title_label = gtk4::Label::builder()
+            .label(&section.title)
+            .halign(gtk4::Align::Start)
+            .css_classes(["title-2"])
+            .build();
+
+        header_box.append(&title_label);
+
+        // Add "View All" button if there are many items
+        if section.items.len() > 10 {
+            let view_all_button = gtk4::Button::builder()
+                .label("View All")
+                .halign(gtk4::Align::End)
+                .hexpand(true)
+                .css_classes(["flat"])
+                .build();
+
+            header_box.append(&view_all_button);
+        }
+
+        section_box.append(&header_box);
+
+        // Create horizontal scrollable list for items
+        let scrolled = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Automatic)
+            .vscrollbar_policy(gtk4::PolicyType::Never)
+            .height_request(280) // Fixed height for media cards
+            .build();
+
+        let items_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(12)
+            .build();
+
+        // Create initial cards
+        let mut cards = Vec::new();
+        for item in &section.items[..section.items.len().min(HOME_INITIAL_CARDS_PER_SECTION)] {
+            let card = self.create_media_card(item);
+            items_box.append(&card);
+            cards.push(card);
+        }
+
+        // Setup scroll handler for lazy loading
+        let section_items = Rc::new(section.items.clone());
+        let cards_rc = Rc::new(RefCell::new(cards.clone()));
+        let self_weak = self.downgrade();
+        let items_box_weak = items_box.downgrade();
+        let scroll_counter: Rc<RefCell<u32>> = Rc::new(RefCell::new(0));
+
+        scrolled.hadjustment().connect_value_changed(move |h_adj| {
+            let value = h_adj.value();
+            let page_size = h_adj.page_size();
+            let counter = scroll_counter.clone();
+            let current_count = {
+                let mut c = counter.borrow_mut();
+                *c += 1;
+                *c
+            };
+
+            let cards_for_load = cards_rc.clone();
+            let section_items_for_create = section_items.clone();
+            let self_weak_for_create = self_weak.clone();
+            let items_box_weak_for_create = items_box_weak.clone();
+            let counter_inner = counter.clone();
+
+            glib::timeout_add_local(
+                std::time::Duration::from_millis(SCROLL_DEBOUNCE_MS),
+                move || {
+                    if *counter_inner.borrow() != current_count {
+                        return glib::ControlFlow::Break;
+                    }
+
+                    // Calculate which cards are visible
+                    let card_width = 144.0;
+                    let start_idx = (value / card_width).floor() as usize;
+                    let end_idx = ((value + page_size) / card_width).ceil() as usize + 3;
+
+                    // Create cards if needed
+                    if let Some(page) = self_weak_for_create.upgrade()
+                        && let Some(items_box) = items_box_weak_for_create.upgrade()
+                    {
+                        let mut cards = cards_for_load.borrow_mut();
+                        for i in cards.len()..end_idx.min(section_items_for_create.len()).min(20) {
+                            if let Some(item) = section_items_for_create.get(i) {
+                                let card = page.create_media_card(item);
+                                items_box.append(&card);
+                                cards.push(card.clone());
+                            }
+                        }
+
+                        // Trigger load on visible cards
+                        for i in start_idx..end_idx.min(cards.len()) {
+                            if let Some(card) = cards.get(i)
+                                && let Some(media_card) =
+                                    card.downcast_ref::<super::library::MediaCard>()
+                            {
+                                media_card.trigger_load(ImageSize::Small);
+                            }
+                        }
+                    }
+
+                    glib::ControlFlow::Break
+                },
+            );
+        });
+
+        // Trigger initial loads
+        glib::timeout_add_local_once(std::time::Duration::from_millis(100), {
+            let cards = cards.clone();
+            move || {
+                for (i, card) in cards.iter().enumerate() {
+                    if i >= HOME_INITIAL_IMAGES_PER_SECTION {
+                        break;
+                    }
+                    if let Some(media_card) = card.downcast_ref::<super::library::MediaCard>() {
+                        media_card.trigger_load(ImageSize::Small);
+                    }
+                }
+            }
+        });
+
+        scrolled.set_child(Some(&items_box));
+        section_box.append(&scrolled);
+
+        imp::SectionWidgets {
+            container: section_box,
+            items_box,
+            scrolled,
+            cards,
+        }
+    }
+
+    // Old display_sections becomes unused
     fn display_sections(&self, sections: Vec<HomeSection>) {
         let imp = self.imp();
         let main_box = &imp.main_box;
@@ -240,8 +513,22 @@ impl HomePage {
 
             // Defer initial card creation
             let create_initial = create_cards_batch.clone();
+            let cards_for_initial = cards_rc.clone();
             glib::idle_add_local_once(move || {
                 create_initial(0, HOME_INITIAL_CARDS_PER_SECTION);
+
+                // Immediately trigger load on initial cards
+                glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
+                    let cards = cards_for_initial.borrow();
+                    for (i, card) in cards.iter().enumerate() {
+                        if i >= HOME_INITIAL_IMAGES_PER_SECTION {
+                            break;
+                        }
+                        if let Some(media_card) = card.downcast_ref::<super::library::MediaCard>() {
+                            media_card.trigger_load(ImageSize::Small);
+                        }
+                    }
+                });
             });
 
             // Setup scroll handler to create and load more as needed with debouncing
@@ -286,19 +573,14 @@ impl HomePage {
                         // Create cards if needed
                         create_batch_for_load(start_idx, end_idx);
 
-                        // Batch load visible cards instead of loading one by one
-                        if let Some(page) = self_weak_for_load.upgrade() {
-                            page.batch_load_visible_cards(&section_id_for_load, start_idx, end_idx);
-                        } else {
-                            // Fallback to individual loading if batch loading unavailable
-                            let cards = cards_for_load.borrow();
-                            for i in start_idx..end_idx.min(cards.len()) {
-                                if let Some(card) = cards.get(i)
-                                    && let Some(media_card) =
-                                        card.downcast_ref::<super::library::MediaCard>()
-                                {
-                                    media_card.trigger_load(ImageSize::Small);
-                                }
+                        // Simplified: Just trigger load on visible cards directly
+                        let cards = cards_for_load.borrow();
+                        for i in start_idx..end_idx.min(cards.len()) {
+                            if let Some(card) = cards.get(i)
+                                && let Some(media_card) =
+                                    card.downcast_ref::<super::library::MediaCard>()
+                            {
+                                media_card.trigger_load(ImageSize::Small);
                             }
                         }
 
@@ -307,30 +589,7 @@ impl HomePage {
                 );
             });
 
-            // Trigger initial load when scrolled window is mapped with delay
-            let cards_for_map = cards_rc.clone();
-            scrolled.connect_map(move |_| {
-                // Small delay to let UI settle
-                let cards_clone = cards_for_map.clone();
-                glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(INITIAL_LOAD_DELAY_MS),
-                    move || {
-                        let cards = cards_clone.borrow();
-                        // Load visible cards
-                        for (i, card) in cards.iter().enumerate() {
-                            if i < HOME_INITIAL_IMAGES_PER_SECTION {
-                                if let Some(media_card) =
-                                    card.downcast_ref::<super::library::MediaCard>()
-                                {
-                                    media_card.trigger_load(ImageSize::Small);
-                                }
-                            } else {
-                                break;
-                            }
-                        }
-                    },
-                );
-            });
+            // Removed redundant trigger_initial_loads - cards already load in create_initial above
 
             scrolled.set_child(Some(&items_box));
             section_box.append(&scrolled);
@@ -364,54 +623,5 @@ impl HomePage {
         self.load_homepage();
     }
 
-    /// Batch load images for visible cards
-    fn batch_load_visible_cards(&self, section_id: &str, start_idx: usize, end_idx: usize) {
-        let image_loader = match self.imp().image_loader.borrow().as_ref() {
-            Some(loader) => loader.clone(),
-            None => return,
-        };
-
-        let sections = self.imp().sections.borrow();
-        let section = match sections.iter().find(|s| s.id == section_id) {
-            Some(s) => s,
-            None => return,
-        };
-
-        // Only process if we have items in range
-        if start_idx >= section.items.len() {
-            return;
-        }
-
-        // Collect URLs for batch loading - only items that might need loading
-        let mut batch_requests = Vec::new();
-        let items_to_load =
-            &section.items[start_idx.min(section.items.len())..end_idx.min(section.items.len())];
-
-        for item in items_to_load {
-            if let Some(url) = match item {
-                MediaItem::Movie(m) => m.poster_url.as_ref(),
-                MediaItem::Show(s) => s.poster_url.as_ref(),
-                MediaItem::Episode(e) => e.thumbnail_url.as_ref(),
-                _ => None,
-            } {
-                batch_requests.push((url.clone(), ImageSize::Small));
-            }
-        }
-
-        if !batch_requests.is_empty() {
-            // Only log at trace level to reduce noise
-            trace!(
-                "Batch loading {} images for section {} (indices {}-{})",
-                batch_requests.len(),
-                section_id,
-                start_idx,
-                end_idx
-            );
-
-            // Load images in background - the image loader will handle deduplication
-            glib::spawn_future_local(async move {
-                let _ = image_loader.batch_load(batch_requests).await;
-            });
-        }
-    }
+    // Removed batch_load_visible_cards - no longer needed with simplified approach
 }
