@@ -34,6 +34,123 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
       
+      - name: Check if release exists
+        id: check_release
+        run: |
+          if gh release view ${{ steps.get_version.outputs.version }} &>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Release already exists for ${{ steps.get_version.outputs.version }}"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "No release found for ${{ steps.get_version.outputs.version }}"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+      
+      - name: Generate release notes with Claude
+        id: generate_notes
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          # Get the previous tag
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${{ steps.get_version.outputs.version }}^ 2>/dev/null || echo "")
+          
+          # Get commit messages between tags
+          if [ -n "$PREVIOUS_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s" $PREVIOUS_TAG..${{ steps.get_version.outputs.version }})
+          else
+            COMMITS=$(git log --pretty=format:"- %s" --max-count=20)
+          fi
+          
+          # Install Claude CLI if not already installed
+          if ! command -v claude &> /dev/null; then
+            npm install -g @anthropic-ai/claude-cli
+          fi
+          
+          # Generate release notes with Claude
+          RELEASE_NOTES=$(cat <<EOF | claude --oauth-token "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" --no-markdown
+          Based on these git commits, generate a concise "What's New" section for release notes. 
+          Format as bullet points, group similar changes, and make it user-friendly (not just commit messages).
+          Focus on features, improvements, and fixes that users care about.
+          Keep it to 5-7 bullet points maximum.
+          
+          Commits:
+          $COMMITS
+          
+          Output only the bullet points, no headers or extra text.
+          EOF
+          )
+          
+          # Save to output (escape newlines for GitHub Actions)
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
+      - name: Build release body
+        id: build_body
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          cat > release_body.md << 'RELEASE_BODY'
+          # Reel ${{ steps.get_version.outputs.version }}
+          
+          ## What's New
+          ${{ steps.generate_notes.outputs.notes || '- ' }}
+          
+          ## Downloads
+          - **Linux Tarball**: `reel-linux-x86_64.tar.gz` - Extract and run `./reel`
+          - **Debian/Ubuntu**: `reel-*-amd64.deb` - Install with `sudo dpkg -i reel-*.deb`
+          - **Fedora/RHEL**: `reel-*-x86_64.rpm` - Install with `sudo rpm -i reel-*.rpm`
+          - **AppImage**: `reel-*-x86_64.AppImage` - Portable, runs on most Linux distributions
+          - **macOS**: `reel-macos-universal.dmg` - Mount and drag to Applications
+          - **Windows**: `reel-windows-x86_64.zip` - Extract and run `reel.exe`
+          
+          ## Installation
+          
+          ### Linux
+          
+          #### AppImage (Recommended - Universal)
+          ```bash
+          chmod +x reel-*-x86_64.AppImage
+          ./reel-*-x86_64.AppImage
+          ```
+          
+          #### Debian/Ubuntu
+          ```bash
+          sudo dpkg -i reel-*-amd64.deb
+          sudo apt-get install -f  # Install dependencies if needed
+          ```
+          
+          #### Fedora/RHEL/openSUSE
+          ```bash
+          sudo rpm -i reel-*-x86_64.rpm
+          # or
+          sudo dnf install ./reel-*-x86_64.rpm
+          ```
+          
+          #### Manual Installation
+          ```bash
+          tar -xzf reel-linux-x86_64.tar.gz
+          chmod +x reel
+          ./reel
+          ```
+          
+          ### macOS
+          1. Download the DMG file
+          2. Double-click to mount
+          3. Drag Reel to Applications folder
+          
+          ### Windows
+          1. Download the ZIP file
+          2. Extract to desired location
+          3. Run `reel.exe`
+          
+          ## System Requirements
+          - GTK4 and libadwaita
+          - GStreamer with common plugins
+          - 64-bit operating system
+          RELEASE_BODY
+      
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -42,40 +159,7 @@ jobs:
           name: Reel ${{ steps.get_version.outputs.version }}
           draft: true
           prerelease: false
-          body: |
-            # Reel ${{ steps.get_version.outputs.version }}
-            
-            ## What's New
-            - 
-            
-            ## Downloads
-            - **Linux**: `reel-linux-x86_64.tar.gz` - Extract and run `./reel`
-            - **macOS**: `reel-macos-universal.dmg` - Mount and drag to Applications
-            - **Windows**: `reel-windows-x86_64.zip` - Extract and run `reel.exe`
-            
-            ## Installation
-            
-            ### Linux
-            ```bash
-            tar -xzf reel-linux-x86_64.tar.gz
-            chmod +x reel
-            ./reel
-            ```
-            
-            ### macOS
-            1. Download the DMG file
-            2. Double-click to mount
-            3. Drag Reel to Applications folder
-            
-            ### Windows
-            1. Download the ZIP file
-            2. Extract to desired location
-            3. Run `reel.exe`
-            
-            ## System Requirements
-            - GTK4 and libadwaita
-            - GStreamer with common plugins
-            - 64-bit operating system
+          body_path: ${{ steps.check_release.outputs.exists == 'false' && 'release_body.md' || '' }}
 
   build-linux:
     needs: create-release
@@ -99,11 +183,14 @@ jobs:
             gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly \
             gstreamer1.0-libav \
+            libmpv-dev \
             libsqlite3-dev \
             pkg-config \
             libssl-dev \
             libdbus-1-dev \
-            blueprint-compiler
+            blueprint-compiler \
+            rpm \
+            file
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -120,21 +207,67 @@ jobs:
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-release-
       
+      - name: Install cargo packaging tools
+        run: |
+          cargo install cargo-deb --locked || true
+          cargo install cargo-generate-rpm --locked || true
+      
       - name: Build release binary
         run: |
           cargo build --release
           strip target/release/reel
-          mv target/release/reel reel
       
-      - name: Package Linux binary
+      - name: Package as tarball
         run: |
+          cp target/release/reel reel
           tar -czf reel-linux-x86_64.tar.gz reel
       
-      - name: Upload Linux Release Asset
+      - name: Build Debian package
+        run: |
+          cargo deb --no-build
+          mv target/debian/*.deb reel-${{ needs.create-release.outputs.version }}-amd64.deb || true
+      
+      - name: Build RPM package
+        run: |
+          cargo generate-rpm
+          mv target/generate-rpm/*.rpm reel-${{ needs.create-release.outputs.version }}-x86_64.rpm || true
+      
+      - name: Setup AppImage tools
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          wget -q https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy-plugin-gtk.sh
+      
+      - name: Build AppImage
+        run: |
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
+          cp target/release/reel AppDir/usr/bin/
+          cp data/dev.arsfeld.Reel.desktop AppDir/usr/share/applications/
+          cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+          
+          export VERSION=${{ needs.create-release.outputs.version }}
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --plugin gtk \
+            --output appimage \
+            --desktop-file AppDir/usr/share/applications/dev.arsfeld.Reel.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg \
+            --executable AppDir/usr/bin/reel || true
+          
+          mv Reel*.AppImage reel-${{ needs.create-release.outputs.version }}-x86_64.AppImage || true
+      
+      - name: Upload Linux Release Assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.version }}
-          files: reel-linux-x86_64.tar.gz
+          files: |
+            reel-linux-x86_64.tar.gz
+            reel-*.deb
+            reel-*.rpm
+            reel-*.AppImage
 
   # macOS and Windows builds are disabled for now - we only test on Linux
   # Uncomment the sections below to enable multi-platform builds

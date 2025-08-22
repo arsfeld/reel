@@ -27,6 +27,12 @@ Thumbs.db
 *.gresource
 build/
 
+# AppImage build
+AppDir/
+*.AppImage
+squashfs-root/
+appimagetool-*.AppImage
+
 # Cache and config
 data/cache/
 data/config/

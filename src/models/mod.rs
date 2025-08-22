@@ -270,6 +270,14 @@ impl MediaItem {
             _ => None,
         }
     }
+
+    pub fn playback_position(&self) -> Option<Duration> {
+        match self {
+            MediaItem::Movie(m) => m.playback_position,
+            MediaItem::Episode(e) => e.playback_position,
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

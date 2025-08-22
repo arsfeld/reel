@@ -133,6 +133,183 @@
           echo "Clippy fixes applied!"
         '';
 
+        # Package building scripts
+        buildDeb = pkgs.writeShellScriptBin "build-deb" ''
+          echo "Building Debian package..."
+          
+          # Install cargo-deb if not available
+          if ! command -v cargo-deb &> /dev/null; then
+            echo "Installing cargo-deb..."
+            cargo install cargo-deb --locked
+          fi
+          
+          # Ensure we have a release build
+          cargo build --release
+          
+          # Build the deb package
+          cargo deb --no-build
+          
+          DEB_FILE=$(find target/debian -name "*.deb" -type f | head -n1)
+          if [ -n "$DEB_FILE" ]; then
+            echo "✓ Debian package built: $DEB_FILE"
+            echo ""
+            echo "Package info:"
+            dpkg-deb -I "$DEB_FILE"
+            echo ""
+            echo "Package contents:"
+            dpkg-deb -c "$DEB_FILE" | head -20
+            echo "..."
+          else
+            echo "✗ Failed to build Debian package"
+            exit 1
+          fi
+        '';
+
+        buildRpm = pkgs.writeShellScriptBin "build-rpm" ''
+          echo "Building RPM package..."
+          
+          # Install cargo-generate-rpm if not available
+          if ! command -v cargo-generate-rpm &> /dev/null; then
+            echo "Installing cargo-generate-rpm..."
+            cargo install cargo-generate-rpm --locked
+          fi
+          
+          # Ensure we have a release build
+          cargo build --release
+          
+          # Build the RPM package
+          cargo generate-rpm
+          
+          RPM_FILE=$(find target/generate-rpm -name "*.rpm" -type f | head -n1)
+          if [ -n "$RPM_FILE" ]; then
+            echo "✓ RPM package built: $RPM_FILE"
+            echo ""
+            echo "Package info:"
+            rpm -qip "$RPM_FILE"
+            echo ""
+            echo "Package contents:"
+            rpm -qlp "$RPM_FILE" | head -20
+            echo "..."
+          else
+            echo "✗ Failed to build RPM package"
+            exit 1
+          fi
+        '';
+
+        buildAppImage = pkgs.writeShellScriptBin "build-appimage" ''
+          echo "Building AppImage..."
+          
+          # Ensure we have a release build
+          cargo build --release
+          
+          VERSION=$(grep '^version' Cargo.toml | cut -d'"' -f2)
+          
+          # Clean up previous builds
+          rm -rf AppDir
+          rm -f *.AppImage
+          
+          # Create AppDir structure
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
+          mkdir -p AppDir/usr/share/metainfo
+          
+          # Copy binary
+          cp target/release/reel AppDir/usr/bin/
+          chmod +x AppDir/usr/bin/reel
+          
+          # Copy desktop file
+          cp data/dev.arsfeld.Reel.desktop AppDir/usr/share/applications/
+          
+          # Copy icon
+          cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+          
+          # Create AppRun script
+          cat > AppDir/AppRun << 'EOF'
+          #!/bin/bash
+          SELF=$(readlink -f "$0")
+          HERE=''${SELF%/*}
+          export PATH="''${HERE}/usr/bin:''${PATH}"
+          export LD_LIBRARY_PATH="''${HERE}/usr/lib:''${LD_LIBRARY_PATH}"
+          export XDG_DATA_DIRS="''${HERE}/usr/share:''${XDG_DATA_DIRS}"
+          export GSETTINGS_SCHEMA_DIR="''${HERE}/usr/share/glib-2.0/schemas:''${GSETTINGS_SCHEMA_DIR}"
+          exec "''${HERE}/usr/bin/reel" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+          
+          # Download appimagetool if not available
+          if ! command -v appimagetool &> /dev/null; then
+            if [ ! -f appimagetool-x86_64.AppImage ]; then
+              echo "Downloading appimagetool..."
+              wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+              chmod +x appimagetool-x86_64.AppImage
+            fi
+            APPIMAGETOOL="./appimagetool-x86_64.AppImage"
+          else
+            APPIMAGETOOL="appimagetool"
+          fi
+          
+          # Create the AppImage (handle FUSE requirement)
+          if ! ARCH=x86_64 "$APPIMAGETOOL" --no-appstream AppDir "Reel-$VERSION-x86_64.AppImage" 2>/dev/null; then
+            echo "Trying with appimage-extract method..."
+            "$APPIMAGETOOL" --appimage-extract >/dev/null 2>&1
+            if [ -d squashfs-root ]; then
+              ARCH=x86_64 ./squashfs-root/AppRun --no-appstream AppDir "Reel-$VERSION-x86_64.AppImage"
+              rm -rf squashfs-root
+            else
+              echo "Note: AppImage creation requires FUSE. Install fuse or fuse3 package."
+              echo "Alternatively, you can use the GitHub Actions workflow to build AppImages."
+              exit 1
+            fi
+          fi
+          
+          if [ -f "Reel-$VERSION-x86_64.AppImage" ]; then
+            echo "✓ AppImage built: Reel-$VERSION-x86_64.AppImage"
+            echo ""
+            echo "AppImage info:"
+            file "Reel-$VERSION-x86_64.AppImage"
+            ls -lh "Reel-$VERSION-x86_64.AppImage"
+          else
+            echo "✗ Failed to build AppImage"
+            exit 1
+          fi
+        '';
+
+        buildAllPackages = pkgs.writeShellScriptBin "build-all-packages" ''
+          echo "Building all package formats..."
+          echo "=============================="
+          echo ""
+          
+          # Build release binary first
+          echo "Building release binary..."
+          cargo build --release
+          echo ""
+          
+          # Build each package type
+          echo "1. Building Debian package..."
+          echo "------------------------------"
+          build-deb
+          echo ""
+          
+          echo "2. Building RPM package..."
+          echo "------------------------------"
+          build-rpm
+          echo ""
+          
+          echo "3. Building AppImage..."
+          echo "------------------------------"
+          build-appimage
+          echo ""
+          
+          echo "=============================="
+          echo "All packages built successfully!"
+          echo ""
+          echo "Package files:"
+          find target/debian -name "*.deb" -type f 2>/dev/null | xargs -I {} echo "  - Debian: {}"
+          find target/generate-rpm -name "*.rpm" -type f 2>/dev/null | xargs -I {} echo "  - RPM: {}"
+          find . -maxdepth 1 -name "*.AppImage" -type f 2>/dev/null | xargs -I {} echo "  - AppImage: {}"
+        '';
+
         devTools = with pkgs; [
           # Development tools
           cargo-watch
@@ -140,6 +317,10 @@
           cargo-audit
           cargo-outdated
           cargo-nextest
+          
+          # Package building tools (will be installed via cargo)
+          # cargo-deb and cargo-generate-rpm are installed as needed
+          appimage-run
           
           # Database tools
           sqlx-cli
@@ -159,6 +340,13 @@
           appstream
           flatpak-builder
           pythonWithPkgs
+          
+          # Package testing tools
+          dpkg
+          rpm
+          file
+          wget
+          fuse
         ];
 
       in
@@ -174,6 +362,10 @@
             flatpakLint
             formatCode
             clippyFix
+            buildDeb
+            buildRpm
+            buildAppImage
+            buildAllPackages
           ];
 
           shellHook = ''
@@ -194,6 +386,12 @@
             echo "  clippy-fix     - Run clippy and auto-fix issues"
             echo "  cargo fmt      - Format code (standard)"
             echo "  cargo clippy   - Run linter (standard)"
+            echo ""
+            echo "Package building commands:"
+            echo "  build-deb          - Build Debian package (.deb)"
+            echo "  build-rpm          - Build RPM package (.rpm)"
+            echo "  build-appimage     - Build AppImage"
+            echo "  build-all-packages - Build all package formats"
             echo ""
             echo "Flatpak commands:"
             echo "  flatpak-update-sources - Update cargo-sources.json"

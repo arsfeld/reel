@@ -449,99 +449,45 @@ impl PlexApi {
             return self.mark_watched(media_id).await;
         }
 
-        // Otherwise update the viewOffset
-        let url = format!("{}/library/metadata/{}", self.base_url, media_id);
+        // Otherwise update the viewOffset using timeline endpoint with proper headers
+        // The timeline endpoint is more reliable for position updates
+        let timeline_url = format!("{}/:/timeline", self.base_url);
 
         debug!(
-            "Updating viewOffset for media_id: {}, position: {}ms via PUT request",
+            "Updating progress via timeline - media_id: {}, position: {}ms",
             media_id, position_ms
         );
-
-        let params = [("viewOffset", position_ms.to_string())];
-
-        debug!("ViewOffset update URL: {}", url);
-        debug!("ViewOffset update params: {:?}", params);
-
-        // First, let's try the scrobble endpoint with the position
-        // The scrobble endpoint is specifically designed for updating playback progress
-        let scrobble_url = format!("{}/:/scrobble", self.base_url);
-
-        debug!(
-            "Trying scrobble endpoint to update progress - media_id: {}, position: {}ms",
-            media_id, position_ms
-        );
-
-        let scrobble_params = [
-            ("key", media_id.to_string()),
-            ("identifier", "com.plexapp.plugins.library".to_string()),
-            ("time", position_ms.to_string()),
-        ];
 
         let response = self
             .client
-            .get(&scrobble_url)
+            .get(&timeline_url)
             .header("X-Plex-Token", &self.auth_token)
-            .query(&scrobble_params)
+            .header("X-Plex-Client-Identifier", "reel")
+            .header("X-Plex-Product", "Reel")
+            .header("X-Plex-Version", "0.1.0")
+            .header("X-Plex-Platform", "Linux")
+            .query(&[
+                ("ratingKey", media_id),
+                ("key", &format!("/library/metadata/{}", media_id)),
+                ("identifier", "com.plexapp.plugins.library"),
+                ("state", state),
+                ("time", &position_ms.to_string()),
+                ("duration", &duration_ms.to_string()),
+                ("playbackTime", &position_ms.to_string()),
+            ])
             .send()
             .await?;
 
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "No body".to_string());
-
-        if !status.is_success() {
-            error!(
-                "Scrobble update failed - Status: {}, Body: {}, URL: {}, Params: {:?}",
-                status, body, scrobble_url, scrobble_params
-            );
-
-            // Fall back to timeline endpoint with minimal parameters
-            warn!("Falling back to timeline endpoint");
-            let timeline_url = format!("{}/:/timeline", self.base_url);
-
-            let timeline_params = [
-                ("key", format!("/library/metadata/{}", media_id)),
-                ("ratingKey", media_id.to_string()),
-                ("state", state.to_string()),
-                ("time", position_ms.to_string()),
-                ("duration", duration.as_millis().to_string()),
-            ];
-
-            let timeline_response = self
-                .client
-                .get(&timeline_url)
-                .header("X-Plex-Token", &self.auth_token)
-                .header("X-Plex-Client-Identifier", "reel-player")
-                .header("X-Plex-Product", "Reel")
-                .header("X-Plex-Version", "0.1.0")
-                .header("X-Plex-Platform", "Linux")
-                .query(&timeline_params)
-                .send()
-                .await?;
-
-            if !timeline_response.status().is_success() {
-                let timeline_body = timeline_response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "No body".to_string());
-                error!(
-                    "Timeline update also failed - Status: {}, Body: {}",
-                    timeline_response.status(),
-                    timeline_body
-                );
-                return Err(anyhow!(
-                    "Failed to update progress via both scrobble and timeline"
-                ));
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            debug!("Timeline update response: {} - {}", status, text);
+            // Timeline endpoint often returns 200 with empty response, which is OK
+            if status != 200 {
+                return Err(anyhow!("Failed to update progress: {}", status));
             }
-
-            debug!("Timeline update successful as fallback");
         } else {
-            debug!(
-                "Scrobble update successful for media_id: {} - Response: {}",
-                media_id, body
-            );
+            debug!("Timeline update successful for media_id: {}", media_id);
         }
 
         Ok(())
