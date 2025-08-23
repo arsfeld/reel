@@ -33,14 +33,40 @@ Reel is built using Rust with GTK4/libadwaita for the UI, GStreamer for media pl
 ├─────────────────────────────────────────────────────────────┤
 │                     Service Layer                           │
 ├─────────────────────────────────────────────────────────────┤
+│                  Source Management Layer                     │
+├─────────────────────────────────────────────────────────────┤
 │                  Sync & Cache Manager                       │
 ├─────────────────────────────────────────────────────────────┤
 │                 Metadata Provider Layer                     │
 ├─────────────────────────────────────────────────────────────┤
+│                 Account Management Layer                     │
+├─────────────────────────────────────────────────────────────┤
 │                    Backend Abstraction                      │
 ├──────────────┬──────────────┬──────────────┬───────────────┤
-│    Plex      │   Jellyfin   │ Local Files  │   Future...   │
+│    Plex      │   Jellyfin   │    Local     │   Network     │
 └──────────────┴──────────────┴──────────────┴───────────────┘
+```
+
+### Conceptual Model
+
+```
+User
+ ├── Plex Account 1 ─────┬── Source: Home Server
+ │                        │    ├── Library: Movies
+ │                        │    ├── Library: TV Shows
+ │                        │    └── Library: Kids Movies
+ │                        └── Source: Friend's Server
+ │                             └── Library: Shared Movies
+ ├── Plex Account 2 ──────── Source: Family Server
+ │                             ├── Library: Family Videos
+ │                             └── Library: Photos
+ ├── Jellyfin Credentials ─── Source: Jellyfin Server
+ │                             ├── Library: Anime
+ │                             └── Library: Documentaries
+ └── Local ───────────────── Source: Local Files
+                               ├── Library: /home/user/Videos
+                               ├── Library: /media/nas/movies
+                               └── Library: /media/usb/tvshows
 ```
 
 ## Module Structure
@@ -75,7 +101,9 @@ reel/
 │   │   ├── playback.rs         # Playback service
 │   │   ├── sync.rs             # Sync service
 │   │   ├── cache.rs            # Cache service
-│   │   └── metadata.rs         # Metadata provider service
+│   │   ├── metadata.rs         # Metadata provider service
+│   │   ├── source.rs           # Source management service
+│   │   └── account.rs          # Account management service
 │   ├── backends/
 │   │   ├── mod.rs
 │   │   ├── traits.rs           # Backend trait definitions
@@ -136,12 +164,95 @@ reel/
 
 ## Core Components
 
-### 1. Backend Abstraction Layer
+### 1. Source and Account Management
+
+```rust
+// Account Management - handles authentication and server discovery
+#[derive(Debug, Clone)]
+pub struct PlexAccount {
+    pub id: String,
+    pub username: String,
+    pub email: String,
+    pub token: String,
+    pub discovered_servers: Vec<PlexServer>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlexServer {
+    pub machine_id: String,
+    pub name: String,
+    pub addresses: Vec<ServerAddress>,  // Multiple URLs to test
+    pub owned: bool,
+    pub shared: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerAddress {
+    pub uri: String,
+    pub is_local: bool,
+    pub latency_ms: Option<u32>,  // Measured during connection test
+}
+
+pub struct AccountManager {
+    plex_accounts: HashMap<String, PlexAccount>,
+    jellyfin_credentials: HashMap<String, JellyfinCredentials>,
+}
+
+impl AccountManager {
+    pub async fn add_plex_account(&mut self, username: &str, password: &str) -> Result<PlexAccount>;
+    pub async fn discover_plex_servers(&self, account: &PlexAccount) -> Result<Vec<PlexServer>>;
+    pub async fn test_server_addresses(&self, server: &PlexServer) -> Result<ServerAddress>;
+    pub async fn refresh_plex_token(&mut self, account_id: &str) -> Result<()>;
+}
+
+// Source Management - represents actual media providers
+#[derive(Debug, Clone)]
+pub struct Source {
+    pub id: String,
+    pub name: String,
+    pub source_type: SourceType,
+    pub backend: Arc<dyn MediaBackend>,
+    pub libraries: Vec<Library>,
+    pub connection_info: ConnectionInfo,
+    pub sync_config: SyncConfig,
+}
+
+#[derive(Debug, Clone)]
+pub enum SourceType {
+    PlexServer { account_id: String, machine_id: String },
+    JellyfinServer { server_id: String },
+    Local,
+    Network { share_type: NetworkShareType },
+}
+
+#[derive(Debug, Clone)]
+pub struct ConnectionInfo {
+    pub primary_url: String,
+    pub fallback_urls: Vec<String>,
+    pub last_successful_url: Option<String>,
+    pub connection_tested_at: Option<DateTime<Utc>>,
+}
+
+pub struct SourceManager {
+    sources: HashMap<String, Source>,
+    account_manager: Arc<AccountManager>,
+}
+
+impl SourceManager {
+    pub async fn create_sources_from_plex_account(&mut self, account: &PlexAccount) -> Result<Vec<Source>>;
+    pub async fn add_jellyfin_source(&mut self, url: &str, credentials: JellyfinCredentials) -> Result<Source>;
+    pub async fn add_local_source(&mut self, folders: Vec<PathBuf>) -> Result<Source>;
+    pub async fn test_source_connectivity(&self, source_id: &str) -> Result<ConnectionStatus>;
+    pub async fn get_all_libraries(&self) -> Vec<(Source, Library)>;
+}
+```
+
+### 2. Backend Abstraction Layer
 
 ```rust
 #[async_trait]
 pub trait MediaBackend: Send + Sync {
-    async fn authenticate(&self, credentials: Credentials) -> Result<User>;
+    async fn connect(&self, connection_info: &ConnectionInfo) -> Result<()>;
     async fn get_libraries(&self) -> Result<Vec<Library>>;
     async fn get_movies(&self, library_id: &str) -> Result<Vec<Movie>>;
     async fn get_shows(&self, library_id: &str) -> Result<Vec<Show>>;
@@ -149,32 +260,54 @@ pub trait MediaBackend: Send + Sync {
     async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo>;
     async fn update_progress(&self, media_id: &str, position: Duration) -> Result<()>;
     
-    // Sync support
-    async fn get_backend_id(&self) -> String;
-    async fn get_last_sync_time(&self) -> Option<DateTime<Utc>>;
-    async fn supports_offline(&self) -> bool;
-    async fn needs_metadata_enrichment(&self) -> bool;
+    // Backend identification
+    fn backend_type(&self) -> BackendType;
+    fn supports_multiple_addresses(&self) -> bool;
+    fn needs_metadata_enrichment(&self) -> bool;
 }
 
-pub struct BackendManager {
-    backends: HashMap<String, Arc<dyn MediaBackend>>,
-    active: Option<String>,
-    sync_manager: Arc<SyncManager>,
+// Plex-specific backend implementation
+pub struct PlexBackend {
+    token: String,  // Shared across all servers from same account
+    machine_id: String,
+    current_url: RwLock<String>,
 }
 
-impl BackendManager {
-    pub async fn refresh_backend(&self, backend_id: &str) -> Result<SyncResult>;
-    pub async fn refresh_all_backends(&self) -> Result<Vec<SyncResult>>;
-    pub fn get_offline_backends(&self) -> Vec<String>;
+impl PlexBackend {
+    pub fn new(token: String, machine_id: String) -> Self;
+    pub async fn test_and_select_best_url(&self, addresses: &[ServerAddress]) -> Result<String>;
+}
+
+// Local files backend - singleton
+pub struct LocalBackend {
+    folders: RwLock<Vec<LocalLibrary>>,
+    indexer: MediaIndexer,
+    metadata_service: Arc<MetadataService>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalLibrary {
+    pub path: PathBuf,
+    pub name: String,
+    pub media_type: MediaType,
+    pub last_scan: Option<DateTime<Utc>>,
+}
+
+impl LocalBackend {
+    pub fn new() -> Self;
+    pub async fn add_folder(&mut self, path: PathBuf, name: String) -> Result<()>;
+    pub async fn remove_folder(&mut self, path: &Path) -> Result<()>;
+    pub async fn scan_all_folders(&self) -> Result<Vec<Media>>;
 }
 ```
 
-### 2. State Management
+### 3. State Management
 
 ```rust
 pub struct AppState {
-    backend: Arc<RwLock<BackendManager>>,
-    user: Arc<RwLock<Option<User>>>,
+    source_manager: Arc<RwLock<SourceManager>>,
+    account_manager: Arc<RwLock<AccountManager>>,
+    current_source: Arc<RwLock<Option<Source>>>,
     current_library: Arc<RwLock<Option<Library>>>,
     media_cache: Arc<MediaCache>,
     playback_state: Arc<RwLock<PlaybackState>>,
@@ -191,10 +324,13 @@ impl AppState {
     {
         // Subscribe to state changes
     }
+    
+    pub async fn get_unified_library(&self) -> Result<Vec<MediaItem>>;
+    pub async fn get_source_libraries(&self, source_id: &str) -> Result<Vec<Library>>;
 }
 ```
 
-### 3. Media Player
+### 4. Media Player
 
 ```rust
 pub struct MediaPlayer {
@@ -214,7 +350,7 @@ impl MediaPlayer {
 }
 ```
 
-### 4. Metadata Provider System
+### 5. Metadata Provider System
 
 ```rust
 #[async_trait]
@@ -295,7 +431,7 @@ pub struct MediaMatch {
 }
 ```
 
-### 5. Sync & Cache System
+### 6. Sync & Cache System
 
 ```rust
 pub struct SyncManager {
@@ -305,16 +441,17 @@ pub struct SyncManager {
 }
 
 impl SyncManager {
-    pub async fn sync_backend(&self, backend_id: &str, backend: Arc<dyn MediaBackend>) -> Result<SyncResult>;
-    pub async fn sync_library(&self, backend_id: &str, library_id: &str) -> Result<()>;
-    pub async fn get_sync_status(&self, backend_id: &str) -> SyncStatus;
+    pub async fn sync_source(&self, source_id: &str, source: &Source) -> Result<SyncResult>;
+    pub async fn sync_library(&self, source_id: &str, library_id: &str) -> Result<()>;
+    pub async fn sync_all_sources(&self, sources: &[Source]) -> Result<Vec<SyncResult>>;
+    pub async fn get_sync_status(&self, source_id: &str) -> SyncStatus;
     pub async fn schedule_sync(&self, task: SyncTask);
-    pub async fn cancel_sync(&self, backend_id: &str);
+    pub async fn cancel_sync(&self, source_id: &str);
 }
 
 #[derive(Debug, Clone)]
 pub struct SyncTask {
-    pub backend_id: String,
+    pub source_id: String,
     pub sync_type: SyncType,
     pub priority: SyncPriority,
     pub scheduled_at: DateTime<Utc>,
@@ -390,7 +527,7 @@ impl OfflineStore {
 }
 ```
 
-### 6. Local File Backend Implementation
+### 7. Local File Backend Implementation
 
 ```rust
 pub struct LocalFileBackend {
@@ -452,7 +589,7 @@ impl MediaIndexer {
 }
 ```
 
-### 7. UI Components
+### 8. UI Components
 
 ```rust
 pub struct MainWindow {
@@ -549,10 +686,11 @@ pub struct StreamInfo {
 ## Database Schema
 
 ```sql
--- Media cache with backend support
+-- Media cache with source support
 CREATE TABLE media_cache (
     id TEXT PRIMARY KEY,
-    backend_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    library_id TEXT NOT NULL,
     type TEXT NOT NULL,
     data JSON NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -560,25 +698,26 @@ CREATE TABLE media_cache (
     expires_at TIMESTAMP,
     metadata_source TEXT,
     external_ids JSON,
-    INDEX idx_backend_type (backend_id, type)
+    INDEX idx_source_library (source_id, library_id),
+    INDEX idx_source_type (source_id, type)
 );
 
--- Offline storage for backend data
+-- Offline storage for source data
 CREATE TABLE offline_store (
     id TEXT PRIMARY KEY,
-    backend_id TEXT NOT NULL,
-    library_id TEXT,
+    source_id TEXT NOT NULL,
+    library_id TEXT NOT NULL,
     media_type TEXT NOT NULL,
     data JSON NOT NULL,
     stored_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_accessed TIMESTAMP,
     is_pinned BOOLEAN DEFAULT FALSE,
-    INDEX idx_backend_library (backend_id, library_id)
+    INDEX idx_source_library (source_id, library_id)
 );
 
 -- Sync metadata
 CREATE TABLE sync_metadata (
-    backend_id TEXT PRIMARY KEY,
+    source_id TEXT PRIMARY KEY,
     last_full_sync TIMESTAMP,
     last_incremental_sync TIMESTAMP,
     total_items INTEGER,
@@ -586,27 +725,51 @@ CREATE TABLE sync_metadata (
     error_message TEXT
 );
 
--- Backend configuration
-CREATE TABLE backend_config (
-    backend_id TEXT PRIMARY KEY,
-    backend_type TEXT NOT NULL,
-    display_name TEXT NOT NULL,
-    server_url TEXT,
+-- Source configuration
+CREATE TABLE source_config (
+    source_id TEXT PRIMARY KEY,
+    source_name TEXT NOT NULL,
+    source_type TEXT NOT NULL, -- 'plex_server', 'jellyfin_server', 'local', 'network'
+    account_id TEXT, -- References account that owns this source (for Plex)
+    connection_info JSON NOT NULL, -- URLs, paths, etc.
     is_active BOOLEAN DEFAULT TRUE,
     auto_sync BOOLEAN DEFAULT TRUE,
     sync_interval INTEGER DEFAULT 3600,
     offline_enabled BOOLEAN DEFAULT TRUE
 );
 
+-- Account storage (Plex accounts, etc.)
+CREATE TABLE accounts (
+    account_id TEXT PRIMARY KEY,
+    account_type TEXT NOT NULL, -- 'plex', 'jellyfin'
+    username TEXT,
+    email TEXT,
+    token TEXT, -- Stored encrypted in keyring
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used TIMESTAMP
+);
+
+-- Libraries within sources
+CREATE TABLE libraries (
+    library_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    library_name TEXT NOT NULL,
+    library_type TEXT NOT NULL, -- 'movies', 'shows', 'music', 'photos'
+    path TEXT, -- For local libraries
+    last_synced TIMESTAMP,
+    item_count INTEGER,
+    FOREIGN KEY (source_id) REFERENCES source_config(source_id)
+);
+
 -- Playback progress
 CREATE TABLE playback_progress (
     media_id TEXT,
-    backend_id TEXT,
+    source_id TEXT,
     position INTEGER NOT NULL,
     duration INTEGER NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     synced BOOLEAN DEFAULT FALSE,
-    PRIMARY KEY (media_id, backend_id)
+    PRIMARY KEY (media_id, source_id)
 );
 
 -- User preferences
@@ -618,7 +781,7 @@ CREATE TABLE preferences (
 -- Image cache metadata
 CREATE TABLE image_cache (
     url TEXT PRIMARY KEY,
-    backend_id TEXT,
+    source_id TEXT,
     file_path TEXT NOT NULL,
     size INTEGER NOT NULL,
     accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -629,7 +792,7 @@ CREATE TABLE image_cache (
 CREATE TABLE download_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     media_id TEXT NOT NULL,
-    backend_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
     priority INTEGER DEFAULT 0,
     status TEXT DEFAULT 'pending',
     progress REAL DEFAULT 0,
@@ -637,7 +800,7 @@ CREATE TABLE download_queue (
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
     error_message TEXT,
-    UNIQUE(media_id, backend_id)
+    UNIQUE(media_id, source_id)
 );
 
 -- Local file index
@@ -863,37 +1026,76 @@ auto_download_next = true
 max_concurrent_downloads = 2
 download_quality = "original"  # original|high|medium|low
 
-# Multiple backend configurations
-[[backends]]
-id = "plex_home"
+# Account configurations
+[[accounts]]
+id = "plex_personal"
 type = "plex"
-display_name = "Home Plex Server"
-server_url = "https://192.168.1.100:32400"
-auth_token = ""  # Stored in keyring
+username = "john.doe@example.com"
+# Token stored in keyring
+
+[[accounts]]
+id = "plex_family"
+type = "plex"
+username = "family@example.com"
+# Token stored in keyring
+
+# Source configurations (auto-discovered from accounts + manually added)
+[[sources]]
+id = "plex_home_server"
+name = "Home Server"
+type = "plex_server"
+account_id = "plex_personal"
+machine_id = "abc123..."
+primary_url = "https://192.168.1.100:32400"
+fallback_urls = ["https://home.example.com:32400", "http://192.168.1.100:32400"]
 auto_sync = true
 offline_enabled = true
 
-[[backends]]
-id = "jellyfin_main"
-type = "jellyfin"
-display_name = "Main Jellyfin"
-server_url = "https://jellyfin.example.com"
-api_key = ""  # Stored in keyring
+[[sources]]
+id = "plex_shared_server"
+name = "Friend's Server"
+type = "plex_server"
+account_id = "plex_personal"
+machine_id = "def456..."
+primary_url = "https://friend.example.com:32400"
 auto_sync = true
 offline_enabled = false
 
-[[backends]]
-id = "local_media"
+[[sources]]
+id = "jellyfin_main"
+name = "Main Jellyfin"
+type = "jellyfin_server"
+server_url = "https://jellyfin.example.com"
+username = "jellyfin_user"
+# Password stored in keyring
+auto_sync = true
+offline_enabled = false
+
+[[sources]]
+id = "local_files"
+name = "Local Media"
 type = "local"
-display_name = "Local Files"
-media_paths = ["/home/user/Videos", "/media/nas/movies"]
-auto_scan = true
-auto_match_metadata = true
-watch_for_changes = true
-scan_interval = 3600  # seconds
-file_extensions = ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm"]
-min_file_size_mb = 100  # Ignore files smaller than this
+auto_sync = true
 offline_enabled = true  # Always available offline
+
+# Local library folders
+[[sources.libraries]]
+source_id = "local_files"
+path = "/home/user/Videos"
+name = "Personal Videos"
+media_type = "mixed"
+
+[[sources.libraries]]
+source_id = "local_files"
+path = "/media/nas/movies"
+name = "NAS Movies"
+media_type = "movies"
+
+[[sources.libraries]]
+source_id = "local_files"
+path = "/media/nas/tvshows"
+name = "NAS TV Shows"
+media_type = "shows"
 ```
 
 ## API Documentation
@@ -912,16 +1114,28 @@ impl ReelApp {
     /// Run the application
     pub fn run(&self) -> Result<()>;
     
-    /// Connect to a backend
-    pub async fn connect_backend(&self, backend_type: BackendType, config: BackendConfig) -> Result<()>;
+    /// Account operations
+    pub async fn add_plex_account(&self, username: &str, password: &str) -> Result<Vec<Source>>;
+    pub async fn remove_account(&self, account_id: &str) -> Result<()>;
+    pub async fn refresh_account_servers(&self, account_id: &str) -> Result<Vec<Source>>;
+    
+    /// Source operations
+    pub async fn add_jellyfin_source(&self, url: &str, username: &str, password: &str) -> Result<Source>;
+    pub async fn add_local_folder(&self, path: PathBuf, name: String) -> Result<()>;
+    pub async fn remove_source(&self, source_id: &str) -> Result<()>;
+    pub async fn test_source_connectivity(&self, source_id: &str) -> Result<ConnectionStatus>;
+    
+    /// Library operations
+    pub async fn get_unified_library(&self) -> Result<Vec<MediaItem>>;
+    pub async fn get_source_libraries(&self, source_id: &str) -> Result<Vec<Library>>;
     
     /// Sync operations
-    pub async fn sync_all_backends(&self) -> Result<Vec<SyncResult>>;
-    pub async fn sync_backend(&self, backend_id: &str) -> Result<SyncResult>;
-    pub async fn refresh_library(&self, backend_id: &str, library_id: &str) -> Result<()>;
+    pub async fn sync_all_sources(&self) -> Result<Vec<SyncResult>>;
+    pub async fn sync_source(&self, source_id: &str) -> Result<SyncResult>;
+    pub async fn refresh_library(&self, source_id: &str, library_id: &str) -> Result<()>;
     
     /// Offline operations
-    pub async fn download_for_offline(&self, media_id: &str) -> Result<()>;
+    pub async fn download_for_offline(&self, media_id: &str, source_id: &str) -> Result<()>;
     pub async fn remove_offline(&self, media_id: &str) -> Result<()>;
     pub async fn get_offline_status(&self) -> OfflineStatus;
     
@@ -935,7 +1149,8 @@ impl ReelApp {
 /// Sync result information
 #[derive(Debug, Clone)]
 pub struct SyncResult {
-    pub backend_id: String,
+    pub source_id: String,
+    pub source_name: String,
     pub success: bool,
     pub items_synced: usize,
     pub duration: Duration,
@@ -948,7 +1163,16 @@ pub struct OfflineStatus {
     pub total_size_mb: u64,
     pub used_size_mb: u64,
     pub items_count: usize,
-    pub backends: HashMap<String, BackendOfflineInfo>,
+    pub sources: HashMap<String, SourceOfflineInfo>,
+}
+
+/// Connection status for a source
+#[derive(Debug, Clone)]
+pub struct ConnectionStatus {
+    pub is_online: bool,
+    pub selected_url: Option<String>,
+    pub latency_ms: Option<u32>,
+    pub last_error: Option<String>,
 }
 ```
 

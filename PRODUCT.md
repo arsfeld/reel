@@ -48,16 +48,23 @@ To create the definitive media player for the Linux desktop that seamlessly inte
 - **Keyboard Navigation**: Full keyboard control
 - **Gamepad Support**: Navigate with game controllers
 
-### 4. Multi-Backend Support with Sync
-- **Plex**: Full Plex Media Server integration with automatic sync
-- **Jellyfin**: Complete Jellyfin server support with background updates
-- **Local Files**: Browse and play local media with automatic metadata enrichment
-- **Metadata Providers**: Fetch rich metadata from TMDB, TVDB, OMDB, and more
-- **Smart Matching**: Intelligent file name parsing and fuzzy matching for accurate identification
-- **Multiple Servers**: Manage multiple backends simultaneously
-- **Smart Sync**: Each backend syncs independently on configurable schedules
-- **Unified Library**: Single interface for all your media sources
-- **Conflict Resolution**: Intelligent handling of duplicate media across backends
+### 4. Multi-Source Architecture with Sync
+- **Sources**: Each source represents a media provider (Plex server, Jellyfin server, local folders)
+- **Libraries**: Each source contains multiple libraries (Movies, TV Shows, Music, etc.)
+- **Backend Types**: 
+  - **Plex**: Connect via Plex accounts, each account can access multiple servers (sources)
+  - **Jellyfin**: Direct server connection with user credentials
+  - **Local**: Single local source with multiple folder libraries
+  - **Network** (future): Remote file shares and network sources
+- **Account Management**:
+  - **Plex Accounts**: Login once, discover all accessible servers automatically
+  - **Multiple Accounts**: Support for multiple Plex accounts simultaneously
+  - **Server Discovery**: Automatic detection of available servers per account
+- **Server Optimization**: Test multiple server addresses to find fastest connection
+- **Metadata Enrichment**: Automatic metadata fetching from TMDB, TVDB, OMDB
+- **Smart Sync**: Each source syncs independently on configurable schedules
+- **Unified Library**: Single interface across all sources and libraries
+- **Conflict Resolution**: Intelligent handling of duplicate media across sources
 
 ### 5. Offline-First Architecture
 - **Instant Launch**: App opens immediately with cached library data
@@ -192,7 +199,8 @@ To create the definitive media player for the Linux desktop that seamlessly inte
 **vs Official Plex App**
 - Native performance
 - Better GNOME integration
-- Multiple backend support
+- Multiple Plex account support
+- Multiple source types beyond Plex
 - True offline mode with full library access
 - Open source
 - No internet required for local cached content
@@ -203,7 +211,7 @@ To create the definitive media player for the Linux desktop that seamlessly inte
 - Integrated player
 - Lighter resource usage
 - Superior offline capabilities
-- Multi-server unified interface
+- Multi-source unified interface (Plex + Jellyfin + Local)
 
 **vs VLC**
 - Server integration
@@ -257,14 +265,14 @@ To create the definitive media player for the Linux desktop that seamlessly inte
 ### The Commuter
 Sarah takes the train to work daily with spotty internet. She adds her favorite shows to Reel, which automatically downloads the next 3 episodes of each series. During her commute, she enjoys uninterrupted playback and can browse her entire library offline.
 
-### The Multi-Server User  
-John has a Plex server at home, shares a Jellyfin server with friends, and keeps personal videos locally. Reel provides a unified interface where all content appears together, syncing from each source independently. His local files are automatically matched with TMDB metadata, displaying professional posters and descriptions alongside his server content.
+### The Multi-Source User  
+John has two Plex accounts (personal and family shared), a Jellyfin server with friends, and keeps personal videos locally. When he adds his Plex accounts, Reel automatically discovers all accessible servers - his home server, his brother's server, and a friend's shared server. Each appears as a separate source with its own libraries. His Jellyfin server shows as another source, and his local folders appear as libraries within a single local source. Reel provides a unified interface where all content appears together, with each source syncing independently.
 
 ### The Bandwidth-Conscious User
 Maria has a metered connection. She configures Reel to only sync on WiFi, automatically downloading new episodes at night. The app respects her data limits while ensuring fresh content is always available.
 
 ### The Power User
-Alex manages a 50TB media library across multiple servers. Reel's smart sync only updates changed items, launches instantly showing the cached library, and provides detailed sync status for each backend.
+Alex manages a 50TB media library across multiple sources - three Plex servers through two accounts, a Jellyfin server, and local archives. Reel automatically discovers all his Plex servers when he logs into his accounts, tests multiple addresses for each server to find the fastest connection, and provides detailed sync status for each source. The app launches instantly showing the cached library from all sources.
 
 ### The Local Media Collector
 Emma has thousands of movie and TV files organized in folders. Reel automatically scans her directories, matches files with TMDB and TVDB data, downloads artwork, and presents her collection with the same polish as streaming services. She can manually correct any mismatches and the app remembers her preferences.
