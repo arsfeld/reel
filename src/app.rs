@@ -10,20 +10,24 @@ use crate::APP_ID;
 use crate::config::Config;
 use crate::state::AppState;
 use crate::ui::MainWindow;
+use tokio::sync::RwLock;
 
 pub struct ReelApp {
     app: adw::Application,
     state: Arc<AppState>,
-    config: Arc<Config>,
+    config: Arc<RwLock<Config>>,
 }
 
 impl ReelApp {
     pub fn new() -> Result<Self> {
-        // Load configuration
-        let config = Arc::new(Config::load()?);
+        // Load configuration once
+        let config = Arc::new(RwLock::new(Config::load()?));
 
-        // Initialize application state
+        // Initialize application state with shared config
         let state = Arc::new(AppState::new(config.clone())?);
+
+        // Initialize the SourceCoordinator
+        state.clone().initialize_source_coordinator();
 
         // Create the application
         let app = adw::Application::builder().application_id(APP_ID).build();

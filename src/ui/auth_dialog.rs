@@ -8,6 +8,9 @@ use tracing::{error, info};
 use crate::backends::plex::{PlexAuth, PlexPin, PlexServer};
 use crate::state::AppState;
 
+// Re-export BackendType for external use
+pub use imp::BackendType;
+
 mod imp {
     use super::*;
     use gtk4::CompositeTemplate;
@@ -18,9 +21,12 @@ mod imp {
         #[template_child]
         pub cancel_button: TemplateChild<gtk4::Button>,
         #[template_child]
-        pub view_stack: TemplateChild<adw::ViewStack>,
+        pub save_button: TemplateChild<gtk4::Button>,
         #[template_child]
-        pub pin_status_page: TemplateChild<adw::StatusPage>,
+        pub view_stack: TemplateChild<adw::ViewStack>,
+        // Plex automatic auth elements
+        #[template_child]
+        pub pin_status_page: TemplateChild<gtk4::Box>,
         #[template_child]
         pub pin_label: TemplateChild<gtk4::Label>,
         #[template_child]
@@ -33,16 +39,43 @@ mod imp {
         pub retry_button: TemplateChild<gtk4::Button>,
         #[template_child]
         pub open_link_button: TemplateChild<gtk4::Button>,
+        // Plex manual auth elements
         #[template_child]
         pub server_url_entry: TemplateChild<adw::EntryRow>,
         #[template_child]
         pub token_entry: TemplateChild<adw::PasswordEntryRow>,
         #[template_child]
         pub manual_connect_button: TemplateChild<gtk4::Button>,
+        // Jellyfin UI elements
+        #[template_child]
+        pub jellyfin_url_entry: TemplateChild<adw::EntryRow>,
+        #[template_child]
+        pub jellyfin_username_entry: TemplateChild<adw::EntryRow>,
+        #[template_child]
+        pub jellyfin_password_entry: TemplateChild<adw::PasswordEntryRow>,
+        #[template_child]
+        pub jellyfin_progress: TemplateChild<gtk4::ProgressBar>,
+        #[template_child]
+        pub jellyfin_error: TemplateChild<adw::StatusPage>,
+        #[template_child]
+        pub jellyfin_retry_button: TemplateChild<gtk4::Button>,
 
         pub state: RefCell<Option<Arc<AppState>>>,
         pub auth_handle: RefCell<Option<glib::JoinHandle<()>>>,
         pub current_pin: RefCell<Option<PlexPin>>,
+        pub backend_type: RefCell<BackendType>,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum BackendType {
+        Plex,
+        Jellyfin,
+    }
+
+    impl Default for BackendType {
+        fn default() -> Self {
+            BackendType::Plex
+        }
     }
 
     #[glib::object_subclass]
@@ -53,51 +86,10 @@ mod imp {
 
         fn class_init(klass: &mut Self::Class) {
             klass.bind_template();
-            klass.bind_template_callbacks();
         }
 
         fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
             obj.init_template();
-        }
-    }
-
-    #[gtk4::template_callbacks]
-    impl ReelAuthDialog {
-        #[template_callback]
-        fn on_cancel_clicked(&self) {
-            info!("Cancel button clicked");
-            self.obj().close();
-        }
-
-        #[template_callback]
-        fn on_open_link_clicked(&self) {
-            info!("Opening plex.tv/link");
-            if let Err(e) = gio::AppInfo::launch_default_for_uri(
-                "https://plex.tv/link",
-                None::<&gio::AppLaunchContext>,
-            ) {
-                error!("Failed to open browser: {}", e);
-            }
-        }
-
-        #[template_callback]
-        fn on_retry_clicked(&self) {
-            info!("Retrying authentication");
-            self.auth_error.set_visible(false);
-            self.pin_status_page.set_visible(true);
-            self.obj().start_auth();
-        }
-
-        #[template_callback]
-        fn on_manual_connect_clicked(&self) {
-            let url = self.server_url_entry.text();
-            let token = self.token_entry.text();
-
-            if !url.is_empty() && !token.is_empty() {
-                info!("Manual connection to: {}", url);
-                self.obj()
-                    .connect_manual(url.to_string(), token.to_string());
-            }
         }
     }
 
@@ -107,32 +99,171 @@ mod imp {
 
             let obj = self.obj();
 
-            // Set placeholder text for server URL
-            self.server_url_entry.set_text("http://192.168.1.100:32400");
+            // Connect button signals manually instead of using template callbacks
+            self.cancel_button.connect_clicked(clone!(
+                #[weak]
+                obj,
+                move |_| {
+                    info!("Cancel button clicked");
+                    obj.close();
+                }
+            ));
 
-            // Enable manual connect when both fields have text
-            let update_manual_button = clone!(
+            self.open_link_button.connect_clicked(|_| {
+                info!("Opening plex.tv/link");
+                if let Err(e) = gio::AppInfo::launch_default_for_uri(
+                    "https://plex.tv/link",
+                    None::<&gio::AppLaunchContext>,
+                ) {
+                    error!("Failed to open browser: {}", e);
+                }
+            });
+
+            self.retry_button.connect_clicked(clone!(
+                #[weak]
+                obj,
+                move |_| {
+                    info!("Retrying authentication");
+                    let imp = obj.imp();
+                    imp.auth_error.set_visible(false);
+                    imp.pin_status_page.set_visible(true);
+                    obj.start_auth();
+                }
+            ));
+
+            self.save_button.connect_clicked(clone!(
+                #[weak]
+                obj,
+                move |_| {
+                    let imp = obj.imp();
+                    let backend_type = *imp.backend_type.borrow();
+                    match backend_type {
+                        BackendType::Plex => {
+                            let url = imp.server_url_entry.text();
+                            let token = imp.token_entry.text();
+
+                            if !url.is_empty() && !token.is_empty() {
+                                info!("Connecting to Plex server");
+                                obj.connect_manual(url.to_string(), token.to_string());
+                            }
+                        }
+                        BackendType::Jellyfin => {
+                            let url = imp.jellyfin_url_entry.text();
+                            let username = imp.jellyfin_username_entry.text();
+                            let password = imp.jellyfin_password_entry.text();
+
+                            if !url.is_empty() && !username.is_empty() && !password.is_empty() {
+                                info!("Connecting to Jellyfin server");
+                                obj.connect_jellyfin(
+                                    url.to_string(),
+                                    username.to_string(),
+                                    password.to_string(),
+                                );
+                            }
+                        }
+                    }
+                }
+            ));
+
+            self.manual_connect_button.connect_clicked(clone!(
+                #[weak]
+                obj,
+                move |_| {
+                    let imp = obj.imp();
+                    let url = imp.server_url_entry.text();
+                    let token = imp.token_entry.text();
+
+                    if !url.is_empty() && !token.is_empty() {
+                        info!("Manual connection to: {}", url);
+                        obj.connect_manual(url.to_string(), token.to_string());
+                    }
+                }
+            ));
+
+            // jellyfin_connect_button is hidden - using Save/Connect button in header instead
+
+            self.jellyfin_retry_button.connect_clicked(clone!(
+                #[weak]
+                obj,
+                move |_| {
+                    let imp = obj.imp();
+                    imp.jellyfin_error.set_visible(false);
+                    // Show the input fields again
+                    imp.jellyfin_url_entry.set_visible(true);
+                    imp.jellyfin_username_entry.set_visible(true);
+                    imp.jellyfin_password_entry.set_visible(true);
+                    // Re-enable them
+                    imp.jellyfin_url_entry.set_sensitive(true);
+                    imp.jellyfin_username_entry.set_sensitive(true);
+                    imp.jellyfin_password_entry.set_sensitive(true);
+                }
+            ));
+
+            // Update save button and connect buttons based on current backend
+            let update_buttons = clone!(
                 #[weak]
                 obj,
                 move || {
                     let imp = obj.imp();
-                    let has_url = !imp.server_url_entry.text().is_empty();
-                    let has_token = !imp.token_entry.text().is_empty();
-                    imp.manual_connect_button
-                        .set_sensitive(has_url && has_token);
+                    let backend_type = *imp.backend_type.borrow();
+
+                    let save_enabled = match backend_type {
+                        BackendType::Plex => {
+                            let has_url = !imp.server_url_entry.text().is_empty();
+                            let has_token = !imp.token_entry.text().is_empty();
+                            imp.manual_connect_button
+                                .set_sensitive(has_url && has_token);
+                            has_url && has_token
+                        }
+                        BackendType::Jellyfin => {
+                            let has_url = !imp.jellyfin_url_entry.text().is_empty();
+                            let has_username = !imp.jellyfin_username_entry.text().is_empty();
+                            let has_password = !imp.jellyfin_password_entry.text().is_empty();
+                            has_url && has_username && has_password
+                        }
+                    };
+
+                    imp.save_button.set_sensitive(save_enabled);
                 }
             );
 
+            // Set placeholder text for server URL
+            self.server_url_entry.set_text("http://192.168.1.100:32400");
+
             self.server_url_entry.connect_changed(clone!(
                 #[strong]
-                update_manual_button,
+                update_buttons,
                 move |_| {
-                    update_manual_button();
+                    update_buttons();
                 }
             ));
 
-            self.token_entry.connect_changed(move |_| {
-                update_manual_button();
+            self.token_entry.connect_changed(clone!(
+                #[strong]
+                update_buttons,
+                move |_| {
+                    update_buttons();
+                }
+            ));
+
+            self.jellyfin_url_entry.connect_changed(clone!(
+                #[strong]
+                update_buttons,
+                move |_| {
+                    update_buttons();
+                }
+            ));
+
+            self.jellyfin_username_entry.connect_changed(clone!(
+                #[strong]
+                update_buttons,
+                move |_| {
+                    update_buttons();
+                }
+            ));
+
+            self.jellyfin_password_entry.connect_changed(move |_| {
+                update_buttons();
             });
         }
 
@@ -159,6 +290,51 @@ impl ReelAuthDialog {
         let dialog: Self = glib::Object::builder().build();
         dialog.imp().state.replace(Some(state));
         dialog
+    }
+
+    pub fn set_backend_type(&self, backend_type: BackendType) {
+        let imp = self.imp();
+        imp.backend_type.replace(backend_type);
+
+        // Update the title and visible stack page
+        match backend_type {
+            BackendType::Plex => {
+                self.set_title("Connect to Plex");
+                // Show Plex tabs, hide Jellyfin
+                let stack = &*imp.view_stack;
+                if let Some(child) = stack.child_by_name("automatic") {
+                    let page = stack.page(&child);
+                    page.set_visible(true);
+                }
+                if let Some(child) = stack.child_by_name("manual") {
+                    let page = stack.page(&child);
+                    page.set_visible(true);
+                }
+                if let Some(child) = stack.child_by_name("jellyfin") {
+                    let page = stack.page(&child);
+                    page.set_visible(false);
+                }
+                stack.set_visible_child_name("automatic");
+            }
+            BackendType::Jellyfin => {
+                self.set_title("Connect to Jellyfin");
+                // Hide Plex tabs, show Jellyfin
+                let stack = &*imp.view_stack;
+                if let Some(child) = stack.child_by_name("automatic") {
+                    let page = stack.page(&child);
+                    page.set_visible(false);
+                }
+                if let Some(child) = stack.child_by_name("manual") {
+                    let page = stack.page(&child);
+                    page.set_visible(false);
+                }
+                if let Some(child) = stack.child_by_name("jellyfin") {
+                    let page = stack.page(&child);
+                    page.set_visible(true);
+                }
+                stack.set_visible_child_name("jellyfin");
+            }
+        }
     }
 
     pub fn start_auth(&self) {
@@ -305,7 +481,10 @@ impl ReelAuthDialog {
                 if let Some(Some((token, server))) = rx.recv().await {
                     // Get or create backend ID
                     let config = state_clone.config.clone();
-                    let last_active = config.get_last_active_backend();
+                    let last_active = {
+                        let config_read = config.read().await;
+                        config_read.get_last_active_backend()
+                    };
                     info!("Last active backend from config: {:?}", last_active);
 
                     let backend_id = if let Some(ref last_id) = last_active {
@@ -313,58 +492,57 @@ impl ReelAuthDialog {
                             info!("Reusing existing Plex backend ID: {}", last_id);
                             last_id.clone()
                         } else {
-                            let existing_backends = config.get_configured_backends();
-                            info!("Existing configured backends: {:?}", existing_backends);
-                            let mut new_id = "plex".to_string();
-                            let mut counter = 1;
-                            while existing_backends.contains(&new_id) {
-                                new_id = format!("plex_{}", counter);
-                                counter += 1;
-                            }
-                            info!("Creating new Plex backend ID: {}", new_id);
-                            new_id
+                            // Just create a new ID without checking legacy backends
+                            info!("Creating new Plex backend ID: plex");
+                            "plex".to_string()
                         }
                     } else {
                         info!("No last active backend, using default ID: plex");
                         "plex".to_string()
                     };
 
-                    // Create backend with the ID and cache
-                    info!("Creating PlexBackend with ID: {}", backend_id);
-                    let cache = state_clone.cache_manager.clone();
-                    let plex_backend = Arc::new(crate::backends::plex::PlexBackend::with_cache(
-                        backend_id.clone(),
-                        Some(cache),
-                    ));
+                    // Use SourceCoordinator to add Plex account
+                    if let Some(source_coordinator) = state_clone.get_source_coordinator().await {
+                        match source_coordinator.add_plex_account(&token).await {
+                            Ok(sources) => {
+                                info!(
+                                    "Successfully added Plex account with {} sources",
+                                    sources.len()
+                                );
 
-                    // Authenticate with PIN (this will save the token to keyring)
-                    if let Some(pin) = current_pin {
-                        if let Err(e) = plex_backend.authenticate_with_pin(&pin, &server).await {
-                            error!("Failed to authenticate backend: {}", e);
-                        } else {
-                            info!("Backend authenticated and token saved to keyring");
+                                // Set the first source as active if available
+                                if let Some(first_source) = sources.first() {
+                                    let mut backend_manager =
+                                        state_clone.backend_manager.write().await;
+                                    backend_manager.set_active(&first_source.id).ok();
 
-                            // Register the backend
-                            let mut backend_manager = state_clone.backend_manager.write().await;
-                            backend_manager
-                                .register_backend(backend_id.clone(), plex_backend.clone());
-                            backend_manager.set_active(&backend_id).ok();
+                                    // Save as last active backend
+                                    {
+                                        let mut config = state_clone.config.write().await;
+                                        let _ = config.set_last_active_backend(&first_source.id);
+                                    }
+                                }
 
-                            // Save as last active backend
-                            let mut config = state_clone.config.as_ref().clone();
-                            let _ = config.set_last_active_backend(&backend_id);
-
-                            // Get user info
-                            if let Ok(plex_user) = PlexAuth::get_user(&token).await {
-                                let user = crate::models::User {
-                                    id: plex_user.id.to_string(),
-                                    username: plex_user.username,
-                                    email: Some(plex_user.email),
-                                    avatar_url: plex_user.thumb,
-                                };
-                                state_clone.set_user(user.clone()).await;
+                                // Get user info
+                                if let Ok(plex_user) = PlexAuth::get_user(&token).await {
+                                    let user = crate::models::User {
+                                        id: plex_user.id.to_string(),
+                                        username: plex_user.username,
+                                        email: Some(plex_user.email),
+                                        avatar_url: plex_user.thumb,
+                                    };
+                                    state_clone.set_user(user.clone()).await;
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to add Plex account through SourceCoordinator: {}",
+                                    e
+                                );
                             }
                         }
+                    } else {
+                        error!("SourceCoordinator not initialized");
                     }
 
                     // Close dialog
@@ -442,7 +620,10 @@ impl ReelAuthDialog {
                 } else {
                     // Get or reuse backend ID
                     let config = state.config.clone();
-                    let last_active = config.get_last_active_backend();
+                    let last_active = {
+                        let config_read = config.read().await;
+                        config_read.get_last_active_backend()
+                    };
 
                     let backend_id = if let Some(ref last_id) = last_active {
                         if last_id.starts_with("plex") {
@@ -464,8 +645,10 @@ impl ReelAuthDialog {
                     backend_manager.set_active(&backend_id).ok();
 
                     // Save as last active backend
-                    let mut config = state.config.as_ref().clone();
-                    let _ = config.set_last_active_backend(&backend_id);
+                    {
+                        let mut config = state.config.write().await;
+                        let _ = config.set_last_active_backend(&backend_id);
+                    }
 
                     // Start sync
                     if let Some(dialog) = dialog_weak.upgrade() {
@@ -497,6 +680,187 @@ impl ReelAuthDialog {
                     Err(e) => error!("Failed to sync: {}", e),
                 }
             }
+        }
+    }
+
+    async fn save_manual_config(&self, _url: String, _token: String) {
+        // This method is deprecated - manual config should use SourceCoordinator
+        error!("save_manual_config is deprecated - use SourceCoordinator instead");
+        self.close();
+    }
+
+    async fn save_jellyfin_config(&self, _url: String, _username: String, _password: String) {
+        // This method is deprecated - Jellyfin config should use SourceCoordinator
+        error!("save_jellyfin_config is deprecated - use SourceCoordinator instead");
+        self.close();
+    }
+
+    fn connect_jellyfin(&self, url: String, username: String, password: String) {
+        info!("Connecting to Jellyfin server: {}", url);
+
+        let imp = self.imp();
+
+        // Show progress
+        imp.jellyfin_progress.set_visible(true);
+        imp.jellyfin_progress.pulse();
+
+        // Start pulsing animation
+        let progress = imp.jellyfin_progress.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+            progress.pulse();
+            glib::ControlFlow::Continue
+        });
+
+        let state = imp.state.borrow().as_ref().map(|s| s.clone());
+
+        if let Some(state) = state {
+            let dialog_weak = self.downgrade();
+
+            glib::spawn_future_local(async move {
+                // First create a temporary Jellyfin backend to authenticate and get credentials
+                let temp_backend = crate::backends::jellyfin::JellyfinBackend::new();
+
+                match temp_backend
+                    .authenticate_with_credentials(&url, &username, &password)
+                    .await
+                {
+                    Ok(()) => {
+                        info!("Successfully authenticated with Jellyfin, getting credentials");
+
+                        // Get the stored credentials from the backend
+                        let (access_token, user_id) = temp_backend
+                            .get_credentials()
+                            .await
+                            .unwrap_or_else(|| (String::new(), String::new()));
+
+                        if !access_token.is_empty() && !user_id.is_empty() {
+                            info!("Got credentials, adding through SourceCoordinator");
+
+                            // Use SourceCoordinator to add the Jellyfin source
+                            if let Some(source_coordinator) = state.get_source_coordinator().await {
+                                info!("Calling add_jellyfin_source...");
+                                let result = source_coordinator
+                                    .add_jellyfin_source(
+                                        &url,
+                                        &username,
+                                        &password,
+                                        &access_token,
+                                        &user_id,
+                                    )
+                                    .await;
+                                info!("add_jellyfin_source returned: {:?}", result.is_ok());
+
+                                match result {
+                                    Ok(source) => {
+                                        info!(
+                                            "Successfully added Jellyfin source: {}",
+                                            source.name
+                                        );
+
+                                        // Close dialog first to avoid blocking
+                                        if let Some(dialog) = dialog_weak.upgrade() {
+                                            info!("Closing auth dialog");
+                                            dialog.close();
+                                        }
+
+                                        // Set the source as active
+                                        info!("Setting source as active: {}", source.id);
+                                        let mut backend_manager =
+                                            state.backend_manager.write().await;
+                                        backend_manager.set_active(&source.id).ok();
+
+                                        // Save as last active backend
+                                        info!("Saving as last active backend");
+                                        {
+                                            let mut config = state.config.write().await;
+                                            let _ = config.set_last_active_backend(&source.id);
+                                        }
+
+                                        // Set the user
+                                        info!("Setting user");
+                                        let user = crate::models::User {
+                                            id: user_id,
+                                            username: username.clone(),
+                                            email: None,
+                                            avatar_url: None,
+                                        };
+                                        state.set_user(user).await;
+                                        info!("Jellyfin setup complete");
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to add Jellyfin source through SourceCoordinator: {}",
+                                            e
+                                        );
+
+                                        if let Some(dialog) = dialog_weak.upgrade() {
+                                            let imp = dialog.imp();
+                                            imp.jellyfin_progress.set_visible(false);
+                                            imp.jellyfin_error.set_visible(true);
+                                            imp.jellyfin_error.set_title("Connection Failed");
+                                            imp.jellyfin_error
+                                                .set_description(Some(&format!("{}", e)));
+                                            imp.jellyfin_retry_button.set_visible(true);
+                                            // Hide the input fields and connect button when showing error
+                                            imp.jellyfin_url_entry.set_visible(false);
+                                            imp.jellyfin_username_entry.set_visible(false);
+                                            imp.jellyfin_password_entry.set_visible(false);
+                                        }
+                                    }
+                                }
+                            } else {
+                                error!("SourceCoordinator not initialized");
+
+                                if let Some(dialog) = dialog_weak.upgrade() {
+                                    let imp = dialog.imp();
+                                    imp.jellyfin_progress.set_visible(false);
+                                    imp.jellyfin_error.set_visible(true);
+                                    imp.jellyfin_error.set_title("Internal Error");
+                                    imp.jellyfin_error
+                                        .set_description(Some("Source coordinator not available"));
+                                    imp.jellyfin_retry_button.set_visible(true);
+                                    // Hide the input fields and connect button when showing error
+                                    imp.jellyfin_url_entry.set_visible(false);
+                                    imp.jellyfin_username_entry.set_visible(false);
+                                    imp.jellyfin_password_entry.set_visible(false);
+                                }
+                            }
+                        } else {
+                            error!("Failed to get credentials from Jellyfin backend");
+
+                            if let Some(dialog) = dialog_weak.upgrade() {
+                                let imp = dialog.imp();
+                                imp.jellyfin_progress.set_visible(false);
+                                imp.jellyfin_error.set_visible(true);
+                                imp.jellyfin_error.set_title("Authentication Failed");
+                                imp.jellyfin_error
+                                    .set_description(Some("Could not retrieve access token"));
+                                imp.jellyfin_retry_button.set_visible(true);
+                                // Hide the input fields and connect button when showing error
+                                imp.jellyfin_url_entry.set_visible(false);
+                                imp.jellyfin_username_entry.set_visible(false);
+                                imp.jellyfin_password_entry.set_visible(false);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to authenticate with Jellyfin: {}", e);
+
+                        if let Some(dialog) = dialog_weak.upgrade() {
+                            let imp = dialog.imp();
+                            imp.jellyfin_progress.set_visible(false);
+                            imp.jellyfin_error.set_visible(true);
+                            imp.jellyfin_error.set_title("Authentication Failed");
+                            imp.jellyfin_error.set_description(Some(&format!("{}", e)));
+                            imp.jellyfin_retry_button.set_visible(true);
+                            // Hide the input fields and connect button when showing error
+                            imp.jellyfin_url_entry.set_visible(false);
+                            imp.jellyfin_username_entry.set_visible(false);
+                            imp.jellyfin_password_entry.set_visible(false);
+                        }
+                    }
+                }
+            });
         }
     }
 }

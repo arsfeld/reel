@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 #[derive(Debug)]
 pub struct BackendManager {
     backends: HashMap<String, Arc<dyn traits::MediaBackend>>,
-    active_backend: Option<String>,
+    backend_order: Vec<String>, // Order of backends for display
     sync_manager: Arc<SyncManager>,
 }
 
@@ -32,37 +32,94 @@ impl BackendManager {
     pub fn new() -> Self {
         Self {
             backends: HashMap::new(),
-            active_backend: None,
+            backend_order: Vec::new(),
             sync_manager: Arc::new(SyncManager::new()),
         }
     }
 
     pub fn register_backend(&mut self, name: String, backend: Arc<dyn traits::MediaBackend>) {
+        if !self.backends.contains_key(&name) {
+            self.backend_order.push(name.clone());
+        }
         self.backends.insert(name, backend);
     }
 
+    pub fn remove_backend(&mut self, name: &str) -> Option<Arc<dyn traits::MediaBackend>> {
+        // Remove from order list
+        if let Some(pos) = self.backend_order.iter().position(|x| x == name) {
+            self.backend_order.remove(pos);
+        }
+        // Remove and return the backend
+        self.backends.remove(name)
+    }
+
+    // Deprecated - kept for compatibility but all backends are now active
     pub fn set_active(&mut self, name: &str) -> Result<()> {
         if self.backends.contains_key(name) {
-            self.active_backend = Some(name.to_string());
+            // Move this backend to the front of the order
+            if let Some(pos) = self.backend_order.iter().position(|x| x == name) {
+                let backend = self.backend_order.remove(pos);
+                self.backend_order.insert(0, backend);
+            }
             Ok(())
         } else {
             anyhow::bail!("Backend '{}' not found", name)
         }
     }
 
+    // Deprecated - returns the first backend in order for compatibility
     pub fn get_active(&self) -> Option<Arc<dyn traits::MediaBackend>> {
-        self.active_backend
-            .as_ref()
+        self.backend_order
+            .first()
             .and_then(|name| self.backends.get(name))
             .cloned()
     }
 
+    // Deprecated - returns the first backend in order for compatibility
     pub fn get_active_backend(&self) -> Option<(String, Arc<dyn traits::MediaBackend>)> {
-        self.active_backend.as_ref().and_then(|name| {
+        self.backend_order.first().and_then(|name| {
             self.backends
                 .get(name)
                 .map(|backend| (name.clone(), backend.clone()))
         })
+    }
+
+    // Get all backends in order
+    pub fn get_all_backends(&self) -> Vec<(String, Arc<dyn traits::MediaBackend>)> {
+        self.backend_order
+            .iter()
+            .filter_map(|name| {
+                self.backends
+                    .get(name)
+                    .map(|backend| (name.clone(), backend.clone()))
+            })
+            .collect()
+    }
+
+    // Reorder backends
+    pub fn reorder_backends(&mut self, new_order: Vec<String>) {
+        // Validate that all backend IDs exist
+        if new_order.iter().all(|id| self.backends.contains_key(id)) {
+            self.backend_order = new_order;
+        }
+    }
+
+    // Move a backend up in the order
+    pub fn move_backend_up(&mut self, backend_id: &str) {
+        if let Some(pos) = self.backend_order.iter().position(|x| x == backend_id) {
+            if pos > 0 {
+                self.backend_order.swap(pos, pos - 1);
+            }
+        }
+    }
+
+    // Move a backend down in the order
+    pub fn move_backend_down(&mut self, backend_id: &str) {
+        if let Some(pos) = self.backend_order.iter().position(|x| x == backend_id) {
+            if pos < self.backend_order.len() - 1 {
+                self.backend_order.swap(pos, pos + 1);
+            }
+        }
     }
 
     pub fn get_backend(&self, name: &str) -> Option<Arc<dyn traits::MediaBackend>> {
@@ -80,12 +137,15 @@ impl BackendManager {
     pub async fn refresh_all_backends(&self) -> Result<Vec<traits::SyncResult>> {
         let mut results = Vec::new();
 
-        for (backend_id, backend) in &self.backends {
-            let result = self
-                .sync_manager
-                .sync_backend(backend_id, backend.clone())
-                .await?;
-            results.push(result);
+        // Sync backends in order
+        for backend_id in &self.backend_order {
+            if let Some(backend) = self.backends.get(backend_id) {
+                let result = self
+                    .sync_manager
+                    .sync_backend(backend_id, backend.clone())
+                    .await?;
+                results.push(result);
+            }
         }
 
         Ok(results)
@@ -132,9 +192,7 @@ impl BackendManager {
 
     pub fn unregister_backend(&mut self, name: &str) {
         self.backends.remove(name);
-        if self.active_backend.as_ref() == Some(&name.to_string()) {
-            self.active_backend = None;
-        }
+        self.backend_order.retain(|x| x != name);
     }
 }
 

@@ -48,7 +48,7 @@ impl Player {
             }
             PlayerBackend::Mpv => {
                 info!("Creating MPV player backend");
-                Ok(Player::Mpv(MpvPlayer::new()?))
+                Ok(Player::Mpv(MpvPlayer::new(config)?))
             }
         }
     }
