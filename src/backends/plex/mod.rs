@@ -13,11 +13,14 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tracing::info;
 
 use super::traits::{MediaBackend, SearchResults};
-use crate::models::{ChapterMarker, Credentials, Episode, Library, Movie, Show, StreamInfo, User};
-use crate::services::cache::CacheManager;
+use crate::models::{
+    AuthProvider, ChapterMarker, Credentials, Episode, Library, Movie, Show, Source, SourceType,
+    StreamInfo, User,
+};
+use crate::services::{auth_manager::AuthManager, cache::CacheManager};
 
 pub struct PlexBackend {
     client: Client,
@@ -29,6 +32,9 @@ pub struct PlexBackend {
     server_name: Arc<RwLock<Option<String>>>,
     server_info: Arc<RwLock<Option<ServerInfo>>>,
     cache: Option<Arc<CacheManager>>,
+    auth_provider: Option<AuthProvider>,
+    source: Option<Source>,
+    auth_manager: Option<Arc<AuthManager>>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,7 +70,48 @@ impl PlexBackend {
             server_name: Arc::new(RwLock::new(None)),
             server_info: Arc::new(RwLock::new(None)),
             cache,
+            auth_provider: None,
+            source: None,
+            auth_manager: None,
         }
+    }
+
+    /// Create a new PlexBackend from an AuthProvider and Source
+    pub fn from_auth(
+        auth_provider: AuthProvider,
+        source: Source,
+        auth_manager: Arc<AuthManager>,
+        cache: Option<Arc<CacheManager>>,
+    ) -> Result<Self> {
+        // Validate that this is a Plex auth provider
+        if !matches!(auth_provider, AuthProvider::PlexAccount { .. }) {
+            return Err(anyhow!("Invalid auth provider type for Plex backend"));
+        }
+
+        // Validate that this is a Plex source
+        if !matches!(source.source_type, SourceType::PlexServer { .. }) {
+            return Err(anyhow!("Invalid source type for Plex backend"));
+        }
+
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("Failed to create HTTP client");
+
+        Ok(Self {
+            client,
+            base_url: Arc::new(RwLock::new(source.connection_info.primary_url.clone())),
+            auth_token: Arc::new(RwLock::new(None)), // Will be loaded from AuthProvider
+            backend_id: source.id.clone(),
+            last_sync_time: Arc::new(RwLock::new(None)),
+            api: Arc::new(RwLock::new(None)),
+            server_name: Arc::new(RwLock::new(Some(source.name.clone()))),
+            server_info: Arc::new(RwLock::new(None)),
+            cache,
+            auth_provider: Some(auth_provider),
+            source: Some(source),
+            auth_manager: Some(auth_manager),
+        })
     }
 
     pub fn set_cache(&mut self, cache: Arc<CacheManager>) {
@@ -359,94 +406,121 @@ impl MediaBackend for PlexBackend {
     }
 
     async fn initialize(&self) -> Result<Option<User>> {
-        // Try to get token from keyring first, then fallback to file
-        let token = {
-            // Try keyring first
-            let service = "dev.arsfeld.Reel";
-            let account = &self.backend_id;
-
-            tracing::info!(
-                "Looking for saved token - service: '{}', account: '{}'",
-                service,
-                account
-            );
-
-            match keyring::Entry::new(service, account) {
-                Ok(entry) => match entry.get_password() {
-                    Ok(token) => {
-                        tracing::info!(
-                            "Successfully retrieved token from keyring for backend {}",
-                            self.backend_id
-                        );
-                        Some(token)
-                    }
-                    Err(e) => {
-                        let error_str = e.to_string();
-                        tracing::debug!(
-                            "Keyring error for backend {}: {}",
-                            self.backend_id,
-                            error_str
-                        );
-                        None
-                    }
-                },
-                Err(e) => {
-                    tracing::debug!("Failed to create keyring entry: {}", e);
-                    None
-                }
-            }
-        };
-
-        // If keyring failed, try file fallback
-        let token = if let Some(token) = token {
-            token
-        } else {
-            // Try to read from fallback file
-            let config_dir = dirs::config_dir()
-                .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
-            let token_file = config_dir
-                .join("reel")
-                .join(format!(".{}.token", self.backend_id));
-
-            if token_file.exists() {
-                tracing::info!(
-                    "Checking fallback token file for backend {}",
-                    self.backend_id
-                );
-                match std::fs::read(&token_file) {
-                    Ok(obfuscated) => {
-                        // De-obfuscate the token
-                        let token_bytes: Vec<u8> = obfuscated
-                            .iter()
-                            .enumerate()
-                            .map(|(i, &b)| b ^ ((i as u8) + 42))
-                            .collect();
-
-                        match String::from_utf8(token_bytes) {
-                            Ok(token) => {
-                                tracing::info!(
-                                    "Successfully retrieved token from file storage for backend {}",
-                                    self.backend_id
-                                );
-                                token
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to decode token from file: {}", e);
+        // If we have an AuthProvider, use its token
+        let token = if let Some(auth_provider) = &self.auth_provider {
+            match auth_provider {
+                AuthProvider::PlexAccount { token, .. } => {
+                    if !token.is_empty() {
+                        token.clone()
+                    } else if let Some(auth_manager) = &self.auth_manager {
+                        // Try to get token from keyring via AuthManager
+                        match auth_manager.get_credentials(auth_provider.id(), "token") {
+                            Ok(t) => t,
+                            Err(_) => {
+                                tracing::warn!("No token found in AuthProvider or keyring");
                                 return Ok(None);
                             }
                         }
-                    }
-                    Err(e) => {
-                        tracing::debug!("Failed to read token file: {}", e);
+                    } else {
+                        tracing::warn!("No token in AuthProvider and no AuthManager available");
                         return Ok(None);
                     }
                 }
-            } else {
-                tracing::debug!(
-                    "No saved token found for backend {} in keyring or file",
-                    self.backend_id
+                _ => {
+                    tracing::error!("Invalid AuthProvider type for Plex backend");
+                    return Ok(None);
+                }
+            }
+        } else {
+            // Legacy path: Try to get token from keyring first, then fallback to file
+            let token = {
+                // Try keyring first
+                let service = "dev.arsfeld.Reel";
+                let account = &self.backend_id;
+
+                tracing::info!(
+                    "Looking for saved token - service: '{}', account: '{}'",
+                    service,
+                    account
                 );
-                return Ok(None);
+
+                match keyring::Entry::new(service, account) {
+                    Ok(entry) => match entry.get_password() {
+                        Ok(token) => {
+                            tracing::info!(
+                                "Successfully retrieved token from keyring for backend {}",
+                                self.backend_id
+                            );
+                            Some(token)
+                        }
+                        Err(e) => {
+                            let error_str = e.to_string();
+                            tracing::debug!(
+                                "Keyring error for backend {}: {}",
+                                self.backend_id,
+                                error_str
+                            );
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        tracing::debug!("Failed to create keyring entry: {}", e);
+                        None
+                    }
+                }
+            };
+
+            // If keyring failed, try file fallback
+            if let Some(token) = token {
+                token
+            } else {
+                // Try to read from fallback file
+                let config_dir = dirs::config_dir()
+                    .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+                let token_file = config_dir
+                    .join("reel")
+                    .join(format!(".{}.token", self.backend_id));
+
+                if token_file.exists() {
+                    tracing::info!(
+                        "Checking fallback token file for backend {}",
+                        self.backend_id
+                    );
+                    match std::fs::read(&token_file) {
+                        Ok(obfuscated) => {
+                            // De-obfuscate the token
+                            let token_bytes: Vec<u8> = obfuscated
+                                .iter()
+                                .enumerate()
+                                .map(|(i, &b)| b ^ ((i as u8) + 42))
+                                .collect();
+
+                            match String::from_utf8(token_bytes) {
+                                Ok(token) => {
+                                    tracing::info!(
+                                        "Successfully retrieved token from file storage for backend {}",
+                                        self.backend_id
+                                    );
+                                    token
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to decode token from file: {}", e);
+                                    return Ok(None);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!("Failed to read token file: {}", e);
+                            return Ok(None);
+                        }
+                    }
+                } else {
+                    tracing::debug!(
+                        "No saved token found for backend {} in keyring or file",
+                        self.backend_id
+                    );
+                    return Ok(None);
+                }
             }
         };
 

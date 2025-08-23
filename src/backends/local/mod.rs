@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
@@ -7,7 +7,10 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use super::traits::{MediaBackend, SearchResults};
-use crate::models::{Credentials, Episode, Library, Movie, Show, StreamInfo, User};
+use crate::models::{
+    AuthProvider, Credentials, Episode, Library, Movie, Show, Source, StreamInfo, User,
+};
+use crate::services::{AuthManager, CacheManager};
 
 #[derive(Debug)]
 pub struct LocalBackend {
@@ -39,6 +42,28 @@ impl LocalBackend {
             dirs.push(path);
         }
         Ok(())
+    }
+
+    /// Create from AuthProvider and Source
+    pub fn from_auth(
+        _provider: AuthProvider,
+        source: Source,
+        _auth_manager: Arc<AuthManager>,
+        _cache: Option<Arc<CacheManager>>,
+    ) -> Result<Self> {
+        // Extract path from source
+        let path = match source.source_type {
+            crate::models::SourceType::LocalFolder { path } => path,
+            _ => return Err(anyhow!("Invalid source type for LocalBackend")),
+        };
+
+        let backend = Self {
+            media_directories: Arc::new(RwLock::new(vec![path])),
+            backend_id: source.id,
+            last_scan_time: Arc::new(RwLock::new(None)),
+        };
+
+        Ok(backend)
     }
 }
 

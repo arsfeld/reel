@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use tracing::{error, info, trace};
+use tracing::{error, info};
 
 use super::library::MediaCard;
 use crate::constants::*;

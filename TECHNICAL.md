@@ -27,7 +27,8 @@ Reel is built using Rust with GTK4/libadwaita for the UI, GStreamer for media pl
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        UI Layer (GTK4)                      │
+│                   UI Layer (GTK4)                           │
+│                  Unified Sidebar View                       │
 ├─────────────────────────────────────────────────────────────┤
 │                    Application State                         │
 ├─────────────────────────────────────────────────────────────┤
@@ -244,6 +245,8 @@ impl SourceManager {
     pub async fn add_local_source(&mut self, folders: Vec<PathBuf>) -> Result<Source>;
     pub async fn test_source_connectivity(&self, source_id: &str) -> Result<ConnectionStatus>;
     pub async fn get_all_libraries(&self) -> Vec<(Source, Library)>;
+    pub async fn get_libraries_for_display(&self, visible_sources: &HashSet<String>, visible_libraries: &HashSet<String>) -> Vec<(Source, Library)>;
+    pub async fn set_source_enabled(&mut self, source_id: &str, enabled: bool) -> Result<()>;
 }
 ```
 
@@ -307,8 +310,9 @@ impl LocalBackend {
 pub struct AppState {
     source_manager: Arc<RwLock<SourceManager>>,
     account_manager: Arc<RwLock<AccountManager>>,
-    current_source: Arc<RwLock<Option<Source>>>,
-    current_library: Arc<RwLock<Option<Library>>>,
+    visible_sources: Arc<RwLock<HashSet<String>>>,  // Sources shown in sidebar
+    visible_libraries: Arc<RwLock<HashSet<String>>>, // Libraries shown in sidebar
+    library_sort_order: Arc<RwLock<Vec<String>>>,    // Custom sort/pin order
     media_cache: Arc<MediaCache>,
     playback_state: Arc<RwLock<PlaybackState>>,
 }
@@ -325,8 +329,17 @@ impl AppState {
         // Subscribe to state changes
     }
     
-    pub async fn get_unified_library(&self) -> Result<Vec<MediaItem>>;
-    pub async fn get_source_libraries(&self, source_id: &str) -> Result<Vec<Library>>;
+    pub async fn get_unified_library(&self) -> Result<Vec<MediaItem>> {
+        // Aggregate content from all visible libraries
+    }
+    
+    pub async fn get_visible_libraries(&self) -> Result<Vec<(Source, Library)>> {
+        // Return only libraries that are set as visible
+    }
+    
+    pub async fn toggle_source_visibility(&self, source_id: &str) -> Result<()>;
+    pub async fn toggle_library_visibility(&self, library_id: &str) -> Result<()>;
+    pub async fn set_library_sort_order(&self, order: Vec<String>) -> Result<()>;
 }
 ```
 
@@ -595,22 +608,48 @@ impl MediaIndexer {
 pub struct MainWindow {
     window: adw::ApplicationWindow,
     stack: gtk::Stack,
+    sidebar: UnifiedSidebar,
+    content_area: ContentArea,
     player_view: PlayerView,
-    library_view: LibraryView,
     state: Arc<AppState>,
+}
+
+pub struct UnifiedSidebar {
+    scrolled_window: gtk::ScrolledWindow,
+    list_box: gtk::ListBox,
+    source_sections: HashMap<String, SourceSection>,
+}
+
+pub struct SourceSection {
+    expander: gtk::Expander,
+    source_id: String,
+    library_rows: Vec<LibraryRow>,
+    visibility_toggle: gtk::Switch,
+}
+
+pub struct LibraryRow {
+    library_id: String,
+    label: gtk::Label,
+    count_badge: gtk::Label,
+    sync_indicator: gtk::Spinner,
+    visibility_checkbox: gtk::CheckButton,
 }
 
 impl MainWindow {
     pub fn new(app: &adw::Application, state: Arc<AppState>) -> Self {
-        // Build UI
+        // Build UI with unified sidebar
     }
     
     fn setup_actions(&self) {
-        // Setup GActions
+        // Setup GActions for visibility toggles
     }
     
     fn bind_state(&self) {
-        // Bind state to UI
+        // Bind state to UI, update sidebar on visibility changes
+    }
+    
+    fn populate_sidebar(&self) {
+        // Populate sidebar with all sources and libraries
     }
 }
 ```
@@ -776,6 +815,16 @@ CREATE TABLE playback_progress (
 CREATE TABLE preferences (
     key TEXT PRIMARY KEY,
     value JSON NOT NULL
+);
+
+-- UI visibility settings
+CREATE TABLE ui_visibility (
+    id TEXT PRIMARY KEY,  -- source_id or library_id
+    type TEXT NOT NULL,   -- 'source' or 'library'
+    is_visible BOOLEAN DEFAULT TRUE,
+    sort_order INTEGER,
+    pinned BOOLEAN DEFAULT FALSE,
+    INDEX idx_visibility_type (type, is_visible)
 );
 
 -- Image cache metadata
@@ -1124,10 +1173,15 @@ impl ReelApp {
     pub async fn add_local_folder(&self, path: PathBuf, name: String) -> Result<()>;
     pub async fn remove_source(&self, source_id: &str) -> Result<()>;
     pub async fn test_source_connectivity(&self, source_id: &str) -> Result<ConnectionStatus>;
+    pub async fn toggle_source_visibility(&self, source_id: &str) -> Result<()>;
+    pub async fn toggle_library_visibility(&self, library_id: &str) -> Result<()>;
+    pub async fn pin_library(&self, library_id: &str) -> Result<()>;
+    pub async fn reorder_libraries(&self, library_ids: Vec<String>) -> Result<()>;
     
     /// Library operations
-    pub async fn get_unified_library(&self) -> Result<Vec<MediaItem>>;
-    pub async fn get_source_libraries(&self, source_id: &str) -> Result<Vec<Library>>;
+    pub async fn get_unified_library(&self) -> Result<Vec<MediaItem>>;  // All visible libraries
+    pub async fn get_all_libraries(&self) -> Result<Vec<(Source, Library)>>;  // All libraries
+    pub async fn get_visible_libraries(&self) -> Result<Vec<(Source, Library)>>;  // Only visible
     
     /// Sync operations
     pub async fn sync_all_sources(&self) -> Result<Vec<SyncResult>>;

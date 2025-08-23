@@ -72,9 +72,13 @@ impl PlayerPage {
         video_container.add_css_class("video-container");
         overlay.set_child(Some(&video_container));
 
-        // Create player based on config - reload from disk to get latest settings
+        // Create player based on config from AppState
         info!("PlayerPage::new() - Creating player");
-        let config = Config::load().expect("Failed to load config");
+        let config_arc = state.config.clone();
+        let config = tokio::task::block_in_place(|| {
+            let config_guard = tokio::runtime::Handle::current().block_on(config_arc.read());
+            config_guard.clone()
+        });
         info!(
             "PlayerPage::new() - Using player backend: {}",
             config.playback.player_backend
