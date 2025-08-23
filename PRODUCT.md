@@ -48,9 +48,14 @@ To create the definitive media player for the Linux desktop that seamlessly inte
 - **Keyboard Navigation**: Full keyboard control
 - **Gamepad Support**: Navigate with game controllers
 
-### 4. Multi-Source Architecture with Sync
+### 4. Unified Multi-Source Architecture
 - **Sources**: Each source represents a media provider (Plex server, Jellyfin server, local folders)
 - **Libraries**: Each source contains multiple libraries (Movies, TV Shows, Music, etc.)
+- **Unified Sidebar**: All libraries from all active sources displayed together
+  - **Source Grouping**: Libraries grouped by source with collapsible sections
+  - **Show/Hide Controls**: Toggle visibility of entire sources or individual libraries
+  - **Visual Indicators**: Icons and colors to distinguish source types
+  - **Library Badges**: Show item counts and sync status per library
 - **Backend Types**: 
   - **Plex**: Connect via Plex accounts, each account can access multiple servers (sources)
   - **Jellyfin**: Direct server connection with user credentials
@@ -63,7 +68,7 @@ To create the definitive media player for the Linux desktop that seamlessly inte
 - **Server Optimization**: Test multiple server addresses to find fastest connection
 - **Metadata Enrichment**: Automatic metadata fetching from TMDB, TVDB, OMDB
 - **Smart Sync**: Each source syncs independently on configurable schedules
-- **Unified Library**: Single interface across all sources and libraries
+- **Unified Content View**: Seamless browsing across all visible libraries
 - **Conflict Resolution**: Intelligent handling of duplicate media across sources
 
 ### 5. Offline-First Architecture
@@ -266,13 +271,13 @@ To create the definitive media player for the Linux desktop that seamlessly inte
 Sarah takes the train to work daily with spotty internet. She adds her favorite shows to Reel, which automatically downloads the next 3 episodes of each series. During her commute, she enjoys uninterrupted playback and can browse her entire library offline.
 
 ### The Multi-Source User  
-John has two Plex accounts (personal and family shared), a Jellyfin server with friends, and keeps personal videos locally. When he adds his Plex accounts, Reel automatically discovers all accessible servers - his home server, his brother's server, and a friend's shared server. Each appears as a separate source with its own libraries. His Jellyfin server shows as another source, and his local folders appear as libraries within a single local source. Reel provides a unified interface where all content appears together, with each source syncing independently.
+John has two Plex accounts (personal and family shared), a Jellyfin server with friends, and keeps personal videos locally. When he adds his Plex accounts, Reel automatically discovers all accessible servers - his home server, his brother's server, and a friend's shared server. All libraries from all sources appear in the unified sidebar, grouped by their source. He can collapse his brother's server section when not needed, hide specific libraries like "Family Videos" that he rarely watches, and the main content area seamlessly displays items from all visible libraries. Each source syncs independently in the background, with status indicators in the sidebar showing sync progress.
 
 ### The Bandwidth-Conscious User
 Maria has a metered connection. She configures Reel to only sync on WiFi, automatically downloading new episodes at night. The app respects her data limits while ensuring fresh content is always available.
 
 ### The Power User
-Alex manages a 50TB media library across multiple sources - three Plex servers through two accounts, a Jellyfin server, and local archives. Reel automatically discovers all his Plex servers when he logs into his accounts, tests multiple addresses for each server to find the fastest connection, and provides detailed sync status for each source. The app launches instantly showing the cached library from all sources.
+Alex manages a 50TB media library across multiple sources - three Plex servers through two accounts, a Jellyfin server, and local archives. Reel automatically discovers all his Plex servers when he logs into his accounts, tests multiple addresses for each server to find the fastest connection. The unified sidebar shows all 15+ libraries across his sources, which he's customized by hiding rarely-used libraries and pinning his favorites to the top. The app launches instantly with the sidebar populated from cache, and the main content area aggregates media from all visible libraries with smart deduplication.
 
 ### The Local Media Collector
 Emma has thousands of movie and TV files organized in folders. Reel automatically scans her directories, matches files with TMDB and TVDB data, downloads artwork, and presents her collection with the same polish as streaming services. She can manually correct any mismatches and the app remembers her preferences.

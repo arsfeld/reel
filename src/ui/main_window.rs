@@ -4,13 +4,14 @@ use libadwaita::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::config::Config;
 use crate::constants::PLAYER_CONTROLS_HIDE_DELAY_SECS;
 use crate::state::AppState;
 use crate::ui::filters::{SortOrder, WatchStatus};
 use crate::ui::pages;
+use tokio::sync::RwLock;
 
 mod imp {
     use super::*;
@@ -29,17 +30,15 @@ mod imp {
         #[template_child]
         pub home_list: TemplateChild<gtk4::ListBox>,
         #[template_child]
-        pub libraries_group: TemplateChild<adw::PreferencesGroup>,
+        pub sources_button: TemplateChild<gtk4::Button>,
         #[template_child]
-        pub libraries_list: TemplateChild<gtk4::ListBox>,
+        pub sources_container: TemplateChild<gtk4::Box>,
         #[template_child]
-        pub edit_libraries_button: TemplateChild<gtk4::Button>,
-        #[template_child]
-        pub refresh_button: TemplateChild<gtk4::Button>,
-        #[template_child]
-        pub status_row: TemplateChild<adw::ActionRow>,
+        pub status_container: TemplateChild<gtk4::Box>,
         #[template_child]
         pub status_icon: TemplateChild<gtk4::Image>,
+        #[template_child]
+        pub status_label: TemplateChild<gtk4::Label>,
         #[template_child]
         pub sync_spinner: TemplateChild<gtk4::Spinner>,
         #[template_child]
@@ -52,9 +51,10 @@ mod imp {
         pub content_header: TemplateChild<adw::HeaderBar>,
 
         pub state: RefCell<Option<Arc<AppState>>>,
-        pub config: RefCell<Option<Arc<Config>>>,
+        pub config: RefCell<Option<Arc<RwLock<Config>>>>,
         pub content_stack: RefCell<Option<gtk4::Stack>>,
         pub home_page: RefCell<Option<crate::ui::pages::HomePage>>,
+        pub sources_page: RefCell<Option<crate::ui::pages::SourcesPage>>,
         pub library_view: RefCell<Option<crate::ui::pages::LibraryView>>,
         pub player_page: RefCell<Option<crate::ui::pages::PlayerPage>>,
         pub show_details_page: RefCell<Option<crate::ui::pages::ShowDetailsPage>>,
@@ -66,6 +66,7 @@ mod imp {
         pub library_visibility: RefCell<std::collections::HashMap<String, bool>>,
         pub all_libraries: RefCell<Vec<(crate::models::Library, usize)>>,
         pub navigation_stack: RefCell<Vec<String>>, // Track navigation history
+        pub header_add_button: RefCell<Option<gtk4::Button>>, // Track add button in header
     }
 
     #[glib::object_subclass]
@@ -115,43 +116,10 @@ mod imp {
                 }
             ));
 
-            // Make status row clickable when authentication is needed
-            self.status_row.set_activatable(true);
-            self.status_row.connect_activated(clone!(
-                #[weak]
-                obj,
-                move |row| {
-                    // Only open auth dialog if we need authentication
-                    if row
-                        .subtitle()
-                        .map(|s| s.contains("Sign in") || s.contains("Authentication"))
-                        .unwrap_or(false)
-                    {
-                        obj.show_auth_dialog();
-                    }
-                }
-            ));
+            // Status is now more subtle, no need for clickable row
 
-            self.refresh_button.connect_clicked(clone!(
-                #[weak]
-                obj,
-                move |_| {
-                    let state_clone = obj.imp().state.borrow().as_ref().map(|s| s.clone());
-                    if let Some(state) = state_clone {
-                        glib::spawn_future_local(async move {
-                            obj.trigger_sync(state).await;
-                        });
-                    }
-                }
-            ));
-
-            self.edit_libraries_button.connect_clicked(clone!(
-                #[weak]
-                obj,
-                move |button| {
-                    obj.toggle_edit_mode(button);
-                }
-            ));
+            // No longer need refresh_button and edit_libraries_button connections here
+            // They will be handled per-source group
 
             // Connect to home list row activation
             self.home_list.connect_row_activated(clone!(
@@ -165,22 +133,19 @@ mod imp {
                 }
             ));
 
-            // Connect to library list row activation
-            self.libraries_list.connect_row_activated(clone!(
+            // Connect to sources button click
+            self.sources_button.connect_clicked(clone!(
                 #[weak]
                 obj,
-                move |_, row| {
-                    if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
-                        info!("Library selected: {}", action_row.title());
-
-                        // Get library ID from the row's widget name
-                        let library_id = action_row.widget_name().to_string();
-
-                        // Navigate to library view
-                        obj.navigate_to_library(&library_id);
-                    }
+                move |_| {
+                    info!("Sources button clicked");
+                    obj.show_sources_page();
                 }
             ));
+
+            // Library list row activation is now handled per-source group
+
+            // Sources button is now always visible
         }
     }
 
@@ -198,7 +163,7 @@ glib::wrapper! {
 }
 
 impl ReelMainWindow {
-    pub fn new(app: &adw::Application, state: Arc<AppState>, config: Arc<Config>) -> Self {
+    pub fn new(app: &adw::Application, state: Arc<AppState>, config: Arc<RwLock<Config>>) -> Self {
         let window: Self = glib::Object::builder().property("application", app).build();
 
         // Store state and config
@@ -209,7 +174,12 @@ impl ReelMainWindow {
         window.setup_actions(app);
 
         // Apply theme
-        window.apply_theme();
+        let window_weak = window.downgrade();
+        glib::spawn_future_local(async move {
+            if let Some(window) = window_weak.upgrade() {
+                window.apply_theme().await;
+            }
+        });
 
         // FIRST: Try to load any cached data immediately (before authentication)
         window.load_cached_data_on_startup(state.clone());
@@ -252,11 +222,16 @@ impl ReelMainWindow {
         app.set_accels_for_action("window.close", &["<primary>w"]);
     }
 
-    fn apply_theme(&self) {
-        if let Some(config) = self.imp().config.borrow().as_ref() {
+    async fn apply_theme(&self) {
+        if let Some(config_arc) = self.imp().config.borrow().as_ref() {
             let style_manager = adw::StyleManager::default();
 
-            match config.general.theme.as_str() {
+            let theme = {
+                let config = config_arc.read().await;
+                config.general.theme.clone()
+            };
+
+            match theme.as_str() {
                 "light" => style_manager.set_color_scheme(adw::ColorScheme::ForceLight),
                 "dark" => style_manager.set_color_scheme(adw::ColorScheme::ForceDark),
                 _ => style_manager.set_color_scheme(adw::ColorScheme::PreferDark),
@@ -272,68 +247,119 @@ impl ReelMainWindow {
             if let Some(window) = window_weak.upgrade() {
                 info!("Checking for cached data on startup...");
 
-                // Get the last active backend ID from config
-                let config = state.config.clone();
-                let backend_id = config.get_last_active_backend();
+                // Get all providers from source coordinator
+                if let Some(source_coordinator) = state.get_source_coordinator().await {
+                    // Load saved providers first
+                    if let Err(e) = source_coordinator.get_auth_manager().load_providers().await {
+                        error!("Failed to load providers: {}", e);
+                    }
 
-                // If no last active backend, skip cache loading
-                if backend_id.is_none() {
-                    info!("No last active backend found, skipping cache load");
-                    return;
-                }
+                    let providers = source_coordinator
+                        .get_auth_manager()
+                        .get_all_providers()
+                        .await;
+                    if providers.is_empty() {
+                        info!("No auth providers found, skipping cache load");
+                        return;
+                    }
 
-                let backend_id = backend_id.unwrap();
-                info!(
-                    "Loading cached data for last active backend: {}",
-                    backend_id
-                );
+                    // Use the sync manager from AppState
+                    let sync_manager = state.sync_manager.clone();
+                    let mut has_any_cached_data = false;
+                    let mut backends_libraries = Vec::new();
+                    let provider_count = providers.len();
 
-                // Use the sync manager from AppState instead of creating a new one
-                let sync_manager = state.sync_manager.clone();
-                let cache = state.cache_manager.clone();
+                    // Try to load cached data from all providers
+                    for provider in &providers {
+                        let provider_id = provider.id();
+                        info!("Checking cached data for provider: {}", provider_id);
 
-                // Try to get cached libraries
-                match sync_manager.get_cached_libraries(&backend_id).await {
-                    Ok(libraries) if !libraries.is_empty() => {
+                        match sync_manager.get_cached_libraries(provider_id).await {
+                            Ok(libraries) if !libraries.is_empty() => {
+                                info!(
+                                    "Found {} cached libraries for provider {}",
+                                    libraries.len(),
+                                    provider_id
+                                );
+
+                                // Build library list with counts
+                                let mut library_info = Vec::new();
+
+                                for library in &libraries {
+                                    use crate::models::LibraryType;
+                                    let item_count = match library.library_type {
+                                        LibraryType::Movies => {
+                                            match sync_manager
+                                                .get_cached_movies(provider_id, &library.id)
+                                                .await
+                                            {
+                                                Ok(movies) => movies.len(),
+                                                Err(_) => 0,
+                                            }
+                                        }
+                                        LibraryType::Shows => {
+                                            match sync_manager
+                                                .get_cached_shows(provider_id, &library.id)
+                                                .await
+                                            {
+                                                Ok(shows) => shows.len(),
+                                                Err(_) => 0,
+                                            }
+                                        }
+                                        _ => 0,
+                                    };
+
+                                    library_info.push((library.clone(), item_count));
+                                }
+
+                                if !library_info.is_empty() {
+                                    backends_libraries
+                                        .push((provider_id.to_string(), library_info));
+                                    has_any_cached_data = true;
+                                }
+                            }
+                            Ok(_) => {
+                                info!("No cached libraries for provider {}", provider_id);
+                            }
+                            Err(e) => {
+                                info!(
+                                    "Could not load cached libraries for provider {}: {}",
+                                    provider_id, e
+                                );
+                            }
+                        }
+                    }
+
+                    if has_any_cached_data {
                         info!(
-                            "Found {} cached libraries on startup, showing immediately",
-                            libraries.len()
+                            "Found cached data from {} providers, showing immediately",
+                            backends_libraries.len()
                         );
 
                         // Hide welcome page and show libraries immediately
                         window.imp().welcome_page.set_visible(false);
-                        window.imp().libraries_group.set_visible(true);
+                        window.imp().sources_container.set_visible(true);
+                        window.imp().home_group.set_visible(true);
 
-                        // Load and display the cached libraries
-                        window.load_cached_libraries_for_backend(&backend_id).await;
+                        // Update UI with all backends' libraries
+                        window.update_all_backends_libraries(backends_libraries);
 
-                        // Update status to show we're using cached data
-                        // Try to load cached server name if available
-                        let cache_key = format!("{}:server_name", backend_id);
-                        let title = if let Ok(Some(server_name)) =
-                            cache.get_media::<String>(&cache_key).await
-                        {
-                            server_name
-                        } else {
-                            "Cached Libraries".to_string()
-                        };
-
-                        window.imp().status_row.set_title(&title);
-                        window
-                            .imp()
-                            .status_row
-                            .set_subtitle("Authentication needed - Using cached data");
+                        // Update subtle status for cached data
+                        window.imp().status_container.set_visible(true);
+                        window.imp().status_label.set_text(&format!(
+                            "{} source{} (cached)",
+                            provider_count,
+                            if provider_count == 1 { "" } else { "s" }
+                        ));
                         window
                             .imp()
                             .status_icon
-                            .set_icon_name(Some("dialog-password-symbolic"));
+                            .set_icon_name(Some("folder-remote-symbolic"));
+                    } else {
+                        info!("No cached data found from any provider");
                     }
-                    Ok(_) => {
-                        info!("No cached libraries found on startup");
-                    }
-                    Err(e) => {
-                        info!("Could not load cached libraries on startup: {}", e);
-                    }
+                } else {
+                    error!("SourceCoordinator not initialized");
                 }
             }
         });
@@ -343,224 +369,109 @@ impl ReelMainWindow {
         let window_weak = self.downgrade();
 
         glib::spawn_future_local(async move {
-            // Initialize all configured backends
-            let plex_backend = {
-                let mut backend_manager = state.backend_manager.write().await;
+            // Use SourceCoordinator to initialize all sources
+            if let Some(source_coordinator) = state.get_source_coordinator().await {
+                // First, load saved providers from config
+                if let Err(e) = source_coordinator.get_auth_manager().load_providers().await {
+                    error!("Failed to load providers: {}", e);
+                }
 
-                // Import the trait to access the initialize method
-                use crate::backends::MediaBackend;
+                // Then, migrate any legacy backends
+                if let Err(e) = source_coordinator.migrate_legacy_backends().await {
+                    error!("Failed to migrate legacy backends: {}", e);
+                }
 
-                // First check if we have a last active backend that we should reuse
-                let config = state.config.clone();
-                let last_active = config.get_last_active_backend();
+                // Initialize all sources
+                match source_coordinator.initialize_all_sources().await {
+                    Ok(source_statuses) => {
+                        let connected_count = source_statuses
+                            .iter()
+                            .filter(|s| matches!(s.connection_status, crate::services::source_coordinator::ConnectionStatus::Connected))
+                            .count();
 
-                // Check if the last active backend was a plex backend
-                let backend_id = if let Some(ref last_id) = last_active {
-                    if last_id.starts_with("plex") {
-                        // Reuse the last active backend ID
-                        info!("Reusing existing backend ID: {}", last_id);
-                        last_id.clone()
-                    } else {
-                        // Last active was not plex, find an appropriate ID
-                        let existing_backends = state.config.get_configured_backends();
-                        let mut new_id = "plex".to_string();
-                        let mut counter = 1;
-
-                        while existing_backends.contains(&new_id) {
-                            new_id = format!("plex_{}", counter);
-                            counter += 1;
-                        }
-                        new_id
-                    }
-                } else {
-                    // No last active backend, use "plex" as the ID
-                    "plex".to_string()
-                };
-
-                // Try to initialize Plex backend with the correct ID and cache
-                let cache = state.cache_manager.clone();
-                let plex_backend = Arc::new(crate::backends::plex::PlexBackend::with_cache(
-                    backend_id.clone(),
-                    Some(cache.clone()),
-                ));
-
-                match plex_backend.initialize().await {
-                    Ok(Some(mut user)) => {
-                        // Check if we're in offline mode
-                        if user.username == "Offline Mode" {
-                            info!("Backend {} initialized in offline mode", backend_id);
-                            // Try to load cached username
-                            let user_cache_key = format!("{}:last_user", backend_id);
-                            if let Ok(Some(cached_username)) =
-                                cache.get_media::<String>(&user_cache_key).await
-                            {
-                                user.username = cached_username;
-                                info!("Loaded cached username: {}", user.username);
-                            }
-                        } else {
-                            info!(
-                                "Successfully initialized backend {} for user: {}",
-                                backend_id, user.username
-                            );
-                            // Cache the username for offline use
-                            let user_cache_key = format!("{}:last_user", backend_id);
-                            let _ = cache
-                                .set_media(&user_cache_key, "user", &user.username)
-                                .await;
-                        }
-
-                        // Register the backend with its ID
-                        backend_manager.register_backend(backend_id.clone(), plex_backend.clone());
-                        backend_manager.set_active(&backend_id).ok();
-
-                        // Set the user
-                        state.set_user(user.clone()).await;
-
-                        // Save this backend as the last active (only if it changed)
-                        if last_active.as_ref() != Some(&backend_id) {
-                            let mut config = state.config.as_ref().clone();
-                            let _ = config.set_last_active_backend(&backend_id);
-                        }
-
-                        // Get and cache server info if available
-                        let backend_info = plex_backend.get_backend_info().await;
-                        if let Some(server_name) = backend_info.server_name {
-                            let cache_key = format!("{}:server_name", backend_id);
-                            let _ = cache
-                                .set_media(&cache_key, "server_name", &server_name)
-                                .await;
-                        }
-
-                        Some((backend_id, plex_backend))
-                    }
-                    Ok(None) => {
                         info!(
-                            "No credentials found for backend {}, need to re-authenticate",
-                            backend_id
+                            "Initialized {} sources, {} connected",
+                            source_statuses.len(),
+                            connected_count
                         );
-                        // Backend is configured but has no valid token
-                        // We should prompt for re-authentication
-                        if let Some(window) = window_weak.upgrade() {
-                            // Show that we need authentication
-                            window.imp().welcome_page.set_visible(false);
-                            window.imp().libraries_group.set_visible(true);
-                            window.imp().status_row.set_title("Authentication Required");
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize sources: {}", e);
+                    }
+                }
+
+                // Handle the results of backend initialization
+                if let Some(window) = window_weak.upgrade() {
+                    // Update backend selector (now just hides it)
+                    window.update_backend_selector().await;
+
+                    // Check how many backends are connected
+                    let backend_manager = state.backend_manager.read().await;
+                    let all_backends = backend_manager.get_all_backends();
+                    let connected_count = all_backends.len();
+                    drop(backend_manager);
+
+                    if connected_count > 0 {
+                        info!("Successfully initialized {} backends", connected_count);
+                        window.update_connection_status(true).await;
+
+                        // Update subtle status
+                        window.imp().status_container.set_visible(true);
+                        window.imp().status_label.set_text(&format!(
+                            "{} source{} connected",
+                            connected_count,
+                            if connected_count == 1 { "" } else { "s" }
+                        ));
+                        window
+                            .imp()
+                            .status_icon
+                            .set_icon_name(Some("network-transmit-receive-symbolic"));
+
+                        // Refresh all libraries
+                        window.refresh_all_libraries().await;
+
+                        // Start background sync for all sources
+                        let coordinator_clone = source_coordinator.clone();
+                        let window_weak2 = window.downgrade();
+                        glib::spawn_future_local(async move {
+                            if let Some(_window) = window_weak2.upgrade() {
+                                info!("Starting background sync for all sources...");
+                                if let Err(e) = coordinator_clone.sync_all_visible_sources().await {
+                                    error!("Failed to sync sources: {}", e);
+                                }
+                            }
+                        });
+                    } else {
+                        info!("No backends were successfully initialized");
+
+                        // Check if we have any providers that need authentication
+                        let providers = source_coordinator
+                            .get_auth_manager()
+                            .get_all_providers()
+                            .await;
+
+                        if !providers.is_empty() {
+                            info!(
+                                "Found {} providers but no valid credentials",
+                                providers.len()
+                            );
+
+                            // Show subtle authentication needed status
+                            window.imp().status_container.set_visible(true);
                             window
                                 .imp()
-                                .status_row
-                                .set_subtitle("Please sign in to your Plex account");
+                                .status_label
+                                .set_text("Authentication required");
                             window
                                 .imp()
                                 .status_icon
                                 .set_icon_name(Some("dialog-password-symbolic"));
-
-                            // Auto-show the auth dialog after a short delay
-                            let window_weak2 = window.downgrade();
-                            glib::timeout_add_local(
-                                std::time::Duration::from_millis(500),
-                                move || {
-                                    if let Some(window) = window_weak2.upgrade() {
-                                        window.show_auth_dialog();
-                                    }
-                                    glib::ControlFlow::Break
-                                },
-                            );
                         }
-                        None
-                    }
-                    Err(e) => {
-                        error!("Failed to initialize backend: {}", e);
-                        None
-                    }
-                }
-            }; // Write lock is dropped here
-
-            // Handle the result of backend initialization
-            if let Some(window) = window_weak.upgrade() {
-                if let Some((backend_id, backend)) = plex_backend {
-                    // Backend successfully initialized
-                    info!("Updating UI after successful Plex initialization");
-                    window.update_connection_status(true).await;
-
-                    // Re-read backend manager to get the registered backend
-                    let backend_manager = state.backend_manager.read().await;
-                    info!(
-                        "Backend manager has active backend: {}",
-                        backend_manager.get_active().is_some()
-                    );
-
-                    if let Some(current_user) = state.get_user().await {
-                        info!("Updating user display for: {}", current_user.username);
-                        // Pass the backend manager to update_user_display_with_backend
-                        window
-                            .update_user_display_with_backend(
-                                Some(current_user.clone()),
-                                &backend_manager,
-                            )
-                            .await;
-                    } else {
-                        info!("No current user found in state");
-                    }
-
-                    // Refresh the cached data with the authenticated backend
-                    // (this will update with any new data, but cache was already shown)
-                    info!("Refreshing libraries with authenticated backend...");
-                    window.load_cached_libraries_for_backend(&backend_id).await;
-
-                    // THEN: Start background sync (without blocking)
-                    let backend_clone = backend.clone();
-                    let state_clone = state.clone();
-                    let window_weak2 = window.downgrade();
-                    glib::spawn_future_local(async move {
-                        info!("Starting background sync...");
-                        if let Some(window) = window_weak2.upgrade() {
-                            // Show sync is starting
-                            window.show_sync_progress(true);
-
-                            // Start sync with backend ID
-                            window
-                                .sync_and_update_libraries(&backend_id, backend_clone, state_clone)
-                                .await;
-
-                            // Hide sync indicator
-                            window.show_sync_progress(false);
-                        }
-                    });
-                } else {
-                    // No backend was initialized but we might have a configured backend ID
-                    info!("No backend initialized, checking if we have cached data");
-
-                    // Check if we have a last active backend configured
-                    let config = state.config.clone();
-                    if let Some(backend_id) = config.get_last_active_backend() {
-                        info!(
-                            "Found configured backend {} but no valid credentials",
-                            backend_id
-                        );
-
-                        // We have a backend configured but no valid token
-                        // Show cached data if available, but indicate auth is needed
-                        window.load_cached_libraries_for_backend(&backend_id).await;
-
-                        // Update status to show authentication is needed
-                        window.imp().status_row.set_title("Authentication Required");
-                        window
-                            .imp()
-                            .status_row
-                            .set_subtitle("Sign in to sync and play media");
-                        window
-                            .imp()
-                            .status_icon
-                            .set_icon_name(Some("dialog-password-symbolic"));
-
-                        // Don't auto-show dialog here since we already do it in the Ok(None) case above
                     }
                 }
             } else {
-                error!("Failed to upgrade window weak reference");
+                error!("SourceCoordinator not initialized");
             }
-
-            // TODO: Initialize other backends (Jellyfin, Local)
         });
     }
 
@@ -576,17 +487,18 @@ impl ReelMainWindow {
             // Don't set default values here - let update_user_display handle the details
             imp.welcome_page.set_visible(false); // Hide welcome message
             imp.home_group.set_visible(true);
-            imp.libraries_group.set_visible(true);
+            imp.sources_container.set_visible(true);
 
-            // TODO: Load libraries from backend
-        } else {
-            imp.status_row.set_title("Not Connected");
-            imp.status_row.set_subtitle("No server configured");
+            // Show subtle status
+            imp.status_container.set_visible(true);
+            imp.status_label.set_text("Connected");
             imp.status_icon
-                .set_icon_name(Some("network-offline-symbolic"));
+                .set_icon_name(Some("network-transmit-receive-symbolic"));
+        } else {
+            imp.status_container.set_visible(false);
             imp.welcome_page.set_visible(true); // Show welcome message
             imp.home_group.set_visible(false);
-            imp.libraries_group.set_visible(false);
+            imp.sources_container.set_visible(false);
         }
     }
 
@@ -618,64 +530,48 @@ impl ReelMainWindow {
                             == crate::backends::traits::ConnectionType::Unknown
                     {
                         // We have cached credentials but can't connect
-                        imp.status_row.set_title("Offline Mode");
-                        imp.status_row
-                            .set_subtitle(&format!("{} - Using cached data", user.username));
+                        imp.status_container.set_visible(true);
+                        imp.status_label.set_text("Offline (cached)");
                         imp.status_icon
                             .set_icon_name(Some("network-offline-symbolic"));
                     } else {
-                        // Update title with server name or backend display name
-                        let title = backend_info
-                            .server_name
-                            .unwrap_or(backend_info.display_name);
-                        imp.status_row.set_title(&title);
-
-                        // Create detailed subtitle based on connection type
+                        // Create detailed status based on connection type
                         use crate::backends::traits::ConnectionType;
-                        let (connection_type_str, icon_name) = match backend_info.connection_type {
-                            ConnectionType::Local => ("Local", "network-wired-symbolic"),
-                            ConnectionType::Remote => ("Remote", "network-wireless-symbolic"),
-                            ConnectionType::Relay => ("Relay", "network-cellular-symbolic"),
+                        let (status_text, icon_name) = match backend_info.connection_type {
+                            ConnectionType::Local => {
+                                ("Connected (local)", "network-wired-symbolic")
+                            }
+                            ConnectionType::Remote => {
+                                ("Connected (remote)", "network-wireless-symbolic")
+                            }
+                            ConnectionType::Relay => {
+                                ("Connected (relay)", "network-cellular-symbolic")
+                            }
                             ConnectionType::Offline => {
-                                ("Offline - Using cached data", "network-offline-symbolic")
+                                ("Offline (cached)", "network-offline-symbolic")
                             }
                             ConnectionType::Unknown => {
                                 ("Connected", "network-transmit-receive-symbolic")
                             }
                         };
 
-                        if backend_info.connection_type == ConnectionType::Offline {
-                            imp.status_row.set_subtitle(&format!(
-                                "{} - {}",
-                                user.username, connection_type_str
-                            ));
-                        } else {
-                            imp.status_row.set_subtitle(&format!(
-                                "{} - {} connection",
-                                user.username, connection_type_str
-                            ));
-                        }
-
+                        imp.status_container.set_visible(true);
+                        imp.status_label.set_text(status_text);
                         imp.status_icon.set_icon_name(Some(icon_name));
                     }
                 } else {
-                    imp.status_row.set_title("Authenticated");
-                    imp.status_row
-                        .set_subtitle(&format!("{} - Not connected to server", user.username));
+                    imp.status_container.set_visible(true);
+                    imp.status_label.set_text("Authenticated");
                     imp.status_icon.set_icon_name(Some("network-idle-symbolic"));
                 }
             } else {
-                imp.status_row.set_title("Not Connected");
-                imp.status_row
-                    .set_subtitle(&format!("Logged in as {}", user.username));
+                imp.status_container.set_visible(true);
+                imp.status_label.set_text("Not connected");
                 imp.status_icon
                     .set_icon_name(Some("network-offline-symbolic"));
             }
         } else {
-            imp.status_row.set_title("Not Connected");
-            imp.status_row.set_subtitle("No server configured");
-            imp.status_icon
-                .set_icon_name(Some("network-offline-symbolic"));
+            imp.status_container.set_visible(false);
         }
     }
 
@@ -692,55 +588,36 @@ impl ReelMainWindow {
                     // Get backend info using the trait method
                     let backend_info = backend.get_backend_info().await;
 
-                    // Update title with server name or backend display name
-                    let title = backend_info
-                        .server_name
-                        .unwrap_or(backend_info.display_name);
-                    imp.status_row.set_title(&title);
-
-                    // Create detailed subtitle based on connection type
+                    // Create detailed status based on connection type
                     use crate::backends::traits::ConnectionType;
-                    let (connection_type_str, icon_name) = match backend_info.connection_type {
-                        ConnectionType::Local => ("Local", "network-wired-symbolic"),
-                        ConnectionType::Remote => ("Remote", "network-wireless-symbolic"),
-                        ConnectionType::Relay => ("Relay", "network-cellular-symbolic"),
-                        ConnectionType::Offline => {
-                            ("Offline - Using cached data", "network-offline-symbolic")
+                    let (status_text, icon_name) = match backend_info.connection_type {
+                        ConnectionType::Local => ("Connected (local)", "network-wired-symbolic"),
+                        ConnectionType::Remote => {
+                            ("Connected (remote)", "network-wireless-symbolic")
                         }
+                        ConnectionType::Relay => ("Connected (relay)", "network-cellular-symbolic"),
+                        ConnectionType::Offline => ("Offline (cached)", "network-offline-symbolic"),
                         ConnectionType::Unknown => {
                             ("Connected", "network-transmit-receive-symbolic")
                         }
                     };
 
-                    if backend_info.connection_type == ConnectionType::Offline {
-                        imp.status_row
-                            .set_subtitle(&format!("{} - {}", user.username, connection_type_str));
-                    } else {
-                        imp.status_row.set_subtitle(&format!(
-                            "{} - {} connection",
-                            user.username, connection_type_str
-                        ));
-                    }
-
+                    imp.status_container.set_visible(true);
+                    imp.status_label.set_text(status_text);
                     imp.status_icon.set_icon_name(Some(icon_name));
                 } else {
-                    imp.status_row.set_title("Authenticated");
-                    imp.status_row
-                        .set_subtitle(&format!("{} - Not connected to server", user.username));
+                    imp.status_container.set_visible(true);
+                    imp.status_label.set_text("Authenticated");
                     imp.status_icon.set_icon_name(Some("network-idle-symbolic"));
                 }
             } else {
-                imp.status_row.set_title("Not Connected");
-                imp.status_row
-                    .set_subtitle(&format!("Logged in as {}", user.username));
+                imp.status_container.set_visible(true);
+                imp.status_label.set_text("Not connected");
                 imp.status_icon
                     .set_icon_name(Some("network-offline-symbolic"));
             }
         } else {
-            imp.status_row.set_title("Not Connected");
-            imp.status_row.set_subtitle("No server configured");
-            imp.status_icon
-                .set_icon_name(Some("network-offline-symbolic"));
+            imp.status_container.set_visible(false);
         }
     }
 
@@ -771,6 +648,9 @@ impl ReelMainWindow {
                     {
                         info!("Backend initialized after auth dialog closed");
 
+                        // Update backend selector with new backend
+                        window.update_backend_selector().await;
+
                         // Update connection status
                         window.update_connection_status(true).await;
 
@@ -787,8 +667,10 @@ impl ReelMainWindow {
                             window.load_cached_libraries_for_backend(&backend_id).await;
 
                             // Save this backend as the last active
-                            let mut config = state_for_async.config.as_ref().clone();
-                            let _ = config.set_last_active_backend(&backend_id);
+                            {
+                                let mut config = state_for_async.config.write().await;
+                                let _ = config.set_last_active_backend(&backend_id);
+                            }
                         }
 
                         // THEN: Start background sync
@@ -826,9 +708,10 @@ impl ReelMainWindow {
     fn show_preferences(&self) {
         info!("Showing preferences");
 
-        let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        let prefs_window = crate::ui::PreferencesWindow::new(self, state);
-        prefs_window.present();
+        if let Some(config) = self.imp().config.borrow().as_ref() {
+            let prefs_window = crate::ui::PreferencesWindow::new(self, config.clone());
+            prefs_window.present();
+        }
     }
 
     fn show_about(&self) {
@@ -847,14 +730,30 @@ impl ReelMainWindow {
     }
 
     pub fn update_libraries(&self, libraries: Vec<(crate::models::Library, usize)>) {
+        // For single backend, use update_all_backends_libraries
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+        let libraries_clone = libraries.clone();
+        let window_weak = self.downgrade();
+
+        glib::spawn_future_local(async move {
+            if let Some(window) = window_weak.upgrade() {
+                // Get backend ID
+                if let Some(backend_id) = state.get_active_backend_id().await {
+                    window.update_all_backends_libraries(vec![(backend_id, libraries_clone)]);
+                }
+            }
+        });
+    }
+
+    pub fn update_all_backends_libraries(
+        &self,
+        backends_libraries: Vec<(String, Vec<(crate::models::Library, usize)>)>,
+    ) {
         let imp = self.imp();
 
-        // Store all libraries for edit mode
-        imp.all_libraries.replace(libraries.clone());
-
-        // Load visibility settings if not already loaded
-        if imp.library_visibility.borrow().is_empty() && !libraries.is_empty() {
-            self.load_library_visibility();
+        // Clear existing source containers
+        while let Some(child) = imp.sources_container.first_child() {
+            imp.sources_container.remove(&child);
         }
 
         // Clear existing home rows
@@ -862,10 +761,10 @@ impl ReelMainWindow {
             imp.home_list.remove(&child);
         }
 
-        // Add Home row to the home section
+        // Add unified Home row for all sources
         let home_row = adw::ActionRow::builder()
             .title("Home")
-            .subtitle("Recently added, continue watching, and more")
+            .subtitle("Recently added from all sources")
             .activatable(true)
             .build();
 
@@ -875,16 +774,146 @@ impl ReelMainWindow {
         let home_arrow = gtk4::Image::from_icon_name("go-next-symbolic");
         home_row.add_suffix(&home_arrow);
 
-        // Use special ID for home
         home_row.set_widget_name("__home__");
-
         imp.home_list.append(&home_row);
-
-        // Show home group
         imp.home_group.set_visible(true);
 
-        // Update the library display
-        self.update_libraries_display(libraries);
+        // Collect all libraries for edit mode
+        let mut all_libraries = Vec::new();
+
+        // Create a separate PreferencesGroup for each backend
+        for (backend_id, libraries) in backends_libraries.iter() {
+            if libraries.is_empty() {
+                continue;
+            }
+
+            // Create a preferences group for this source
+            let source_group = adw::PreferencesGroup::builder()
+                .title(&self.get_backend_display_name(backend_id))
+                .build();
+
+            // Add edit/refresh buttons in the header suffix
+            let header_buttons = gtk4::Box::builder()
+                .orientation(gtk4::Orientation::Horizontal)
+                .spacing(6)
+                .build();
+
+            let edit_button = gtk4::Button::builder()
+                .icon_name("document-edit-symbolic")
+                .valign(gtk4::Align::Center)
+                .tooltip_text("Edit Libraries")
+                .css_classes(vec!["flat"])
+                .build();
+
+            let refresh_button = gtk4::Button::builder()
+                .icon_name("view-refresh-symbolic")
+                .valign(gtk4::Align::Center)
+                .tooltip_text("Refresh")
+                .css_classes(vec!["flat"])
+                .build();
+
+            header_buttons.append(&edit_button);
+            header_buttons.append(&refresh_button);
+            source_group.set_header_suffix(Some(&header_buttons));
+
+            // Connect refresh button for this specific backend
+            let backend_id_clone = backend_id.clone();
+            let window_weak = self.downgrade();
+            refresh_button.connect_clicked(move |_| {
+                if let Some(window) = window_weak.upgrade() {
+                    let backend_id = backend_id_clone.clone();
+                    glib::spawn_future_local(async move {
+                        window.sync_single_backend(&backend_id).await;
+                    });
+                }
+            });
+
+            // Create list box for libraries
+            let libraries_list = gtk4::ListBox::builder()
+                .selection_mode(gtk4::SelectionMode::None)
+                .css_classes(vec!["boxed-list"])
+                .build();
+
+            // Add libraries for this backend
+            for (library, item_count) in libraries {
+                all_libraries.push((library.clone(), *item_count));
+
+                let visibility_map = imp.library_visibility.borrow();
+                let is_visible = visibility_map.get(&library.id).copied().unwrap_or(true);
+
+                if is_visible {
+                    let row = adw::ActionRow::builder()
+                        .title(&library.title)
+                        .subtitle(&format!("{} items", item_count))
+                        .activatable(true)
+                        .build();
+
+                    // Add icon based on library type
+                    let icon_name = match library.library_type {
+                        crate::models::LibraryType::Movies => "video-x-generic-symbolic",
+                        crate::models::LibraryType::Shows => "video-display-symbolic",
+                        crate::models::LibraryType::Music => "audio-x-generic-symbolic",
+                        crate::models::LibraryType::Photos => "image-x-generic-symbolic",
+                        _ => "folder-symbolic",
+                    };
+
+                    let prefix_icon = gtk4::Image::from_icon_name(icon_name);
+                    row.add_prefix(&prefix_icon);
+
+                    let arrow = gtk4::Image::from_icon_name("go-next-symbolic");
+                    row.add_suffix(&arrow);
+
+                    // Store backend_id:library_id in widget name for navigation
+                    row.set_widget_name(&format!("{}:{}", backend_id, library.id));
+
+                    libraries_list.append(&row);
+                }
+            }
+
+            // Connect row activation for this list
+            let window_weak = self.downgrade();
+            libraries_list.connect_row_activated(move |_, row| {
+                if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
+                    if let Some(window) = window_weak.upgrade() {
+                        let library_id = action_row.widget_name().to_string();
+                        window.navigate_to_library(&library_id);
+                    }
+                }
+            });
+
+            source_group.add(&libraries_list);
+            imp.sources_container.append(&source_group);
+        }
+
+        // Store all libraries for edit mode
+        imp.all_libraries.replace(all_libraries);
+
+        // Show sources container if we have any backends
+        imp.sources_container
+            .set_visible(!backends_libraries.is_empty());
+    }
+
+    fn get_backend_display_name(&self, backend_id: &str) -> String {
+        // Get display name from cache or backend info
+        if let Some(state) = self.imp().state.borrow().as_ref() {
+            let state = state.clone();
+            let backend_id = backend_id.to_string();
+            let cache_key = format!("{}:server_name", backend_id);
+
+            // Try to get cached server name synchronously (this should be refactored to async)
+            // For now, just use the backend ID
+            if backend_id.starts_with("plex") {
+                "Plex Server".to_string()
+            } else if backend_id.starts_with("jellyfin") {
+                "Jellyfin Server".to_string()
+            } else if backend_id.starts_with("local") {
+                "Local Files".to_string()
+            } else {
+                backend_id.to_string()
+            }
+        } else {
+            backend_id.to_string()
+        }
     }
 
     pub fn show_sync_progress(&self, syncing: bool) {
@@ -953,8 +982,81 @@ impl ReelMainWindow {
         }
     }
 
+    fn show_sources_page(&self) {
+        info!("show_sources_page called");
+        let imp = self.imp();
+
+        // Clear header end widgets first
+        self.clear_header_end_widgets();
+
+        // Remove any filter controls since sources page doesn't need them
+        if let Some(filter_controls) = imp.filter_controls.borrow().as_ref() {
+            imp.content_header.remove(filter_controls);
+        }
+        imp.filter_controls.replace(None);
+
+        // Get or create content stack
+        let content_stack = if imp.content_stack.borrow().is_none() {
+            let stack = gtk4::Stack::new();
+            stack.add_named(&*imp.empty_state, Some("empty"));
+            imp.content_toolbar.set_content(Some(&stack));
+            imp.content_stack.replace(Some(stack.clone()));
+            stack
+        } else {
+            imp.content_stack.borrow().as_ref().unwrap().clone()
+        };
+
+        // Create sources page if it doesn't exist
+        if content_stack.child_by_name("sources").is_none() {
+            if let Some(state) = &*imp.state.borrow() {
+                let sources_page = pages::SourcesPage::new(state.clone());
+                content_stack.add_named(&sources_page, Some("sources"));
+                imp.sources_page.replace(Some(sources_page));
+            }
+        }
+
+        // Show the sources page
+        content_stack.set_visible_child_name("sources");
+
+        // Update header title
+        imp.content_header
+            .set_title_widget(Some(&gtk4::Label::new(Some("Sources & Accounts"))));
+
+        // Add "Add Source" button to header
+        let add_button = gtk4::Button::builder()
+            .icon_name("list-add-symbolic")
+            .tooltip_text("Add Source")
+            .css_classes(vec!["suggested-action"])
+            .build();
+
+        if let Some(sources_page) = imp.sources_page.borrow().as_ref() {
+            let sources_page_weak = sources_page.downgrade();
+            add_button.connect_clicked(move |_| {
+                if let Some(sources_page) = sources_page_weak.upgrade() {
+                    sources_page.show_add_source_dialog();
+                }
+            });
+        }
+
+        imp.content_header.pack_end(&add_button);
+        imp.header_add_button.replace(Some(add_button));
+    }
+
+    fn clear_header_end_widgets(&self) {
+        let imp = self.imp();
+
+        // Remove the add button if it exists
+        if let Some(button) = imp.header_add_button.borrow().as_ref() {
+            imp.content_header.remove(button);
+        }
+        imp.header_add_button.replace(None);
+    }
+
     fn show_home_page(&self) {
         let imp = self.imp();
+
+        // Clear header end widgets
+        self.clear_header_end_widgets();
 
         // Remove any filter controls since homepage doesn't need them
         if let Some(filter_controls) = imp.filter_controls.borrow().as_ref() {
@@ -1028,29 +1130,10 @@ impl ReelMainWindow {
     }
 
     pub async fn trigger_sync(&self, state: Arc<AppState>) {
-        info!("Manually triggering sync...");
+        info!("Manually triggering sync for all backends...");
 
-        // Get the active backend
-        let backend_manager = state.backend_manager.read().await;
-        if let Some(backend) = backend_manager.get_active() {
-            if backend.is_initialized().await {
-                // Show sync progress
-                self.show_sync_progress(true);
-
-                // Start sync with backend ID
-                if let Some(backend_id) = state.get_active_backend_id().await {
-                    self.sync_and_update_libraries(&backend_id, backend, state.clone())
-                        .await;
-                }
-
-                // Hide sync progress
-                self.show_sync_progress(false);
-            } else {
-                warn!("Backend not initialized, cannot sync");
-            }
-        } else {
-            warn!("No active backend, cannot sync");
-        }
+        // Sync all backends
+        self.sync_all_backends(state).await;
     }
 
     pub async fn sync_and_update_libraries(
@@ -1059,7 +1142,7 @@ impl ReelMainWindow {
         backend: Arc<dyn crate::backends::MediaBackend>,
         state: Arc<AppState>,
     ) {
-        info!("Starting library sync...");
+        info!("Starting library sync for backend: {}", backend_id);
 
         // Get sync manager from state
         let sync_manager = state.sync_manager.clone();
@@ -1067,90 +1150,127 @@ impl ReelMainWindow {
         // Perform sync
         match sync_manager.sync_backend(backend_id, backend).await {
             Ok(result) => {
-                info!("Sync completed: {} items synced", result.items_synced);
-
-                // Get cached libraries and update UI
-                match sync_manager.get_cached_libraries(backend_id).await {
-                    Ok(libraries) => {
-                        info!("Found {} libraries in cache", libraries.len());
-
-                        // Build library list with counts
-                        let mut library_info = Vec::new();
-
-                        for library in &libraries {
-                            use crate::models::LibraryType;
-                            let item_count = match library.library_type {
-                                LibraryType::Movies => {
-                                    // Get movie count for this library
-                                    match sync_manager
-                                        .get_cached_movies(backend_id, &library.id)
-                                        .await
-                                    {
-                                        Ok(movies) => movies.len(),
-                                        Err(_) => 0,
-                                    }
-                                }
-                                LibraryType::Shows => {
-                                    // Get show count for this library
-                                    match sync_manager
-                                        .get_cached_shows(backend_id, &library.id)
-                                        .await
-                                    {
-                                        Ok(shows) => shows.len(),
-                                        Err(_) => 0,
-                                    }
-                                }
-                                _ => {
-                                    // For other library types, we don't have counts yet
-                                    0
-                                }
-                            };
-
-                            library_info.push((library.clone(), item_count));
-                        }
-
-                        info!("Updating UI with {} libraries", library_info.len());
-                        self.update_libraries(library_info);
-
-                        // Check if we should navigate to home page
-                        let imp = self.imp();
-                        let should_show_home =
-                            if let Some(stack) = imp.content_stack.borrow().as_ref() {
-                                // Check if we have any actual content pages
-                                let has_content = stack.child_by_name("library").is_some()
-                                    || stack.child_by_name("movie_details").is_some()
-                                    || stack.child_by_name("show_details").is_some()
-                                    || stack.child_by_name("player").is_some();
-
-                                if has_content {
-                                    // User has navigated somewhere, don't interrupt
-                                    false
-                                } else {
-                                    // We only have home/welcome, safe to show home
-                                    true
-                                }
-                            } else {
-                                // No content stack yet, this is initial load
-                                true
-                            };
-
-                        if should_show_home && !libraries.is_empty() {
-                            self.show_home_page();
-                        } else if !should_show_home {
-                            // Just refresh the home page data if it exists, don't navigate
-                            if let Some(home_page) = &*imp.home_page.borrow() {
-                                home_page.refresh();
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to get cached libraries: {}", e);
-                    }
-                }
+                info!(
+                    "Sync completed for {}: {} items synced",
+                    backend_id, result.items_synced
+                );
             }
             Err(e) => {
-                error!("Sync failed: {}", e);
+                error!("Sync failed for {}: {}", backend_id, e);
             }
+        }
+
+        // After syncing one backend, refresh all libraries display
+        self.refresh_all_libraries().await;
+
+        // Check if we should navigate to home page
+        let imp = self.imp();
+        let should_show_home = if let Some(stack) = imp.content_stack.borrow().as_ref() {
+            // Check if we have any actual content pages
+            let has_content = stack.child_by_name("library").is_some()
+                || stack.child_by_name("movie_details").is_some()
+                || stack.child_by_name("show_details").is_some()
+                || stack.child_by_name("player").is_some();
+
+            !has_content
+        } else {
+            true
+        };
+
+        if should_show_home {
+            self.show_home_page();
+        } else {
+            // Just refresh the home page data if it exists
+            if let Some(home_page) = &*imp.home_page.borrow() {
+                home_page.refresh();
+            }
+        }
+    }
+
+    pub async fn sync_all_backends(&self, state: Arc<AppState>) {
+        info!("Starting sync for all backends...");
+
+        let backend_manager = state.backend_manager.read().await;
+        let all_backends = backend_manager.get_all_backends();
+        drop(backend_manager);
+
+        // Show sync progress
+        self.show_sync_progress(true);
+
+        // Sync each backend sequentially
+        for (backend_id, backend) in all_backends {
+            info!("Syncing backend: {}", backend_id);
+
+            let sync_manager = state.sync_manager.clone();
+            match sync_manager.sync_backend(&backend_id, backend).await {
+                Ok(result) => {
+                    info!(
+                        "Backend {} synced: {} items",
+                        backend_id, result.items_synced
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to sync backend {}: {}", backend_id, e);
+                }
+            }
+        }
+
+        // Hide sync progress
+        self.show_sync_progress(false);
+
+        // Refresh all libraries display
+        self.refresh_all_libraries().await;
+
+        // Navigate to home if appropriate
+        let imp = self.imp();
+        let should_show_home = if let Some(stack) = imp.content_stack.borrow().as_ref() {
+            !stack.child_by_name("library").is_some()
+                && !stack.child_by_name("movie_details").is_some()
+                && !stack.child_by_name("show_details").is_some()
+                && !stack.child_by_name("player").is_some()
+        } else {
+            true
+        };
+
+        if should_show_home {
+            self.show_home_page();
+        } else if let Some(home_page) = &*imp.home_page.borrow() {
+            home_page.refresh();
+        }
+    }
+
+    pub async fn sync_single_backend(&self, backend_id: &str) {
+        info!("Starting sync for backend: {}", backend_id);
+
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+        let backend_manager = state.backend_manager.read().await;
+
+        if let Some(backend) = backend_manager.get_backend(backend_id) {
+            drop(backend_manager);
+
+            // Show sync progress
+            self.show_sync_progress(true);
+
+            let sync_manager = state.sync_manager.clone();
+            match sync_manager.sync_backend(backend_id, backend).await {
+                Ok(result) => {
+                    info!(
+                        "Backend {} synced: {} items",
+                        backend_id, result.items_synced
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to sync backend {}: {}", backend_id, e);
+                }
+            }
+
+            // Hide sync progress
+            self.show_sync_progress(false);
+
+            // Refresh all libraries display
+            self.refresh_all_libraries().await;
+        } else {
+            error!("Backend {} not found", backend_id);
         }
     }
 
@@ -1163,28 +1283,115 @@ impl ReelMainWindow {
 
         glib::spawn_future_local(async move {
             if let Some(window) = window_weak.upgrade() {
-                // Get backend ID and sync manager
-                if let Some(backend_id) = state.get_active_backend_id().await {
-                    let sync_manager = state.sync_manager.clone();
+                // Check if library_id contains backend_id
+                let (backend_id, actual_library_id) = if library_id.contains(':') {
+                    let parts: Vec<&str> = library_id.splitn(2, ':').collect();
+                    (parts[0].to_string(), parts[1].to_string())
+                } else {
+                    // Fallback to active backend for backward compatibility
+                    if let Some(active_id) = state.get_active_backend_id().await {
+                        (active_id, library_id.clone())
+                    } else {
+                        error!("No active backend");
+                        return;
+                    }
+                };
 
-                    // Get the library from cache
-                    match sync_manager.get_cached_libraries(&backend_id).await {
-                        Ok(libraries) => {
-                            if let Some(library) = libraries.iter().find(|l| l.id == library_id) {
-                                window.show_library_view(backend_id, library.clone()).await;
-                            } else {
-                                error!("Library not found: {}", library_id);
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to get libraries: {}", e);
+                let sync_manager = state.sync_manager.clone();
+
+                // Get the library from cache
+                match sync_manager.get_cached_libraries(&backend_id).await {
+                    Ok(libraries) => {
+                        if let Some(library) = libraries.iter().find(|l| l.id == actual_library_id)
+                        {
+                            window.show_library_view(backend_id, library.clone()).await;
+                        } else {
+                            error!("Library not found: {}", actual_library_id);
                         }
                     }
-                } else {
-                    error!("No active backend");
+                    Err(e) => {
+                        error!("Failed to get libraries: {}", e);
+                    }
                 }
             }
         });
+    }
+
+    async fn move_backend_up(&self, backend_id: &str) {
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+        let mut backend_manager = state.backend_manager.write().await;
+        backend_manager.move_backend_up(backend_id);
+        drop(backend_manager);
+
+        // Refresh the display
+        self.refresh_all_libraries().await;
+    }
+
+    async fn move_backend_down(&self, backend_id: &str) {
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+        let mut backend_manager = state.backend_manager.write().await;
+        backend_manager.move_backend_down(backend_id);
+        drop(backend_manager);
+
+        // Refresh the display
+        self.refresh_all_libraries().await;
+    }
+
+    async fn refresh_all_libraries(&self) {
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+        let backend_manager = state.backend_manager.read().await;
+        let all_backends = backend_manager.get_all_backends();
+        drop(backend_manager);
+
+        let sync_manager = state.sync_manager.clone();
+        let mut backends_libraries = Vec::new();
+
+        for (backend_id, _backend) in all_backends {
+            // Get cached libraries for this backend
+            match sync_manager.get_cached_libraries(&backend_id).await {
+                Ok(libraries) => {
+                    // Build library list with counts
+                    let mut library_info = Vec::new();
+
+                    for library in &libraries {
+                        use crate::models::LibraryType;
+                        let item_count = match library.library_type {
+                            LibraryType::Movies => {
+                                match sync_manager
+                                    .get_cached_movies(&backend_id, &library.id)
+                                    .await
+                                {
+                                    Ok(movies) => movies.len(),
+                                    Err(_) => 0,
+                                }
+                            }
+                            LibraryType::Shows => {
+                                match sync_manager
+                                    .get_cached_shows(&backend_id, &library.id)
+                                    .await
+                                {
+                                    Ok(shows) => shows.len(),
+                                    Err(_) => 0,
+                                }
+                            }
+                            _ => 0,
+                        };
+
+                        library_info.push((library.clone(), item_count));
+                    }
+
+                    if !library_info.is_empty() {
+                        backends_libraries.push((backend_id.clone(), library_info));
+                    }
+                }
+                Err(e) => {
+                    info!("No cached libraries for backend {}: {}", backend_id, e);
+                }
+            }
+        }
+
+        // Update the UI with all backends' libraries
+        self.update_all_backends_libraries(backends_libraries);
     }
 
     pub async fn show_movie_details(&self, movie: crate::models::Movie, state: Arc<AppState>) {
@@ -1961,123 +2168,102 @@ impl ReelMainWindow {
         controls_box
     }
 
-    fn toggle_edit_mode(&self, button: &gtk4::Button) {
-        let imp = self.imp();
-        let current_mode = *imp.edit_mode.borrow();
-        let new_mode = !current_mode;
-
-        imp.edit_mode.replace(new_mode);
-
-        if new_mode {
-            button.set_icon_name("object-select-symbolic");
-            button.set_tooltip_text(Some("Done Editing"));
-
-            // Show all libraries in edit mode
-            let all_libraries = imp.all_libraries.borrow().clone();
-            self.update_libraries_display(all_libraries);
-        } else {
-            button.set_icon_name("document-edit-symbolic");
-            button.set_tooltip_text(Some("Edit Libraries"));
-
-            // Save the visibility settings
-            self.save_library_visibility();
-
-            // Refresh display with visibility applied
-            let all_libraries = imp.all_libraries.borrow().clone();
-            self.update_libraries_display(all_libraries);
-        }
+    fn toggle_edit_mode(&self, _button: &gtk4::Button) {
+        // Edit mode is now handled per-source group
+        // This method might be removed or repurposed
     }
 
-    fn update_libraries_display(&self, libraries: Vec<(crate::models::Library, usize)>) {
-        let imp = self.imp();
-
-        // Clear existing library rows
-        while let Some(child) = imp.libraries_list.first_child() {
-            imp.libraries_list.remove(&child);
-        }
-
-        let is_edit_mode = *imp.edit_mode.borrow();
-        let visibility_map = imp.library_visibility.borrow();
-
-        // Add a row for each library
-        for (library, item_count) in libraries {
-            // Check if library should be shown
-            let is_visible = visibility_map.get(&library.id).copied().unwrap_or(true);
-
-            if is_edit_mode || is_visible {
-                let row = adw::ActionRow::builder()
-                    .title(&library.title)
-                    .subtitle(format!("{} items", item_count))
-                    .activatable(!is_edit_mode) // Only activatable when not in edit mode
-                    .build();
-
-                // Add icon based on library type
-                let icon_name = match library.library_type {
-                    crate::models::LibraryType::Movies => "video-x-generic-symbolic",
-                    crate::models::LibraryType::Shows => "video-display-symbolic",
-                    crate::models::LibraryType::Music => "audio-x-generic-symbolic",
-                    crate::models::LibraryType::Photos => "image-x-generic-symbolic",
-                    _ => "folder-symbolic",
-                };
-
-                let prefix_icon = gtk4::Image::from_icon_name(icon_name);
-                row.add_prefix(&prefix_icon);
-
-                // In edit mode, add checkbox; otherwise add navigation arrow
-                if is_edit_mode {
-                    let check_button = gtk4::CheckButton::builder().active(is_visible).build();
-
-                    let library_id = library.id.clone();
-                    let window_weak = self.downgrade();
-                    check_button.connect_toggled(move |button| {
-                        if let Some(window) = window_weak.upgrade() {
-                            window
-                                .imp()
-                                .library_visibility
-                                .borrow_mut()
-                                .insert(library_id.clone(), button.is_active());
-                        }
-                    });
-
-                    row.add_suffix(&check_button);
-                } else {
-                    let arrow = gtk4::Image::from_icon_name("go-next-symbolic");
-                    row.add_suffix(&arrow);
-                }
-
-                // Store the library ID in the widget name
-                row.set_widget_name(&library.id);
-
-                imp.libraries_list.append(&row);
-            }
-        }
-    }
-
-    fn load_library_visibility(&self) {
+    async fn load_library_visibility(&self) {
         // Load from existing config
-        if let Some(config) = self.imp().config.borrow().as_ref() {
-            let visibility = config.get_all_library_visibility();
+        if let Some(config_arc) = self.imp().config.borrow().as_ref() {
+            let visibility = {
+                let config = config_arc.read().await;
+                config.get_all_library_visibility()
+            };
             *self.imp().library_visibility.borrow_mut() = visibility;
         }
     }
 
-    fn save_library_visibility(&self) {
+    async fn save_library_visibility(&self) {
         // Save to config using proper methods
         let visibility = self.imp().library_visibility.borrow().clone();
 
-        // Clone the config, update it, and save
-        let config_clone = {
-            let config_ref = self.imp().config.borrow();
-            config_ref.as_ref().map(|config| config.as_ref().clone())
-        }; // Drop the borrow here
-
-        if let Some(mut config) = config_clone {
+        if let Some(config_arc) = self.imp().config.borrow().as_ref() {
+            let mut config = config_arc.write().await;
             if let Err(e) = config.set_all_library_visibility(visibility) {
                 error!("Failed to save library visibility: {}", e);
-            } else {
-                // Update the stored config
-                self.imp().config.replace(Some(Arc::new(config)));
             }
+        }
+    }
+
+    pub async fn update_backend_selector(&self) {
+        // Backend selector is now deprecated - we show all backends at once
+        // Sources button is always visible at the bottom
+    }
+
+    async fn switch_backend(&self, backend_id: &str, state: Arc<AppState>) {
+        info!("Switching to backend: {}", backend_id);
+
+        // Update the active backend in the backend manager
+        {
+            let mut backend_manager = state.backend_manager.write().await;
+            if let Err(e) = backend_manager.set_active(backend_id) {
+                error!("Failed to set active backend: {}", e);
+                return;
+            }
+        }
+
+        // Save the new active backend to config
+        {
+            let mut config = state.config.write().await;
+            let _ = config.set_last_active_backend(backend_id);
+        }
+
+        // Clear current sources display
+        while let Some(child) = self.imp().sources_container.first_child() {
+            self.imp().sources_container.remove(&child);
+        }
+
+        // Show loading state
+        self.show_sync_progress(true);
+
+        // Load cached libraries for the new backend
+        self.load_cached_libraries_for_backend(backend_id).await;
+
+        // Get the backend and sync
+        let backend_manager = state.backend_manager.read().await;
+        if let Some(backend) = backend_manager.get_backend(backend_id) {
+            if backend.is_initialized().await {
+                // Update user display for the new backend
+                if let Some(user) = state.get_user().await {
+                    self.update_user_display_with_backend(Some(user), &backend_manager)
+                        .await;
+                }
+
+                // Start background sync
+                let backend_clone = backend.clone();
+                let state_clone = state.clone();
+                let window_weak = self.downgrade();
+                let backend_id = backend_id.to_string();
+                glib::spawn_future_local(async move {
+                    if let Some(window) = window_weak.upgrade() {
+                        window
+                            .sync_and_update_libraries(&backend_id, backend_clone, state_clone)
+                            .await;
+                        window.show_sync_progress(false);
+                    }
+                });
+            } else {
+                // Backend not initialized, show auth needed
+                self.imp().status_container.set_visible(true);
+                self.imp().status_label.set_text("Authentication required");
+                self.imp()
+                    .status_icon
+                    .set_icon_name(Some("dialog-password-symbolic"));
+                self.show_sync_progress(false);
+            }
+        } else {
+            self.show_sync_progress(false);
         }
     }
 }

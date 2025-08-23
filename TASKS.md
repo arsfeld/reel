@@ -1,60 +1,35 @@
 # Reel Development Tasks
 
-## Phase 1: Plex Authentication & Basic Browsing
+## Phase 1: Core Features ✅
 
-### 🔐 Authentication Foundation
-- [x] **Implement Plex OAuth authentication flow**
-  - [x] Create Plex auth module with PIN-based authentication
-  - [x] Implement auth token exchange with Plex.tv API
-  - [x] Store auth token to disk (temporary solution)
-  - [ ] Store auth token securely in system keyring
+### Remaining Tasks
+- [x] **Security & Auth**
+  - [x] Store auth token securely in system keyring (Completed for Plex & Jellyfin)
   - [ ] Handle token refresh and expiration
-  - [x] Create auth status UI indicators
+  - [x] Create server selection dialog (for multiple servers) - Backend switcher implemented
 
-- [x] **Server Discovery & Connection**
-  - [x] Implement Plex server discovery via API
-  - [x] Parallel connection testing for best server
-  - [x] Test server connectivity with latency measurement
-  - [x] Store server URL and connection details
-  - [x] Handle connection errors gracefully
-  - [ ] Create server selection dialog (for multiple servers)
-
-### 📚 Library Browsing
-- [x] **Fetch and Display Libraries**
-  - [x] Implement `/library/sections` API call
-  - [x] Parse library metadata (movies, shows, music)
-  - [x] Update home page with actual library counts
-  - [x] Create library type icons and badges
-  - [x] Cache library data locally
-
-- [x] **Movies Library Implementation**
-  - [x] Fetch movies from library endpoint
-  - [x] Parse movie metadata (title, year, rating, poster)
-  - [x] Create movie grid view component
-  - [x] Implement lazy loading for large libraries
-  - [x] Add movie detail view (COMPLETED with premium design!)
-
-- [x] **TV Shows Library Implementation**
-  - [x] Fetch shows from library endpoint
-  - [x] Parse show/season/episode structure
-  - [x] Create show grid view component
-  - [x] Implement season/episode navigation with modern dropdown selector
-  - [x] Add episode carousel view with thumbnails and watch indicators
+### 🔐 Authentication & Source Management
+- [x] **Sources Page Implementation** (January 2025)
+  - [x] Create dedicated Sources & Accounts page
+  - [x] Separate AuthProvider from Source model
+  - [x] Support for multiple auth types (Plex accounts, Jellyfin, future network sources)
+  - [x] AuthManager service for credential management
+  - [x] Move backend configuration from preferences to Sources page
+  - [x] Backend constructors accept AuthProvider and Source
+  - [x] Centralized credential storage in keyring via AuthManager
+  - [x] Fix auth dialog compilation errors (adw::Dialog API usage)
+  - [x] Migrate existing backends to AuthProvider model
+  - [x] Simplify auth dialog (remove backend selector)
+  - [x] Enhanced sources page with exciting UI
+  - [x] **Offline-first sources page** - Loads cached data instantly, refreshes in background
+  - [x] **Centralized Config management** - Single shared instance via AppState
+  - [x] **Source caching** - Providers and sources cached with TTL for instant display
+  - [ ] Implement Plex account token refresh
+  - [ ] Add network source authentication (SMB, SFTP, WebDAV, NFS)
+  - [x] Implement source discovery for Plex accounts (working in SourceCoordinator)
+  - [x] Complete auth dialog migration to use SourceCoordinator
 
 ### 🖼️ Media & Metadata
-- [x] **Image Loading & Caching** (Partially Working - Performance Issues)
-  - [x] Implement poster/thumb URL construction
-  - [x] Create async image download service with throttling
-  - [x] Implement disk-based image cache (~/.cache/reel/images/)
-  - [x] Add placeholder images for unloaded content
-  - [x] Handle image loading errors with fallback
-  - [x] Viewport-based lazy loading for performance
-  - [x] Concurrent download limiting (increased to 50 simultaneous)
-  - [x] Memory cache for instant access
-  - [x] Pre-fetch 2 screens ahead for smoother scrolling
-  - [x] Reduced debounce delay to 50ms
-  - [ ] **Performance still needs improvement** - images load too slowly
-
 - [ ] **Metadata Display**
   - [ ] Create media info cards
   - [ ] Display ratings, duration, genre
@@ -63,32 +38,26 @@
   - [ ] Add media badges (4K, HDR, etc.)
 
 ### 🔄 Sync & Cache System
-- [x] **SQLite Database Setup**
-  - [x] Create database schema migrations
-  - [x] Implement cache manager
-  - [x] Create CRUD operations for media
+- [ ] **Remaining Database Tasks**
   - [ ] Add indexes for performance
   - [ ] Implement cache expiration logic
-
-- [x] **Background Sync Service**
-  - [x] Create sync manager structure
-  - [x] Implement incremental sync
-  - [x] Add sync status indicators
   - [ ] Handle sync conflicts
   - [ ] Create sync scheduling system
 
 ### 🎨 UI Improvements
-- [x] **Blueprint UI Setup**
-  - [x] Migrate to GNOME Blueprint for UI definitions
-  - [x] Create reusable Blueprint components
-  - [x] Set up resource compilation in build.rs
-  
-- [ ] **Navigation & Routing**
-  - [ ] Fix navigation between pages
-  - [ ] Implement back button handling
+- [ ] **Navigation & Routing** (PARTIALLY IMPLEMENTED)
+  - [x] Basic navigation between pages works
+  - [x] Basic back button in player and detail pages
+  - [ ] Navigation history only tracks player page (limited implementation)
   - [ ] Add breadcrumb navigation
-  - [ ] Create loading states
-  - [ ] Add error state displays
+  - [ ] Create consistent loading states
+  - [ ] Add consistent error state displays
+
+- [x] **Source & Backend Management** (January 2025)
+  - [x] Create dedicated Sources page for backend management
+  - [x] Remove backend configuration from preferences window
+  - [x] Implement AuthProvider/Source separation
+  - [x] Support multiple sources per auth provider
 
 - [ ] **Proper Settings Management**
   - [ ] Implement GSettings for GNOME-compliant settings storage
@@ -98,198 +67,67 @@
   - [ ] Support settings sync across instances
   - [ ] Add settings migration from old config.toml
 
-- [x] **Server Connection UI**
-  - [x] Create connection dialog with Blueprint
-  - [x] Add server status indicators
-  - [x] Show connected user and server status
-  - [x] Display server name with connection type (Local/Remote/Relay)
-  - [x] Add connection type icons (wired/wireless/cellular)
-  - [x] Hide welcome screen when connected
+- [ ] **Server Connection UI**
   - [ ] Implement connection retry UI
-  - [x] Show sync progress
   - [ ] Add offline mode banner
 
-### 🎬 Basic Playback
-- [x] **Stream URL Generation**
-  - [x] Construct direct play URLs
+### 🎬 Playback Enhancements
+- [ ] **Stream Optimization**
   - [ ] Handle transcoding decisions
   - [ ] Implement quality selection
-  - [x] Add subtitle/audio track selection (implemented in both players)
   - [ ] Create playback decision engine
 
-- [x] **Skip Intro/Credits & Auto-Play** (January 2025)
-  - [x] Implemented Plex chapter marker detection (intro/credits)
-  - [x] Added skip intro button overlay during intro segments
-  - [x] Added skip credits button overlay during credits
-  - [x] Fetch markers from Plex API `/library/metadata/{id}` endpoint
-  - [x] Only show skip buttons when actual markers exist (no fallback timings)
-  - [x] Auto-play next episode with picture-in-picture preview
-  - [x] PiP shows current episode at 320x180 while displaying next episode info
-  - [x] Countdown timer with Play Now and Cancel buttons
-  - [x] Configuration options: skip_intro, skip_credits, auto_play_next, auto_play_delay
-  - [x] Added ChapterMarker and ChapterType to data models
-  - [x] Integrated marker fetching into MediaBackend trait
-  - [x] CSS styling for pill-shaped skip buttons and auto-play overlay
-  - [x] **Fixed marker parsing** - Corrected Plex API deserialization (January 2025)
-  - [x] **Fixed marker API call** - Added includeChapters=1 parameter to ensure markers are returned (January 2025)
-  - [ ] **UI Improvements Needed**:
-    - [ ] Move skip intro button to bottom-right corner (currently top-right)
-    - [ ] Clean up verbose debug logging for markers
+- [ ] **Skip Intro/Credits UI Improvements**
+  - [ ] Move skip intro button to bottom-right corner (currently top-right)
+  - [ ] Clean up verbose debug logging for markers
   - [ ] Actual next episode loading (infrastructure complete, needs show ID lookup)
 
-- [x] **Player Integration** (Completed with Dual Backend Support!)
-  - [x] **MPV Player Backend** (DEFAULT - January 2025)
-    - [x] Created alternative MPV player implementation using libmpv2
-    - [x] Full feature parity with GStreamer player
-    - [x] **MPV is now the default player** due to superior performance and no subtitle issues
-    - [x] Wayland-native rendering support
-    - [x] Audio/subtitle track selection
-    - [x] No color correction issues with subtitles (unlike GStreamer)
-  - [x] Initialize GStreamer player (SECONDARY - Has Issues)
-    - [ ] **CRITICAL BUG: Subtitle Colorspace Issue** (January 2025)
-      - **Problem**: Green/incorrect colors appear on video frames when subtitles are displayed
-      - **Symptoms**: Video shows green bars or color artifacts specifically when subtitle text appears
-      - **Root Cause Analysis** (from GSTREAMER.md research):
-        - Double colorspace conversion in both video-filter AND sink bin
-        - Incorrect pipeline ordering causing multiple YUV→RGB conversions
-        - playbin3 disabled with `if false &&` preventing modern subtitle handling
-      - **Solution Plan**:
-        - [ ] Enable playbin3 (remove `false &&` on line 479)
-        - [ ] Remove video-filter setup (lines 497-501, 531-535) - keep only sink conversion
-        - [ ] Enable QoS with `enable-qos` property
-        - [ ] Use `n-threads: 0` for automatic CPU detection
-        - [ ] Add configurable subtitle properties (font, timing offsets)
-        - [ ] Implement overlay composition approach for subtitles
-      - **Status**: GStreamer remains available but MPV is recommended until fixes are implemented
-    - [x] **MPV Render API Integration** (January 2025 - WORKING!)
-      - [x] Implemented GLArea-based rendering with libmpv2-sys
-      - [x] Replaced dmabuf-wayland with vo=libmpv for embedded rendering
-      - [x] OpenGL context integration via eglGetProcAddress for GL function loading
-      - [x] **RESOLVED**: MPV_ERROR_UNSUPPORTED - Fixed by using eglGetProcAddress instead of dlsym
-      - [x] MPV render context successfully initializes
-      - [x] Audio playback working correctly
-      - [x] MPV successfully loading video (confirmed 1920x800 resolution)
-      - [x] mpv_render_context_render() succeeding without errors
-      - [x] **RESOLVED**: Segmentation faults - Fixed by reverting Epoxy functions and delayed media loading
-      - [x] Added MPV debug logging (terminal output and gpu-debug enabled)
-      - [x] **RESOLVED**: VIDEO RENDERING WORKING!
-        - Fixed by querying GTK's actual framebuffer (FBO 1)
-        - Using eglGetProcAddress to get GL functions
-        - Properly calling attach_buffers() before rendering
-        - mpv_render_context_render() succeeds with correct FBO
-      - [x] **Performance Issues RESOLVED** (January 2025):
-        - **Optimized render callback** - Now frame-driven instead of timer-driven
-        - **Reduced GL state queries** - Cached FBO and GL function pointers
-        - **Improved timing** - Adaptive 16ms timer only when playing (60 FPS)
-        - **Added performance metrics** - FPS tracking for debugging
-        - **Cached proc addresses** - GL function lookups now cached
-        - **Better MPV settings** - Optimized for lower latency rendering
-        - **Increased cache buffers** - Better for 4K content and seeking
-  - [x] Load and play video streams
-  - [x] Implement basic controls (play/pause/seek)
-  - [x] Add immersive playback mode with auto-hiding controls
-  - [x] Handle playback errors with user-friendly dialogs
-  - [x] Fix seek loop issue in progress bar
-  - [x] Implement hover-based UI controls (header and player controls)
-  - [x] Add window resizing to match video aspect ratio
-  - [x] Create overlay header bar that doesn't affect video layout
-  - [x] **Add fullscreen support** (COMPLETED - January 2025)
-    - [x] F/F11 keys toggle fullscreen
-    - [x] Double-click on video toggles fullscreen
-    - [x] Fullscreen button in controls
-    - [x] Proper CSS styling for fullscreen mode
-    - [x] Cursor auto-hiding in fullscreen after 3 seconds
-    - [x] Escape key exits fullscreen
-  - [x] **Enhanced Player Controls** (January 2025)
-    - [x] Fixed play/pause button centering
-    - [x] Fixed initial play button state (shows pause when playing)
-    - [x] Reduced controls auto-hide timeout to 2 seconds
-    - [x] Fixed arrow keys for seeking (±10 seconds)
-    - [x] Controls start hidden with 1 second delay before mouse activation
-    - [x] Added Q key to quit application
-    - [x] Click and drag on video to move window
-    - [x] Time display modes (duration/remaining/end time) - click to cycle
-  - [x] **System Integration** (January 2025)
-    - [x] Inhibit system suspend/screensaver when playing video
-    - [x] Remove inhibit when paused or stopped
-    - [x] Proper cleanup on application exit
+### Player Issues
+- [ ] **GStreamer Subtitle Colorspace Bug**
+  - [ ] Enable playbin3 (remove `false &&` on line 479)
+  - [ ] Remove video-filter setup (lines 497-501, 531-535)
+  - [ ] Enable QoS with `enable-qos` property
+  - [ ] Use `n-threads: 0` for automatic CPU detection
+  - [ ] Add configurable subtitle properties
+  - [ ] Implement overlay composition for subtitles
 
-### 📺 Watched/Unwatched Tracking (COMPLETED!)
-- [x] **Data Model & Storage**
-  - [x] Add watched status fields to Movie, Show, and Episode models
-  - [x] Include view count and last watched timestamp
-  - [x] Add playback position for resume functionality
-  - [x] Update database schema with watch status fields
-
-- [x] **Backend Integration**
-  - [x] Add watch status methods to MediaBackend trait
-  - [x] Implement Plex API calls for mark watched/unwatched
-  - [x] Parse watch status from Plex API responses
-  - [x] Add placeholder implementations for Jellyfin and Local backends
-
-- [x] **UI Indicators** (Enhanced!)
-  - [x] Add watched checkmark overlay to MediaCard
-  - [x] Show progress bar for partially watched content
-  - [x] Calculate and display watch progress percentage
-  - [x] Automatic UI updates based on watch status
-  - [x] **NEW: Enhanced unwatched indicator** - Glowing blue dot for unwatched content
-  - [x] **NEW: Reversed logic** - Show indicators for unwatched items instead of watched
-  - [x] **NEW: CPU-optimized design** - Static glow effect without animations
-
-- [x] **Automatic Tracking**
-  - [x] Monitor playback completion in player
-  - [x] Auto-mark as watched when >90% viewed
-  - [x] Sync watch status back to Plex server
-  - [x] Handle playback interruption gracefully
-
-- [ ] **Manual Controls** (Future Enhancement)
-  - [ ] Add context menu to toggle watched status
+### 📺 Watch Tracking
+- [ ] **Manual Controls** (backend support limited)
+  - [ ] Add context menu to toggle watched status (Jellyfin has API, Plex missing)
   - [ ] Implement mark all as watched/unwatched
   - [ ] Add bulk selection for multiple items
+  - [x] Watch status filter implemented (All/Watched/Unwatched)
 
-## Phase 2: Enhanced Features (Future)
+## Phase 2: Enhanced Features
 
-### 🏠 Homepage Implementation (COMPLETED!)
-- [x] **Homepage Sections**
-  - [x] Create HomePage UI component with scrollable sections
-  - [x] Add "Home" navigation item in sidebar
-  - [x] Implement Continue Watching section (On Deck)
-  - [x] Implement Recently Added section
-  - [x] Add trigger_load for poster images on homepage
-  - [x] Fix layout to expand vertically
-  - [x] Add library-specific hub sections (Popular, Top Rated, etc.)
-  - [x] **Make homepage items clickable** - navigates to player/show details like in library view
-  - [x] **Separate Home from Libraries** - Home now in its own section in sidebar
-  - [ ] Implement "View All" navigation for sections
+### 🏠 Homepage
+- [ ] Implement "View All" navigation for sections
 
 ### 📊 Advanced Features
-- [x] Continue Watching functionality (via homepage)
-- [x] Recently Added section (via homepage)
-- [ ] Search implementation
-- [x] **Filters and Sorting Infrastructure** (COMPLETED!)
-  - [x] Generic FilterManager for extensible filtering
-  - [x] Watch status filters (All, Watched, Unwatched, In Progress)
-  - [x] Sort options (Title, Year, Rating, Date Added)
-  - [x] Filter controls in header bar for cleaner UI
-  - [x] Filters only show on library views, not homepage
+- [ ] **Search implementation** (backend support varies)
+  - [x] Jellyfin search implemented
+  - [ ] Plex search returns todo!()
+  - [ ] Local files search returns empty
+  - [ ] No UI for search yet
+- [ ] **Additional Filters**
   - [ ] Genre filter implementation
   - [ ] Year range filter
   - [ ] Rating filter
   - [ ] Resolution filter
   - [ ] Advanced filter popover/dialog
-- [x] **Library Visibility Management** (NEW!)
-  - [x] Edit mode for showing/hiding libraries
-  - [x] Checkbox selection in edit mode
-  - [x] Persistent storage of visibility preferences in config
-  - [x] Edit button in libraries header
-  - [x] Integrated with existing Config system
 - [ ] Collections support
 - [ ] Playlists
 - [ ] Watchlist/Up Next
 
 ### 🌐 Additional Backends
-- [ ] Jellyfin integration
-- [ ] Local file support
+- [x] **Jellyfin Integration** (January 2025)
+  - [x] Full authentication flow with auth dialog
+  - [x] Backend management in preferences
+  - [x] Seamless backend switching
+  - [x] Cast/crew info (implemented, depends on server metadata)
+  - [x] Watch status retrieval (fully functional)
+  - [x] Chapter markers (MediaSegments API, requires server plugin)
+- [ ] Local file support (UI exists, backend not implemented)
 - [ ] Metadata provider integration
 
 ### 💾 Offline Support
@@ -298,288 +136,198 @@
 - [ ] Smart storage management
 - [ ] Network-aware sync
 
-## ✅ COMPLETED - Architecture Refactoring
+## ✅ Completed Major Milestones
 
-### **Backend-Agnostic Architecture** (COMPLETED)
-Successfully refactored the entire codebase to remove all backend-specific hard-coding. The UI layer is now completely agnostic and works with any backend type.
+### Phase 1 Core (December 2024 - January 2025)
+- ✅ Plex authentication & server discovery
+- ✅ Library browsing (movies, TV shows)
+- ✅ Media detail pages with premium design
+- ✅ Dual player backends (MPV default, GStreamer secondary)
+- ✅ Watch status tracking
+- ✅ Skip intro/credits with auto-play
+- ✅ Image loading optimization
+- ✅ Backend-agnostic architecture refactoring
+- ✅ Jellyfin integration with full auth dialog
+- ✅ Homepage with Continue Watching & Recently Added
+- ✅ Filters and sorting infrastructure (title, year, rating, date added, watch status)
+- ✅ Library visibility management
+- ✅ Multi-backend support with backend switcher
+- ✅ Secure credential storage in system keyring
 
-**Completed Fixes:**
-- [x] Removed all "plex" string literals from UI code
-- [x] Removed hard-coded movie/TV show assumptions from UI
-- [x] Made cache manager backend-agnostic (uses dynamic backend IDs)
-- [x] Store libraries in AppState with backend ID association
-- [x] Made sync manager work with any backend generically
-- [x] Updated all UI components to work with generic library data
-- [x] Removed hard-coded library type filtering in sync
-- [x] Store and load last active backend ID persistently
-- [x] Support multiple backends of same type with unique IDs
+## Player Status
+- **MPV**: Default player, fully working
+- **GStreamer**: Available but has subtitle color issues
 
-**Completed Refactoring Tasks:**
-1. [x] **AppState Refactoring**
-   - [x] Added `libraries: HashMap<String, Vec<Library>>` to AppState
-   - [x] Added `library_items: HashMap<String, Vec<MediaItem>>` for cached items
-   - [x] Added methods to get libraries for active backend
-   - [x] Added methods to get items for a specific library
-   - [x] Added method to get active backend ID
+## Recently Completed (January 2025)
 
-2. [x] **Cache Manager Refactoring**
-   - [x] Uses backend IDs dynamically instead of hard-coded "plex"
-   - [x] Created generic cache keys: `{backend_id}:{type}:{id}`
-   - [x] Supports multiple backends in same cache
+### ✅ Jellyfin Sync & UI Fixes (January 2025)
+- [x] **Fixed Jellyfin sync parsing errors**
+  - [x] Added #[serde(default)] to UserData fields to handle missing PlayedCount
+  - [x] Made ImageTags and backdrop_image_tags use default values
+  - [x] Jellyfin now successfully syncs 337 movies and 184 shows
+- [x] **Library count display in Sources page**
+  - [x] Added library_count field to Source model
+  - [x] Sources page now shows "Jellyfin • X libraries" instead of just "Online"
+  - [x] Library count updates after sync completes
+  - [x] Added update_source_library_count() method to AuthManager
+- [x] **Fixed Jellyfin API initialization in detail pages**
+  - [x] Added ensure_api_initialized() helper method to JellyfinBackend
+  - [x] All MediaBackend trait methods now auto-initialize API if needed
+  - [x] Fixed keyring service name consistency (standardized on "dev.arsfeld.Reel")
+  - [x] Removed legacy credential loading from JellyfinBackend - now relies solely on AuthProvider
+  - [x] Movie and show detail pages now work correctly with Jellyfin
 
-3. [x] **Sync Manager Refactoring**
-   - [x] Removed all hard-coded "plex" references
-   - [x] Uses active backend from AppState
-   - [x] Supports syncing any library type (Movies, Shows, Music, Photos)
-   - [x] Generic `sync_library_items` method for all media types
+### ✅ Offline-First Architecture Improvements (January 2025)
+- [x] **Centralized Configuration Management**
+  - [x] Config is now loaded once at app startup and shared via Arc<RwLock<Config>>
+  - [x] Eliminated multiple disk reads throughout the application
+  - [x] All components use shared Config instance from AppState
+  - [x] Updated PreferencesWindow, AuthManager, PlayerPage to use shared config
+  - [x] MPV player now receives config at initialization instead of loading from disk
 
-4. [x] **UI Components Refactoring**
-   - [x] Library list is completely generic
-   - [x] Displays ALL library types from backend
-   - [x] Uses library type from backend data, not hard-coded
-   - [x] Removed PlexBackend downcasting - uses generic backend info
+- [x] **Offline-First Sources Page**
+  - [x] Sources page loads cached provider and source data instantly
+  - [x] Background refresh happens asynchronously without blocking UI
+  - [x] AuthManager caches Plex sources with 5-minute TTL
+  - [x] Falls back to cached data gracefully on network failures
+  - [x] Added cached_sources and sources_last_fetched to RuntimeConfig
+  - [x] Implemented get_cached_sources() and refresh_sources_background() in AuthManager
 
-5. [x] **Backend Info System**
-   - [x] Added `BackendInfo` struct with server details
-   - [x] Added `get_backend_info()` to MediaBackend trait
-   - [x] UI uses generic backend info instead of type-specific methods
+- [x] **SourceCoordinator Improvements**
+  - [x] initialize_all_sources() now loads cached sources first with offline status
+  - [x] Creates UI entries immediately from cache
+  - [x] Triggers background refresh to update connection status
+  - [x] Provides instant app launch with visible library data
 
-6. [x] **Persistent Backend Management**
-   - [x] Added RuntimeConfig to store last active backend
-   - [x] Automatically loads last used backend on startup
-   - [x] Generates unique backend IDs (plex, plex_1, plex_2, etc.)
+### ✅ SourceCoordinator Implementation & Integration (January 2025)
+- [x] **Core Service Created**
+  - [x] Centralized backend lifecycle management
+  - [x] Integration with AuthManager for credentials
+  - [x] Support for Plex, Jellyfin, and LocalFiles backends
+  - [x] Source status tracking and connection management
+  - [x] Sync coordination across sources
+  - [x] Source discovery from Plex accounts
+  - [x] Backend removal support (added to BackendManager)
+- [x] **Full Integration Completed**
+  - [x] Added SourceCoordinator to AppState with late initialization
+  - [x] Updated auth dialog to use SourceCoordinator for Plex/Jellyfin
+  - [x] Migrated main window backend initialization to use SourceCoordinator
+  - [x] Added get_credentials() method to JellyfinBackend
+  - [x] Replaced direct backend creation with SourceCoordinator calls throughout
 
-7. [x] **Instant Cache Loading**
-   - [x] Cache loads immediately on app startup
-   - [x] Welcome UI hidden as soon as cached data is available
-   - [x] Authentication happens in background without blocking UI
+## Previously Completed (January 2025)
 
-### **Architecture Principles to Enforce:**
-1. **Backend Agnostic UI**: The UI layer should NEVER import or reference specific backend implementations
-2. **Generic Data Flow**: UI → AppState → BackendManager → Active Backend
-3. **Dynamic Backend Selection**: Support multiple backends simultaneously with runtime switching
-4. **Universal Caching**: Cache should work identically for all backends
-5. **Type Safety**: Use the MediaBackend trait exclusively in UI/services
+### ✅ Sources Page UI Improvements (January 2025)
+- [x] **Enhanced Sources Page**
+  - [x] Made Sources button sticky in sidebar (not a list item)
+  - [x] Added exciting empty state with big "Connect to Plex" and "Connect to Jellyfin" buttons
+  - [x] Removed duplicate window controls from sources page
+  - [x] Added "Add Source" button to header bar when viewing sources
+  - [x] Properly clear header buttons when navigating between pages
 
-### **Example of Correct Architecture:**
-```
-// BAD - UI knows about Plex
-window.sync_and_update_libraries("plex", backend)
+### ✅ Auth Dialog Simplification (January 2025)
+- [x] **Simplified Auth Dialog**
+  - [x] Removed backend selector dropdown from auth dialog
+  - [x] Dialog title changes based on backend type ("Connect to Plex" or "Connect to Jellyfin")
+  - [x] Fixed template callback signatures (added button parameter)
+  - [x] Backend type is now set programmatically when opening dialog
 
-// GOOD - UI uses active backend
-let backend_id = state.backend_manager.get_active_id();
-window.sync_and_update_libraries(backend_id, backend)
-```
+### ✅ Legacy Backend Migration (January 2025)
+- [x] **AuthProvider Migration**
+  - [x] Added migrate_legacy_backends() method to AuthManager
+  - [x] Automatically migrates existing Plex backends from keyring to AuthProvider model
+  - [x] Supports migration of Jellyfin backends with stored credentials
+  - [x] Preserves existing backend IDs during migration
+  - [x] Migration runs automatically when sources page loads
 
-## Player Backend Status (January 2025)
+### ✅ Fixed Compilation Errors (January 2025)
+- [x] **Auth Dialog Compilation Issues**
+  - [x] Fixed adw::Dialog present() method signature (requires Option<&Window>)
+  - [x] Added libadwaita::prelude import to sources.rs for PreferencesGroupExt trait
+  - [x] Implemented Default trait for NetworkCredentialData enum
+  - [x] Fixed borrow checker issue with configured_backends in main_window.rs
+  - [x] Resolved all E0599, E0277, E0308, and E0382 compilation errors
 
-**MPV is now the default player backend** due to:
-- ✅ **Complete video rendering** - Works perfectly with GTK4 GLArea integration  
-- ✅ **No subtitle issues** - Subtitles render correctly without color artifacts
-- ✅ **Superior performance** - Optimized rendering with cached GL functions
-- ✅ **Full feature parity** - All player features working (play/pause/seek/tracks)
-- ✅ **Wayland support** - Native Wayland rendering without window embedding issues
+### ✅ Backend Management System
+- [x] **Multi-Backend Support**
+  - [x] Simultaneous Plex and Jellyfin connections
+  - [x] Backend switcher in sidebar (subtle dropdown)
+  - [x] Only visible when multiple backends configured
+  - [x] Seamless switching with library refresh
 
-**GStreamer remains available** but has known subtitle color correction issues that affect user experience. Users can still switch to GStreamer via config if needed, but MPV is recommended.
+- [x] **Enhanced Auth Dialog**
+  - [x] Backend type selector (Plex/Jellyfin)
+  - [x] Dynamic UI based on backend type
+  - [x] Jellyfin username/password authentication
+  - [x] Programmatic backend type setting
 
-## Current Priority Tasks
+- [x] **Sources & Authentication Architecture**
+  - [x] Separate AuthProvider model for account management
+  - [x] Support for multiple sources per auth provider (e.g., Plex account → multiple servers)
+  - [x] Dedicated Sources page in main window
+  - [x] AuthManager service for credential management
+  - [x] Preparation for future network sources (SMB, SFTP, WebDAV, NFS)
+  - [x] Moved backend management from preferences to Sources page
 
-### ✅ Image Loading Performance (COMPLETED - December 2024)
+### ✅ Authentication Refactoring (January 2025)
+- [x] **Backend AuthProvider Integration**
+  - [x] PlexBackend::from_auth() constructor for AuthProvider+Source
+  - [x] JellyfinBackend::from_auth() constructor for AuthProvider+Source
+  - [x] Backends can use AuthProvider credentials or fall back to legacy storage
+  - [x] AuthManager integrated into AppState
+  - [x] Centralized credential management in system keyring
+  - [x] Support for re-authentication with stored credentials
+  - [x] Fixed NetworkCredentials naming conflict (→ NetworkCredentialData)
 
-#### Core Performance Improvements Implemented
-- [x] **Request Coalescing** (Completed)
-  - [x] Added pending_downloads tracking with oneshot channels
-  - [x] Prevents duplicate requests for same URL
-  - [x] Multiple waiters share single download result
-  - Achieved: ~40% bandwidth reduction, 50% faster initial render
+## 🎯 Immediate Priority Tasks (Now that Auth is Done)
 
-- [x] **Optimized Processing Thresholds** (Completed)
-  - [x] Skip processing for Small size (Plex sends 200x300)
-  - [x] Lowered thresholds: 100KB for Medium, 250KB for Large
-  - [x] Removed WebP conversion (GDK compatibility issues)
-  - Achieved: 35% reduction in CPU usage
+### 1️⃣ Critical Bug Fixes
+- [ ] **Homepage horizontal scrolling** - Images don't load when scrolling
+- [ ] **GStreamer subtitle colorspace** - Fix color artifacts or disable subtitles
+- [ ] **Navigation history** - Extend beyond just player page
 
-- [x] **LRU Cache Implementation** (Completed)
-  - [x] Replaced HashMap with proper LRU cache (1000 items)
-  - [x] O(1) operations for all cache access
-  - [x] Automatic eviction of least recently used items
-  - Achieved: 25% memory reduction, faster cache operations
+### 2️⃣ Complete Partial Implementations
+- [ ] **Plex search** - Replace todo!() with actual implementation
+- [ ] **Cast/crew data** - Plex still returns empty arrays (Jellyfin now implemented)
+- [ ] **Local files backend** - Implement actual file scanning
+- [ ] **Watch status for Plex** - Add mark as watched/unwatched API calls
 
-#### Network & Advanced Features
-- [x] **HTTP/2 with Connection Reuse** (Completed)
-  - [x] Enabled http2_prior_knowledge for Plex servers
-  - [x] Added TCP and HTTP/2 keepalive settings
-  - [x] Increased connection pool to 100 per host
-  - [x] Increased concurrent downloads to 20 (from 10)
-  - Achieved: 30% faster network operations
+### 3️⃣ UI Polish
+- [ ] **Search UI** - Add search bar and results display
+- [ ] **Loading states** - Consistent spinners/skeletons
+- [ ] **Error handling** - User-friendly error messages
+- [ ] **Settings migration** - Move from config.toml to GSettings
 
-- [x] **Adaptive Quality Loading** (Completed)
-  - [x] load_adaptive() method loads Small immediately
-  - [x] Upgrades to target size after 500ms if still visible
-  - [x] Progressive enhancement for better perceived performance
-  - Achieved: Near-instant initial display
+## Future Enhancements
 
-- [x] **Predictive Preloading** (Completed)
-  - [x] predictive_preload() with priority levels (High/Medium/Low)
-  - [x] Delayed loading based on priority (0/100/500ms)
-  - [x] Foundation for scroll-based prefetching
-  - Achieved: Smoother scrolling experience
+### 🚀 Performance Optimizations
 
-### 🚀 Library Performance Optimizations (SECOND PRIORITY)
-
-#### FlowBox & UI Rendering
-- [ ] **Implement Model-Based FlowBox with Recycling**
+- [ ] **FlowBox Model-Based Recycling**
   - [ ] Replace child removal/recreation with ListStore model binding
-  - [ ] Reuse existing MediaCard widgets when filtering/sorting
+  - [ ] Reuse MediaCard widgets when filtering/sorting
   - [ ] Implement dirty tracking for differential updates
-  - [ ] Expected impact: 60-70% reduction in filter/sort operation time
 
-#### Memory & Cache Optimizations
-- [ ] **Smart Prefetching System**
+- [ ] **Smart Prefetching**
   - [ ] Calculate prefetch range based on scroll velocity
   - [ ] Implement predictive loading based on user patterns
   - [ ] Combine immediate and prefetch passes into single operation
-  - [ ] Expected impact: Smoother scrolling experience
-
-### ✅ Completed
-1. [x] **Blueprint UI Implementation**
-   - [x] Set up GNOME Blueprint for UI development
-   - [x] Create Blueprint templates for main window
-   - [x] Create auth dialog with Blueprint
-   - [x] Fix Blueprint syntax errors (semicolons, signal handlers)
-   - [x] Fix UI layout issues (vertical expansion, selectable PIN)
-   - [x] Successfully compile and run with Blueprint UI
-
-2. [x] **Plex Authentication**
-   - [x] Implement PIN-based authentication flow
-   - [x] Generate 4-character PIN codes
-   - [x] Poll for auth token
-   - [x] Save token to disk
-   - [x] Update UI to show auth status
-   - [x] Auto-load saved credentials on startup
-
-3. [x] **Server Discovery**
-   - [x] Implement Plex server discovery API
-   - [x] Parse server responses correctly
-   - [x] Test all connections in parallel
-   - [x] Select fastest responding server
-   - [x] Handle connection failures gracefully
-   - [x] Store server connection info (name, local/relay status)
-   - [x] Display server details in UI status bar
-
-4. [x] **Library Sync & Display**
-   - [x] Implement Plex API for fetching libraries
-   - [x] Create sync manager for background updates
-   - [x] Cache libraries and media in SQLite
-   - [x] Update UI with real library counts
-   - [x] Show sync progress spinner
-   - [x] Auto-sync on authentication
-
-### ✅ Recently Completed
-
-**Movie and Show Details Pages** (December 2024)
-- [x] Created slick, modern movie details page with Blueprint template
-- [x] Added cinematic backdrop images with gradient overlays
-- [x] Implemented enhanced poster styling with drop shadows and rounded corners
-- [x] Added loading placeholders with smooth transitions
-- [x] Created file/stream information display showing codecs and quality
-- [x] Converted show details page to Blueprint for consistency
-- [x] Enhanced episode cards with hover effects and play overlays
-- [x] Added glass-morphism effects on buttons
-- [x] Implemented Mark as Watched functionality for movies and seasons
-
-### ✅ Previously Completed
-1. [x] **Library Navigation**
-   - [x] Navigate to library views when clicked
-   - [x] Create media grid view component (generic for all types)
-   - [x] Implement movie and TV show views
-   - [x] Fix AdwApplicationWindow navigation issues
-   - [x] Create MediaCard widget for grid display
-   - [x] Add back navigation from library view
-
-2. [x] **Backend Management System**
-   - [x] Create preferences window with AdwPreferencesWindow
-   - [x] Implement backend list view with add/remove functionality
-   - [x] Add backend removal with confirmation dialog
-   - [x] Fix backend ID generation to reuse existing IDs
-   - [x] Add clear cache functionality for removed backends
-   - [x] Create add backend flow with type selection
-   - [x] Integrate with existing auth dialog for Plex
-
-3. [x] **Watched/Unwatched Tracking** (ENHANCED!)
-   - [x] Added watched status fields to all media models
-   - [x] Implemented Plex API integration for watch status
-   - [x] Created visual indicators (checkmark and progress bar)
-   - [x] Auto-mark items as watched on playback completion
-   - [x] Upgraded to Rust edition 2024 for latest language features
-   - [x] **Enhanced unwatched indicator** - Prominent glowing blue dot for unwatched content
-   - [x] **Improved UX** - Reversed indicator logic to highlight new/unwatched content
-   - [x] **Performance optimized** - Removed animations to reduce CPU usage
 
 ### 📋 Next Steps
 
-1. [x] **Image Loading & Display** (COMPLETED)
-   - [x] Implement poster/thumb URL construction for Plex
-   - [x] Create async image download service
-   - [x] Add disk-based image cache
-   - [x] Load and display poster images in MediaCard
-   - [x] Add loading spinner while images load
-   - [x] Handle image loading errors gracefully
-   - [x] Viewport-based lazy loading to prevent UI freezing
-   - [x] Concurrent download throttling
-
-2. [x] **Media Detail Views** (COMPLETED with Premium Design!)
-   - [x] Create media detail page layout
-   - [x] **Movie Detail View** (COMPLETED!)
-     - [x] Cinematic backdrop image with gradient overlay
-     - [x] Enhanced poster with drop shadow and rounded corners (3D effect)
-     - [x] Loading placeholder with smooth transitions
-     - [x] Synopsis and metadata display
-     - [x] Genre chips with modern styling
-     - [x] File/stream information display (codec, resolution, bitrate)
-     - [x] Play button with glass-morphism effect
-     - [x] Mark as Watched toggle functionality
-     - [x] Direct Play/Transcode indicator
-   - [x] **TV Show Detail View** (ENHANCED with Blueprint!)
-     - [x] Converted to Blueprint template for consistency
-     - [x] Cinematic backdrop image matching movie details style
-     - [x] Enhanced poster with same 3D effect as movies
-     - [x] Modern layout with poster and show info
-     - [x] Season dropdown selector integrated in action row
-     - [x] Horizontal episode carousel with enhanced cards
-     - [x] Episode cards with hover effects and play overlay
-     - [x] Watch status indicators on episodes
-     - [x] Progress bars for partially watched episodes
-     - [x] Click to play functionality for episodes
-     - [x] Genre chips matching movie details style
-     - [x] Rating display with star icon
-     - [x] Mark Season as Watched functionality
-   - [x] Display synopsis for shows and movies
-   - [ ] Display cast and crew information
-   - [x] Add play button functionality (for movies and episodes)
-
-3. [ ] **Library Enhancements**
-   - [x] Implement lazy loading for large libraries
-   - [ ] Add search within library
-   - [ ] Implement sorting options (title, year, rating)
-   - [ ] Add filter by genre, year, etc.
+1. [ ] **Library Enhancements**
+   - [ ] Add search UI within library (backend support varies)
+   - [x] Implement sorting options (title, year, rating, date added - DONE)
+   - [x] Basic watch status filter (All/Watched/Unwatched - DONE)
+   - [ ] Add filter by genre, year range, resolution
    - [ ] Create list/grid view toggle
+   - [ ] Display cast and crew information UI (Jellyfin provides data, Plex empty)
 
-4. [ ] **Performance Optimizations** (High Priority)
-   - [ ] Request smaller thumbnail sizes from Plex API (150x225 instead of full posters)
-   - [ ] Implement progressive image loading (low-res placeholder → full image)
-   - [ ] Use WebP format if Plex supports it for smaller file sizes
+2. [ ] **Performance Optimizations**
+   - [ ] Request smaller thumbnail sizes from Plex API
+   - [ ] Implement progressive image loading
+   - [ ] Use WebP format if supported
    - [ ] Pre-cache next library's images when idle
-   - [ ] Consider using native GTK async image loading APIs
-   - [ ] Investigate GdkPixbuf loader performance
-   - [ ] Profile actual bottlenecks (network vs decoding vs rendering)
-
-5. [x] **Playback Foundation** (COMPLETED!)
-   - [x] Initialize GStreamer player component
-   - [x] Generate stream URLs from Plex
-   - [x] Implement basic video playback
-   - [x] Add playback controls overlay
-   - [x] Track playback progress (COMPLETED - syncs position to Plex server via viewOffset)
+   - [ ] Profile actual bottlenecks
 
 ## Testing Checklist
 - [ ] Test with local Plex server
@@ -590,197 +338,128 @@ window.sync_and_update_libraries(backend_id, backend)
 - [ ] Test various media formats
 - [ ] Test on different screen sizes
 
-## Known Issues & Troubleshooting
+## Known Issues
 
-### Current Issues
-- [x] **MPV Player (DEFAULT - FULLY WORKING)**:
-  - **Status**: ✅ All issues resolved, working perfectly
-  - **Video rendering**: Working with GLArea integration
-  - **Audio/Subtitles**: Full support with no color issues
-  - **Performance**: Optimized with cached GL functions and frame-based rendering
-  - **MPV is now the default and recommended player backend**
+### Critical Issues
+- [ ] **Homepage horizontal scrolling**: Images don't load when scrolling horizontally
+- [ ] **GStreamer subtitles**: Color artifacts when subtitles displayed (use MPV instead)
+- [x] **Jellyfin sync failure**: ~~Connects successfully but fails to fetch movie/show items during sync~~ FIXED - Added #[serde(default)] to handle missing UserData fields
+- [x] **Jellyfin detail pages**: ~~"Jellyfin API not initialized" error when viewing movie/show details~~ FIXED - Added ensure_api_initialized() helper method
 
-- [ ] **GStreamer Subtitle Rendering Issue (SECONDARY PLAYER)**:
-  - **Status**: Subtitle overlay causes color conversion artifacts
-  - **Problem**: Green bars/incorrect colors appear when subtitles are displayed
-  - **Attempted Fixes**:
-    - Implemented video-filter for RGBA conversion
-    - Added glsinkbin wrapper for GL handling  
-    - Used videoconvertscale for optimized conversion
-    - Fell back to regular playbin from playbin3
-  - **Current State**: Issue persists, appears to be YUV→RGB conversion problem during subtitle compositing
-  - **Workaround**: Use MPV player backend (now default) which has no subtitle issues
-- [ ] **Homepage Issues** (CRITICAL):
-  - [ ] **Horizontal scrolling broken**: Scrolling horizontally on homepage sections doesn't trigger image loading
-    - The hadjustment().connect_value_changed handler fires but images don't load
-    - Initial images load on section creation but scrolling right shows blank cards
-    - Likely related to the batch_load_visible_cards or trigger_load methods
-    - Cards are created but MediaCard.trigger_load() may not be working properly
-  - [ ] **Continue Watching section issues**: 
-    - Thumbnails may not load consistently
-    - Navigation to player/details needs verification
-  - [ ] **Scroll handler improvements needed**: The horizontal scroll detection and image loading coordination needs fixing
-- [ ] **Music/Photo Libraries**: Views not yet implemented
-- [ ] **Jellyfin Backend**: Integration pending implementation
-- [ ] **Local Files Backend**: File browser not yet implemented
-- [x] **Image Loading Performance**: RESOLVED with major optimizations
-  - [x] Request coalescing prevents duplicate downloads
-  - [x] LRU cache with O(1) operations for better memory management
-  - [x] HTTP/2 connection reuse for faster network operations
-  - [x] Adaptive loading shows small images immediately
-  - [x] Increased concurrent downloads to 20 with HTTP/2
-  - [x] Skip processing for Plex's pre-sized 200x300 thumbnails
-  - Average load time reduced from 100-500ms to 20-100ms
-- [ ] **Minor Player UI Issues**: 
-  - Occasional duplicate back button in player overlay (mostly fixed)
-  - Fullscreen button exists but not fully implemented
+### Not Yet Implemented
+- [ ] Music/Photo library views
+- [ ] Local files backend (stub exists, needs implementation)
+- [ ] Cast/crew information display UI (Jellyfin backend provides data, Plex returns empty)
+- [ ] Search UI (backend implementations vary: Jellyfin works, Plex todo!(), Local empty)
 
-### Resolved Issues
-- ✅ **GTK Template Loading Error**: Fixed by correcting Blueprint syntax
-- ✅ **Plex PIN Authentication**: Fixed by removing "strong" parameter
-- ✅ **Server Discovery Parsing**: Fixed by handling array response format
-- ✅ **Connection Selection**: Implemented parallel testing for best server
-- ✅ **UI Server Status Display**: Fixed RwLock deadlock and added server info display with connection type icons
-- ✅ **Backend-Specific Hard-coding**: Completely refactored to backend-agnostic architecture
-- ✅ **Slow Startup**: Cache now loads instantly before authentication
-- ✅ **Backend ID Management**: Fixed to reuse existing IDs instead of creating new ones
-- ✅ **AdwApplicationWindow Navigation**: Fixed set_child error by using set_content
-- ✅ **RefCell Borrow Panic**: Fixed multiple borrow issue in library navigation
-- ✅ **Widget Parent Issues**: Resolved GTK widget parent conflicts when switching views
-- ✅ **Poster Images Not Loading**: Implemented async image loader with disk/memory caching
-- ✅ **UI Freezing with Large Libraries**: Added viewport-based lazy loading with throttling
-- ✅ **Source ID Removal Panic**: Fixed with counter-based debouncing approach
-- ✅ **GStreamer Playback Issues**: Fixed missing typefind element, playbin creation, and video sink setup
-- ✅ **Player Navigation**: Fixed page not changing when clicking movies
-- ✅ **Seek Loop Bug**: Fixed infinite seeking caused by progress bar updates
-- ✅ **Immersive Player Mode**: Implemented auto-hiding controls with overlay header bar
-- ✅ **Window Aspect Ratio**: Window now resizes to match video aspect ratio
-- ✅ **Player Controls Layout**: Header bar now overlays video instead of pushing it down
-- ✅ **Homepage Navigation Fixed**: Homepage items now properly navigate to player/show details when clicked
-- ✅ **Show Seasons Count**: Fixed "0 seasons" display by using episode count or "TV Series" fallback when season data isn't loaded
-- ✅ **Show Details Page Enhanced**: Completely redesigned with modern dropdown season selector and horizontal episode carousel
-- ✅ **Episode Thumbnails**: Added episode thumbnail support with play icon fallbacks
-- ✅ **Enhanced Episode Cards**: Cards show episode number, duration, watch status, and progress indicators
-- ✅ **Episode Markers Not Loading**: Fixed Plex API marker deserialization - changed from camelCase to explicit field mappings
 
-## MPV Render API Integration Plan
+## Placeholder & Unimplemented Code
 
-### Problem Statement
-The current MPV player implementation uses `dmabuf-wayland` output driver which creates its own separate window instead of embedding video into the GTK widget. This is due to Wayland's security model which doesn't allow direct window embedding like X11.
+### Backend Implementations
 
-### Solution: MPV Render API with GTK4 GLArea
+#### Jellyfin Backend (Mostly Complete - January 2025)
+- [x] **Core API Implementation** - Complete
+  - [x] Authentication (username/password)
+  - [x] Library fetching
+  - [x] Movie and show retrieval
+  - [x] Episode fetching
+  - [x] Stream URL generation
+  - [x] Playback progress tracking
+  - [x] Search functionality
+  - [x] Home sections
+- [x] **UI Integration**:
+  - [x] Auth dialog with backend type selector
+  - [x] Preferences window backend management
+  - [x] Backend switcher in main window
+  - [x] Automatic backend ID generation
+  - [x] Secure credential storage in keyring
+- [x] **Recently Implemented** (January 2025):
+  - [x] Watch status retrieval (gets watched state, view count, last watched date, playback position)
+  - [x] Cast and crew information (fetches People field, separates actors from crew)
+  - [x] Find next episode functionality (retrieves next episode in series)
+  - [x] Chapter markers support (MediaSegments API for intro/credits detection)
+  - [x] Backend loading at startup (fixed - providers now load from config)
+- [x] **Remaining Issues FIXED**:
+  - [x] **Sync fails to fetch library items** - ~~Connection works, libraries found, but get_movies/get_shows failing~~ FIXED - Serde deserialization issue with missing fields
+  - [x] **Detail pages can't access API** - ~~Movie/show detail pages report "Jellyfin API not initialized"~~ FIXED - Added ensure_api_initialized() helper that auto-initializes if needed
+  - [ ] Cast/crew may not show if Jellyfin server lacks metadata
+  - [ ] MediaSegments requires server plugin for intro detection
+  - [ ] No fallback if series_id is missing for next episode
 
-The proper approach is to use MPV's render API (`libmpv_render`) to draw video frames directly into a GTK4 GLArea widget. This provides true embedding and full control over the video rendering surface.
+#### Local Files Backend (STUB IMPLEMENTED - January 2025)
+- [x] **Basic structure implemented**:
+  - [x] Backend creation with `from_auth()` constructor
+  - [x] Basic library support (returns single library)
+  - [x] Initialize method (checks path exists)
+- [ ] **Actual functionality not implemented**:
+  - [ ] Library scanning (returns empty)
+  - [ ] Movie scanning (returns empty)
+  - [ ] TV show scanning (returns empty)
+  - [ ] Episode scanning (returns empty)
+  - [ ] Progress tracking (no-op)
+  - [ ] Watch status management (no-op)
+  - [ ] Search functionality (returns empty)
 
-### Implementation Steps
+#### Plex Backend
+- [ ] **Incomplete Features**:
+  - [ ] Cast and crew details (returns empty arrays)
+  - [ ] Search functionality (returns `todo!()`)
+  - [ ] Proper next episode finding (placeholder implementation)
+  - [ ] Last watched timestamp for shows (returns None)
 
-#### Phase 1: Dependencies & Setup
-- [ ] **Update Cargo.toml dependencies**
-  - [ ] Check if libmpv2 crate supports render API (if not, may need libmpv-sys or custom bindings)
-  - [ ] Add gtk4-rs GLArea support dependencies if needed
-  - [ ] Ensure OpenGL/EGL dependencies are available
+### Core Services
 
-#### Phase 2: Create GLArea-based Video Widget
-- [ ] **Create new `mpv_gl_player.rs` module**
-  - [ ] Implement GTK4 GLArea widget wrapper
-  - [ ] Set up OpenGL context initialization
-  - [ ] Handle widget realize/unrealize signals
-  - [ ] Implement proper cleanup on widget destruction
+#### Sync Manager
+- [x] **Library-specific sync** (`sync_library` implemented - uses backend sync for now)
+- [ ] **Actual library-level sync logic** (currently syncs entire backend)
 
-#### Phase 3: MPV Render Context Integration
-- [ ] **Initialize MPV with render API**
-  - [ ] Create MPV instance with `vo=libmpv` instead of output drivers
-  - [ ] Create render context with OpenGL backend
-  - [ ] Get OpenGL proc address function from GTK GLArea
-  - [ ] Initialize render context with GL context from widget
+#### Cache Manager
+- [ ] **Offline functionality**:
+  - [ ] `mark_for_offline` (empty implementation)
+  - [ ] `is_available_offline` (always returns false)
+- [ ] **Image cache**:
+  - [ ] `get` method (always returns None)
+  - [ ] `set` method (no-op implementation)
+- [ ] **Database filtering**:
+  - [ ] `get_libraries` by backend_id (returns empty vec)
+  - [ ] `get_movies` by backend_id and library_id (returns empty vec)
 
-#### Phase 4: Rendering Pipeline
-- [ ] **Implement render loop**
-  - [ ] Connect to GLArea's `render` signal
-  - [ ] Call `mpv_render_context_render()` in render callback
-  - [ ] Handle render updates from MPV
-  - [ ] Implement proper frame timing and vsync
+### Player Features
 
-#### Phase 5: Event Handling
-- [ ] **Handle MPV render events**
-  - [ ] Set up wakeup callback for render updates
-  - [ ] Handle MPV_EVENT_VIDEO_RECONFIG for size changes
-  - [ ] Properly queue widget redraws when new frames available
-  - [ ] Handle OpenGL context loss/recreation
+#### GStreamer Player
+- [ ] **Stream selection for playbin3**:
+  - [ ] Proper audio track selection
+  - [ ] Proper subtitle track selection
+  - [ ] GstStreamCollection API usage
 
-#### Phase 6: Migration & Testing
-- [ ] **Migrate existing functionality**
-  - [ ] Port all playback controls to new implementation
-  - [ ] Ensure audio/subtitle track selection works
-  - [ ] Test seek functionality
-  - [ ] Verify proper cleanup on player destruction
-- [ ] **Testing**
-  - [ ] Test on Wayland session
-  - [ ] Test on X11/XWayland for compatibility
-  - [ ] Test with various video formats and codecs
-  - [ ] Verify hardware acceleration works
+#### Next Episode Auto-play
+- [ ] **Actual episode loading** - Infrastructure is complete but needs:
+  - [ ] Show ID lookup from current episode
+  - [ ] Proper next episode retrieval from backend
 
-### Technical Details
+### UI Components
 
-#### Key Components:
-1. **GTK4 GLArea Widget**: Provides OpenGL context for rendering
-2. **MPV Render API**: `mpv_render_context` for GPU-accelerated rendering
-3. **OpenGL Backend**: Uses EGL/OpenGL for hardware acceleration
-4. **Frame Callback System**: Proper synchronization between MPV and GTK
+#### Filter Manager
+- [ ] **Sort implementations**:
+  - [ ] Date Added sorting (uses title as fallback)
+  - [ ] Date Watched sorting (uses title as fallback)
 
-#### Code Structure:
-```rust
-// Pseudo-code structure
-pub struct MpvGLPlayer {
-    mpv: Mpv,
-    render_context: MpvRenderContext,
-    gl_area: gtk4::GLArea,
-    // ... other fields
-}
+#### Preferences Window
+- [ ] **Local backend registration** - Folder selection UI exists but doesn't create backend
 
-impl MpvGLPlayer {
-    pub fn new() -> Result<Self> {
-        // 1. Create GLArea widget
-        // 2. Initialize MPV with vo=libmpv
-        // 3. Create render context on widget realize
-        // 4. Connect render signals
-    }
-    
-    fn on_gl_realize(&self) {
-        // Initialize OpenGL context
-        // Create MPV render context
-    }
-    
-    fn on_gl_render(&self) -> bool {
-        // Call mpv_render_context_render()
-        // Return true to stop other handlers
-    }
-}
-```
+#### Main Window
+- [x] **Backend initialization** - Plex and Jellyfin backends are properly initialized
+- [x] **Backend switcher** - Subtle dropdown at bottom of sidebar (only visible with 2+ backends)
 
-#### Key Challenges:
-- OpenGL context management between GTK and MPV
-- Proper synchronization of render updates
-- Handling context loss (GPU reset, suspend/resume)
-- Ensuring proper cleanup to avoid GPU memory leaks
+### Media Metadata
 
-### Alternative Approaches (if render API fails)
-1. **GStreamer with mpv sink**: Use GStreamer pipeline with custom MPV sink
-2. **Texture sharing**: Use dmabuf texture sharing between MPV and GTK
-3. **Fallback to GStreamer**: Keep GStreamer as primary, MPV as optional
-
-### Success Criteria
-- [ ] Video renders inside GTK widget (not separate window)
-- [ ] Smooth playback without tearing
-- [ ] Hardware acceleration working
-- [ ] All existing player features functional
-- [ ] No memory/GPU resource leaks
-- [ ] Works on both Wayland and X11
-
-### References
-- [MPV Render API Documentation](https://github.com/mpv-player/mpv/blob/master/libmpv/render.h)
-- [GTK4 GLArea Documentation](https://docs.gtk.org/gtk4/class.GLArea.html)
-- [mpv-player/mpv-examples](https://github.com/mpv-player/mpv-examples/tree/master/libmpv/sdl)
+#### Backend-Specific Issues
+- [ ] **Plex: Cast and crew information** - Returns empty arrays for:
+  - [ ] Movie cast/crew
+  - [ ] TV show cast
+  - [ ] Person images and roles
+- [x] **Jellyfin: Cast and crew** - Fully implemented with person images
+- [ ] **Local files: Cast and crew** - Not implemented
 
 ## Documentation
 - [ ] API documentation

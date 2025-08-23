@@ -112,9 +112,9 @@ pub struct RuntimeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_active_backend: Option<String>,
 
-    /// List of all configured backend IDs
-    #[serde(default)]
-    pub configured_backends: Vec<String>,
+    /// List of all legacy backend IDs that need migration
+    #[serde(default, alias = "configured_backends")]
+    pub legacy_backends: Vec<String>,
 
     /// Last sync timestamp for each backend
     #[serde(default)]
@@ -123,6 +123,18 @@ pub struct RuntimeConfig {
     /// Library visibility settings (library_id -> is_visible)
     #[serde(default)]
     pub library_visibility: std::collections::HashMap<String, bool>,
+
+    /// Persisted auth providers
+    #[serde(default)]
+    pub auth_providers: std::collections::HashMap<String, crate::models::AuthProvider>,
+
+    /// Cached sources for each provider (provider_id -> sources)
+    #[serde(default)]
+    pub cached_sources: std::collections::HashMap<String, Vec<crate::models::Source>>,
+
+    /// Last time sources were fetched for each provider
+    #[serde(default)]
+    pub sources_last_fetched: std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>,
 }
 
 impl Config {
@@ -169,15 +181,13 @@ impl Config {
     pub fn set_last_active_backend(&mut self, backend_id: &str) -> Result<()> {
         self.runtime.last_active_backend = Some(backend_id.to_string());
 
-        // Add to configured backends if not already there
+        // Add to legacy backends if not already there
         if !self
             .runtime
-            .configured_backends
+            .legacy_backends
             .contains(&backend_id.to_string())
         {
-            self.runtime
-                .configured_backends
-                .push(backend_id.to_string());
+            self.runtime.legacy_backends.push(backend_id.to_string());
         }
 
         self.save()
@@ -187,8 +197,8 @@ impl Config {
         self.runtime.last_active_backend.clone()
     }
 
-    pub fn get_configured_backends(&self) -> Vec<String> {
-        self.runtime.configured_backends.clone()
+    pub fn get_legacy_backends(&self) -> Vec<String> {
+        self.runtime.legacy_backends.clone()
     }
 
     pub fn set_library_visibility(&mut self, library_id: &str, visible: bool) -> Result<()> {
@@ -216,6 +226,75 @@ impl Config {
     ) -> Result<()> {
         self.runtime.library_visibility = visibility;
         self.save()
+    }
+
+    pub fn get_auth_providers(
+        &self,
+    ) -> std::collections::HashMap<String, crate::models::AuthProvider> {
+        self.runtime.auth_providers.clone()
+    }
+
+    pub fn set_auth_providers(
+        &mut self,
+        providers: std::collections::HashMap<String, crate::models::AuthProvider>,
+    ) -> Result<()> {
+        self.runtime.auth_providers = providers;
+        self.save()
+    }
+
+    pub fn add_auth_provider(
+        &mut self,
+        id: String,
+        provider: crate::models::AuthProvider,
+    ) -> Result<()> {
+        self.runtime.auth_providers.insert(id, provider);
+        self.save()
+    }
+
+    pub fn remove_auth_provider(&mut self, id: &str) -> Result<()> {
+        self.runtime.auth_providers.remove(id);
+        self.runtime.cached_sources.remove(id);
+        self.runtime.sources_last_fetched.remove(id);
+        self.save()
+    }
+
+    pub fn remove_legacy_backend(&mut self, backend_id: &str) -> Result<()> {
+        self.runtime.legacy_backends.retain(|b| b != backend_id);
+        self.save()
+    }
+
+    pub fn get_cached_sources(&self, provider_id: &str) -> Option<Vec<crate::models::Source>> {
+        self.runtime.cached_sources.get(provider_id).cloned()
+    }
+
+    pub fn set_cached_sources(
+        &mut self,
+        provider_id: String,
+        sources: Vec<crate::models::Source>,
+    ) -> Result<()> {
+        self.runtime
+            .cached_sources
+            .insert(provider_id.clone(), sources);
+        self.runtime
+            .sources_last_fetched
+            .insert(provider_id, chrono::Utc::now());
+        self.save()
+    }
+
+    pub fn get_sources_last_fetched(
+        &self,
+        provider_id: &str,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.runtime.sources_last_fetched.get(provider_id).copied()
+    }
+
+    pub fn is_sources_cache_stale(&self, provider_id: &str, max_age_secs: i64) -> bool {
+        if let Some(last_fetched) = self.get_sources_last_fetched(provider_id) {
+            let age = chrono::Utc::now() - last_fetched;
+            age.num_seconds() > max_age_secs
+        } else {
+            true // No cached data means it's stale
+        }
     }
 
     fn config_path() -> Result<PathBuf> {

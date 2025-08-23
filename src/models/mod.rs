@@ -1,3 +1,7 @@
+mod auth_provider;
+
+pub use auth_provider::{AuthProvider, NetworkAuthType, NetworkCredentialData, Source, SourceType};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

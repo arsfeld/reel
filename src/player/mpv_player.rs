@@ -42,6 +42,9 @@ struct MpvPlayerInner {
     cached_fbo: Cell<i32>,
     timer_handle: RefCell<Option<glib::SourceId>>,
     verbose_logging: bool,
+    cache_size_mb: u32,
+    cache_backbuffer_mb: u32,
+    cache_secs: u32,
     seek_pending: Arc<Mutex<Option<(f64, Instant)>>>,
     seek_timer: RefCell<Option<glib::SourceId>>,
     last_seek_target: Arc<Mutex<Option<f64>>>,
@@ -56,16 +59,15 @@ unsafe impl Send for MpvPlayer {}
 unsafe impl Sync for MpvPlayer {}
 
 impl MpvPlayer {
-    pub fn new() -> Result<Self> {
-        // Try to load config to get verbose logging setting
-        let verbose_logging = Config::load()
-            .ok()
-            .map(|c| c.playback.mpv_verbose_logging)
-            .unwrap_or(false);
+    pub fn new(config: &Config) -> Result<Self> {
+        let verbose_logging = config.playback.mpv_verbose_logging;
+        let cache_size_mb = config.playback.mpv_cache_size_mb;
+        let cache_backbuffer_mb = config.playback.mpv_cache_backbuffer_mb;
+        let cache_secs = config.playback.mpv_cache_secs;
 
         info!(
-            "Initializing MPV player (verbose_logging: {})",
-            verbose_logging
+            "Initializing MPV player (verbose_logging: {}, cache: {}MB/{}s)",
+            verbose_logging, cache_size_mb, cache_secs
         );
 
         Ok(Self {
@@ -82,6 +84,9 @@ impl MpvPlayer {
                 cached_fbo: Cell::new(-1),
                 timer_handle: RefCell::new(None),
                 verbose_logging,
+                cache_size_mb,
+                cache_backbuffer_mb,
+                cache_secs,
                 seek_pending: Arc::new(Mutex::new(None)),
                 seek_timer: RefCell::new(None),
                 last_seek_target: Arc::new(Mutex::new(None)),
@@ -889,9 +894,6 @@ impl MpvPlayerInner {
     fn init_mpv(&self) -> Result<Mpv> {
         info!("Creating MPV instance");
 
-        // Load configuration for cache settings
-        let config = Config::load().unwrap_or_default();
-
         // MPV requires LC_NUMERIC to be set to "C"
         unsafe {
             let c_locale = CString::new("C").unwrap();
@@ -979,7 +981,7 @@ impl MpvPlayerInner {
         // Aggressive cache settings - cache entire episodes when possible (configurable)
         mpv.set_property("cache", true)
             .map_err(|e| anyhow::anyhow!("Failed to set cache: {:?}", e))?;
-        mpv.set_property("cache-secs", config.playback.mpv_cache_secs as i64)
+        mpv.set_property("cache-secs", self.cache_secs as i64)
             .map_err(|e| anyhow::anyhow!("Failed to set cache-secs: {:?}", e))?;
         mpv.set_property("cache-pause-initial", false) // Don't pause initially for cache
             .map_err(|e| anyhow::anyhow!("Failed to set cache-pause-initial: {:?}", e))?;
@@ -987,24 +989,21 @@ impl MpvPlayerInner {
             .map_err(|e| anyhow::anyhow!("Failed to set cache-pause-wait: {:?}", e))?;
 
         // Configurable cache sizes
-        let cache_size = format!("{}MiB", config.playback.mpv_cache_size_mb);
-        let backbuffer_size = format!("{}MiB", config.playback.mpv_cache_backbuffer_mb);
+        let cache_size = format!("{}MiB", self.cache_size_mb);
+        let backbuffer_size = format!("{}MiB", self.cache_backbuffer_mb);
 
         mpv.set_property("demuxer-max-bytes", cache_size.as_str())
             .map_err(|e| anyhow::anyhow!("Failed to set demuxer-max-bytes: {:?}", e))?;
         mpv.set_property("demuxer-max-back-bytes", backbuffer_size.as_str())
             .map_err(|e| anyhow::anyhow!("Failed to set demuxer-max-back-bytes: {:?}", e))?;
-        mpv.set_property(
-            "demuxer-readahead-secs",
-            config.playback.mpv_cache_secs as i64,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to set demuxer-readahead-secs: {:?}", e))?;
+        mpv.set_property("demuxer-readahead-secs", self.cache_secs as i64)
+            .map_err(|e| anyhow::anyhow!("Failed to set demuxer-readahead-secs: {:?}", e))?;
 
         info!(
             "MPV cache configured: {}MB forward, {}MB backward, up to {} minutes buffering",
-            config.playback.mpv_cache_size_mb,
-            config.playback.mpv_cache_backbuffer_mb,
-            config.playback.mpv_cache_secs / 60
+            self.cache_size_mb,
+            self.cache_backbuffer_mb,
+            self.cache_secs / 60
         );
 
         // Additional cache optimizations

@@ -2,200 +2,234 @@ using Gtk 4.0;
 using Adw 1;
 
 template ReelAuthDialog : Adw.Dialog {
-  title: _("Connect to Plex");
+  title: _("Connect to Server");
   content-width: 450;
   content-height: 600;
   
   child: Adw.ToolbarView {
     [top]
-    Adw.HeaderBar header_bar {
+    Adw.HeaderBar {
       show-end-title-buttons: false;
       
       [start]
       Gtk.Button cancel_button {
         label: _("Cancel");
-        clicked => $on_cancel_clicked();
       }
       
-      title-widget: Adw.ViewSwitcherTitle view_switcher_title {
-        stack: view_stack;
-        title: _("Connect to Plex");
-      };
+      [end]
+      Gtk.Button save_button {
+        label: _("Connect");
+        sensitive: false;
+        styles ["suggested-action"]
+      }
     }
     
-    content: Gtk.Box {
-      orientation: vertical;
+    content: Adw.ViewStack view_stack {
+      vhomogeneous: false;
       vexpand: true;
       
-      Adw.ViewStack view_stack {
-        vhomogeneous: false;
-        vexpand: true;
-        
-        Adw.ViewStackPage {
-          name: "automatic";
-          title: _("Automatic");
-          icon-name: "emblem-default-symbolic";
+      Adw.ViewStackPage {
+        name: "automatic";
+        title: _("Automatic");
+        icon-name: "emblem-default-symbolic";
           
-          child: Gtk.ScrolledWindow {
-            hscrollbar-policy: never;
-            vscrollbar-policy: automatic;
-            vexpand: true;
+        child: Adw.Clamp {
+            maximum-size: 400;
+            margin-top: 48;
+            margin-bottom: 24;
+            margin-start: 12;
+            margin-end: 12;
             
-            Adw.Clamp {
-              maximum-size: 400;
-              margin-top: 48;
-              margin-bottom: 24;
-              margin-start: 12;
-              margin-end: 12;
-              vexpand: true;
+            Gtk.Box pin_status_page {
+              orientation: vertical;
+              spacing: 24;
+              valign: start;
               
-              child: Gtk.Box {
-                orientation: vertical;
-                spacing: 24;
-                vexpand: true;
-                
-                Adw.StatusPage pin_status_page {
-                  icon-name: "network-server-symbolic";
-                  title: _("Sign in with PIN");
-                  description: _("Visit plex.tv/link and enter the PIN below");
-                  
-                  Gtk.Box {
-                    orientation: vertical;
-                    spacing: 18;
-                    halign: center;
-                    
-                    Gtk.Frame {
-                      margin-top: 12;
-                      margin-bottom: 12;
-                      
-                      Gtk.Box {
-                        orientation: vertical;
-                        spacing: 6;
-                        margin-top: 24;
-                        margin-bottom: 24;
-                        margin-start: 36;
-                        margin-end: 36;
-                        
-                        Gtk.Label {
-                          label: _("Your PIN Code:");
-                          styles ["dim-label"]
-                        }
-                        
-                        Gtk.Label pin_label {
-                          label: "----";
-                          selectable: true;
-                          styles ["title-1", "monospace"]
-                        }
-                      }
-                    }
-                    
-                    Gtk.Button open_link_button {
-                      label: _("Open plex.tv/link");
-                      halign: center;
-                      clicked => $on_open_link_clicked();
-                      styles ["suggested-action", "pill"]
-                    }
-                    
-                    Gtk.ProgressBar auth_progress {
-                      visible: false;
-                      pulse-step: 0.1;
-                      margin-top: 24;
-                      width-request: 200;
-                    }
-                  }
-                }
-                
-                Adw.StatusPage auth_status {
-                  visible: false;
-                  icon-name: "emblem-ok-symbolic";
-                  title: _("Authentication Successful!");
-                  description: _("Connecting to your Plex server...");
-                }
-                
-                Adw.StatusPage auth_error {
-                  visible: false;
-                  icon-name: "dialog-error-symbolic";
-                  title: _("Authentication Failed");
-                  
-                  Gtk.Button retry_button {
-                    label: _("Try Again");
-                    halign: center;
-                    clicked => $on_retry_clicked();
-                    styles ["suggested-action", "pill"]
-                  }
-                }
-              };
-            }
-          };
-        }
-        
-        Adw.ViewStackPage {
-          name: "manual";
-          title: _("Manual");
-          icon-name: "preferences-system-symbolic";
-          
-          child: Gtk.ScrolledWindow {
-            hscrollbar-policy: never;
-            vscrollbar-policy: automatic;
-            vexpand: true;
-            
-            Adw.Clamp {
-              maximum-size: 400;
-              margin-top: 48;
-              margin-bottom: 24;
-              margin-start: 12;
-              margin-end: 12;
-              vexpand: true;
+              Gtk.Label {
+                label: _("Sign in with PIN");
+                styles ["title-2"]
+              }
               
-              child: Gtk.Box {
-                orientation: vertical;
-                spacing: 24;
-                vexpand: true;
-                
-                Adw.StatusPage {
-                  icon-name: "network-server-symbolic";
-                  title: _("Manual Connection");
-                  description: _("Connect directly with your server details");
-                }
-                
-                Adw.PreferencesGroup {
-                  
-                  Adw.EntryRow server_url_entry {
-                    title: _("Server URL");
-                    text: "";
-                  }
-                  
-                  Adw.PasswordEntryRow token_entry {
-                    title: _("Auth Token");
-                  }
-                }
+              Gtk.Label {
+                label: _("Visit plex.tv/link and enter the PIN below");
+                wrap: true;
+                styles ["dim-label"]
+              }
+              
+              Gtk.Frame {
+                halign: center;
                 
                 Gtk.Box {
                   orientation: vertical;
-                  spacing: 12;
+                  spacing: 6;
+                  margin-top: 18;
+                  margin-bottom: 18;
+                  margin-start: 24;
+                  margin-end: 24;
                   
-                  Gtk.Button manual_connect_button {
-                    label: _("Connect");
-                    halign: center;
-                    sensitive: false;
-                    clicked => $on_manual_connect_clicked();
-                    styles ["suggested-action", "pill"]
+                  Gtk.Label {
+                    label: _("Your PIN Code:");
+                    styles ["dim-label"]
                   }
                   
-                  Gtk.LinkButton {
-                    label: _("How to get your token?");
-                    uri: "https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/";
-                    halign: center;
+                  Gtk.Label pin_label {
+                    label: "----";
+                    selectable: true;
+                    styles ["title-1", "monospace"]
                   }
                 }
-              };
+              }
+              
+              Gtk.Button open_link_button {
+                label: _("Open plex.tv/link");
+                halign: center;
+                styles ["suggested-action", "pill"]
+              }
+              
+              Gtk.ProgressBar auth_progress {
+              visible: false;
+                pulse-step: 0.1;
+                margin-top: 24;
+                width-request: 200;
+                halign: center;
+              }
+              
+              Adw.StatusPage auth_status {
+              visible: false;
+              icon-name: "emblem-ok-symbolic";
+              title: _("Authentication Successful!");
+                description: _("Connecting to your Plex server...");
+              }
+              
+              Adw.StatusPage auth_error {
+              visible: false;
+              icon-name: "dialog-error-symbolic";
+              title: _("Authentication Failed");
+                
+                Gtk.Button retry_button {
+                  label: _("Try Again");
+                  halign: center;
+                  styles ["suggested-action", "pill"]
+                }
+              }
             }
           };
         }
-      }
-      
-      Adw.ViewSwitcherBar view_switcher_bar {
-        stack: view_stack;
+        
+        Adw.ViewStackPage {
+        name: "manual";
+        title: _("Manual");
+        icon-name: "preferences-system-symbolic";
+          
+        child: Adw.Clamp {
+            maximum-size: 400;
+            margin-top: 48;
+            margin-bottom: 24;
+            margin-start: 12;
+            margin-end: 12;
+            
+            Gtk.Box {
+              orientation: vertical;
+              spacing: 24;
+              valign: start;
+              
+              Adw.PreferencesGroup {
+              title: _("Server Connection");
+                description: _("Connect directly with your Plex server");
+                
+                Adw.EntryRow server_url_entry {
+                title: _("Server URL");
+                  text: "";
+                }
+                
+                Adw.PasswordEntryRow token_entry {
+                title: _("Auth Token");
+                }
+              }
+              
+              Gtk.Box {
+                orientation: vertical;
+                spacing: 12;
+                
+                Gtk.Button manual_connect_button {
+                  label: _("Connect");
+                  halign: center;
+                  sensitive: false;
+                  styles ["suggested-action", "pill"]
+                }
+                
+                Gtk.LinkButton {
+                  label: _("How to get your token?");
+                  uri: "https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/";
+                  halign: center;
+                }
+              }
+            }
+          };
+        }
+        
+        Adw.ViewStackPage {
+        name: "jellyfin";
+        title: _("Jellyfin");
+        icon-name: "network-server-symbolic";
+        visible: false;
+          
+        child: Adw.Clamp {
+            maximum-size: 400;
+            margin-top: 48;
+            margin-bottom: 24;
+            margin-start: 12;
+            margin-end: 12;
+            
+            Gtk.Box {
+              orientation: vertical;
+              spacing: 24;
+              valign: start;
+              
+              Adw.PreferencesGroup {
+              title: _("Server Details");
+                description: _("Enter your Jellyfin server URL");
+                
+                Adw.EntryRow jellyfin_url_entry {
+                title: _("Server URL");
+                  text: "http://localhost:8096";
+                }
+              }
+              
+              Adw.PreferencesGroup {
+              title: _("Credentials");
+                description: _("Sign in with your Jellyfin account");
+                
+                Adw.EntryRow jellyfin_username_entry {
+                title: _("Username");
+                }
+                
+                Adw.PasswordEntryRow jellyfin_password_entry {
+                title: _("Password");
+                }
+              }
+              
+              Gtk.ProgressBar jellyfin_progress {
+              visible: false;
+                pulse-step: 0.1;
+                margin-top: 24;
+                width-request: 200;
+                halign: center;
+              }
+              
+              Adw.StatusPage jellyfin_error {
+              visible: false;
+              icon-name: "dialog-error-symbolic";
+              title: _("Connection Failed");
+                
+                Gtk.Button jellyfin_retry_button {
+                  label: _("Try Again");
+                  halign: center;
+                  styles ["suggested-action", "pill"]
+                }
+              }
+            }
+        };
       }
     };
   };

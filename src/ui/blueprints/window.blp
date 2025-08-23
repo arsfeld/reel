@@ -20,90 +20,109 @@ template ReelMainWindow : Adw.ApplicationWindow {
           }
         }
         
-        content: Gtk.ScrolledWindow {
-          hscrollbar-policy: never;
-          vscrollbar-policy: automatic;
+        content: Gtk.Box {
+          orientation: vertical;
           
-          Gtk.Box {
-            orientation: vertical;
-            margin-top: 12;
-            margin-bottom: 12;
-            margin-start: 12;
-            margin-end: 12;
-            spacing: 12;
+          // Scrollable content area
+          Gtk.ScrolledWindow {
+            hscrollbar-policy: never;
+            vscrollbar-policy: automatic;
+            vexpand: true;
             
-            Adw.StatusPage welcome_page {
-              icon-name: "applications-multimedia-symbolic";
-              title: _("Welcome to Reel");
-              description: _("Connect to your media server to get started");
+            Gtk.Box {
+              orientation: vertical;
+              margin-top: 12;
+              margin-bottom: 12;
+              margin-start: 12;
+              margin-end: 12;
+              spacing: 12;
               
-              Gtk.Box {
-                orientation: vertical;
-                spacing: 12;
-                halign: center;
+              Adw.StatusPage welcome_page {
+                icon-name: "applications-multimedia-symbolic";
+                title: _("Welcome to Reel");
+                description: _("Connect to your media server to get started");
                 
-                Gtk.Button connect_button {
-                  label: _("Connect to Plex");
+                Gtk.Box {
+                  orientation: vertical;
+                  spacing: 12;
                   halign: center;
-                  styles ["pill", "suggested-action"]
+                  
+                  Gtk.Button connect_button {
+                    label: _("Connect to Server");
+                    halign: center;
+                    styles ["pill", "suggested-action"]
+                  }
                 }
               }
-            }
-            
-            Adw.PreferencesGroup home_group {
-              visible: false;
               
-              Gtk.ListBox home_list {
-                selection-mode: none;
-                styles ["boxed-list"]
+              // Global Home for all sources
+              Adw.PreferencesGroup home_group {
+                visible: false;
+                
+                Gtk.ListBox home_list {
+                  selection-mode: none;
+                  styles ["boxed-list"]
+                }
               }
-            }
-            
-            Adw.PreferencesGroup libraries_group {
-              title: _("Libraries");
-              visible: false;
               
-              [header-suffix]
-              Gtk.Box library_header_buttons {
+              // Container for all source groups
+              Gtk.Box sources_container {
+                orientation: vertical;
+                spacing: 18;
+                visible: false;
+              }
+              
+              // Subtle status indicator at the bottom
+              Gtk.Box status_container {
                 orientation: horizontal;
                 spacing: 6;
+                margin-top: 6;
+                visible: false;
                 
-                Gtk.Button edit_libraries_button {
-                  icon-name: "document-edit-symbolic";
-                  valign: center;
-                  tooltip-text: _("Edit Libraries");
-                  styles ["flat"]
-                }
-                
-                Gtk.Button refresh_button {
-                  icon-name: "view-refresh-symbolic";
-                  valign: center;
-                  tooltip-text: _("Refresh Libraries");
-                  styles ["flat"]
-                }
-              }
-              
-              Gtk.ListBox libraries_list {
-                selection-mode: none;
-                styles ["boxed-list"]
-              }
-            }
-            
-            Adw.PreferencesGroup status_group {
-              title: _("Server Status");
-              
-              Adw.ActionRow status_row {
-                title: _("Not Connected");
-                subtitle: _("No server configured");
-                
-                [prefix]
                 Gtk.Image status_icon {
-                  icon-name: "network-offline-symbolic";
+                  icon-name: "network-transmit-receive-symbolic";
+                  opacity: 0.5;
                 }
                 
-                [suffix]
+                Gtk.Label status_label {
+                  label: _("Connected");
+                  styles ["dim-label", "caption"]
+                }
+                
                 Gtk.Spinner sync_spinner {
                   visible: false;
+                  margin-start: 6;
+                }
+              }
+            }
+          }
+          
+          // Sticky Sources button at the bottom
+          Gtk.Box {
+            orientation: vertical;
+            
+            Gtk.Separator {
+              orientation: horizontal;
+            }
+            
+            Gtk.Button sources_button {
+              margin-top: 12;
+              margin-bottom: 12;
+              margin-start: 12;
+              margin-end: 12;
+              styles ["pill"]
+              
+              Gtk.Box {
+                orientation: horizontal;
+                spacing: 6;
+                halign: center;
+                
+                Gtk.Image {
+                  icon-name: "network-server-symbolic";
+                }
+                
+                Gtk.Label {
+                  label: _("Sources & Accounts");
                 }
               }
             }
