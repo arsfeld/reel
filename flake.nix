@@ -19,11 +19,10 @@
           extensions = [ "rust-src" "rust-analyzer" "rustfmt" "clippy" ];
         };
 
-        nativeBuildInputs = with pkgs; [
+        # Build inputs needed for compiling the Rust project
+        rustBuildInputs = with pkgs; [
           rustToolchain
           pkg-config
-          meson
-          ninja
           wrapGAppsHook4
           desktop-file-utils
           blueprint-compiler
@@ -352,7 +351,8 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          inherit buildInputs nativeBuildInputs;
+          inherit buildInputs;
+          nativeBuildInputs = rustBuildInputs;
           
           packages = devTools ++ [
             flatpakUpdateSources
@@ -445,7 +445,9 @@
             lockFile = ./Cargo.lock;
           };
           
-          inherit nativeBuildInputs buildInputs;
+          nativeBuildInputs = rustBuildInputs;
+          
+          inherit buildInputs;
           
           # Skip tests during build (can be run separately)
           doCheck = false;
@@ -458,5 +460,7 @@
             platforms = platforms.linux;
           };
         };
+        
+        packages.gnome-reel = self.packages.${system}.default;
       });
 }

@@ -37,8 +37,8 @@ This project uses Nix flakes to manage the development environment, ensuring all
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/reel.git
-cd reel
+git clone https://github.com/arsfeld/gnome-reel.git
+cd gnome-reel
 
 # Enter the Nix development shell
 nix develop
@@ -74,7 +74,7 @@ cargo build --release
 
 ```bash
 # Run directly with Nix flakes
-nix run github:yourusername/reel
+nix run github:arsfeld/gnome-reel
 ```
 
 ### Flatpak
