@@ -388,8 +388,8 @@ impl ShowDetailsPage {
         if let Some(show) = imp.current_show.borrow().as_ref() {
             // Get backend and fetch episodes
             if let Some(state) = imp.state.borrow().as_ref() {
-                let backend_manager = state.backend_manager.read().await;
-                if let Some((_, backend)) = backend_manager.get_active_backend() {
+                let backend_id = &show.backend_id;
+                if let Some(backend) = state.source_coordinator.get_backend(backend_id).await {
                     match backend.get_episodes(&show.id, season_number).await {
                         Ok(episodes) => {
                             // Update episode count
@@ -420,8 +420,8 @@ impl ShowDetailsPage {
         let imp = self.imp();
 
         if let Some(state) = imp.state.borrow().as_ref() {
-            let backend_manager = state.backend_manager.read().await;
-            if let Some((_, backend)) = backend_manager.get_active_backend() {
+            let backend_id = &show.backend_id;
+            if let Some(backend) = state.source_coordinator.get_backend(backend_id).await {
                 // Check each season for unwatched episodes
                 for (index, season) in show.seasons.iter().enumerate() {
                     match backend.get_episodes(&show.id, season.season_number).await {
@@ -467,8 +467,8 @@ impl ShowDetailsPage {
         if let Some(show) = imp.current_show.borrow().as_ref() {
             // Get backend and fetch episodes
             if let Some(state) = imp.state.borrow().as_ref() {
-                let backend_manager = state.backend_manager.read().await;
-                if let Some((_, backend)) = backend_manager.get_active_backend() {
+                let backend_id = &show.backend_id;
+                if let Some(backend) = state.source_coordinator.get_backend(backend_id).await {
                     match backend.get_episodes(&show.id, season_number).await {
                         Ok(episodes) => {
                             // Update episode count
@@ -726,17 +726,21 @@ impl ShowDetailsPage {
     fn on_mark_watched_clicked(&self) {
         let imp = self.imp();
 
-        if let Some(current_season) = imp.current_season.borrow().as_ref()
-            && let Some(show) = imp.current_show.borrow().as_ref()
+        let current_season = imp.current_season.borrow().clone();
+        let show = imp.current_show.borrow().clone();
+
+        if let Some(current_season) = current_season
+            && let Some(show) = show
         {
             let show_id = show.id.clone();
-            let season = *current_season;
+            let season = current_season;
             let state = imp.state.borrow().clone();
 
             glib::spawn_future_local(async move {
                 if let Some(state) = state {
-                    let backend_manager = state.backend_manager.read().await;
-                    if let Some((_, backend)) = backend_manager.get_active_backend() {
+                    let source_coordinator = state.get_source_coordinator();
+                    // Use the backend_id from the show
+                    if let Some(backend) = source_coordinator.get_backend(&show.backend_id).await {
                         // Get all episodes for the season
                         match backend.get_episodes(&show_id, season).await {
                             Ok(episodes) => {

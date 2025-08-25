@@ -275,6 +275,7 @@ impl JellyfinApi {
 
                 Movie {
                     id: item.id.clone(),
+                    backend_id: self.backend_id.clone(),
                     title: item.name,
                     year: item.production_year,
                     duration,
@@ -376,6 +377,7 @@ impl JellyfinApi {
 
             shows.push(Show {
                 id: item.id.clone(),
+                backend_id: self.backend_id.clone(),
                 title: item.name,
                 year: item.production_year,
                 seasons,
@@ -507,6 +509,7 @@ impl JellyfinApi {
 
             episodes.push(Episode {
                 id: item.id.clone(),
+                backend_id: self.backend_id.clone(),
                 title: item.name,
                 season_number: item.parent_index_number.unwrap_or(0) as u32,
                 episode_number: item.index_number.unwrap_or(0) as u32,
@@ -881,6 +884,7 @@ impl JellyfinApi {
 
                 Ok(Some(Episode {
                     id: next_item.id.clone(),
+                    backend_id: self.backend_id.clone(),
                     title: next_item.name.clone(),
                     season_number: next_item.parent_index_number.unwrap_or(0) as u32,
                     episode_number: next_item.index_number.unwrap_or(0) as u32,
@@ -953,6 +957,7 @@ impl JellyfinApi {
                     let (cast, crew) = self.convert_people_to_cast_crew(item.people.clone());
                     results.push(MediaItem::Movie(Movie {
                         id: item.id.clone(),
+                        backend_id: self.backend_id.clone(),
                         title: item.name,
                         year: item.production_year,
                         duration,
@@ -985,6 +990,7 @@ impl JellyfinApi {
                     let (cast, _crew) = self.convert_people_to_cast_crew(item.people.clone());
                     results.push(MediaItem::Show(Show {
                         id: item.id.clone(),
+                        backend_id: self.backend_id.clone(),
                         title: item.name,
                         year: item.production_year,
                         seasons: vec![],
@@ -1014,6 +1020,7 @@ impl JellyfinApi {
                         Duration::from_secs(item.run_time_ticks.unwrap_or(0) / 10_000_000);
                     results.push(MediaItem::Episode(Episode {
                         id: item.id.clone(),
+                        backend_id: self.backend_id.clone(),
                         title: item.name,
                         season_number: item.parent_index_number.unwrap_or(0) as u32,
                         episode_number: item.index_number.unwrap_or(0) as u32,
@@ -1154,6 +1161,7 @@ impl JellyfinApi {
                     let (cast, crew) = self.convert_people_to_cast_crew(item.people.clone());
                     Some(MediaItem::Movie(Movie {
                         id: item.id.clone(),
+                        backend_id: self.backend_id.clone(),
                         title: item.name,
                         year: item.production_year,
                         duration,
@@ -1191,6 +1199,7 @@ impl JellyfinApi {
                         Duration::from_secs(item.run_time_ticks.unwrap_or(0) / 10_000_000);
                     Some(MediaItem::Episode(Episode {
                         id: item.id.clone(),
+                        backend_id: self.backend_id.clone(),
                         title: item.name,
                         season_number: item.parent_index_number.unwrap_or(0) as u32,
                         episode_number: item.index_number.unwrap_or(0) as u32,

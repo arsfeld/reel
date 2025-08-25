@@ -108,10 +108,6 @@ pub struct JellyfinConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RuntimeConfig {
-    /// The ID of the last active backend
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_active_backend: Option<String>,
-
     /// List of all legacy backend IDs that need migration
     #[serde(default, alias = "configured_backends")]
     pub legacy_backends: Vec<String>,
@@ -176,25 +172,6 @@ impl Config {
     pub async fn set_plex_token(&mut self, token: &str) -> Result<()> {
         self.backends.plex.auth_token = Some(token.to_string());
         self.save()
-    }
-
-    pub fn set_last_active_backend(&mut self, backend_id: &str) -> Result<()> {
-        self.runtime.last_active_backend = Some(backend_id.to_string());
-
-        // Add to legacy backends if not already there
-        if !self
-            .runtime
-            .legacy_backends
-            .contains(&backend_id.to_string())
-        {
-            self.runtime.legacy_backends.push(backend_id.to_string());
-        }
-
-        self.save()
-    }
-
-    pub fn get_last_active_backend(&self) -> Option<String> {
-        self.runtime.last_active_backend.clone()
     }
 
     pub fn get_legacy_backends(&self) -> Vec<String> {
