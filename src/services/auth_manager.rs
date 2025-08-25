@@ -268,15 +268,36 @@ impl AuthManager {
                             );
 
                             // Find the best connection URL (prefer local, then remote, then relay)
-                            if let Some(connection) = server
-                                .connections
-                                .iter()
-                                .find(|c| c.local)
-                                .or_else(|| server.connections.iter().find(|c| !c.relay))
-                                .or_else(|| server.connections.first())
-                            {
+                            // Log all available connections for debugging
+                            for conn in &server.connections {
+                                info!(
+                                    "Available connection for {}: {} (local: {}, relay: {})",
+                                    server.name, conn.uri, conn.local, conn.relay
+                                );
+                            }
+
+                            // Sort connections by preference
+                            let mut sorted_connections = server.connections.clone();
+                            sorted_connections.sort_by_key(|c| {
+                                if c.local && !c.relay {
+                                    0 // Best: local non-relay
+                                } else if c.local {
+                                    1 // Good: local (might be relay)
+                                } else if !c.relay {
+                                    2 // OK: remote direct
+                                } else {
+                                    3 // Last resort: relay
+                                }
+                            });
+
+                            // For now, just pick the first one by preference
+                            // TODO: In the future, we could test connections here too
+                            if let Some(connection) = sorted_connections.first() {
                                 source.connection_info.primary_url = Some(connection.uri.clone());
-                                info!("Set primary URL for {}: {}", server.name, connection.uri);
+                                info!(
+                                    "Selected primary URL for {}: {} (local: {}, relay: {})",
+                                    server.name, connection.uri, connection.local, connection.relay
+                                );
                             } else {
                                 warn!("No connections found for Plex server {}", server.name);
                             }
@@ -332,6 +353,24 @@ impl AuthManager {
                     "Updated library count for source {}: {} libraries",
                     source_id, library_count
                 );
+                config.save()?;
+                return Ok(());
+            }
+        }
+
+        warn!("Source {} not found in cache", source_id);
+        Ok(())
+    }
+
+    /// Update the URL for a source (when we find a better working URL)
+    pub async fn update_source_url(&self, source_id: &str, new_url: &str) -> Result<()> {
+        let mut config = self.config.write().await;
+
+        // Find and update the source across all providers
+        for (_provider_id, sources) in config.runtime.cached_sources.iter_mut() {
+            if let Some(source) = sources.iter_mut().find(|s| s.id == source_id) {
+                source.connection_info.primary_url = Some(new_url.to_string());
+                info!("Updated URL for source {}: {}", source_id, new_url);
                 config.save()?;
                 return Ok(());
             }

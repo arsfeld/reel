@@ -37,6 +37,11 @@ pub struct PlayerPage {
     config: Config,
     position_sync_timer: Arc<RwLock<Option<glib::SourceId>>>,
     last_synced_position: Arc<RwLock<Option<Duration>>>,
+    loading_overlay: gtk4::Box,
+    loading_spinner: gtk4::Spinner,
+    loading_label: gtk4::Label,
+    error_overlay: gtk4::Box,
+    error_label: gtk4::Label,
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -211,6 +216,83 @@ impl PlayerPage {
         auto_play_overlay.append(&pip_container);
         auto_play_overlay.append(&next_episode_container);
         overlay.add_overlay(&auto_play_overlay);
+
+        // Create loading overlay
+        let loading_overlay = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(20)
+            .visible(false)
+            .halign(gtk4::Align::Center)
+            .valign(gtk4::Align::Center)
+            .build();
+        loading_overlay.add_css_class("osd");
+        loading_overlay.add_css_class("loading-overlay");
+
+        let loading_spinner = gtk4::Spinner::builder()
+            .spinning(true)
+            .width_request(48)
+            .height_request(48)
+            .build();
+        loading_overlay.append(&loading_spinner);
+
+        let loading_label = gtk4::Label::builder().label("Loading media...").build();
+        loading_label.add_css_class("title-2");
+        loading_overlay.append(&loading_label);
+        overlay.add_overlay(&loading_overlay);
+
+        // Create error overlay
+        let error_overlay = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(20)
+            .visible(false)
+            .halign(gtk4::Align::Center)
+            .valign(gtk4::Align::Center)
+            .margin_start(40)
+            .margin_end(40)
+            .build();
+        error_overlay.add_css_class("osd");
+        error_overlay.add_css_class("error-overlay");
+
+        let error_icon = gtk4::Image::builder()
+            .icon_name("dialog-error-symbolic")
+            .pixel_size(48)
+            .build();
+        error_overlay.append(&error_icon);
+
+        let error_label = gtk4::Label::builder()
+            .label("Failed to load media")
+            .wrap(true)
+            .max_width_chars(50)
+            .build();
+        error_label.add_css_class("title-2");
+        error_overlay.append(&error_label);
+
+        let retry_button = gtk4::Button::builder().label("Go Back").build();
+        retry_button.add_css_class("suggested-action");
+        error_overlay.append(&retry_button);
+
+        let hint_label = gtk4::Label::builder()
+            .label("Please check your server connection and try again")
+            .wrap(true)
+            .build();
+        hint_label.add_css_class("dim-label");
+        error_overlay.append(&hint_label);
+
+        overlay.add_overlay(&error_overlay);
+
+        // Connect retry button to go back to the previous page
+        let error_overlay_for_retry = error_overlay.clone();
+        let widget_for_retry = widget.clone();
+        retry_button.connect_clicked(move |_| {
+            error_overlay_for_retry.set_visible(false);
+            // Navigate back
+            if let Some(window) = widget_for_retry
+                .root()
+                .and_then(|r| r.downcast::<gtk4::Window>().ok())
+            {
+                window.close();
+            }
+        });
 
         // Create controls (backend and media item will be set when loading media)
         let controls = PlayerControls::new(
@@ -475,7 +557,54 @@ impl PlayerPage {
             config,
             position_sync_timer: Arc::new(RwLock::new(None)),
             last_synced_position: Arc::new(RwLock::new(None)),
+            loading_overlay,
+            loading_spinner,
+            loading_label,
+            error_overlay,
+            error_label,
         }
+    }
+
+    fn show_loading_state(&self, message: &str) {
+        let loading_label = self.loading_label.clone();
+        let loading_overlay = self.loading_overlay.clone();
+        let error_overlay = self.error_overlay.clone();
+        let controls = self.controls.widget.clone();
+        let msg = message.to_string();
+
+        glib::MainContext::default().spawn_local(async move {
+            loading_label.set_text(&msg);
+            loading_overlay.set_visible(true);
+            error_overlay.set_visible(false);
+            controls.set_visible(false);
+        });
+    }
+
+    fn show_error_state(&self, message: &str) {
+        let error_label = self.error_label.clone();
+        let error_overlay = self.error_overlay.clone();
+        let loading_overlay = self.loading_overlay.clone();
+        let controls = self.controls.widget.clone();
+        let msg = message.to_string();
+
+        glib::MainContext::default().spawn_local(async move {
+            error_label.set_text(&msg);
+            error_overlay.set_visible(true);
+            loading_overlay.set_visible(false);
+            controls.set_visible(false);
+        });
+    }
+
+    fn hide_overlays(&self) {
+        let loading_overlay = self.loading_overlay.clone();
+        let error_overlay = self.error_overlay.clone();
+        let controls = self.controls.widget.clone();
+
+        glib::MainContext::default().spawn_local(async move {
+            loading_overlay.set_visible(false);
+            error_overlay.set_visible(false);
+            controls.set_visible(true);
+        });
     }
 
     pub async fn load_media(
@@ -488,6 +617,9 @@ impl PlayerPage {
             media_item.title()
         );
         info!("PlayerPage::load_media() - Media ID: {}", media_item.id());
+
+        // Show loading state
+        self.show_loading_state("Loading media...");
 
         // Store the current media item
         *self.current_media_item.write().await = Some(media_item.clone());
@@ -504,9 +636,45 @@ impl PlayerPage {
 
             // Update controls' backend reference
             *self.controls.backend.write().await = Some(backend.clone());
-            // Get stream URL from backend
+
+            // Update loading message
+            self.show_loading_state("Fetching stream URL...");
+
+            // Get stream URL from backend with timeout
             debug!("PlayerPage::load_media() - Requesting stream URL from backend");
-            let stream_info = backend.get_stream_url(media_item.id()).await?;
+            let stream_result = tokio::time::timeout(
+                Duration::from_secs(30),
+                backend.get_stream_url(media_item.id()),
+            )
+            .await;
+
+            let stream_info = match stream_result {
+                Ok(Ok(info)) => info,
+                Ok(Err(e)) => {
+                    error!("Failed to get stream URL: {}", e);
+                    let error_msg = if e.to_string().contains("401")
+                        || e.to_string().contains("Unauthorized")
+                    {
+                        "Authentication failed. Please re-add your Plex account."
+                    } else if e.to_string().contains("404") {
+                        "Media not found on server. It may have been deleted."
+                    } else if e.to_string().contains("connection")
+                        || e.to_string().contains("timed out")
+                    {
+                        "Cannot connect to Plex server. Check if the server is running and accessible."
+                    } else {
+                        "Failed to load media from server"
+                    };
+                    self.show_error_state(error_msg);
+                    return Err(e);
+                }
+                Err(_) => {
+                    let err = anyhow::anyhow!("Connection timeout");
+                    error!("Connection timeout while fetching stream URL");
+                    self.show_error_state("Connection timeout. The server is not responding.");
+                    return Err(err);
+                }
+            };
             info!(
                 "PlayerPage::load_media() - Got stream URL: {}",
                 stream_info.url
@@ -521,6 +689,9 @@ impl PlayerPage {
 
             // Store stream info for quality selection
             *self.current_stream_info.write().await = Some(stream_info.clone());
+
+            // Update loading message
+            self.show_loading_state("Preparing video player...");
 
             // Clear any existing video widget first
             debug!("PlayerPage::load_media() - Clearing existing video widgets");
@@ -540,10 +711,21 @@ impl PlayerPage {
             self.video_container.append(&video_widget);
             info!("PlayerPage::load_media() - Video widget added to container");
 
+            // Update loading message
+            self.show_loading_state("Loading video stream...");
+
             // Load the media (sink is already set up in create_video_widget)
             debug!("PlayerPage::load_media() - Loading media into player");
-            player.load_media(&stream_info.url).await?;
-            info!("PlayerPage::load_media() - Media loaded into player");
+            match player.load_media(&stream_info.url).await {
+                Ok(_) => {
+                    info!("PlayerPage::load_media() - Media loaded into player");
+                }
+                Err(e) => {
+                    error!("Failed to load media into player: {}", e);
+                    self.show_error_state(&format!("Failed to play video: {}", e));
+                    return Err(e);
+                }
+            }
 
             // Check if we should resume from a previous position
             let resume_position = media_item.playback_position();
@@ -566,8 +748,12 @@ impl PlayerPage {
 
             // Start playback
             debug!("PlayerPage::load_media() - Starting playback");
+            self.show_loading_state("Starting playback...");
             player.play().await?;
             info!("PlayerPage::load_media() - Playback started successfully");
+
+            // Hide loading overlay now that playback has started
+            self.hide_overlays();
 
             // Start position sync timer
             self.start_position_sync_timer().await;
