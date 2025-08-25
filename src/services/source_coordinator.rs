@@ -341,8 +341,14 @@ impl SourceCoordinator {
         let mut results = Vec::new();
         let statuses = self.source_statuses.read().await;
 
+        info!("Found {} sources in statuses map", statuses.len());
         for (source_id, status) in statuses.iter() {
+            info!(
+                "Checking source {} with status: {:?}",
+                source_id, status.connection_status
+            );
             if matches!(status.connection_status, ConnectionStatus::Connected) {
+                info!("Source {} is connected, syncing...", source_id);
                 match self.sync_source(source_id).await {
                     Ok(result) => results.push(result),
                     Err(e) => {
@@ -459,11 +465,16 @@ impl SourceCoordinator {
         provider: AuthProvider,
         source: Source,
     ) -> Result<SourceStatus> {
+        info!("Initializing source: {} ({})", source.name, source.id);
         let status = self
             .create_and_register_backend(provider, source.clone())
             .await?;
 
         let mut statuses = self.source_statuses.write().await;
+        info!(
+            "Adding source {} to statuses map with status: {:?}",
+            source.id, status.connection_status
+        );
         statuses.insert(source.id.clone(), status.clone());
 
         Ok(status)
