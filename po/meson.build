@@ -1,0 +1,15 @@
+i18n.gettext(meson.project_name(),
+  args: [
+    '--from-code=UTF-8',
+    '--add-comments',
+    '--keyword=translatable',
+    '--keyword=_',
+    '--keyword=N_',
+    '--keyword=C_:1c,2',
+    '--keyword=NC_:1c,2',
+    '--keyword=g_dcgettext:2',
+    '--keyword=g_dngettext:2,3',
+    '--keyword=g_dpgettext2:2c,3',
+  ],
+  preset: 'glib',
+)

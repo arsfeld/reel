@@ -1,0 +1,33 @@
+# List of source files containing translatable strings
+
+# Desktop file
+data/dev.arsfeld.Reel.desktop.in.in
+
+# Metainfo file
+data/dev.arsfeld.Reel.metainfo.xml.in.in
+
+# GSchema file
+data/dev.arsfeld.Reel.gschema.xml.in
+
+# UI Blueprint files
+src/ui/blueprints/window.blp
+src/ui/blueprints/auth_dialog.blp
+src/ui/blueprints/library_view.blp
+src/ui/blueprints/media_card.blp
+src/ui/blueprints/movie_details.blp
+src/ui/blueprints/show_details.blp
+
+# Rust source files with translatable strings
+src/main.rs
+src/app.rs
+src/ui/main_window.rs
+src/ui/pages/home.rs
+src/ui/pages/library_view.rs
+src/ui/pages/movie_details.rs
+src/ui/pages/show_details.rs
+src/ui/pages/player_page.rs
+src/ui/pages/sources_page.rs
+src/ui/widgets/auth_dialog.rs
+src/ui/widgets/media_card.rs
+src/ui/widgets/episode_card.rs
+src/ui/widgets/season_selector.rs

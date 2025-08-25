@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="@APPLICATION_ID@" path="/dev/arsfeld/Reel/">
+    <key name="window-width" type="i">
+      <default>1024</default>
+      <summary>Window width</summary>
+      <description>The width of the main window</description>
+    </key>
+    <key name="window-height" type="i">
+      <default>768</default>
+      <summary>Window height</summary>
+      <description>The height of the main window</description>
+    </key>
+    <key name="window-maximized" type="b">
+      <default>false</default>
+      <summary>Window maximized</summary>
+      <description>Whether the main window is maximized</description>
+    </key>
+    <key name="window-fullscreen" type="b">
+      <default>false</default>
+      <summary>Window fullscreen</summary>
+      <description>Whether the main window is in fullscreen mode</description>
+    </key>
+    <key name="cache-size-mb" type="i">
+      <default>500</default>
+      <summary>Cache size in MB</summary>
+      <description>Maximum size of the media cache in megabytes</description>
+    </key>
+    <key name="sync-interval-minutes" type="i">
+      <default>30</default>
+      <summary>Sync interval in minutes</summary>
+      <description>How often to sync with media servers in minutes</description>
+    </key>
+    <key name="enable-hardware-decoding" type="b">
+      <default>true</default>
+      <summary>Enable hardware video decoding</summary>
+      <description>Use hardware acceleration for video decoding when available</description>
+    </key>
+    <key name="preferred-quality" type="s">
+      <default>'auto'</default>
+      <summary>Preferred video quality</summary>
+      <description>Preferred video quality for streaming (auto, 1080p, 720p, 480p)</description>
+    </key>
+  </schema>
+</schemalist>
