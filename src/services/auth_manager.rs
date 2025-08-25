@@ -257,15 +257,31 @@ impl AuthManager {
                         .into_iter()
                         .map(|server| {
                             let source_id = format!("plex_server_{}", server.client_identifier);
-                            Source::new(
+                            let mut source = Source::new(
                                 source_id,
                                 server.name.clone(),
                                 SourceType::PlexServer {
-                                    machine_id: server.client_identifier,
+                                    machine_id: server.client_identifier.clone(),
                                     owned: server.owned,
                                 },
                                 Some(provider_id.to_string()),
-                            )
+                            );
+
+                            // Find the best connection URL (prefer local, then remote, then relay)
+                            if let Some(connection) = server
+                                .connections
+                                .iter()
+                                .find(|c| c.local)
+                                .or_else(|| server.connections.iter().find(|c| !c.relay))
+                                .or_else(|| server.connections.first())
+                            {
+                                source.connection_info.primary_url = Some(connection.uri.clone());
+                                info!("Set primary URL for {}: {}", server.name, connection.uri);
+                            } else {
+                                warn!("No connections found for Plex server {}", server.name);
+                            }
+
+                            source
                         })
                         .collect();
 

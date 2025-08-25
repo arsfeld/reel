@@ -26,8 +26,7 @@ impl ReelApp {
         // Initialize application state with shared config
         let state = Arc::new(AppState::new(config.clone())?);
 
-        // Initialize the SourceCoordinator
-        state.clone().initialize_source_coordinator();
+        // SourceCoordinator is already initialized in AppState::new()
 
         // Create the application
         let app = adw::Application::builder().application_id(APP_ID).build();

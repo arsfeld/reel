@@ -123,13 +123,17 @@ impl HomePage {
         let page_weak = self.downgrade();
 
         glib::spawn_future_local(async move {
-            let backend_manager = state.backend_manager.read().await;
-            if let Some(backend) = backend_manager.get_active() {
+            let source_coordinator = state.get_source_coordinator();
+            // TODO: Home page needs to be refactored to show content from all backends
+            // or to accept a specific backend_id parameter
+            let all_backends = source_coordinator.get_all_backends().await;
+            for (_backend_id, backend) in all_backends {
                 match backend.get_home_sections().await {
                     Ok(sections) => {
                         info!("Loaded {} homepage sections", sections.len());
+                        let page_weak_clone = page_weak.clone();
                         glib::idle_add_local_once(move || {
-                            if let Some(page) = page_weak.upgrade() {
+                            if let Some(page) = page_weak_clone.upgrade() {
                                 page.sync_sections(sections);
                             }
                         });

@@ -129,6 +129,7 @@ impl PlexApi {
 
                 Movie {
                     id: meta.rating_key,
+                    backend_id: self.backend_id.clone(),
                     title: meta.title,
                     year: meta.year,
                     duration,
@@ -189,6 +190,7 @@ impl PlexApi {
 
             shows.push(Show {
                 id: meta.rating_key,
+                backend_id: self.backend_id.clone(),
                 title: meta.title,
                 year: meta.year,
                 seasons,
@@ -293,6 +295,7 @@ impl PlexApi {
 
                 Episode {
                     id: meta.rating_key,
+                    backend_id: self.backend_id.clone(),
                     title: meta.title,
                     season_number: meta.parent_index.unwrap_or(0),
                     episode_number: meta.index.unwrap_or(0),
@@ -1032,6 +1035,7 @@ impl PlexApi {
                     playback_position: meta.view_offset.map(Duration::from_millis),
                     intro_marker: None,   // Will be fetched when playing
                     credits_marker: None, // Will be fetched when playing
+                    backend_id: self.backend_id.clone(),
                 };
                 Ok(MediaItem::Movie(movie))
             }
@@ -1041,6 +1045,7 @@ impl PlexApi {
 
                 let show = Show {
                     id: meta.rating_key,
+                    backend_id: self.backend_id.clone(),
                     title: meta.title,
                     year: meta.year,
                     seasons: Vec::new(),
@@ -1080,6 +1085,7 @@ impl PlexApi {
                     intro_marker: None,
                     credits_marker: None,
                     id: meta.rating_key,
+                    backend_id: self.backend_id.clone(),
                     title: meta.title,
                     season_number: meta.parent_index.unwrap_or(0),
                     episode_number: meta.index.unwrap_or(0),
