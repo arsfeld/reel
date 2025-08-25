@@ -71,19 +71,19 @@ impl BackendManager {
 
     // Move a backend up in the order
     pub fn move_backend_up(&mut self, backend_id: &str) {
-        if let Some(pos) = self.backend_order.iter().position(|x| x == backend_id) {
-            if pos > 0 {
-                self.backend_order.swap(pos, pos - 1);
-            }
+        if let Some(pos) = self.backend_order.iter().position(|x| x == backend_id)
+            && pos > 0
+        {
+            self.backend_order.swap(pos, pos - 1);
         }
     }
 
     // Move a backend down in the order
     pub fn move_backend_down(&mut self, backend_id: &str) {
-        if let Some(pos) = self.backend_order.iter().position(|x| x == backend_id) {
-            if pos < self.backend_order.len() - 1 {
-                self.backend_order.swap(pos, pos + 1);
-            }
+        if let Some(pos) = self.backend_order.iter().position(|x| x == backend_id)
+            && pos < self.backend_order.len() - 1
+        {
+            self.backend_order.swap(pos, pos + 1);
         }
     }
 

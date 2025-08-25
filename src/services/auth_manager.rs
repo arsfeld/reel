@@ -230,11 +230,11 @@ impl AuthManager {
         drop(config);
 
         // If we have cached sources and they're fresh, return them immediately
-        if let Some(ref sources) = cached {
-            if !is_stale {
-                info!("Returning cached Plex sources for provider {}", provider_id);
-                return Ok(sources.clone());
-            }
+        if let Some(ref sources) = cached
+            && !is_stale
+        {
+            info!("Returning cached Plex sources for provider {}", provider_id);
+            return Ok(sources.clone());
         }
 
         // If online, try to fetch fresh data

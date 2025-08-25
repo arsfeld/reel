@@ -119,12 +119,12 @@ impl GStreamerPlayer {
         let video_sink = self.create_optimized_video_sink(force_fallback, use_gl_sink);
 
         // If we have a gtk4paintablesink, extract and set its paintable
-        if let Some(ref sink) = video_sink {
-            if let Some(gtk_sink) = self.extract_gtk4_sink(sink) {
-                let paintable = gtk_sink.property::<gdk::Paintable>("paintable");
-                picture.set_paintable(Some(&paintable));
-                debug!("GStreamerPlayer::create_video_widget() - Paintable set on Picture widget");
-            }
+        if let Some(ref sink) = video_sink
+            && let Some(gtk_sink) = self.extract_gtk4_sink(sink)
+        {
+            let paintable = gtk_sink.property::<gdk::Paintable>("paintable");
+            picture.set_paintable(Some(&paintable));
+            debug!("GStreamerPlayer::create_video_widget() - Paintable set on Picture widget");
         }
 
         // Store the video sink
@@ -158,11 +158,9 @@ impl GStreamerPlayer {
         }
 
         // Try glimagesink or autovideosink fallback
-        if use_gl_sink {
-            if let Some(sink) = self.create_gl_fallback_sink() {
-                info!("Using glimagesink fallback");
-                return Some(sink);
-            }
+        if use_gl_sink && let Some(sink) = self.create_gl_fallback_sink() {
+            info!("Using glimagesink fallback");
+            return Some(sink);
         }
 
         // Final fallback to autovideosink
@@ -231,7 +229,7 @@ impl GStreamerPlayer {
         bin.add(&capsfilter).ok()?;
         bin.add(&glsinkbin).ok()?;
 
-        gst::Element::link_many(&[&convert, &capsfilter, &glsinkbin]).ok()?;
+        gst::Element::link_many([&convert, &capsfilter, &glsinkbin]).ok()?;
 
         // Add ghost pad
         let sink_pad = convert.static_pad("sink")?;
@@ -283,7 +281,7 @@ impl GStreamerPlayer {
         bin.add(&capsfilter).ok()?;
         bin.add(&gtk_sink).ok()?;
 
-        gst::Element::link_many(&[&convert, &capsfilter, &gtk_sink]).ok()?;
+        gst::Element::link_many([&convert, &capsfilter, &gtk_sink]).ok()?;
 
         // Create ghost pad
         let sink_pad = convert.static_pad("sink")?;
@@ -345,7 +343,7 @@ impl GStreamerPlayer {
         bin.add(&capsfilter).ok()?;
         bin.add(&sink).ok()?;
 
-        gst::Element::link_many(&[&convert, &capsfilter, &sink]).ok()?;
+        gst::Element::link_many([&convert, &capsfilter, &sink]).ok()?;
 
         let sink_pad = convert.static_pad("sink")?;
         let ghost_pad = gst::GhostPad::with_target(&sink_pad).ok()?;
@@ -475,7 +473,7 @@ impl GStreamerPlayer {
             while let Ok(Some(elem)) = iter.next() {
                 if elem
                     .factory()
-                    .map_or(false, |f| f.name() == "gtk4paintablesink")
+                    .is_some_and(|f| f.name() == "gtk4paintablesink")
                 {
                     return Some(elem);
                 }
@@ -486,7 +484,7 @@ impl GStreamerPlayer {
             }
         } else if element
             .factory()
-            .map_or(false, |f| f.name() == "gtk4paintablesink")
+            .is_some_and(|f| f.name() == "gtk4paintablesink")
         {
             return Some(element.clone());
         }

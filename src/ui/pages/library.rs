@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use tracing::{debug, error, info, trace};
+use tracing::{error, info, trace};
 
 use crate::constants::*;
 use crate::models::{Library, LibraryType, MediaItem};

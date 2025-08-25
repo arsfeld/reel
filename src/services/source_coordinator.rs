@@ -313,7 +313,7 @@ impl SourceCoordinator {
 
         // Update status
         let library_count = libraries.len();
-        if let Some(mut status) = self.source_statuses.write().await.get_mut(source_id) {
+        if let Some(status) = self.source_statuses.write().await.get_mut(source_id) {
             status.library_count = library_count;
         }
 

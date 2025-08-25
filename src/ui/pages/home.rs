@@ -177,10 +177,10 @@ impl HomePage {
             if let Some(widgets) = section_widgets.get(&section.id) {
                 // Section exists - update its items if needed
                 let old_section = old_sections.iter().find(|s| s.id == section.id);
-                if let Some(old) = old_section {
-                    if !Self::items_equal(&old.items, &section.items) {
-                        self.update_section_items(widgets, section);
-                    }
+                if let Some(old) = old_section
+                    && !Self::items_equal(&old.items, &section.items)
+                {
+                    self.update_section_items(widgets, section);
                 }
 
                 // Ensure it's at the right position by moving to end
