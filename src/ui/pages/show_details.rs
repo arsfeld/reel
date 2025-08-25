@@ -726,7 +726,7 @@ impl ShowDetailsPage {
     fn on_mark_watched_clicked(&self) {
         let imp = self.imp();
 
-        let current_season = imp.current_season.borrow().clone();
+        let current_season = *imp.current_season.borrow();
         let show = imp.current_show.borrow().clone();
 
         if let Some(current_season) = current_season

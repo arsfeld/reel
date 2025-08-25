@@ -717,18 +717,18 @@ impl MediaBackend for PlexBackend {
                                 );
 
                                 // Update the source with the working URL if we have access to auth_manager
-                                if let Some(ref auth_manager) = self.auth_manager {
-                                    if let Some(ref source) = self.source {
-                                        tracing::info!(
-                                            "Updating source with working URL: {}",
-                                            best_conn.uri
-                                        );
-                                        if let Err(e) = auth_manager
-                                            .update_source_url(&source.id, &best_conn.uri)
-                                            .await
-                                        {
-                                            tracing::warn!("Failed to update source URL: {}", e);
-                                        }
+                                if let Some(ref auth_manager) = self.auth_manager
+                                    && let Some(ref source) = self.source
+                                {
+                                    tracing::info!(
+                                        "Updating source with working URL: {}",
+                                        best_conn.uri
+                                    );
+                                    if let Err(e) = auth_manager
+                                        .update_source_url(&source.id, &best_conn.uri)
+                                        .await
+                                    {
+                                        tracing::warn!("Failed to update source URL: {}", e);
                                     }
                                 }
                             }
