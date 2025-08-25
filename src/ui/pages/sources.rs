@@ -301,7 +301,7 @@ impl SourcesPage {
         let imp = self.imp();
 
         // Update the provider section if it exists
-        if let Some(mut section) = imp.provider_sections.borrow_mut().get_mut(provider_id) {
+        if let Some(section) = imp.provider_sections.borrow_mut().get_mut(provider_id) {
             // Clear existing rows
             while let Some(child) = section.sources_list.first_child() {
                 section.sources_list.remove(&child);
@@ -525,7 +525,7 @@ impl SourcesPage {
                     error!("Failed to discover Plex sources: {}", e);
                     let error_row = adw::ActionRow::builder()
                         .title("Failed to load servers")
-                        .subtitle(&e.to_string())
+                        .subtitle(e.to_string())
                         .build();
                     sources_list.append(&error_row);
                 }
@@ -588,7 +588,7 @@ impl SourcesPage {
                     format!("{} server • Offline", ownership)
                 }
             }
-            crate::models::SourceType::JellyfinServer { .. } => {
+            crate::models::SourceType::JellyfinServer => {
                 if source.is_online() {
                     format!("Jellyfin • {} libraries", source.library_count)
                 } else {
@@ -724,12 +724,12 @@ impl SourcesPage {
         let page_weak = self.downgrade();
         if let Some(window) = self.root().and_downcast::<gtk4::Window>() {
             dialog.select_folder(Some(&window), gtk4::gio::Cancellable::NONE, move |result| {
-                if let Ok(folder) = result {
-                    if let Some(page) = page_weak.upgrade() {
-                        info!("Selected folder: {:?}", folder.path());
-                        // TODO: Add local folder as source
-                        page.load_providers();
-                    }
+                if let Ok(folder) = result
+                    && let Some(page) = page_weak.upgrade()
+                {
+                    info!("Selected folder: {:?}", folder.path());
+                    // TODO: Add local folder as source
+                    page.load_providers();
                 }
             });
         }
@@ -755,10 +755,10 @@ impl SourcesPage {
         let provider_id = provider_id.to_string();
         let page_weak = self.downgrade();
         dialog.connect_response(None, move |_, response| {
-            if response == "remove" {
-                if let Some(page) = page_weak.upgrade() {
-                    page.remove_provider(&provider_id);
-                }
+            if response == "remove"
+                && let Some(page) = page_weak.upgrade()
+            {
+                page.remove_provider(&provider_id);
             }
         });
 
@@ -803,16 +803,16 @@ impl SourcesPage {
                 Err(e) => {
                     error!("Failed to remove provider: {}", e);
                     // Show error dialog
-                    if let Some(page) = page_weak.upgrade() {
-                        if let Some(window) = page.root().and_downcast::<gtk4::Window>() {
-                            let dialog = adw::AlertDialog::new(
-                                Some("Failed to Remove Source"),
-                                Some(&format!("Error: {}", e)),
-                            );
-                            dialog.add_response("ok", "OK");
-                            dialog.set_default_response(Some("ok"));
-                            dialog.present(Some(&window));
-                        }
+                    if let Some(page) = page_weak.upgrade()
+                        && let Some(window) = page.root().and_downcast::<gtk4::Window>()
+                    {
+                        let dialog = adw::AlertDialog::new(
+                            Some("Failed to Remove Source"),
+                            Some(&format!("Error: {}", e)),
+                        );
+                        dialog.add_response("ok", "OK");
+                        dialog.set_default_response(Some("ok"));
+                        dialog.present(Some(&window));
                     }
                 }
             }

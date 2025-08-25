@@ -11,7 +11,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::backends::traits::MediaBackend;
 use crate::config::Config;
 use crate::constants::PLAYER_CONTROLS_HIDE_DELAY_SECS;
-use crate::models::{ChapterMarker, ChapterType, Episode, MediaItem, Movie};
+use crate::models::{Episode, MediaItem, Movie};
 use crate::player::Player;
 use crate::state::AppState;
 
@@ -513,18 +513,17 @@ impl PlayerPage {
                     .and_then(|r| r.downcast::<gtk4::Window>().ok())
             {
                 // Start the window drag operation
-                if let Some(surface) = window.surface() {
-                    if let Some(toplevel) = surface.downcast_ref::<gdk::Toplevel>() {
-                        if let Some(device) = gesture.device() {
-                            toplevel.begin_move(
-                                &device,
-                                gdk::BUTTON_PRIMARY as i32,
-                                start_x,
-                                start_y,
-                                gtk4::gdk::CURRENT_TIME,
-                            );
-                        }
-                    }
+                if let Some(surface) = window.surface()
+                    && let Some(toplevel) = surface.downcast_ref::<gdk::Toplevel>()
+                    && let Some(device) = gesture.device()
+                {
+                    toplevel.begin_move(
+                        &device,
+                        gdk::BUTTON_PRIMARY as i32,
+                        start_x,
+                        start_y,
+                        gtk4::gdk::CURRENT_TIME,
+                    );
                 }
             }
         });
@@ -997,42 +996,37 @@ impl PlayerPage {
             .widget
             .root()
             .and_then(|r| r.downcast::<gtk4::Window>().ok())
-        {
-            if let Some(app) = window
+            && let Some(app) = window
                 .application()
                 .and_then(|a| a.downcast::<gtk4::Application>().ok())
-            {
-                // Inhibit suspend and idle with reason
-                let cookie = app.inhibit(
-                    Some(&window),
-                    gtk4::ApplicationInhibitFlags::SUSPEND | gtk4::ApplicationInhibitFlags::IDLE,
-                    Some("Playing video"),
-                );
+        {
+            // Inhibit suspend and idle with reason
+            let cookie = app.inhibit(
+                Some(&window),
+                gtk4::ApplicationInhibitFlags::SUSPEND | gtk4::ApplicationInhibitFlags::IDLE,
+                Some("Playing video"),
+            );
 
-                *self.inhibit_cookie.write().await = Some(cookie);
-                info!("Inhibited system suspend/screensaver (cookie: {})", cookie);
-            }
+            *self.inhibit_cookie.write().await = Some(cookie);
+            info!("Inhibited system suspend/screensaver (cookie: {})", cookie);
         }
     }
 
     async fn uninhibit_suspend(&self) {
-        if let Some(cookie) = self.inhibit_cookie.write().await.take() {
-            if let Some(window) = self
+        if let Some(cookie) = self.inhibit_cookie.write().await.take()
+            && let Some(window) = self
                 .widget
                 .root()
                 .and_then(|r| r.downcast::<gtk4::Window>().ok())
-            {
-                if let Some(app) = window
-                    .application()
-                    .and_then(|a| a.downcast::<gtk4::Application>().ok())
-                {
-                    app.uninhibit(cookie);
-                    info!(
-                        "Removed system suspend/screensaver inhibit (cookie: {})",
-                        cookie
-                    );
-                }
-            }
+            && let Some(app) = window
+                .application()
+                .and_then(|a| a.downcast::<gtk4::Application>().ok())
+        {
+            app.uninhibit(cookie);
+            info!(
+                "Removed system suspend/screensaver inhibit (cookie: {})",
+                cookie
+            );
         }
     }
 
@@ -1105,26 +1099,26 @@ impl PlayerPage {
                     let player = player.read().await;
                     if let Some(position) = player.get_position().await {
                         // Handle intro marker - only show if marker exists
-                        if config.playback.skip_intro {
-                            if let Some(marker) = &intro_marker {
-                                // Show skip intro button during intro period
-                                if position >= marker.start_time && position < marker.end_time {
-                                    skip_intro_btn.set_visible(true);
-                                } else {
-                                    skip_intro_btn.set_visible(false);
-                                }
+                        if config.playback.skip_intro
+                            && let Some(marker) = &intro_marker
+                        {
+                            // Show skip intro button during intro period
+                            if position >= marker.start_time && position < marker.end_time {
+                                skip_intro_btn.set_visible(true);
+                            } else {
+                                skip_intro_btn.set_visible(false);
                             }
                         }
 
                         // Handle credits marker - only show if marker exists
-                        if config.playback.skip_credits {
-                            if let Some(marker) = &credits_marker {
-                                // Show skip credits button during credits period
-                                if position >= marker.start_time {
-                                    skip_credits_btn.set_visible(true);
-                                } else {
-                                    skip_credits_btn.set_visible(false);
-                                }
+                        if config.playback.skip_credits
+                            && let Some(marker) = &credits_marker
+                        {
+                            // Show skip credits button during credits period
+                            if position >= marker.start_time {
+                                skip_credits_btn.set_visible(true);
+                            } else {
+                                skip_credits_btn.set_visible(false);
                             }
                         }
                     }
@@ -1188,32 +1182,32 @@ impl PlayerPage {
             glib::spawn_future_local(async move {
                 if let Some(next_episode) = player_page.find_next_episode().await {
                     // Update the next episode info with actual data
-                    if let Some(container) = auto_play_overlay.first_child() {
-                        if let Some(next_container) = container.next_sibling() {
-                            // Update title label with actual episode info
-                            if let Some(label) = next_container
-                                .first_child()
-                                .and_then(|w| w.next_sibling())
-                                .and_then(|w| w.downcast::<gtk4::Label>().ok())
-                            {
-                                let title = format!(
-                                    "S{:02}E{:02} - {}",
-                                    next_episode.season_number,
-                                    next_episode.episode_number,
-                                    next_episode.title
-                                );
-                                label.set_text(&title);
-                            }
+                    if let Some(container) = auto_play_overlay.first_child()
+                        && let Some(next_container) = container.next_sibling()
+                    {
+                        // Update title label with actual episode info
+                        if let Some(label) = next_container
+                            .first_child()
+                            .and_then(|w| w.next_sibling())
+                            .and_then(|w| w.downcast::<gtk4::Label>().ok())
+                        {
+                            let title = format!(
+                                "S{:02}E{:02} - {}",
+                                next_episode.season_number,
+                                next_episode.episode_number,
+                                next_episode.title
+                            );
+                            label.set_text(&title);
+                        }
 
-                            // Update countdown label (still using demo countdown for now)
-                            if let Some(label) = next_container
-                                .first_child()
-                                .and_then(|w| w.next_sibling())
-                                .and_then(|w| w.next_sibling())
-                                .and_then(|w| w.downcast::<gtk4::Label>().ok())
-                            {
-                                label.set_text("Playing in 10 seconds");
-                            }
+                        // Update countdown label (still using demo countdown for now)
+                        if let Some(label) = next_container
+                            .first_child()
+                            .and_then(|w| w.next_sibling())
+                            .and_then(|w| w.next_sibling())
+                            .and_then(|w| w.downcast::<gtk4::Label>().ok())
+                        {
+                            label.set_text("Playing in 10 seconds");
                         }
                     }
 
@@ -1221,26 +1215,26 @@ impl PlayerPage {
                     *player_page.next_episode_info.write().await = Some(next_episode);
                 } else {
                     // No next episode found - still show overlay but with different message
-                    if let Some(container) = auto_play_overlay.first_child() {
-                        if let Some(next_container) = container.next_sibling() {
-                            // Update title label to indicate no next episode
-                            if let Some(label) = next_container
-                                .first_child()
-                                .and_then(|w| w.next_sibling())
-                                .and_then(|w| w.downcast::<gtk4::Label>().ok())
-                            {
-                                label.set_text("No next episode available");
-                            }
+                    if let Some(container) = auto_play_overlay.first_child()
+                        && let Some(next_container) = container.next_sibling()
+                    {
+                        // Update title label to indicate no next episode
+                        if let Some(label) = next_container
+                            .first_child()
+                            .and_then(|w| w.next_sibling())
+                            .and_then(|w| w.downcast::<gtk4::Label>().ok())
+                        {
+                            label.set_text("No next episode available");
+                        }
 
-                            // Hide countdown since there's nothing to play
-                            if let Some(label) = next_container
-                                .first_child()
-                                .and_then(|w| w.next_sibling())
-                                .and_then(|w| w.next_sibling())
-                                .and_then(|w| w.downcast::<gtk4::Label>().ok())
-                            {
-                                label.set_text("");
-                            }
+                        // Hide countdown since there's nothing to play
+                        if let Some(label) = next_container
+                            .first_child()
+                            .and_then(|w| w.next_sibling())
+                            .and_then(|w| w.next_sibling())
+                            .and_then(|w| w.downcast::<gtk4::Label>().ok())
+                        {
+                            label.set_text("");
                         }
                     }
                 }
@@ -1270,26 +1264,26 @@ impl PlayerPage {
                     let player = player.read().await;
                     if let Some(position) = player.get_position().await {
                         // Handle intro marker - only show if marker exists
-                        if config.playback.skip_intro {
-                            if let Some(marker) = &intro_marker {
-                                // Show skip intro button during intro period
-                                if position >= marker.start_time && position < marker.end_time {
-                                    skip_intro_btn.set_visible(true);
-                                } else {
-                                    skip_intro_btn.set_visible(false);
-                                }
+                        if config.playback.skip_intro
+                            && let Some(marker) = &intro_marker
+                        {
+                            // Show skip intro button during intro period
+                            if position >= marker.start_time && position < marker.end_time {
+                                skip_intro_btn.set_visible(true);
+                            } else {
+                                skip_intro_btn.set_visible(false);
                             }
                         }
 
                         // Handle credits marker - only show if marker exists
-                        if config.playback.skip_credits {
-                            if let Some(marker) = &credits_marker {
-                                // Show skip credits button during credits period
-                                if position >= marker.start_time {
-                                    skip_credits_btn.set_visible(true);
-                                } else {
-                                    skip_credits_btn.set_visible(false);
-                                }
+                        if config.playback.skip_credits
+                            && let Some(marker) = &credits_marker
+                        {
+                            // Show skip credits button during credits period
+                            if position >= marker.start_time {
+                                skip_credits_btn.set_visible(true);
+                            } else {
+                                skip_credits_btn.set_visible(false);
                             }
                         }
                     }
@@ -1297,7 +1291,6 @@ impl PlayerPage {
 
                 glib::ControlFlow::Continue
             });
-        } else {
         }
     }
 
@@ -1332,12 +1325,11 @@ impl PlayerPage {
                             let duration = player.get_duration().await;
 
                             // Sync final position before marking as watched
-                            if let (Some(pos), Some(dur)) = (position, duration) {
-                                if let Err(e) =
+                            if let (Some(pos), Some(dur)) = (position, duration)
+                                && let Err(e) =
                                     backend.update_progress(media_item.id(), pos, dur).await
-                                {
-                                    error!("Failed to sync final playback position: {}", e);
-                                }
+                            {
+                                error!("Failed to sync final playback position: {}", e);
                             }
 
                             // If we've watched more than 90% of the content, mark as watched
@@ -1519,11 +1511,7 @@ impl PlayerPage {
                     let should_sync = match last_pos {
                         None => true,
                         Some(last) => {
-                            let diff = if position > last {
-                                position - last
-                            } else {
-                                last - position
-                            };
+                            let diff = position.abs_diff(last);
                             diff > Duration::from_secs(5)
                         }
                     };
@@ -1569,20 +1557,20 @@ impl PlayerPage {
     async fn sync_playback_position(&self) {
         // Get current position and sync immediately
         let player = self.player.read().await;
-        if let Some(position) = player.get_position().await {
-            if let Some(media_item) = &*self.current_media_item.read().await {
-                let backend_id = media_item.backend_id();
-                if let Some(backend) = self.state.source_coordinator.get_backend(backend_id).await {
-                    // Update progress on server
-                    let duration = media_item.duration().unwrap_or(Duration::ZERO);
-                    if let Err(e) = backend
-                        .update_progress(media_item.id(), position, duration)
-                        .await
-                    {
-                        error!("Failed to sync final playback position: {}", e);
-                    } else {
-                        info!("Synced final playback position: {:?}", position);
-                    }
+        if let Some(position) = player.get_position().await
+            && let Some(media_item) = &*self.current_media_item.read().await
+        {
+            let backend_id = media_item.backend_id();
+            if let Some(backend) = self.state.source_coordinator.get_backend(backend_id).await {
+                // Update progress on server
+                let duration = media_item.duration().unwrap_or(Duration::ZERO);
+                if let Err(e) = backend
+                    .update_progress(media_item.id(), position, duration)
+                    .await
+                {
+                    error!("Failed to sync final playback position: {}", e);
+                } else {
+                    info!("Synced final playback position: {:?}", position);
                 }
             }
         }
@@ -1934,23 +1922,21 @@ impl PlayerControls {
                     Self::uninhibit_suspend_static(&widget, inhibit_cookie).await;
 
                     // Sync position when pausing
-                    if let Some(backend) = backend.read().await.as_ref() {
-                        if let Some(media_item) = current_media_item.read().await.as_ref() {
-                            if let (Some(position), Some(duration)) =
-                                (player.get_position().await, player.get_duration().await)
-                            {
-                                debug!(
-                                    "Syncing position on pause: {:?} for {}",
-                                    position,
-                                    media_item.title()
-                                );
-                                if let Err(e) = backend
-                                    .update_progress(media_item.id(), position, duration)
-                                    .await
-                                {
-                                    error!("Failed to sync position on pause: {}", e);
-                                }
-                            }
+                    if let Some(backend) = backend.read().await.as_ref()
+                        && let Some(media_item) = current_media_item.read().await.as_ref()
+                        && let (Some(position), Some(duration)) =
+                            (player.get_position().await, player.get_duration().await)
+                    {
+                        debug!(
+                            "Syncing position on pause: {:?} for {}",
+                            position,
+                            media_item.title()
+                        );
+                        if let Err(e) = backend
+                            .update_progress(media_item.id(), position, duration)
+                            .await
+                        {
+                            error!("Failed to sync position on pause: {}", e);
                         }
                     }
                 }
@@ -2291,24 +2277,22 @@ impl PlayerControls {
         if let Some(window) = widget
             .root()
             .and_then(|r| r.downcast::<gtk4::Window>().ok())
-        {
-            if let Some(app) = window
+            && let Some(app) = window
                 .application()
                 .and_then(|a| a.downcast::<gtk4::Application>().ok())
-            {
-                // Inhibit suspend and idle with reason
-                let cookie = app.inhibit(
-                    Some(&window),
-                    gtk4::ApplicationInhibitFlags::SUSPEND | gtk4::ApplicationInhibitFlags::IDLE,
-                    Some("Playing video"),
-                );
+        {
+            // Inhibit suspend and idle with reason
+            let cookie = app.inhibit(
+                Some(&window),
+                gtk4::ApplicationInhibitFlags::SUSPEND | gtk4::ApplicationInhibitFlags::IDLE,
+                Some("Playing video"),
+            );
 
-                *inhibit_cookie.write().await = Some(cookie);
-                info!(
-                    "Inhibited system suspend/screensaver from controls (cookie: {})",
-                    cookie
-                );
-            }
+            *inhibit_cookie.write().await = Some(cookie);
+            info!(
+                "Inhibited system suspend/screensaver from controls (cookie: {})",
+                cookie
+            );
         }
     }
 
@@ -2316,22 +2300,19 @@ impl PlayerControls {
         widget: &gtk4::Widget,
         inhibit_cookie: Arc<RwLock<Option<u32>>>,
     ) {
-        if let Some(cookie) = inhibit_cookie.write().await.take() {
-            if let Some(window) = widget
+        if let Some(cookie) = inhibit_cookie.write().await.take()
+            && let Some(window) = widget
                 .root()
                 .and_then(|r| r.downcast::<gtk4::Window>().ok())
-            {
-                if let Some(app) = window
-                    .application()
-                    .and_then(|a| a.downcast::<gtk4::Application>().ok())
-                {
-                    app.uninhibit(cookie);
-                    info!(
-                        "Removed system suspend/screensaver inhibit from controls (cookie: {})",
-                        cookie
-                    );
-                }
-            }
+            && let Some(app) = window
+                .application()
+                .and_then(|a| a.downcast::<gtk4::Application>().ok())
+        {
+            app.uninhibit(cookie);
+            info!(
+                "Removed system suspend/screensaver inhibit from controls (cookie: {})",
+                cookie
+            );
         }
     }
 

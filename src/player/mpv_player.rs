@@ -116,10 +116,10 @@ impl MpvPlayer {
 
             // Check cache first - use raw pointer to avoid reference issues
             let cache_ptr = &raw mut PROC_CACHE;
-            if let Some(cache) = &mut *cache_ptr {
-                if let Some(&cached_proc) = cache.get(&name_str) {
-                    return cached_proc;
-                }
+            if let Some(cache) = &mut *cache_ptr
+                && let Some(&cached_proc) = cache.get(&name_str)
+            {
+                return cached_proc;
             }
 
             // Get the GLArea and make context current only if not cached
@@ -132,12 +132,12 @@ impl MpvPlayer {
 
             // Use cached EGL get proc function
             let egl_ptr = &raw const EGL_GET_PROC;
-            if let Some(egl_get_proc) = *egl_ptr {
-                if !egl_get_proc.is_null() {
-                    type EglGetProcFn = unsafe extern "C" fn(*const i8) -> *mut c_void;
-                    let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
-                    func = get_proc(name);
-                }
+            if let Some(egl_get_proc) = *egl_ptr
+                && !egl_get_proc.is_null()
+            {
+                type EglGetProcFn = unsafe extern "C" fn(*const i8) -> *mut c_void;
+                let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
+                func = get_proc(name);
             }
 
             // Fallback to dlsym if needed
@@ -411,7 +411,7 @@ impl MpvPlayer {
                     }
 
                     // Check if MPV needs update
-                    let update_flags = mpv_render_context_update(*mpv_gl) as u64;
+                    let update_flags = mpv_render_context_update(*mpv_gl);
                     if update_flags == 0 {
                         // No update needed, skip rendering
                         return glib::Propagation::Stop;
@@ -536,14 +536,13 @@ impl MpvPlayer {
                 if let Some(ref mpv) = *inner_timer.mpv.borrow() {
                     // Check if we're seeking - if so, skip automatic render
                     let is_seeking = inner_timer.seek_pending.lock().unwrap().is_some();
-                    if !is_seeking {
-                        if let Ok(paused) = mpv.get_property::<bool>("pause") {
-                            if !paused {
-                                // Only queue render if no frame is pending
-                                if !inner_timer.frame_pending.load(Ordering::Acquire) {
-                                    gl_area_timer.queue_render();
-                                }
-                            }
+                    if !is_seeking
+                        && let Ok(paused) = mpv.get_property::<bool>("pause")
+                        && !paused
+                    {
+                        // Only queue render if no frame is pending
+                        if !inner_timer.frame_pending.load(Ordering::Acquire) {
+                            gl_area_timer.queue_render();
                         }
                     }
                 }
@@ -676,19 +675,19 @@ impl MpvPlayer {
                 pending.take()
             };
 
-            if let Some((pos, _timestamp)) = seek_pos {
-                if let Some(ref mpv) = *inner.mpv.borrow() {
-                    // Use keyframe seeking for speed
-                    if let Err(e) = mpv.command("seek", &[&pos.to_string(), "absolute"]) {
-                        error!("Failed to seek: {:?}", e);
-                        // Clear last seek target on error
-                        let mut last_target = last_seek_target.lock().unwrap();
-                        *last_target = None;
-                    } else {
-                        // Force a frame update after seeking
-                        if let Some(gl_area) = &*inner.gl_area.borrow() {
-                            gl_area.queue_render();
-                        }
+            if let Some((pos, _timestamp)) = seek_pos
+                && let Some(ref mpv) = *inner.mpv.borrow()
+            {
+                // Use keyframe seeking for speed
+                if let Err(e) = mpv.command("seek", &[&pos.to_string(), "absolute"]) {
+                    error!("Failed to seek: {:?}", e);
+                    // Clear last seek target on error
+                    let mut last_target = last_seek_target.lock().unwrap();
+                    *last_target = None;
+                } else {
+                    // Force a frame update after seeking
+                    if let Some(gl_area) = &*inner.gl_area.borrow() {
+                        gl_area.queue_render();
                     }
                 }
             }
@@ -707,31 +706,31 @@ impl MpvPlayer {
             let last_target = self.inner.last_seek_target.lock().unwrap();
             if let Some(target_pos) = *last_target {
                 // Check if the seek is recent (within 100ms)
-                if let Some((_, timestamp)) = *self.inner.seek_pending.lock().unwrap() {
-                    if timestamp.elapsed() < Duration::from_millis(100) {
-                        return Some(Duration::from_secs_f64(target_pos));
-                    }
+                if let Some((_, timestamp)) = *self.inner.seek_pending.lock().unwrap()
+                    && timestamp.elapsed() < Duration::from_millis(100)
+                {
+                    return Some(Duration::from_secs_f64(target_pos));
                 }
             }
         }
 
         // Otherwise return the actual position
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
-            if let Ok(pos) = mpv.get_property::<f64>("time-pos") {
-                // Clear the last seek target since we're at the actual position now
-                let mut last_target = self.inner.last_seek_target.lock().unwrap();
-                *last_target = None;
-                return Some(Duration::from_secs_f64(pos));
-            }
+        if let Some(ref mpv) = *self.inner.mpv.borrow()
+            && let Ok(pos) = mpv.get_property::<f64>("time-pos")
+        {
+            // Clear the last seek target since we're at the actual position now
+            let mut last_target = self.inner.last_seek_target.lock().unwrap();
+            *last_target = None;
+            return Some(Duration::from_secs_f64(pos));
         }
         None
     }
 
     pub async fn get_duration(&self) -> Option<Duration> {
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
-            if let Ok(dur) = mpv.get_property::<f64>("duration") {
-                return Some(Duration::from_secs_f64(dur));
-            }
+        if let Some(ref mpv) = *self.inner.mpv.borrow()
+            && let Ok(dur) = mpv.get_property::<f64>("duration")
+        {
+            return Some(Duration::from_secs_f64(dur));
         }
         None
     }
@@ -755,13 +754,13 @@ impl MpvPlayer {
     }
 
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
-            if let (Ok(width), Ok(height)) = (
+        if let Some(ref mpv) = *self.inner.mpv.borrow()
+            && let (Ok(width), Ok(height)) = (
                 mpv.get_property::<i64>("width"),
                 mpv.get_property::<i64>("height"),
-            ) {
-                return Some((width as i32, height as i32));
-            }
+            )
+        {
+            return Some((width as i32, height as i32));
         }
         None
     }
@@ -773,28 +772,28 @@ impl MpvPlayer {
     pub async fn get_audio_tracks(&self) -> Vec<(i32, String)> {
         let mut tracks = Vec::new();
 
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
-            if let Ok(count) = mpv.get_property::<i64>("track-list/count") {
-                for i in 0..count {
-                    let type_key = format!("track-list/{}/type", i);
-                    if let Ok(track_type) = mpv.get_property::<String>(&type_key) {
-                        if track_type == "audio" {
-                            let id_key = format!("track-list/{}/id", i);
-                            let title_key = format!("track-list/{}/title", i);
-                            let lang_key = format!("track-list/{}/lang", i);
+        if let Some(ref mpv) = *self.inner.mpv.borrow()
+            && let Ok(count) = mpv.get_property::<i64>("track-list/count")
+        {
+            for i in 0..count {
+                let type_key = format!("track-list/{}/type", i);
+                if let Ok(track_type) = mpv.get_property::<String>(&type_key)
+                    && track_type == "audio"
+                {
+                    let id_key = format!("track-list/{}/id", i);
+                    let title_key = format!("track-list/{}/title", i);
+                    let lang_key = format!("track-list/{}/lang", i);
 
-                            if let Ok(id) = mpv.get_property::<i64>(&id_key) {
-                                let mut title = format!("Audio Track {}", id);
+                    if let Ok(id) = mpv.get_property::<i64>(&id_key) {
+                        let mut title = format!("Audio Track {}", id);
 
-                                if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
-                                    title = track_title;
-                                } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
-                                    title = format!("Audio Track {} ({})", id, lang);
-                                }
-
-                                tracks.push((id as i32, title));
-                            }
+                        if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
+                            title = track_title;
+                        } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
+                            title = format!("Audio Track {} ({})", id, lang);
                         }
+
+                        tracks.push((id as i32, title));
                     }
                 }
             }
@@ -809,28 +808,28 @@ impl MpvPlayer {
         // Add "None" option
         tracks.push((-1, "None".to_string()));
 
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
-            if let Ok(count) = mpv.get_property::<i64>("track-list/count") {
-                for i in 0..count {
-                    let type_key = format!("track-list/{}/type", i);
-                    if let Ok(track_type) = mpv.get_property::<String>(&type_key) {
-                        if track_type == "sub" {
-                            let id_key = format!("track-list/{}/id", i);
-                            let title_key = format!("track-list/{}/title", i);
-                            let lang_key = format!("track-list/{}/lang", i);
+        if let Some(ref mpv) = *self.inner.mpv.borrow()
+            && let Ok(count) = mpv.get_property::<i64>("track-list/count")
+        {
+            for i in 0..count {
+                let type_key = format!("track-list/{}/type", i);
+                if let Ok(track_type) = mpv.get_property::<String>(&type_key)
+                    && track_type == "sub"
+                {
+                    let id_key = format!("track-list/{}/id", i);
+                    let title_key = format!("track-list/{}/title", i);
+                    let lang_key = format!("track-list/{}/lang", i);
 
-                            if let Ok(id) = mpv.get_property::<i64>(&id_key) {
-                                let mut title = format!("Subtitle {}", id);
+                    if let Ok(id) = mpv.get_property::<i64>(&id_key) {
+                        let mut title = format!("Subtitle {}", id);
 
-                                if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
-                                    title = track_title;
-                                } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
-                                    title = format!("Subtitle {} ({})", id, lang);
-                                }
-
-                                tracks.push((id as i32, title));
-                            }
+                        if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
+                            title = track_title;
+                        } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
+                            title = format!("Subtitle {} ({})", id, lang);
                         }
+
+                        tracks.push((id as i32, title));
                     }
                 }
             }
@@ -866,19 +865,19 @@ impl MpvPlayer {
     }
 
     pub async fn get_current_audio_track(&self) -> i32 {
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
-            if let Ok(aid) = mpv.get_property::<i64>("aid") {
-                return aid as i32;
-            }
+        if let Some(ref mpv) = *self.inner.mpv.borrow()
+            && let Ok(aid) = mpv.get_property::<i64>("aid")
+        {
+            return aid as i32;
         }
         -1
     }
 
     pub async fn get_current_subtitle_track(&self) -> i32 {
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
-            if let Ok(sid) = mpv.get_property::<i64>("sid") {
-                return sid as i32;
-            }
+        if let Some(ref mpv) = *self.inner.mpv.borrow()
+            && let Ok(sid) = mpv.get_property::<i64>("sid")
+        {
+            return sid as i32;
         }
         -1
     }
@@ -915,10 +914,10 @@ impl MpvPlayerInner {
             info!("MPV version: {}", version);
         }
         // Only log configuration in verbose mode
-        if self.verbose_logging {
-            if let Ok(config) = mpv.get_property::<String>("mpv-configuration") {
-                debug!("MPV configuration: {}", config);
-            }
+        if self.verbose_logging
+            && let Ok(config) = mpv.get_property::<String>("mpv-configuration")
+        {
+            debug!("MPV configuration: {}", config);
         }
 
         // Configure MPV for render API with performance optimizations

@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::backends::plex::{PlexAuth, PlexPin, PlexServer};
+use crate::backends::plex::{PlexAuth, PlexPin};
 use crate::state::AppState;
 
 // Re-export BackendType for external use
@@ -66,16 +66,11 @@ mod imp {
         pub backend_type: RefCell<BackendType>,
     }
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Default)]
     pub enum BackendType {
+        #[default]
         Plex,
         Jellyfin,
-    }
-
-    impl Default for BackendType {
-        fn default() -> Self {
-            BackendType::Plex
-        }
     }
 
     #[glib::object_subclass]
@@ -548,7 +543,6 @@ impl ReelAuthDialog {
                 // TODO: Manual server connection should be handled through SourceCoordinator
                 // This code needs to be refactored to use proper authentication flow
                 error!("Manual server connection not yet implemented with new architecture");
-                return;
 
                 // DEPRECATED CODE - this was removed due to architecture changes
             });

@@ -299,7 +299,7 @@ impl JellyfinApi {
                         .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                         .map(|dt| dt.with_timezone(&Utc)),
                     updated_at: None,
-                    watched: item.user_data.as_ref().map_or(false, |ud| ud.played),
+                    watched: item.user_data.as_ref().is_some_and(|ud| ud.played),
                     view_count: item.user_data.as_ref().map_or(0, |ud| ud.play_count),
                     last_watched_at: item
                         .user_data
@@ -524,7 +524,7 @@ impl JellyfinApi {
                     .premiere_date
                     .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                     .map(|dt| dt.with_timezone(&Utc)),
-                watched: item.user_data.as_ref().map_or(false, |ud| ud.played),
+                watched: item.user_data.as_ref().is_some_and(|ud| ud.played),
                 view_count: item.user_data.as_ref().map_or(0, |ud| ud.play_count),
                 last_watched_at: item
                     .user_data
@@ -793,7 +793,7 @@ impl JellyfinApi {
         let item = self.get_item(media_id).await?;
 
         let watch_status = crate::backends::traits::WatchStatus {
-            watched: item.user_data.as_ref().map_or(false, |ud| ud.played),
+            watched: item.user_data.as_ref().is_some_and(|ud| ud.played),
             view_count: item.user_data.as_ref().map_or(0, |ud| ud.play_count),
             last_watched_at: item
                 .user_data
@@ -900,7 +900,7 @@ impl JellyfinApi {
                         .as_ref()
                         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                         .map(|dt| dt.with_timezone(&Utc)),
-                    watched: next_item.user_data.as_ref().map_or(false, |ud| ud.played),
+                    watched: next_item.user_data.as_ref().is_some_and(|ud| ud.played),
                     view_count: next_item.user_data.as_ref().map_or(0, |ud| ud.play_count),
                     last_watched_at: next_item
                         .user_data
@@ -978,7 +978,7 @@ impl JellyfinApi {
                         crew,
                         added_at: None,
                         updated_at: None,
-                        watched: item.user_data.as_ref().map_or(false, |ud| ud.played),
+                        watched: item.user_data.as_ref().is_some_and(|ud| ud.played),
                         view_count: item.user_data.as_ref().map_or(0, |ud| ud.play_count),
                         last_watched_at: None,
                         playback_position: None,
@@ -1032,7 +1032,7 @@ impl JellyfinApi {
                         ),
                         overview: item.overview,
                         air_date: None,
-                        watched: item.user_data.as_ref().map_or(false, |ud| ud.played),
+                        watched: item.user_data.as_ref().is_some_and(|ud| ud.played),
                         view_count: item.user_data.as_ref().map_or(0, |ud| ud.play_count),
                         last_watched_at: None,
                         playback_position: None,
@@ -1182,7 +1182,7 @@ impl JellyfinApi {
                         crew,
                         added_at: None,
                         updated_at: None,
-                        watched: item.user_data.as_ref().map_or(false, |ud| ud.played),
+                        watched: item.user_data.as_ref().is_some_and(|ud| ud.played),
                         view_count: item.user_data.as_ref().map_or(0, |ud| ud.play_count),
                         last_watched_at: None,
                         playback_position: item
@@ -1211,7 +1211,7 @@ impl JellyfinApi {
                         ),
                         overview: item.overview,
                         air_date: None,
-                        watched: item.user_data.as_ref().map_or(false, |ud| ud.played),
+                        watched: item.user_data.as_ref().is_some_and(|ud| ud.played),
                         view_count: item.user_data.as_ref().map_or(0, |ud| ud.play_count),
                         last_watched_at: None,
                         playback_position: item

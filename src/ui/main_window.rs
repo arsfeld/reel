@@ -777,7 +777,7 @@ impl ReelMainWindow {
 
             // Create a preferences group for this source
             let source_group = adw::PreferencesGroup::builder()
-                .title(&self.get_backend_display_name(backend_id))
+                .title(self.get_backend_display_name(backend_id))
                 .build();
 
             // Add edit/refresh buttons in the header suffix
@@ -832,7 +832,7 @@ impl ReelMainWindow {
                 if is_visible {
                     let row = adw::ActionRow::builder()
                         .title(&library.title)
-                        .subtitle(&format!("{} items", item_count))
+                        .subtitle(format!("{} items", item_count))
                         .activatable(true)
                         .build();
 
@@ -861,11 +861,11 @@ impl ReelMainWindow {
             // Connect row activation for this list
             let window_weak = self.downgrade();
             libraries_list.connect_row_activated(move |_, row| {
-                if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
-                    if let Some(window) = window_weak.upgrade() {
-                        let library_id = action_row.widget_name().to_string();
-                        window.navigate_to_library(&library_id);
-                    }
+                if let Some(action_row) = row.downcast_ref::<adw::ActionRow>()
+                    && let Some(window) = window_weak.upgrade()
+                {
+                    let library_id = action_row.widget_name().to_string();
+                    window.navigate_to_library(&library_id);
                 }
             });
 
@@ -995,12 +995,12 @@ impl ReelMainWindow {
         };
 
         // Create sources page if it doesn't exist
-        if content_stack.child_by_name("sources").is_none() {
-            if let Some(state) = &*imp.state.borrow() {
-                let sources_page = pages::SourcesPage::new(state.clone());
-                content_stack.add_named(&sources_page, Some("sources"));
-                imp.sources_page.replace(Some(sources_page));
-            }
+        if content_stack.child_by_name("sources").is_none()
+            && let Some(state) = &*imp.state.borrow()
+        {
+            let sources_page = pages::SourcesPage::new(state.clone());
+            content_stack.add_named(&sources_page, Some("sources"));
+            imp.sources_page.replace(Some(sources_page));
         }
 
         // Show the sources page
@@ -1210,10 +1210,10 @@ impl ReelMainWindow {
         // Navigate to home if appropriate
         let imp = self.imp();
         let should_show_home = if let Some(stack) = imp.content_stack.borrow().as_ref() {
-            !stack.child_by_name("library").is_some()
-                && !stack.child_by_name("movie_details").is_some()
-                && !stack.child_by_name("show_details").is_some()
-                && !stack.child_by_name("player").is_some()
+            stack.child_by_name("library").is_none()
+                && stack.child_by_name("movie_details").is_none()
+                && stack.child_by_name("show_details").is_none()
+                && stack.child_by_name("player").is_none()
         } else {
             true
         };
@@ -1723,10 +1723,10 @@ impl ReelMainWindow {
                     // Navigate back to the previous page from navigation stack
                     let previous_page = window.imp().navigation_stack.borrow_mut().pop();
                     if let Some(page_name) = previous_page {
-                        if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
-                            if stack.child_by_name(&page_name).is_some() {
-                                stack.set_visible_child_name(&page_name);
-                            }
+                        if let Some(stack) = window.imp().content_stack.borrow().as_ref()
+                            && stack.child_by_name(&page_name).is_some()
+                        {
+                            stack.set_visible_child_name(&page_name);
                         }
                     } else {
                         // Fallback if no navigation history

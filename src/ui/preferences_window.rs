@@ -1,4 +1,4 @@
-use gtk4::{gio, glib, glib::clone, prelude::*, subclass::prelude::*};
+use gtk4::{glib, glib::clone, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
@@ -186,32 +186,31 @@ impl PreferencesWindow {
                     );
 
                     // Show a toast notification
-                    if let Some(window) = window_weak.upgrade() {
-                        if let Some(parent) = window
+                    if let Some(window) = window_weak.upgrade()
+                        && let Some(parent) = window
                             .transient_for()
                             .and_then(|w| w.downcast::<adw::ApplicationWindow>().ok())
-                        {
-                            let toast = adw::Toast::builder()
-                                .title(format!(
-                                    "Player backend changed to {}",
-                                    if backend_str == "mpv" {
-                                        "MPV"
-                                    } else {
-                                        "GStreamer"
-                                    }
-                                ))
-                                .timeout(3)
-                                .build();
+                    {
+                        let toast = adw::Toast::builder()
+                            .title(format!(
+                                "Player backend changed to {}",
+                                if backend_str == "mpv" {
+                                    "MPV"
+                                } else {
+                                    "GStreamer"
+                                }
+                            ))
+                            .timeout(3)
+                            .build();
 
-                            // Find the toast overlay in the main window
-                            if let Some(content) = parent
-                                .content()
-                                .and_then(|w| w.downcast::<adw::ToastOverlay>().ok())
-                            {
-                                content.add_toast(toast);
-                            } else {
-                                info!("Player backend will be used for next playback");
-                            }
+                        // Find the toast overlay in the main window
+                        if let Some(content) = parent
+                            .content()
+                            .and_then(|w| w.downcast::<adw::ToastOverlay>().ok())
+                        {
+                            content.add_toast(toast);
+                        } else {
+                            info!("Player backend will be used for next playback");
                         }
                     }
                 }

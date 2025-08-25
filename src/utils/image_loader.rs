@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 use tokio::fs;
 use tokio::sync::{RwLock, Semaphore};
-use tracing::{debug, info, trace};
+use tracing::{info, trace};
 
 use crate::constants::*;
 

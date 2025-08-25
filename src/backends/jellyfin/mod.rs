@@ -213,22 +213,18 @@ impl JellyfinBackend {
         let service = "dev.arsfeld.Reel";
         let account = &format!("{}_jellyfin", self.backend_id);
 
-        match keyring::Entry::new(service, account) {
-            Ok(entry) => match entry.get_password() {
-                Ok(creds) => {
-                    let parts: Vec<&str> = creds.split('|').collect();
-                    if parts.len() == 3 {
-                        info!("Loaded credentials from keyring for {}", self.backend_id);
-                        return Ok(Some((
-                            parts[0].to_string(),
-                            parts[1].to_string(),
-                            parts[2].to_string(),
-                        )));
-                    }
+        if let Ok(entry) = keyring::Entry::new(service, account) {
+            if let Ok(creds) = entry.get_password() {
+                let parts: Vec<&str> = creds.split('|').collect();
+                if parts.len() == 3 {
+                    info!("Loaded credentials from keyring for {}", self.backend_id);
+                    return Ok(Some((
+                        parts[0].to_string(),
+                        parts[1].to_string(),
+                        parts[2].to_string(),
+                    )));
                 }
-                Err(_) => {}
-            },
-            Err(_) => {}
+            }
         }
 
         let config_dir =
@@ -508,10 +504,10 @@ impl MediaBackend for JellyfinBackend {
         let api = self.ensure_api_initialized().await?;
 
         let shows = api.get_shows(show_id).await?;
-        if let Some(show) = shows.first() {
-            if let Some(season_info) = show.seasons.iter().find(|s| s.season_number == season) {
-                return api.get_episodes(&season_info.id).await;
-            }
+        if let Some(show) = shows.first()
+            && let Some(season_info) = show.seasons.iter().find(|s| s.season_number == season)
+        {
+            return api.get_episodes(&season_info.id).await;
         }
 
         Err(anyhow!("Season not found"))
