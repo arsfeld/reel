@@ -48,7 +48,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         continue-on-error: true
       
-      - name: Generate release notes with Claude
+      - name: Generate release notes placeholder
         id: generate_notes
         if: steps.check_release.outputs.exists == 'false'
         run: |
@@ -62,24 +62,12 @@ jobs:
             COMMITS=$(git log --pretty=format:"- %s" --max-count=20)
           fi
           
-          # Install Claude Code if not already installed
-          if ! command -v claude &> /dev/null; then
-            npm install -g @anthropic-ai/claude-code
-          fi
+          # Create placeholder release notes
+          RELEASE_NOTES="[RELEASE NOTES TO BE ADDED] - Please update this section with the actual release notes after the CI completes."
+          RELEASE_NOTES="$RELEASE_NOTES
           
-          # Generate release notes with Claude
-          RELEASE_NOTES=$(cat <<EOF | claude --oauth-token "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" --no-markdown
-          Based on these git commits, generate a concise "What's New" section for release notes. 
-          Format as bullet points, group similar changes, and make it user-friendly (not just commit messages).
-          Focus on features, improvements, and fixes that users care about.
-          Keep it to 5-7 bullet points maximum.
-          
-          Commits:
-          $COMMITS
-          
-          Output only the bullet points, no headers or extra text.
-          EOF
-          )
+          Recent commits for reference -
+          $COMMITS"
           
           # Save to output (escape newlines for GitHub Actions)
           echo "notes<<EOF" >> $GITHUB_OUTPUT
