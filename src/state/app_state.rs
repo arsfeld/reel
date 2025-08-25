@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::log::{info, warn};
 
 use crate::backends::BackendManager;
 use crate::config::Config;
@@ -158,15 +159,27 @@ impl AppState {
 
         let mut all_libraries = Vec::new();
 
+        info!(
+            "Getting all libraries, found {} backends",
+            all_backends.len()
+        );
         for (backend_id, _backend) in all_backends {
+            info!("Checking libraries for backend: {}", backend_id);
             // Try to get cached libraries for this backend
             if let Ok(libraries) = self.sync_manager.get_cached_libraries(&backend_id).await {
+                info!(
+                    "Found {} cached libraries for backend {}",
+                    libraries.len(),
+                    backend_id
+                );
                 if !libraries.is_empty() {
                     all_libraries.push((backend_id, libraries));
                 }
+            } else {
+                warn!("Failed to get cached libraries for backend {}", backend_id);
             }
         }
-
+        info!("Returning {} library groups", all_libraries.len());
         all_libraries
     }
 }

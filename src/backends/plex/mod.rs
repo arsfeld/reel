@@ -369,22 +369,38 @@ impl PlexBackend {
 
     /// Get the API client, ensuring it's initialized
     async fn get_api(&self) -> Result<PlexApi> {
+        tracing::debug!("get_api() called for backend {}", self.backend_id);
+
         let api_guard = self.api.read().await;
-        if let Some(api) = api_guard.as_ref() {
+        if let Some(_api) = api_guard.as_ref() {
+            tracing::debug!("API client exists, checking base_url and auth_token");
+
             let base_url = self
                 .base_url
                 .read()
                 .await
                 .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("Base URL not set"))?
+                .ok_or_else(|| {
+                    tracing::error!("Base URL not set for backend {}", self.backend_id);
+                    anyhow::anyhow!("Base URL not set")
+                })?
                 .clone();
+
+            tracing::debug!("Base URL: {}", base_url);
+
             let auth_token = self
                 .auth_token
                 .read()
                 .await
                 .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("Auth token not set"))?
+                .ok_or_else(|| {
+                    tracing::error!("Auth token not set for backend {}", self.backend_id);
+                    anyhow::anyhow!("Auth token not set")
+                })?
                 .clone();
+
+            tracing::debug!("Auth token length: {}", auth_token.len());
+
             Ok(PlexApi::with_cache(
                 base_url,
                 auth_token,
@@ -392,6 +408,10 @@ impl PlexBackend {
                 self.backend_id.clone(),
             ))
         } else {
+            tracing::error!(
+                "Plex API not initialized for backend {}. Please authenticate first.",
+                self.backend_id
+            );
             Err(anyhow::anyhow!(
                 "Plex API not initialized. Please authenticate first."
             ))
@@ -594,27 +614,55 @@ impl MediaBackend for PlexBackend {
             // We already have a URL from the source, just use it
             tracing::info!("Using existing URL from source: {}", url);
 
-            // Create and store the API client with cache
-            let api = PlexApi::with_cache(
-                url.clone(),
-                token.to_string(),
-                self.cache.clone(),
-                self.backend_id.clone(),
-            );
-            *self.api.write().await = Some(api);
+            // Test if the URL is actually reachable
+            let test_client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .danger_accept_invalid_certs(true)
+                .build()?;
 
-            // Store server info
-            if let Some(ref source) = self.source {
-                *self.server_info.write().await = Some(ServerInfo {
-                    name: source.name.clone(),
-                    is_local: url.contains("192.168.")
-                        || url.contains("10.")
-                        || url.contains("localhost"),
-                    is_relay: url.contains("plex.direct"),
-                    uri: url.clone(),
-                });
+            let test_result = test_client
+                .get(format!("{}/identity", url))
+                .header("X-Plex-Token", &token)
+                .send()
+                .await;
+
+            if let Err(e) = test_result {
+                tracing::warn!(
+                    "Saved URL {} is not reachable: {}. Will try to discover servers.",
+                    url,
+                    e
+                );
+                // Clear the bad URL and fall through to discovery
+                *self.base_url.write().await = None;
+            } else {
+                tracing::info!("URL {} is reachable, using it", url);
+
+                // Create and store the API client with cache
+                let api = PlexApi::with_cache(
+                    url.clone(),
+                    token.to_string(),
+                    self.cache.clone(),
+                    self.backend_id.clone(),
+                );
+                *self.api.write().await = Some(api);
+
+                // Store server info
+                if let Some(ref source) = self.source {
+                    *self.server_info.write().await = Some(ServerInfo {
+                        name: source.name.clone(),
+                        is_local: url.contains("192.168.")
+                            || url.contains("10.")
+                            || url.contains("172.")
+                            || url.contains("localhost"),
+                        is_relay: url.contains("plex.direct"),
+                        uri: url.clone(),
+                    });
+                }
             }
-        } else {
+        }
+
+        // If we don't have a URL or the saved one failed, discover servers
+        if self.base_url.read().await.is_none() {
             // No URL saved, need to discover servers
             tracing::info!("No saved URL, discovering servers...");
 
@@ -667,6 +715,22 @@ impl MediaBackend for PlexBackend {
                                         "remote"
                                     }
                                 );
+
+                                // Update the source with the working URL if we have access to auth_manager
+                                if let Some(ref auth_manager) = self.auth_manager {
+                                    if let Some(ref source) = self.source {
+                                        tracing::info!(
+                                            "Updating source with working URL: {}",
+                                            best_conn.uri
+                                        );
+                                        if let Err(e) = auth_manager
+                                            .update_source_url(&source.id, &best_conn.uri)
+                                            .await
+                                        {
+                                            tracing::warn!("Failed to update source URL: {}", e);
+                                        }
+                                    }
+                                }
                             }
                             Err(e) => {
                                 tracing::warn!("Failed to connect to any server endpoint: {}", e);
@@ -752,8 +816,19 @@ impl MediaBackend for PlexBackend {
     }
 
     async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo> {
+        tracing::info!(
+            "get_stream_url() called for media_id: {} on backend: {}",
+            media_id,
+            self.backend_id
+        );
         let api = self.get_api().await?;
-        api.get_stream_url(media_id).await
+        tracing::info!("Got API client, fetching stream URL from Plex API");
+        let result = api.get_stream_url(media_id).await;
+        match &result {
+            Ok(info) => tracing::info!("Successfully got stream URL: {}", info.url),
+            Err(e) => tracing::error!("Failed to get stream URL: {}", e),
+        }
+        result
     }
 
     async fn update_progress(
