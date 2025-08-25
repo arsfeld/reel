@@ -705,9 +705,23 @@ impl PlayerPage {
             let video_widget = player.create_video_widget();
             info!("PlayerPage::load_media() - Video widget created");
 
-            // Add video widget to container
+            // Add video widget to container with GraphicsOffload if available
             debug!("PlayerPage::load_media() - Adding video widget to container");
-            self.video_container.append(&video_widget);
+
+            // Use GraphicsOffload for better performance (GTK 4.14+)
+            // This offloads video rendering to a dedicated GPU subsurface
+            let offload = gtk4::GraphicsOffload::builder()
+                .child(&video_widget)
+                .build();
+
+            // Enable offload - this can reduce CPU usage and improve performance
+            // The widget will determine if offloading is actually beneficial
+            offload.set_enabled(gtk4::GraphicsOffloadEnabled::Enabled);
+
+            debug!("PlayerPage::load_media() - Using GraphicsOffload for video rendering");
+            info!("GraphicsOffload enabled for improved video performance");
+            self.video_container.append(&offload);
+
             info!("PlayerPage::load_media() - Video widget added to container");
 
             // Update loading message
