@@ -62,9 +62,9 @@ jobs:
             COMMITS=$(git log --pretty=format:"- %s" --max-count=20)
           fi
           
-          # Install Claude CLI if not already installed
+          # Install Claude Code if not already installed
           if ! command -v claude &> /dev/null; then
-            npm install -g @anthropic-ai/claude-cli
+            npm install -g @anthropic-ai/claude-code
           fi
           
           # Generate release notes with Claude
