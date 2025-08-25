@@ -437,7 +437,7 @@
 
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "gnome-reel";
-          version = "0.1.0";
+          version = "0.3.0";
           
           src = ./.;
           
@@ -452,12 +452,21 @@
           # Skip tests during build (can be run separately)
           doCheck = false;
           
+          # Create a wrapper script that points to the actual binary
+          postInstall = ''
+            # The cargo build produces 'reel' binary, create symlink for 'gnome-reel'
+            if [ -f $out/bin/reel ]; then
+              ln -s $out/bin/reel $out/bin/gnome-reel
+            fi
+          '';
+          
           meta = with pkgs.lib; {
             description = "A modern GTK frontend for Plex and other media servers";
             homepage = "https://github.com/arsfeld/gnome-reel";
             license = licenses.gpl3Plus;
             maintainers = [];
             platforms = platforms.linux;
+            mainProgram = "reel";
           };
         };
         
