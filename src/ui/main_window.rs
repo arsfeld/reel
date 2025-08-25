@@ -248,118 +248,114 @@ impl ReelMainWindow {
                 info!("Checking for cached data on startup...");
 
                 // Get all providers from source coordinator
-                if let Some(source_coordinator) = state.get_source_coordinator().await {
-                    // Load saved providers first
-                    if let Err(e) = source_coordinator.get_auth_manager().load_providers().await {
-                        error!("Failed to load providers: {}", e);
-                    }
+                let source_coordinator = state.get_source_coordinator();
+                // Load saved providers first
+                if let Err(e) = source_coordinator.get_auth_manager().load_providers().await {
+                    error!("Failed to load providers: {}", e);
+                }
 
-                    let providers = source_coordinator
-                        .get_auth_manager()
-                        .get_all_providers()
-                        .await;
-                    if providers.is_empty() {
-                        info!("No auth providers found, skipping cache load");
-                        return;
-                    }
+                let providers = source_coordinator
+                    .get_auth_manager()
+                    .get_all_providers()
+                    .await;
+                if providers.is_empty() {
+                    info!("No auth providers found, skipping cache load");
+                    return;
+                }
 
-                    // Use the sync manager from AppState
-                    let sync_manager = state.sync_manager.clone();
-                    let mut has_any_cached_data = false;
-                    let mut backends_libraries = Vec::new();
-                    let provider_count = providers.len();
+                // Use the sync manager from AppState
+                let sync_manager = state.sync_manager.clone();
+                let mut has_any_cached_data = false;
+                let mut backends_libraries = Vec::new();
+                let provider_count = providers.len();
 
-                    // Try to load cached data from all providers
-                    for provider in &providers {
-                        let provider_id = provider.id();
-                        info!("Checking cached data for provider: {}", provider_id);
+                // Try to load cached data from all providers
+                for provider in &providers {
+                    let provider_id = provider.id();
+                    info!("Checking cached data for provider: {}", provider_id);
 
-                        match sync_manager.get_cached_libraries(provider_id).await {
-                            Ok(libraries) if !libraries.is_empty() => {
-                                info!(
-                                    "Found {} cached libraries for provider {}",
-                                    libraries.len(),
-                                    provider_id
-                                );
+                    match sync_manager.get_cached_libraries(provider_id).await {
+                        Ok(libraries) if !libraries.is_empty() => {
+                            info!(
+                                "Found {} cached libraries for provider {}",
+                                libraries.len(),
+                                provider_id
+                            );
 
-                                // Build library list with counts
-                                let mut library_info = Vec::new();
+                            // Build library list with counts
+                            let mut library_info = Vec::new();
 
-                                for library in &libraries {
-                                    use crate::models::LibraryType;
-                                    let item_count = match library.library_type {
-                                        LibraryType::Movies => {
-                                            match sync_manager
-                                                .get_cached_movies(provider_id, &library.id)
-                                                .await
-                                            {
-                                                Ok(movies) => movies.len(),
-                                                Err(_) => 0,
-                                            }
+                            for library in &libraries {
+                                use crate::models::LibraryType;
+                                let item_count = match library.library_type {
+                                    LibraryType::Movies => {
+                                        match sync_manager
+                                            .get_cached_movies(provider_id, &library.id)
+                                            .await
+                                        {
+                                            Ok(movies) => movies.len(),
+                                            Err(_) => 0,
                                         }
-                                        LibraryType::Shows => {
-                                            match sync_manager
-                                                .get_cached_shows(provider_id, &library.id)
-                                                .await
-                                            {
-                                                Ok(shows) => shows.len(),
-                                                Err(_) => 0,
-                                            }
+                                    }
+                                    LibraryType::Shows => {
+                                        match sync_manager
+                                            .get_cached_shows(provider_id, &library.id)
+                                            .await
+                                        {
+                                            Ok(shows) => shows.len(),
+                                            Err(_) => 0,
                                         }
-                                        _ => 0,
-                                    };
+                                    }
+                                    _ => 0,
+                                };
 
-                                    library_info.push((library.clone(), item_count));
-                                }
+                                library_info.push((library.clone(), item_count));
+                            }
 
-                                if !library_info.is_empty() {
-                                    backends_libraries
-                                        .push((provider_id.to_string(), library_info));
-                                    has_any_cached_data = true;
-                                }
-                            }
-                            Ok(_) => {
-                                info!("No cached libraries for provider {}", provider_id);
-                            }
-                            Err(e) => {
-                                info!(
-                                    "Could not load cached libraries for provider {}: {}",
-                                    provider_id, e
-                                );
+                            if !library_info.is_empty() {
+                                backends_libraries.push((provider_id.to_string(), library_info));
+                                has_any_cached_data = true;
                             }
                         }
+                        Ok(_) => {
+                            info!("No cached libraries for provider {}", provider_id);
+                        }
+                        Err(e) => {
+                            info!(
+                                "Could not load cached libraries for provider {}: {}",
+                                provider_id, e
+                            );
+                        }
                     }
+                }
 
-                    if has_any_cached_data {
-                        info!(
-                            "Found cached data from {} providers, showing immediately",
-                            backends_libraries.len()
-                        );
+                if has_any_cached_data {
+                    info!(
+                        "Found cached data from {} providers, showing immediately",
+                        backends_libraries.len()
+                    );
 
-                        // Hide welcome page and show libraries immediately
-                        window.imp().welcome_page.set_visible(false);
-                        window.imp().sources_container.set_visible(true);
-                        window.imp().home_group.set_visible(true);
+                    // Hide welcome page and show libraries immediately
+                    window.imp().welcome_page.set_visible(false);
+                    window.imp().sources_container.set_visible(true);
+                    window.imp().home_group.set_visible(true);
 
-                        // Update UI with all backends' libraries
-                        window.update_all_backends_libraries(backends_libraries);
+                    // Update UI with all backends' libraries
+                    window.update_all_backends_libraries(backends_libraries);
 
-                        // Update subtle status for cached data
-                        window.imp().status_container.set_visible(true);
-                        window.imp().status_label.set_text(&format!(
-                            "{} source{} (cached)",
-                            provider_count,
-                            if provider_count == 1 { "" } else { "s" }
-                        ));
-                        window
-                            .imp()
-                            .status_icon
-                            .set_icon_name(Some("folder-remote-symbolic"));
-                    } else {
-                        info!("No cached data found from any provider");
-                    }
+                    // Update subtle status for cached data
+                    window.imp().status_container.set_visible(true);
+                    window.imp().status_label.set_text(&format!(
+                        "{} source{} (cached)",
+                        provider_count,
+                        if provider_count == 1 { "" } else { "s" }
+                    ));
+                    window
+                        .imp()
+                        .status_icon
+                        .set_icon_name(Some("folder-remote-symbolic"));
                 } else {
-                    error!("SourceCoordinator not initialized");
+                    info!("No cached data found from any provider");
                 }
             }
         });
@@ -370,107 +366,107 @@ impl ReelMainWindow {
 
         glib::spawn_future_local(async move {
             // Use SourceCoordinator to initialize all sources
-            if let Some(source_coordinator) = state.get_source_coordinator().await {
-                // First, load saved providers from config
-                if let Err(e) = source_coordinator.get_auth_manager().load_providers().await {
-                    error!("Failed to load providers: {}", e);
+            let source_coordinator = state.get_source_coordinator();
+            // First, load saved providers from config
+            if let Err(e) = source_coordinator.get_auth_manager().load_providers().await {
+                error!("Failed to load providers: {}", e);
+            }
+
+            // Then, migrate any legacy backends
+            if let Err(e) = source_coordinator.migrate_legacy_backends().await {
+                error!("Failed to migrate legacy backends: {}", e);
+            }
+
+            // Initialize all sources
+            match source_coordinator.initialize_all_sources().await {
+                Ok(source_statuses) => {
+                    let connected_count = source_statuses
+                        .iter()
+                        .filter(|s| {
+                            matches!(
+                                s.connection_status,
+                                crate::services::source_coordinator::ConnectionStatus::Connected
+                            )
+                        })
+                        .count();
+
+                    info!(
+                        "Initialized {} sources, {} connected",
+                        source_statuses.len(),
+                        connected_count
+                    );
                 }
-
-                // Then, migrate any legacy backends
-                if let Err(e) = source_coordinator.migrate_legacy_backends().await {
-                    error!("Failed to migrate legacy backends: {}", e);
+                Err(e) => {
+                    error!("Failed to initialize sources: {}", e);
                 }
+            }
 
-                // Initialize all sources
-                match source_coordinator.initialize_all_sources().await {
-                    Ok(source_statuses) => {
-                        let connected_count = source_statuses
-                            .iter()
-                            .filter(|s| matches!(s.connection_status, crate::services::source_coordinator::ConnectionStatus::Connected))
-                            .count();
+            // Handle the results of backend initialization
+            if let Some(window) = window_weak.upgrade() {
+                // Update backend selector (now just hides it)
+                window.update_backend_selector().await;
 
+                // Check how many backends are connected
+                let all_backends = state.source_coordinator.get_all_backends().await;
+                let connected_count = all_backends.len();
+
+                if connected_count > 0 {
+                    info!("Successfully initialized {} backends", connected_count);
+                    window.update_connection_status(true).await;
+
+                    // Update subtle status
+                    window.imp().status_container.set_visible(true);
+                    window.imp().status_label.set_text(&format!(
+                        "{} source{} connected",
+                        connected_count,
+                        if connected_count == 1 { "" } else { "s" }
+                    ));
+                    window
+                        .imp()
+                        .status_icon
+                        .set_icon_name(Some("network-transmit-receive-symbolic"));
+
+                    // Refresh all libraries
+                    window.refresh_all_libraries().await;
+
+                    // Start background sync for all sources
+                    let coordinator_clone = source_coordinator.clone();
+                    let window_weak2 = window.downgrade();
+                    glib::spawn_future_local(async move {
+                        if let Some(_window) = window_weak2.upgrade() {
+                            info!("Starting background sync for all sources...");
+                            if let Err(e) = coordinator_clone.sync_all_visible_sources().await {
+                                error!("Failed to sync sources: {}", e);
+                            }
+                        }
+                    });
+                } else {
+                    info!("No backends were successfully initialized");
+
+                    // Check if we have any providers that need authentication
+                    let providers = source_coordinator
+                        .get_auth_manager()
+                        .get_all_providers()
+                        .await;
+
+                    if !providers.is_empty() {
                         info!(
-                            "Initialized {} sources, {} connected",
-                            source_statuses.len(),
-                            connected_count
+                            "Found {} providers but no valid credentials",
+                            providers.len()
                         );
-                    }
-                    Err(e) => {
-                        error!("Failed to initialize sources: {}", e);
-                    }
-                }
 
-                // Handle the results of backend initialization
-                if let Some(window) = window_weak.upgrade() {
-                    // Update backend selector (now just hides it)
-                    window.update_backend_selector().await;
-
-                    // Check how many backends are connected
-                    let backend_manager = state.backend_manager.read().await;
-                    let all_backends = backend_manager.get_all_backends();
-                    let connected_count = all_backends.len();
-                    drop(backend_manager);
-
-                    if connected_count > 0 {
-                        info!("Successfully initialized {} backends", connected_count);
-                        window.update_connection_status(true).await;
-
-                        // Update subtle status
+                        // Show subtle authentication needed status
                         window.imp().status_container.set_visible(true);
-                        window.imp().status_label.set_text(&format!(
-                            "{} source{} connected",
-                            connected_count,
-                            if connected_count == 1 { "" } else { "s" }
-                        ));
+                        window
+                            .imp()
+                            .status_label
+                            .set_text("Authentication required");
                         window
                             .imp()
                             .status_icon
-                            .set_icon_name(Some("network-transmit-receive-symbolic"));
-
-                        // Refresh all libraries
-                        window.refresh_all_libraries().await;
-
-                        // Start background sync for all sources
-                        let coordinator_clone = source_coordinator.clone();
-                        let window_weak2 = window.downgrade();
-                        glib::spawn_future_local(async move {
-                            if let Some(_window) = window_weak2.upgrade() {
-                                info!("Starting background sync for all sources...");
-                                if let Err(e) = coordinator_clone.sync_all_visible_sources().await {
-                                    error!("Failed to sync sources: {}", e);
-                                }
-                            }
-                        });
-                    } else {
-                        info!("No backends were successfully initialized");
-
-                        // Check if we have any providers that need authentication
-                        let providers = source_coordinator
-                            .get_auth_manager()
-                            .get_all_providers()
-                            .await;
-
-                        if !providers.is_empty() {
-                            info!(
-                                "Found {} providers but no valid credentials",
-                                providers.len()
-                            );
-
-                            // Show subtle authentication needed status
-                            window.imp().status_container.set_visible(true);
-                            window
-                                .imp()
-                                .status_label
-                                .set_text("Authentication required");
-                            window
-                                .imp()
-                                .status_icon
-                                .set_icon_name(Some("dialog-password-symbolic"));
-                        }
+                            .set_icon_name(Some("dialog-password-symbolic"));
                     }
                 }
-            } else {
-                error!("SourceCoordinator not initialized");
             }
         });
     }
@@ -505,7 +501,7 @@ impl ReelMainWindow {
     pub async fn update_user_display_with_backend(
         &self,
         user: Option<crate::models::User>,
-        backend_manager: &crate::backends::BackendManager,
+        backend: Arc<dyn crate::backends::traits::MediaBackend>,
     ) {
         let imp = self.imp();
         info!(
@@ -514,61 +510,48 @@ impl ReelMainWindow {
         );
 
         if let Some(user) = user {
-            if let Some(backend) = backend_manager.get_active() {
-                info!(
-                    "Active backend found, is_initialized: {}",
-                    backend.is_initialized().await
-                );
-                if backend.is_initialized().await {
-                    // Get backend info using the trait method
-                    let backend_info = backend.get_backend_info().await;
-                    info!("Got backend info: {:?}", backend_info);
+            info!(
+                "Active backend found, is_initialized: {}",
+                backend.is_initialized().await
+            );
+            if backend.is_initialized().await {
+                // Get backend info using the trait method
+                let backend_info = backend.get_backend_info().await;
+                info!("Got backend info: {:?}", backend_info);
 
-                    // Check if we're in offline mode
-                    if user.id == "offline"
-                        && backend_info.connection_type
-                            == crate::backends::traits::ConnectionType::Unknown
-                    {
-                        // We have cached credentials but can't connect
-                        imp.status_container.set_visible(true);
-                        imp.status_label.set_text("Offline (cached)");
-                        imp.status_icon
-                            .set_icon_name(Some("network-offline-symbolic"));
-                    } else {
-                        // Create detailed status based on connection type
-                        use crate::backends::traits::ConnectionType;
-                        let (status_text, icon_name) = match backend_info.connection_type {
-                            ConnectionType::Local => {
-                                ("Connected (local)", "network-wired-symbolic")
-                            }
-                            ConnectionType::Remote => {
-                                ("Connected (remote)", "network-wireless-symbolic")
-                            }
-                            ConnectionType::Relay => {
-                                ("Connected (relay)", "network-cellular-symbolic")
-                            }
-                            ConnectionType::Offline => {
-                                ("Offline (cached)", "network-offline-symbolic")
-                            }
-                            ConnectionType::Unknown => {
-                                ("Connected", "network-transmit-receive-symbolic")
-                            }
-                        };
-
-                        imp.status_container.set_visible(true);
-                        imp.status_label.set_text(status_text);
-                        imp.status_icon.set_icon_name(Some(icon_name));
-                    }
-                } else {
+                // Check if we're in offline mode
+                if user.id == "offline"
+                    && backend_info.connection_type
+                        == crate::backends::traits::ConnectionType::Unknown
+                {
+                    // We have cached credentials but can't connect
                     imp.status_container.set_visible(true);
-                    imp.status_label.set_text("Authenticated");
-                    imp.status_icon.set_icon_name(Some("network-idle-symbolic"));
+                    imp.status_label.set_text("Offline (cached)");
+                    imp.status_icon
+                        .set_icon_name(Some("network-offline-symbolic"));
+                } else {
+                    // Create detailed status based on connection type
+                    use crate::backends::traits::ConnectionType;
+                    let (status_text, icon_name) = match backend_info.connection_type {
+                        ConnectionType::Local => ("Connected (local)", "network-wired-symbolic"),
+                        ConnectionType::Remote => {
+                            ("Connected (remote)", "network-wireless-symbolic")
+                        }
+                        ConnectionType::Relay => ("Connected (relay)", "network-cellular-symbolic"),
+                        ConnectionType::Offline => ("Offline (cached)", "network-offline-symbolic"),
+                        ConnectionType::Unknown => {
+                            ("Connected", "network-transmit-receive-symbolic")
+                        }
+                    };
+
+                    imp.status_container.set_visible(true);
+                    imp.status_label.set_text(status_text);
+                    imp.status_icon.set_icon_name(Some(icon_name));
                 }
             } else {
                 imp.status_container.set_visible(true);
-                imp.status_label.set_text("Not connected");
-                imp.status_icon
-                    .set_icon_name(Some("network-offline-symbolic"));
+                imp.status_label.set_text("Authenticated");
+                imp.status_icon.set_icon_name(Some("network-idle-symbolic"));
             }
         } else {
             imp.status_container.set_visible(false);
@@ -581,9 +564,16 @@ impl ReelMainWindow {
         if let Some(user) = user {
             // Check if backend is initialized
             let state = self.imp().state.borrow().as_ref().unwrap().clone();
-            let backend_manager = state.backend_manager.read().await;
 
-            if let Some(backend) = backend_manager.get_active() {
+            // Skip updating connection status if no backends are configured
+            let all_backends = state.source_coordinator.get_all_backends().await;
+            if all_backends.is_empty() {
+                return;
+            }
+
+            // TODO: Update this to handle multiple backends properly
+            // For now, we'll just skip the status update
+            if let Some((backend_id, backend)) = all_backends.into_iter().next() {
                 if backend.is_initialized().await {
                     // Get backend info using the trait method
                     let backend_info = backend.get_backend_info().await;
@@ -642,8 +632,9 @@ impl ReelMainWindow {
                 // Check if we now have an authenticated backend
                 let state_for_async = state_clone.clone();
                 glib::spawn_future_local(async move {
-                    let backend_manager = state_for_async.backend_manager.read().await;
-                    if let Some(backend) = backend_manager.get_active()
+                    let source_coordinator = state_for_async.get_source_coordinator();
+                    let all_backends = source_coordinator.get_all_backends().await;
+                    if let Some((backend_id, backend)) = all_backends.into_iter().next()
                         && backend.is_initialized().await
                     {
                         info!("Backend initialized after auth dialog closed");
@@ -657,21 +648,14 @@ impl ReelMainWindow {
                         // Update user display
                         if let Some(user) = state_for_async.get_user().await {
                             window
-                                .update_user_display_with_backend(Some(user), &backend_manager)
+                                .update_user_display_with_backend(Some(user), backend.clone())
                                 .await;
                         }
 
                         // FIRST: Load cached data immediately
-                        if let Some(backend_id) = state_for_async.get_active_backend_id().await {
-                            info!("Loading cached libraries for instant display...");
-                            window.load_cached_libraries_for_backend(&backend_id).await;
-
-                            // Save this backend as the last active
-                            {
-                                let mut config = state_for_async.config.write().await;
-                                let _ = config.set_last_active_backend(&backend_id);
-                            }
-                        }
+                        // Load cached libraries for the newly authenticated backend
+                        info!("Loading cached libraries for backend: {}", backend_id);
+                        window.load_cached_libraries_for_backend(&backend_id).await;
 
                         // THEN: Start background sync
                         let backend_clone = backend.clone();
@@ -684,8 +668,8 @@ impl ReelMainWindow {
                                 window.show_sync_progress(true);
 
                                 // Start sync with backend ID
-                                if let Some(backend_id) = state_clone.get_active_backend_id().await
-                                {
+                                // Use the same backend_id from outer scope
+                                if true {
                                     window
                                         .sync_and_update_libraries(
                                             &backend_id,
@@ -737,10 +721,14 @@ impl ReelMainWindow {
 
         glib::spawn_future_local(async move {
             if let Some(window) = window_weak.upgrade() {
-                // Get backend ID
-                if let Some(backend_id) = state.get_active_backend_id().await {
-                    window.update_all_backends_libraries(vec![(backend_id, libraries_clone)]);
-                }
+                // Load libraries for all backends
+                let all_backends = state.source_coordinator.get_all_backends().await;
+                let backends_libraries: Vec<(String, Vec<(crate::models::Library, usize)>)> =
+                    all_backends
+                        .into_iter()
+                        .map(|(backend_id, _)| (backend_id, libraries_clone.clone()))
+                        .collect();
+                window.update_all_backends_libraries(backends_libraries);
             }
         });
     }
@@ -1190,9 +1178,7 @@ impl ReelMainWindow {
     pub async fn sync_all_backends(&self, state: Arc<AppState>) {
         info!("Starting sync for all backends...");
 
-        let backend_manager = state.backend_manager.read().await;
-        let all_backends = backend_manager.get_all_backends();
-        drop(backend_manager);
+        let all_backends = state.source_coordinator.get_all_backends().await;
 
         // Show sync progress
         self.show_sync_progress(true);
@@ -1243,11 +1229,8 @@ impl ReelMainWindow {
         info!("Starting sync for backend: {}", backend_id);
 
         let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        let backend_manager = state.backend_manager.read().await;
 
-        if let Some(backend) = backend_manager.get_backend(backend_id) {
-            drop(backend_manager);
-
+        if let Some(backend) = state.source_coordinator.get_backend(backend_id).await {
             // Show sync progress
             self.show_sync_progress(true);
 
@@ -1288,13 +1271,12 @@ impl ReelMainWindow {
                     let parts: Vec<&str> = library_id.splitn(2, ':').collect();
                     (parts[0].to_string(), parts[1].to_string())
                 } else {
-                    // Fallback to active backend for backward compatibility
-                    if let Some(active_id) = state.get_active_backend_id().await {
-                        (active_id, library_id.clone())
-                    } else {
-                        error!("No active backend");
-                        return;
-                    }
+                    // Library ID must include backend_id
+                    error!(
+                        "Library ID '{}' does not include backend_id separator ':'",
+                        library_id
+                    );
+                    return;
                 };
 
                 let sync_manager = state.sync_manager.clone();
@@ -1319,9 +1301,11 @@ impl ReelMainWindow {
 
     async fn move_backend_up(&self, backend_id: &str) {
         let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        let mut backend_manager = state.backend_manager.write().await;
-        backend_manager.move_backend_up(backend_id);
-        drop(backend_manager);
+        state
+            .source_coordinator
+            .move_backend_up(backend_id)
+            .await
+            .ok();
 
         // Refresh the display
         self.refresh_all_libraries().await;
@@ -1329,9 +1313,11 @@ impl ReelMainWindow {
 
     async fn move_backend_down(&self, backend_id: &str) {
         let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        let mut backend_manager = state.backend_manager.write().await;
-        backend_manager.move_backend_down(backend_id);
-        drop(backend_manager);
+        state
+            .source_coordinator
+            .move_backend_down(backend_id)
+            .await
+            .ok();
 
         // Refresh the display
         self.refresh_all_libraries().await;
@@ -1339,9 +1325,7 @@ impl ReelMainWindow {
 
     async fn refresh_all_libraries(&self) {
         let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        let backend_manager = state.backend_manager.read().await;
-        let all_backends = backend_manager.get_all_backends();
-        drop(backend_manager);
+        let all_backends = state.source_coordinator.get_all_backends().await;
 
         let sync_manager = state.sync_manager.clone();
         let mut backends_libraries = Vec::new();
@@ -2201,69 +2185,9 @@ impl ReelMainWindow {
         // Sources button is always visible at the bottom
     }
 
-    async fn switch_backend(&self, backend_id: &str, state: Arc<AppState>) {
-        info!("Switching to backend: {}", backend_id);
-
-        // Update the active backend in the backend manager
-        {
-            let mut backend_manager = state.backend_manager.write().await;
-            if let Err(e) = backend_manager.set_active(backend_id) {
-                error!("Failed to set active backend: {}", e);
-                return;
-            }
-        }
-
-        // Save the new active backend to config
-        {
-            let mut config = state.config.write().await;
-            let _ = config.set_last_active_backend(backend_id);
-        }
-
-        // Clear current sources display
-        while let Some(child) = self.imp().sources_container.first_child() {
-            self.imp().sources_container.remove(&child);
-        }
-
-        // Show loading state
-        self.show_sync_progress(true);
-
-        // Load cached libraries for the new backend
-        self.load_cached_libraries_for_backend(backend_id).await;
-
-        // Get the backend and sync
-        let backend_manager = state.backend_manager.read().await;
-        if let Some(backend) = backend_manager.get_backend(backend_id) {
-            if backend.is_initialized().await {
-                // Update user display for the new backend
-                if let Some(user) = state.get_user().await {
-                    self.update_user_display_with_backend(Some(user), &backend_manager)
-                        .await;
-                }
-
-                // Start background sync
-                let backend_clone = backend.clone();
-                let state_clone = state.clone();
-                let window_weak = self.downgrade();
-                let backend_id = backend_id.to_string();
-                glib::spawn_future_local(async move {
-                    if let Some(window) = window_weak.upgrade() {
-                        window
-                            .sync_and_update_libraries(&backend_id, backend_clone, state_clone)
-                            .await;
-                        window.show_sync_progress(false);
-                    }
-                });
-            } else {
-                // Backend not initialized, show auth needed
-                self.imp().status_container.set_visible(true);
-                self.imp().status_label.set_text("Authentication required");
-                self.imp()
-                    .status_icon
-                    .set_icon_name(Some("dialog-password-symbolic"));
-                self.show_sync_progress(false);
-            }
-        } else {
-            self.show_sync_progress(false);
-        }
-    }
+    // Backend switching removed - each view must track its own backend_id
+    // The UI should be refactored to either:
+    // 1. Show content from all backends simultaneously
+    // 2. Have a backend selector that filters the view
+    // 3. Pass backend_id through the navigation hierarchy
 }

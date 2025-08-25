@@ -775,14 +775,13 @@ impl SourcesPage {
 
         glib::spawn_future_local(async move {
             // First, remove all sources associated with this provider
-            if let Some(source_coordinator) = state.get_source_coordinator().await {
-                // Get all sources for this provider
-                if let Some(sources) = auth_manager.get_cached_sources(&provider_id).await {
-                    for source in sources {
-                        // Remove each source and its backend
-                        if let Err(e) = source_coordinator.remove_source(&source.id).await {
-                            error!("Failed to remove source {}: {}", source.id, e);
-                        }
+            let source_coordinator = state.get_source_coordinator();
+            // Get all sources for this provider
+            if let Some(sources) = auth_manager.get_cached_sources(&provider_id).await {
+                for source in sources {
+                    // Remove each source and its backend
+                    if let Err(e) = source_coordinator.remove_source(&source.id).await {
+                        error!("Failed to remove source {}: {}", source.id, e);
                     }
                 }
             }

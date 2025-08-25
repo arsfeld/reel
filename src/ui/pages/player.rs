@@ -495,11 +495,11 @@ impl PlayerPage {
         // Update controls' media item reference
         *self.controls.current_media_item.write().await = Some(media_item.clone());
 
-        // Get the backend manager
-        debug!("PlayerPage::load_media() - Getting backend manager");
-        let backend_manager = state.backend_manager.read().await;
+        // Get the backend for this media item
+        let backend_id = media_item.backend_id();
+        debug!("PlayerPage::load_media() - Getting backend: {}", backend_id);
 
-        if let Some((backend_id, backend)) = backend_manager.get_active_backend() {
+        if let Some(backend) = state.source_coordinator.get_backend(backend_id).await {
             info!("PlayerPage::load_media() - Using backend: {}", backend_id);
 
             // Update controls' backend reference
@@ -629,7 +629,7 @@ impl PlayerPage {
             });
 
             // Start monitoring for playback completion
-            self.monitor_playback_completion(backend_id.clone(), backend.clone());
+            self.monitor_playback_completion(backend_id.to_string(), backend.clone());
 
             // Fetch markers and setup skip handlers for both movies and episodes
             match media_item.clone() {
@@ -692,8 +692,11 @@ impl PlayerPage {
                 }
             }
         } else {
-            error!("PlayerPage::load_media() - No active backend found!");
-            return Err(anyhow::anyhow!("No active backend available"));
+            error!(
+                "PlayerPage::load_media() - Backend not found for ID: {}",
+                backend_id
+            );
+            return Err(anyhow::anyhow!("Backend not found for ID: {}", backend_id));
         }
 
         info!("PlayerPage::load_media() - Media loading complete");
@@ -1271,8 +1274,12 @@ impl PlayerPage {
 
         // Only works for episodes, not movies
         if let MediaItem::Episode(current_episode) = current_media {
-            let backend_manager = self.state.backend_manager.read().await;
-            let (_, backend) = backend_manager.get_active_backend()?;
+            let backend_id = current_media.backend_id();
+            let backend = self
+                .state
+                .source_coordinator
+                .get_backend(backend_id)
+                .await?;
 
             // Use the backend's find_next_episode method
             match backend.find_next_episode(current_episode).await {
@@ -1338,8 +1345,10 @@ impl PlayerPage {
                     if should_sync {
                         // Get media item and backend
                         if let Some(media_item) = &*current_media_item.read().await {
-                            let backend_manager = state.backend_manager.read().await;
-                            if let Some((_, backend)) = backend_manager.get_active_backend() {
+                            let backend_id = media_item.backend_id();
+                            if let Some(backend) =
+                                state.source_coordinator.get_backend(backend_id).await
+                            {
                                 // Update progress on server
                                 let duration = media_item.duration().unwrap_or(Duration::ZERO);
                                 if let Err(e) = backend
@@ -1376,8 +1385,8 @@ impl PlayerPage {
         let player = self.player.read().await;
         if let Some(position) = player.get_position().await {
             if let Some(media_item) = &*self.current_media_item.read().await {
-                let backend_manager = self.state.backend_manager.read().await;
-                if let Some((_, backend)) = backend_manager.get_active_backend() {
+                let backend_id = media_item.backend_id();
+                if let Some(backend) = self.state.source_coordinator.get_backend(backend_id).await {
                     // Update progress on server
                     let duration = media_item.duration().unwrap_or(Duration::ZERO);
                     if let Err(e) = backend

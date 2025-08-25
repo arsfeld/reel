@@ -10,7 +10,6 @@ use crate::backends::{
 };
 use crate::models::{AuthProvider, Library, Source, SourceType};
 use crate::services::{AuthManager, CacheManager, SyncManager};
-use crate::state::AppState;
 
 /// Status of a media source connection
 #[derive(Debug, Clone)]
@@ -45,7 +44,6 @@ pub struct SyncResult {
 /// This service centralizes the lifecycle management of media sources,
 /// including authentication, backend creation, and sync coordination.
 pub struct SourceCoordinator {
-    state: Arc<AppState>,
     auth_manager: Arc<AuthManager>,
     backend_manager: Arc<RwLock<BackendManager>>,
     sync_manager: Arc<SyncManager>,
@@ -55,14 +53,12 @@ pub struct SourceCoordinator {
 
 impl SourceCoordinator {
     pub fn new(
-        state: Arc<AppState>,
         auth_manager: Arc<AuthManager>,
         backend_manager: Arc<RwLock<BackendManager>>,
         sync_manager: Arc<SyncManager>,
         cache_manager: Arc<CacheManager>,
     ) -> Self {
         Self {
-            state,
             auth_manager,
             backend_manager,
             sync_manager,
@@ -165,21 +161,40 @@ impl SourceCoordinator {
                             id
                         );
                         for source in sources {
-                            // Create offline status first
-                            let status = SourceStatus {
-                                source_id: source.id.clone(),
-                                source_name: source.name.clone(),
-                                source_type: source.source_type.clone(),
-                                connection_status: ConnectionStatus::Offline, // Start as offline
-                                library_count: 0,
-                            };
-                            all_statuses.push(status.clone());
+                            // Initialize the source (create backend and test connection)
+                            match self
+                                .initialize_source(provider.clone(), source.clone())
+                                .await
+                            {
+                                Ok(status) => {
+                                    info!(
+                                        "Initialized cached source: {} - {:?}",
+                                        source.name, status.connection_status
+                                    );
+                                    all_statuses.push(status);
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to initialize cached source {}: {}",
+                                        source.name, e
+                                    );
+                                    // Even if initialization fails, add an offline status
+                                    let status = SourceStatus {
+                                        source_id: source.id.clone(),
+                                        source_name: source.name.clone(),
+                                        source_type: source.source_type.clone(),
+                                        connection_status: ConnectionStatus::Error(e.to_string()),
+                                        library_count: 0,
+                                    };
+                                    all_statuses.push(status.clone());
 
-                            let mut statuses = self.source_statuses.write().await;
-                            statuses.insert(source.id.clone(), status);
+                                    let mut statuses = self.source_statuses.write().await;
+                                    statuses.insert(source.id.clone(), status);
+                                }
+                            }
                         }
 
-                        // Trigger background refresh
+                        // Trigger background refresh to update any changes
                         self.auth_manager.refresh_sources_background(id).await;
                     } else {
                         // No cache, try to discover online
@@ -521,5 +536,52 @@ impl SourceCoordinator {
         self.initialize_all_sources().await?;
 
         Ok(())
+    }
+
+    // Additional methods for backend management
+
+    /// Get a specific backend by ID
+    pub async fn get_backend(&self, backend_id: &str) -> Option<Arc<dyn MediaBackend>> {
+        let backend_manager = self.backend_manager.read().await;
+        backend_manager.get_backend(backend_id)
+    }
+
+    /// Get all backends
+    pub async fn get_all_backends(&self) -> Vec<(String, Arc<dyn MediaBackend>)> {
+        let backend_manager = self.backend_manager.read().await;
+        backend_manager.get_all_backends()
+    }
+
+    /// List all backends with their info
+    pub async fn list_backends(&self) -> Vec<(String, crate::backends::traits::BackendInfo)> {
+        let backend_manager = self.backend_manager.read().await;
+        backend_manager.list_backends()
+    }
+
+    /// Reorder backends
+    pub async fn reorder_backends(&self, new_order: Vec<String>) -> Result<()> {
+        let mut backend_manager = self.backend_manager.write().await;
+        backend_manager.reorder_backends(new_order);
+        Ok(())
+    }
+
+    /// Move a backend up in the order
+    pub async fn move_backend_up(&self, backend_id: &str) -> Result<()> {
+        let mut backend_manager = self.backend_manager.write().await;
+        backend_manager.move_backend_up(backend_id);
+        Ok(())
+    }
+
+    /// Move a backend down in the order
+    pub async fn move_backend_down(&self, backend_id: &str) -> Result<()> {
+        let mut backend_manager = self.backend_manager.write().await;
+        backend_manager.move_backend_down(backend_id);
+        Ok(())
+    }
+
+    /// Refresh all backends
+    pub async fn refresh_all_backends(&self) -> Result<Vec<crate::backends::traits::SyncResult>> {
+        let backend_manager = self.backend_manager.read().await;
+        backend_manager.refresh_all_backends().await
     }
 }

@@ -19,9 +19,9 @@ pub enum PlaybackState {
 }
 
 pub struct AppState {
-    pub backend_manager: Arc<RwLock<BackendManager>>,
+    backend_manager: Arc<RwLock<BackendManager>>, // Made private
     pub auth_manager: Arc<AuthManager>,
-    pub source_coordinator: Arc<RwLock<Option<Arc<SourceCoordinator>>>>,
+    pub source_coordinator: Arc<SourceCoordinator>, // Made non-optional
     pub current_user: Arc<RwLock<Option<User>>>,
     pub current_library: Arc<RwLock<Option<Library>>>,
     pub libraries: Arc<RwLock<HashMap<String, Vec<Library>>>>, // backend_id -> libraries
@@ -39,10 +39,18 @@ impl AppState {
         let cache_manager = Arc::new(CacheManager::new()?);
         let sync_manager = Arc::new(SyncManager::new(cache_manager.clone()));
 
+        // Create SourceCoordinator directly
+        let source_coordinator = Arc::new(SourceCoordinator::new(
+            auth_manager.clone(),
+            backend_manager.clone(),
+            sync_manager.clone(),
+            cache_manager.clone(),
+        ));
+
         Ok(Self {
             backend_manager,
             auth_manager,
-            source_coordinator: Arc::new(RwLock::new(None)),
+            source_coordinator,
             current_user: Arc::new(RwLock::new(None)),
             current_library: Arc::new(RwLock::new(None)),
             libraries: Arc::new(RwLock::new(HashMap::new())),
@@ -54,23 +62,9 @@ impl AppState {
         })
     }
 
-    pub fn initialize_source_coordinator(self: Arc<Self>) {
-        let source_coordinator = Arc::new(SourceCoordinator::new(
-            self.clone(),
-            self.auth_manager.clone(),
-            self.backend_manager.clone(),
-            self.sync_manager.clone(),
-            self.cache_manager.clone(),
-        ));
-
-        let mut coordinator_lock = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.source_coordinator.write())
-        });
-        *coordinator_lock = Some(source_coordinator);
-    }
-
-    pub async fn get_source_coordinator(&self) -> Option<Arc<SourceCoordinator>> {
-        self.source_coordinator.read().await.clone()
+    // This method is no longer needed since source_coordinator is initialized in new()
+    pub fn get_source_coordinator(&self) -> &Arc<SourceCoordinator> {
+        &self.source_coordinator
     }
 
     pub async fn set_user(&self, user: User) {
@@ -94,9 +88,7 @@ impl AppState {
 
     /// Sync data from all backends
     pub async fn sync_all_backends(&self) -> Result<Vec<crate::services::sync::SyncResult>> {
-        let backend_manager = self.backend_manager.read().await;
-        let all_backends = backend_manager.get_all_backends();
-        drop(backend_manager);
+        let all_backends = self.source_coordinator.get_all_backends().await;
 
         let mut results = Vec::new();
 
@@ -126,43 +118,15 @@ impl AppState {
         Ok(results)
     }
 
-    /// Sync data from the active backend (deprecated - kept for compatibility)
-    pub async fn sync_active_backend(&self) -> Result<()> {
-        let results = self.sync_all_backends().await?;
-        if results.is_empty() {
-            Err(anyhow::anyhow!("No backends configured"))
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Get cached libraries for the active backend
-    pub async fn get_cached_libraries(&self) -> Result<Vec<Library>> {
-        let backend_manager = self.backend_manager.read().await;
-
-        if let Some((backend_id, _)) = backend_manager.get_active_backend() {
-            self.sync_manager.get_cached_libraries(&backend_id).await
-        } else {
-            Ok(Vec::new())
-        }
+    /// Get cached libraries for a specific backend
+    pub async fn get_cached_libraries(&self, backend_id: &str) -> Result<Vec<Library>> {
+        self.sync_manager.get_cached_libraries(backend_id).await
     }
 
     /// Get libraries for a specific backend from state cache
     pub async fn get_libraries_for_backend(&self, backend_id: &str) -> Vec<Library> {
         let libraries = self.libraries.read().await;
         libraries.get(backend_id).cloned().unwrap_or_default()
-    }
-
-    /// Get libraries for the active backend
-    pub async fn get_active_backend_libraries(&self) -> Vec<Library> {
-        let backend_manager = self.backend_manager.read().await;
-
-        if let Some((backend_id, _)) = backend_manager.get_active_backend() {
-            drop(backend_manager); // Release the lock before calling async method
-            self.get_libraries_for_backend(&backend_id).await
-        } else {
-            Vec::new()
-        }
     }
 
     /// Update libraries for a backend
@@ -183,37 +147,14 @@ impl AppState {
         items_map.insert(library_id, items);
     }
 
-    /// Switch to a different backend
-    pub async fn switch_backend(&self, backend_id: &str) -> Result<()> {
-        let mut backend_manager = self.backend_manager.write().await;
-        backend_manager.set_active(backend_id)?;
-
-        // Clear current library selection when switching backends
-        *self.current_library.write().await = None;
-
-        // Clear library items for the previous backend to save memory
-        self.library_items.write().await.clear();
-
-        Ok(())
-    }
-
     /// Get all configured backends
     pub async fn get_all_backends(&self) -> Vec<(String, crate::backends::traits::BackendInfo)> {
-        let backend_manager = self.backend_manager.read().await;
-        backend_manager.list_backends()
-    }
-
-    /// Get the currently active backend ID
-    pub async fn get_active_backend_id(&self) -> Option<String> {
-        let backend_manager = self.backend_manager.read().await;
-        backend_manager.get_active_backend().map(|(id, _)| id)
+        self.source_coordinator.list_backends().await
     }
 
     /// Get libraries from all backends
     pub async fn get_all_libraries(&self) -> Vec<(String, Vec<Library>)> {
-        let backend_manager = self.backend_manager.read().await;
-        let all_backends = backend_manager.get_all_backends();
-        drop(backend_manager);
+        let all_backends = self.source_coordinator.get_all_backends().await;
 
         let mut all_libraries = Vec::new();
 

@@ -354,8 +354,8 @@ impl MovieDetailsPage {
 
         // Get backend and fetch stream info
         if let Some(state) = imp.state.borrow().as_ref() {
-            let backend_manager = state.backend_manager.read().await;
-            if let Some((_, backend)) = backend_manager.get_active_backend() {
+            let backend_id = &movie.backend_id;
+            if let Some(backend) = state.source_coordinator.get_backend(backend_id).await {
                 match backend.get_stream_url(&movie.id).await {
                     Ok(stream_info) => {
                         self.display_stream_info(&stream_info);
@@ -451,8 +451,9 @@ impl MovieDetailsPage {
 
             glib::spawn_future_local(async move {
                 if let Some(state) = state {
-                    let backend_manager = state.backend_manager.read().await;
-                    if let Some((_, backend)) = backend_manager.get_active_backend() {
+                    let source_coordinator = state.get_source_coordinator();
+                    // Use the backend_id from the movie
+                    if let Some(backend) = source_coordinator.get_backend(&movie.backend_id).await {
                         let result = if movie.watched {
                             backend.mark_unwatched(&movie.id).await
                         } else {

@@ -587,58 +587,100 @@ impl MediaBackend for PlexBackend {
         // Store the token
         *self.auth_token.write().await = Some(token.to_string());
 
-        // Try to discover and connect to the best server
-        match PlexAuth::discover_servers(&token).await {
-            Ok(servers) => {
-                if let Some(server) = servers.first() {
-                    // Test all connections in parallel and use the fastest one
-                    match self.find_best_connection(server, &token).await {
-                        Ok(best_conn) => {
-                            *self.base_url.write().await = Some(best_conn.uri.clone());
-                            *self.server_name.write().await = Some(server.name.clone());
+        // Check if we already have a URL from the source
+        let existing_url = self.base_url.read().await.clone();
 
-                            // Store server info
-                            *self.server_info.write().await = Some(ServerInfo {
-                                name: server.name.clone(),
-                                is_local: best_conn.local,
-                                is_relay: best_conn.relay,
-                                uri: best_conn.uri.clone(),
-                            });
+        if let Some(url) = existing_url {
+            // We already have a URL from the source, just use it
+            tracing::info!("Using existing URL from source: {}", url);
 
-                            // Create and store the API client with cache
-                            let api = PlexApi::with_cache(
-                                best_conn.uri.clone(),
-                                token.to_string(),
-                                self.cache.clone(),
-                                self.backend_id.clone(),
-                            );
-                            *self.api.write().await = Some(api);
+            // Create and store the API client with cache
+            let api = PlexApi::with_cache(
+                url.clone(),
+                token.to_string(),
+                self.cache.clone(),
+                self.backend_id.clone(),
+            );
+            *self.api.write().await = Some(api);
 
-                            tracing::info!(
-                                "Connected to Plex server: {} at {} ({})",
-                                server.name,
-                                best_conn.uri,
-                                if best_conn.local {
-                                    "local"
-                                } else if best_conn.relay {
-                                    "relay"
-                                } else {
-                                    "remote"
-                                }
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to connect to any server endpoint: {}", e);
-                        }
-                    }
-                } else {
-                    tracing::warn!("No Plex servers found");
-                }
+            // Store server info
+            if let Some(ref source) = self.source {
+                *self.server_info.write().await = Some(ServerInfo {
+                    name: source.name.clone(),
+                    is_local: url.contains("192.168.")
+                        || url.contains("10.")
+                        || url.contains("localhost"),
+                    is_relay: url.contains("plex.direct"),
+                    uri: url.clone(),
+                });
             }
-            Err(e) => {
-                tracing::warn!("Failed to discover servers (will retry later): {}", e);
-                // Still return success since we have the user authenticated
-                // Server discovery can be retried later
+        } else {
+            // No URL saved, need to discover servers
+            tracing::info!("No saved URL, discovering servers...");
+
+            match PlexAuth::discover_servers(&token).await {
+                Ok(servers) => {
+                    // Find the right server based on our source's machine_id if available
+                    let target_server = if let Some(ref source) = self.source {
+                        if let SourceType::PlexServer { ref machine_id, .. } = source.source_type {
+                            servers.iter().find(|s| &s.client_identifier == machine_id)
+                        } else {
+                            servers.first()
+                        }
+                    } else {
+                        servers.first()
+                    };
+
+                    if let Some(server) = target_server {
+                        // Test all connections in parallel and use the fastest one
+                        match self.find_best_connection(server, &token).await {
+                            Ok(best_conn) => {
+                                *self.base_url.write().await = Some(best_conn.uri.clone());
+                                *self.server_name.write().await = Some(server.name.clone());
+
+                                // Store server info
+                                *self.server_info.write().await = Some(ServerInfo {
+                                    name: server.name.clone(),
+                                    is_local: best_conn.local,
+                                    is_relay: best_conn.relay,
+                                    uri: best_conn.uri.clone(),
+                                });
+
+                                // Create and store the API client with cache
+                                let api = PlexApi::with_cache(
+                                    best_conn.uri.clone(),
+                                    token.to_string(),
+                                    self.cache.clone(),
+                                    self.backend_id.clone(),
+                                );
+                                *self.api.write().await = Some(api);
+
+                                tracing::info!(
+                                    "Connected to Plex server: {} at {} ({})",
+                                    server.name,
+                                    best_conn.uri,
+                                    if best_conn.local {
+                                        "local"
+                                    } else if best_conn.relay {
+                                        "relay"
+                                    } else {
+                                        "remote"
+                                    }
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to connect to any server endpoint: {}", e);
+                            }
+                        }
+                    } else {
+                        tracing::warn!("No Plex servers found");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to discover servers (will retry later): {}", e);
+                    // Still return success since we have the user authenticated
+                    // Server discovery can be retried later
+                }
             }
         }
 

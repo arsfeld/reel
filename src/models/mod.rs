@@ -34,6 +34,7 @@ pub enum LibraryType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Movie {
     pub id: String,
+    pub backend_id: String, // Which backend this movie came from
     pub title: String,
     pub year: Option<u32>,
     pub duration: Duration,
@@ -57,6 +58,7 @@ pub struct Movie {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Show {
     pub id: String,
+    pub backend_id: String, // Which backend this show came from
     pub title: String,
     pub year: Option<u32>,
     pub seasons: Vec<Season>,
@@ -84,6 +86,7 @@ pub struct Season {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Episode {
     pub id: String,
+    pub backend_id: String, // Which backend this episode came from
     pub title: String,
     pub season_number: u32,
     pub episode_number: u32,
@@ -224,6 +227,17 @@ impl MediaItem {
             MediaItem::MusicAlbum(a) => &a.id,
             MediaItem::MusicTrack(t) => &t.id,
             MediaItem::Photo(p) => &p.id,
+        }
+    }
+
+    pub fn backend_id(&self) -> &str {
+        match self {
+            MediaItem::Movie(m) => &m.backend_id,
+            MediaItem::Show(s) => &s.backend_id,
+            MediaItem::Episode(e) => &e.backend_id,
+            MediaItem::MusicAlbum(_) => "", // TODO: Add backend_id to music/photo models
+            MediaItem::MusicTrack(_) => "",
+            MediaItem::Photo(_) => "",
         }
     }
 
