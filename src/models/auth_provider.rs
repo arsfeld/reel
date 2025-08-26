@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Represents different authentication providers for media sources
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum AuthProvider {
     /// Plex account that can discover multiple servers
@@ -85,7 +85,7 @@ impl AuthProvider {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum NetworkAuthType {
     SMB { domain: Option<String> },
     SFTP { use_key: bool },
@@ -93,7 +93,7 @@ pub enum NetworkAuthType {
     NFS,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum NetworkCredentialData {
     UsernamePassword {
         username: String,
@@ -118,7 +118,7 @@ impl Default for NetworkCredentialData {
 }
 
 /// Represents a discovered or configured media source
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Source {
     pub id: String,
     pub name: String,
@@ -131,7 +131,7 @@ pub struct Source {
     pub library_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SourceType {
     PlexServer {
         machine_id: String,
@@ -147,7 +147,7 @@ pub enum SourceType {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConnectionInfo {
     pub primary_url: Option<String>,
     pub is_online: bool,

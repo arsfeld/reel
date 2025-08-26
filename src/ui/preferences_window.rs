@@ -84,12 +84,23 @@ impl PreferencesWindow {
             .model(&gtk4::StringList::new(&["GStreamer", "MPV"]))
             .build();
 
-        // Set current selection based on shared config
+        // Set current selections based on shared config
         if let Some(config_arc) = self.imp().config.borrow().as_ref() {
             let config_arc = config_arc.clone();
             let player_backend_row_clone = player_backend_row.clone();
+            let theme_row_clone = theme_row.clone();
             glib::spawn_future_local(async move {
                 let config = config_arc.read().await;
+
+                // Set theme selection
+                let theme_index = match config.general.theme.as_str() {
+                    "light" => 1,
+                    "dark" => 2,
+                    _ => 0, // Default to System/auto
+                };
+                theme_row_clone.set_selected(theme_index);
+
+                // Set player backend selection
                 let selected_index = match config.playback.player_backend.as_str() {
                     "mpv" => 1,
                     _ => 0, // Default to GStreamer
