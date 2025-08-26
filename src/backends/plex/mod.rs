@@ -372,50 +372,20 @@ impl PlexBackend {
         tracing::debug!("get_api() called for backend {}", self.backend_id);
 
         let api_guard = self.api.read().await;
-        if let Some(_api) = api_guard.as_ref() {
-            tracing::debug!("API client exists, checking base_url and auth_token");
-
-            let base_url = self
-                .base_url
-                .read()
-                .await
-                .as_ref()
-                .ok_or_else(|| {
-                    tracing::error!("Base URL not set for backend {}", self.backend_id);
-                    anyhow::anyhow!("Base URL not set")
-                })?
-                .clone();
-
-            tracing::debug!("Base URL: {}", base_url);
-
-            let auth_token = self
-                .auth_token
-                .read()
-                .await
-                .as_ref()
-                .ok_or_else(|| {
-                    tracing::error!("Auth token not set for backend {}", self.backend_id);
-                    anyhow::anyhow!("Auth token not set")
-                })?
-                .clone();
-
-            tracing::debug!("Auth token length: {}", auth_token.len());
-
-            Ok(PlexApi::with_cache(
-                base_url,
-                auth_token,
-                self.cache.clone(),
-                self.backend_id.clone(),
-            ))
-        } else {
-            tracing::error!(
-                "Plex API not initialized for backend {}. Please authenticate first.",
-                self.backend_id
-            );
-            Err(anyhow::anyhow!(
-                "Plex API not initialized. Please authenticate first."
-            ))
+        if let Some(api) = api_guard.as_ref() {
+            // Return the existing API instance
+            return Ok(api.clone());
         }
+
+        // API not initialized, return error
+        drop(api_guard);
+        tracing::error!(
+            "Plex API not initialized for backend {}. Please authenticate first.",
+            self.backend_id
+        );
+        Err(anyhow::anyhow!(
+            "Plex API not initialized. Please authenticate first."
+        ))
     }
 }
 
