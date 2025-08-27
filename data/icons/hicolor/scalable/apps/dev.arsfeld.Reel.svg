@@ -1,141 +1,32 @@
-<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- GNOME HIG compliant gradients -->
-    <linearGradient id="backgroundGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#3584e4;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#1c71d8;stop-opacity:1" />
+    <linearGradient id="purpleGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ab47bc;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#8e24aa;stop-opacity:1" />
     </linearGradient>
-    
-    <linearGradient id="reelGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#62a0ea;stop-opacity:1" />
-      <stop offset="50%" style="stop-color:#3584e4;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#1c71d8;stop-opacity:1" />
+    <linearGradient id="tealGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#26c6da;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00acc1;stop-opacity:1" />
     </linearGradient>
-    
-    <linearGradient id="centerGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#f6d32d;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#f5c211;stop-opacity:1" />
+    <linearGradient id="pinkGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ec407a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#d81b60;stop-opacity:1" />
     </linearGradient>
-    
-    <linearGradient id="shadowGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#000000;stop-opacity:0.1" />
-      <stop offset="100%" style="stop-color:#000000;stop-opacity:0.3" />
-    </linearGradient>
-    
-    <!-- Modern shadow filter -->
-    <filter id="dropShadow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
-      <feOffset dx="0" dy="2" result="offsetblur"/>
-      <feFlood flood-color="#000000" flood-opacity="0.2"/>
-      <feComposite in2="offsetblur" operator="in"/>
-      <feMerge>
-        <feMergeNode/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-opacity="0.2"/>
     </filter>
-    
-    <!-- Inner shadow for depth -->
-    <filter id="innerShadow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
-      <feOffset dx="0" dy="1" result="offsetblur"/>
-      <feFlood flood-color="#000000" flood-opacity="0.3"/>
-      <feComposite in2="offsetblur" operator="in"/>
-      <feComposite in2="SourceAlpha" operator="in"/>
-      <feMerge>
-        <feMergeNode in="SourceGraphic"/>
-        <feMergeNode/>
-      </feMerge>
+    <filter id="blur">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="0.5"/>
     </filter>
   </defs>
   
-  <!-- Background circle with padding (GNOME HIG safe area) -->
-  <circle cx="128" cy="128" r="108" fill="url(#backgroundGradient)" opacity="0.1"/>
+  <!-- Dynamic overlapping frames -->
+  <rect x="20" y="44" width="36" height="52" rx="8" fill="url(#purpleGradient)" opacity="0.8" filter="url(#shadow)" transform="rotate(-12, 38, 70)"/>
+  <rect x="46" y="38" width="36" height="52" rx="8" fill="url(#tealGradient)" opacity="0.8" filter="url(#shadow)"/>
+  <rect x="72" y="44" width="36" height="52" rx="8" fill="url(#pinkGradient)" opacity="0.8" filter="url(#shadow)" transform="rotate(12, 90, 70)"/>
   
-  <!-- Main film reel body -->
-  <g filter="url(#dropShadow)">
-    <circle cx="128" cy="128" r="100" fill="url(#reelGradient)"/>
-    
-    <!-- Inner rim highlight -->
-    <circle cx="128" cy="128" r="96" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.4"/>
-    
-    <!-- Film strip perforations -->
-    <g transform="translate(128, 128)">
-      <g id="perf">
-        <rect x="-5" y="-92" width="10" height="6" rx="1" fill="#1a5fb4"/>
-      </g>
-      <use href="#perf" transform="rotate(15)"/>
-      <use href="#perf" transform="rotate(30)"/>
-      <use href="#perf" transform="rotate(45)"/>
-      <use href="#perf" transform="rotate(60)"/>
-      <use href="#perf" transform="rotate(75)"/>
-      <use href="#perf" transform="rotate(90)"/>
-      <use href="#perf" transform="rotate(105)"/>
-      <use href="#perf" transform="rotate(120)"/>
-      <use href="#perf" transform="rotate(135)"/>
-      <use href="#perf" transform="rotate(150)"/>
-      <use href="#perf" transform="rotate(165)"/>
-      <use href="#perf" transform="rotate(180)"/>
-      <use href="#perf" transform="rotate(195)"/>
-      <use href="#perf" transform="rotate(210)"/>
-      <use href="#perf" transform="rotate(225)"/>
-      <use href="#perf" transform="rotate(240)"/>
-      <use href="#perf" transform="rotate(255)"/>
-      <use href="#perf" transform="rotate(270)"/>
-      <use href="#perf" transform="rotate(285)"/>
-      <use href="#perf" transform="rotate(300)"/>
-      <use href="#perf" transform="rotate(315)"/>
-      <use href="#perf" transform="rotate(330)"/>
-      <use href="#perf" transform="rotate(345)"/>
-    </g>
-    
-    <!-- Spokes/holes in minimalist style -->
-    <g transform="translate(128, 128)">
-      <!-- Top spoke -->
-      <circle cx="0" cy="-55" r="16" fill="#1a5fb4" filter="url(#innerShadow)"/>
-      <circle cx="0" cy="-55" r="12" fill="#ffffff" opacity="0.1"/>
-      
-      <!-- Top-right spoke -->
-      <circle cx="39" cy="-39" r="16" fill="#1a5fb4" filter="url(#innerShadow)"/>
-      <circle cx="39" cy="-39" r="12" fill="#ffffff" opacity="0.1"/>
-      
-      <!-- Right spoke -->
-      <circle cx="55" cy="0" r="16" fill="#1a5fb4" filter="url(#innerShadow)"/>
-      <circle cx="55" cy="0" r="12" fill="#ffffff" opacity="0.1"/>
-      
-      <!-- Bottom-right spoke -->
-      <circle cx="39" cy="39" r="16" fill="#1a5fb4" filter="url(#innerShadow)"/>
-      <circle cx="39" cy="39" r="12" fill="#ffffff" opacity="0.1"/>
-      
-      <!-- Bottom spoke -->
-      <circle cx="0" cy="55" r="16" fill="#1a5fb4" filter="url(#innerShadow)"/>
-      <circle cx="0" cy="55" r="12" fill="#ffffff" opacity="0.1"/>
-      
-      <!-- Bottom-left spoke -->
-      <circle cx="-39" cy="39" r="16" fill="#1a5fb4" filter="url(#innerShadow)"/>
-      <circle cx="-39" cy="39" r="12" fill="#ffffff" opacity="0.1"/>
-      
-      <!-- Left spoke -->
-      <circle cx="-55" cy="0" r="16" fill="#1a5fb4" filter="url(#innerShadow)"/>
-      <circle cx="-55" cy="0" r="12" fill="#ffffff" opacity="0.1"/>
-      
-      <!-- Top-left spoke -->
-      <circle cx="-39" cy="-39" r="16" fill="#1a5fb4" filter="url(#innerShadow)"/>
-      <circle cx="-39" cy="-39" r="12" fill="#ffffff" opacity="0.1"/>
-    </g>
-    
-    <!-- Center hub with accent color -->
-    <circle cx="128" cy="128" r="28" fill="#1a5fb4" filter="url(#innerShadow)"/>
-    <circle cx="128" cy="128" r="24" fill="url(#centerGradient)"/>
-    
-    <!-- Play symbol in center -->
-    <g transform="translate(128, 128)">
-      <path d="M -7,-9 L -7,9 L 10,0 Z" fill="#9a5200" opacity="0.8"/>
-    </g>
-    
-    <!-- Center hub highlight -->
-    <circle cx="128" cy="128" r="22" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.3"/>
-    
-    <!-- Top highlight for depth -->
-    <ellipse cx="128" cy="60" rx="60" ry="30" fill="#ffffff" opacity="0.15"/>
-  </g>
+  <!-- Glass morphism play button -->
+  <circle cx="64" cy="64" r="22" fill="#ffffff" opacity="0.15" filter="url(#blur)"/>
+  <circle cx="64" cy="64" r="20" fill="#ffffff" opacity="0.9"/>
+  <path d="M 58,54 L 58,74 L 76,64 Z" fill="#424242"/>
 </svg>
