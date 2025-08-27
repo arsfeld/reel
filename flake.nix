@@ -30,7 +30,7 @@
 
         buildInputs = with pkgs; [
           # GTK and UI
-          gtk4
+          gtk4  # This should be 4.14+ from nixpkgs unstable
           libadwaita
           libepoxy  # For OpenGL function loading
           
