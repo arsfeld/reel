@@ -13,20 +13,20 @@
       <stop offset="100%" style="stop-color:#d81b60;stop-opacity:1" />
     </linearGradient>
     <filter id="shadow">
-      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-opacity="0.2"/>
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-opacity="0.25"/>
     </filter>
     <filter id="blur">
       <feGaussianBlur in="SourceGraphic" stdDeviation="0.5"/>
     </filter>
   </defs>
   
-  <!-- Dynamic overlapping frames -->
-  <rect x="20" y="44" width="36" height="52" rx="8" fill="url(#purpleGradient)" opacity="0.8" filter="url(#shadow)" transform="rotate(-12, 38, 70)"/>
-  <rect x="46" y="38" width="36" height="52" rx="8" fill="url(#tealGradient)" opacity="0.8" filter="url(#shadow)"/>
-  <rect x="72" y="44" width="36" height="52" rx="8" fill="url(#pinkGradient)" opacity="0.8" filter="url(#shadow)" transform="rotate(12, 90, 70)"/>
+  <!-- Dynamic overlapping frames - scaled up and repositioned -->
+  <rect x="8" y="32" width="48" height="70" rx="10" fill="url(#purpleGradient)" opacity="0.85" filter="url(#shadow)" transform="rotate(-12, 32, 67)"/>
+  <rect x="40" y="24" width="48" height="70" rx="10" fill="url(#tealGradient)" opacity="0.85" filter="url(#shadow)"/>
+  <rect x="72" y="32" width="48" height="70" rx="10" fill="url(#pinkGradient)" opacity="0.85" filter="url(#shadow)" transform="rotate(12, 96, 67)"/>
   
-  <!-- Glass morphism play button -->
-  <circle cx="64" cy="64" r="22" fill="#ffffff" opacity="0.15" filter="url(#blur)"/>
-  <circle cx="64" cy="64" r="20" fill="#ffffff" opacity="0.9"/>
-  <path d="M 58,54 L 58,74 L 76,64 Z" fill="#424242"/>
+  <!-- Glass morphism play button - larger -->
+  <circle cx="64" cy="64" r="28" fill="#ffffff" opacity="0.15" filter="url(#blur)"/>
+  <circle cx="64" cy="64" r="26" fill="#ffffff" opacity="0.9"/>
+  <path d="M 56,51 L 56,77 L 80,64 Z" fill="#424242"/>
 </svg>
