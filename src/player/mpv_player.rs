@@ -902,6 +902,10 @@ impl MpvPlayerInner {
         let mpv =
             Mpv::new().map_err(|e| anyhow::anyhow!("Failed to create MPV instance: {:?}", e))?;
 
+        // Enable terminal output so MPV can log messages
+        mpv.set_property("terminal", true)
+            .map_err(|e| anyhow::anyhow!("Failed to enable terminal: {:?}", e))?;
+
         // Set log level - this needs to be set before other properties
         if self.verbose_logging {
             let _ = mpv.set_property("msg-level", "all=debug");

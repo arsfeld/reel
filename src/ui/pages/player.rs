@@ -705,22 +705,33 @@ impl PlayerPage {
             let video_widget = player.create_video_widget();
             info!("PlayerPage::load_media() - Video widget created");
 
-            // Add video widget to container with GraphicsOffload if available
+            // Add video widget to container
             debug!("PlayerPage::load_media() - Adding video widget to container");
 
-            // Use GraphicsOffload for better performance (GTK 4.14+)
-            // This offloads video rendering to a dedicated GPU subsurface
-            let offload = gtk4::GraphicsOffload::builder()
-                .child(&video_widget)
-                .build();
+            // Only use GraphicsOffload for GStreamer backend
+            // MPV uses GLArea which manages its own OpenGL context and doesn't work well with offload
+            let using_mpv = self.config.playback.player_backend.to_lowercase() == "mpv";
 
-            // Enable offload - this can reduce CPU usage and improve performance
-            // The widget will determine if offloading is actually beneficial
-            offload.set_enabled(gtk4::GraphicsOffloadEnabled::Enabled);
+            if using_mpv {
+                // Direct append for MPV - it manages its own GL rendering
+                debug!("PlayerPage::load_media() - Using direct rendering for MPV player");
+                self.video_container.append(&video_widget);
+            } else {
+                // Use GraphicsOffload for GStreamer for better performance (GTK 4.14+)
+                // This offloads video rendering to a dedicated GPU subsurface
+                let offload = gtk4::GraphicsOffload::builder()
+                    .child(&video_widget)
+                    .build();
 
-            debug!("PlayerPage::load_media() - Using GraphicsOffload for video rendering");
-            info!("GraphicsOffload enabled for improved video performance");
-            self.video_container.append(&offload);
+                // Enable offload - this can reduce CPU usage and improve performance
+                offload.set_enabled(gtk4::GraphicsOffloadEnabled::Enabled);
+
+                debug!(
+                    "PlayerPage::load_media() - Using GraphicsOffload for GStreamer video rendering"
+                );
+                info!("GraphicsOffload enabled for improved video performance");
+                self.video_container.append(&offload);
+            }
 
             info!("PlayerPage::load_media() - Video widget added to container");
 
