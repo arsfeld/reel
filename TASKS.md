@@ -120,13 +120,14 @@
 - [ ] Watchlist/Up Next
 
 ### 🌐 Additional Backends
-- [x] **Jellyfin Integration** (January 2025)
+- [x] **Jellyfin Integration** (January 2025) ✅ COMPLETE
   - [x] Full authentication flow with auth dialog
   - [x] Backend management in preferences
   - [x] Seamless backend switching
   - [x] Cast/crew info (implemented, depends on server metadata)
   - [x] Watch status retrieval (fully functional)
   - [x] Chapter markers (MediaSegments API, requires server plugin)
+  - [x] Playback position sync (resume from last position)
 - [ ] Local file support (UI exists, backend not implemented)
 - [ ] Metadata provider integration
 
@@ -282,6 +283,7 @@
 ## 🎯 Immediate Priority Tasks (Now that Auth is Done)
 
 ### 1️⃣ Critical Bug Fixes
+- [ ] **Homepage multi-backend conflict** - Sections from different backends randomly replace each other
 - [ ] **Homepage horizontal scrolling** - Images don't load when scrolling
 - [ ] **GStreamer subtitle colorspace** - Fix color artifacts or disable subtitles
 - [ ] **Navigation history** - Extend beyond just player page
@@ -341,6 +343,7 @@
 ## Known Issues
 
 ### Critical Issues
+- [ ] **Homepage with multiple backends**: When multiple backends are enabled, homepage sections randomly replace each other instead of showing all backends' content
 - [ ] **Homepage horizontal scrolling**: Images don't load when scrolling horizontally
 - [ ] **GStreamer subtitles**: Color artifacts when subtitles displayed (use MPV instead)
 - [x] **Jellyfin sync failure**: ~~Connects successfully but fails to fetch movie/show items during sync~~ FIXED - Added #[serde(default)] to handle missing UserData fields
@@ -357,14 +360,14 @@
 
 ### Backend Implementations
 
-#### Jellyfin Backend (Mostly Complete - January 2025)
+#### Jellyfin Backend ✅ COMPLETE (January 2025)
 - [x] **Core API Implementation** - Complete
   - [x] Authentication (username/password)
   - [x] Library fetching
   - [x] Movie and show retrieval
   - [x] Episode fetching
   - [x] Stream URL generation
-  - [x] Playback progress tracking
+  - [x] Playback progress tracking ✅
   - [x] Search functionality
   - [x] Home sections
 - [x] **UI Integration**:
