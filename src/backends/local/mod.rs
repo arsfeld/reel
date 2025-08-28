@@ -189,7 +189,10 @@ impl MediaBackend for LocalBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::events::EventBus;
     use crate::models::{AuthProvider, ConnectionInfo, Source, SourceType};
+    use std::panic::AssertUnwindSafe;
 
     #[test]
     fn test_new() {
@@ -268,7 +271,9 @@ mod tests {
             Some("plex".to_string()),
         );
 
-        let auth_manager = Arc::new(AuthManager::new());
+        let config = Arc::new(RwLock::new(Config::default()));
+        let event_bus = Arc::new(EventBus::new(1000));
+        let auth_manager = Arc::new(AuthManager::new(config, event_bus));
         let result = LocalBackend::from_auth(auth_provider, source, auth_manager, None);
 
         assert!(result.is_err());
@@ -294,7 +299,9 @@ mod tests {
             Some("local".to_string()),
         );
 
-        let auth_manager = Arc::new(AuthManager::new());
+        let config = Arc::new(RwLock::new(Config::default()));
+        let event_bus = Arc::new(EventBus::new(1000));
+        let auth_manager = Arc::new(AuthManager::new(config, event_bus));
         let result = LocalBackend::from_auth(auth_provider, source, auth_manager, None);
 
         assert!(result.is_ok());
@@ -316,7 +323,9 @@ mod tests {
             Some("local".to_string()),
         );
 
-        let auth_manager = Arc::new(AuthManager::new());
+        let config = Arc::new(RwLock::new(Config::default()));
+        let event_bus = Arc::new(EventBus::new(1000));
+        let auth_manager = Arc::new(AuthManager::new(config, event_bus));
         let backend = LocalBackend::from_auth(auth_provider, source, auth_manager, None).unwrap();
 
         let dirs = backend.media_directories.read().await;
@@ -443,30 +452,30 @@ mod tests {
     #[tokio::test]
     async fn test_get_libraries_todo() {
         let backend = LocalBackend::new();
-        let result = std::panic::catch_unwind(|| {
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let runtime = tokio::runtime::Runtime::new().unwrap();
             runtime.block_on(async { backend.get_libraries().await })
-        });
+        }));
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_get_movies_todo() {
         let backend = LocalBackend::new();
-        let result = std::panic::catch_unwind(|| {
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let runtime = tokio::runtime::Runtime::new().unwrap();
             runtime.block_on(async { backend.get_movies("lib1").await })
-        });
+        }));
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_get_shows_todo() {
         let backend = LocalBackend::new();
-        let result = std::panic::catch_unwind(|| {
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let runtime = tokio::runtime::Runtime::new().unwrap();
             runtime.block_on(async { backend.get_shows("lib1").await })
-        });
+        }));
         assert!(result.is_err());
     }
 }
