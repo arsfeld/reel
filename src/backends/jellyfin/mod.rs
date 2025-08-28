@@ -640,6 +640,8 @@ impl MediaBackend for JellyfinBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::events::EventBus;
     use crate::models::{AuthProvider, Source, SourceType};
 
     #[test]
@@ -672,7 +674,9 @@ mod tests {
             Some("plex".to_string()),
         );
 
-        let auth_manager = Arc::new(AuthManager::new());
+        let config = Arc::new(RwLock::new(Config::default()));
+        let event_bus = Arc::new(EventBus::new(1000));
+        let auth_manager = Arc::new(AuthManager::new(config, event_bus));
         let result = JellyfinBackend::from_auth(auth_provider, source, auth_manager);
 
         assert!(result.is_err());
@@ -704,7 +708,9 @@ mod tests {
             Some("jellyfin".to_string()),
         );
 
-        let auth_manager = Arc::new(AuthManager::new());
+        let config = Arc::new(RwLock::new(Config::default()));
+        let event_bus = Arc::new(EventBus::new(1000));
+        let auth_manager = Arc::new(AuthManager::new(config, event_bus));
         let result = JellyfinBackend::from_auth(auth_provider, source, auth_manager);
 
         assert!(result.is_err());
@@ -734,7 +740,9 @@ mod tests {
         );
         source.connection_info.primary_url = Some("http://jellyfin.local".to_string());
 
-        let auth_manager = Arc::new(AuthManager::new());
+        let config = Arc::new(RwLock::new(Config::default()));
+        let event_bus = Arc::new(EventBus::new(1000));
+        let auth_manager = Arc::new(AuthManager::new(config, event_bus));
         let result = JellyfinBackend::from_auth(auth_provider, source.clone(), auth_manager);
 
         assert!(result.is_ok());

@@ -195,8 +195,8 @@ mod tests {
         let strategy =
             SyncStrategy::new().with_intervals(Duration::from_secs(3600), Duration::from_secs(600));
 
-        // Last sync was exactly 10 minutes ago
-        let last_sync = Utc::now() - TimeDelta::seconds(600);
+        // Last sync was exactly 10 minutes ago (minus a small buffer to account for execution time)
+        let last_sync = Utc::now() - TimeDelta::seconds(599);
 
         // Should not sync (needs to be greater than interval)
         assert!(!strategy.should_sync_now(Some(last_sync)));
@@ -238,8 +238,8 @@ mod tests {
         let strategy =
             SyncStrategy::new().with_intervals(Duration::from_secs(3600), Duration::from_secs(600));
 
-        // Last full sync was exactly 1 hour ago
-        let last_sync = Utc::now() - TimeDelta::seconds(3600);
+        // Last full sync was exactly 1 hour ago (minus a small buffer to account for execution time)
+        let last_sync = Utc::now() - TimeDelta::seconds(3599);
 
         // Should not full sync (needs to be greater than interval)
         assert!(!strategy.should_full_sync(Some(last_sync)));
