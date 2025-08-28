@@ -29,6 +29,34 @@ pub enum PlayerState {
     Error(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UpscalingMode {
+    None,
+    HighQuality,
+    FSR,
+    Anime,
+}
+
+impl UpscalingMode {
+    pub fn next(&self) -> Self {
+        match self {
+            UpscalingMode::None => UpscalingMode::HighQuality,
+            UpscalingMode::HighQuality => UpscalingMode::FSR,
+            UpscalingMode::FSR => UpscalingMode::Anime,
+            UpscalingMode::Anime => UpscalingMode::None,
+        }
+    }
+
+    pub fn to_string(&self) -> &'static str {
+        match self {
+            UpscalingMode::None => "None",
+            UpscalingMode::HighQuality => "High Quality",
+            UpscalingMode::FSR => "FSR",
+            UpscalingMode::Anime => "Anime",
+        }
+    }
+}
+
 struct MpvPlayerInner {
     mpv: RefCell<Option<Mpv>>,
     mpv_gl: RefCell<Option<*mut mpv_render_context>>,
@@ -48,6 +76,7 @@ struct MpvPlayerInner {
     seek_pending: Arc<Mutex<Option<(f64, Instant)>>>,
     seek_timer: RefCell<Option<glib::SourceId>>,
     last_seek_target: Arc<Mutex<Option<f64>>>,
+    upscaling_mode: Arc<Mutex<UpscalingMode>>,
 }
 
 #[derive(Clone)]
@@ -90,6 +119,7 @@ impl MpvPlayer {
                 seek_pending: Arc::new(Mutex::new(None)),
                 seek_timer: RefCell::new(None),
                 last_seek_target: Arc::new(Mutex::new(None)),
+                upscaling_mode: Arc::new(Mutex::new(UpscalingMode::None)),
             }),
         })
     }
@@ -355,6 +385,12 @@ impl MpvPlayer {
             if inner_realize.mpv.borrow().is_none() {
                 match MpvPlayerInner::init_mpv(&inner_realize) {
                     Ok(mpv) => {
+                        // Apply initial upscaling mode
+                        let initial_mode = *inner_realize.upscaling_mode.lock().unwrap();
+                        player_self
+                            .apply_upscaling_settings(&mpv, initial_mode)
+                            .unwrap_or(());
+
                         inner_realize.mpv.replace(Some(mpv));
                     }
                     Err(e) => {
@@ -886,6 +922,135 @@ impl MpvPlayer {
         // MPV maintains a fixed ~10 second buffer, which isn't useful to display
         // This method is kept for compatibility but returns None
         None
+    }
+
+    pub async fn set_upscaling_mode(&self, mode: UpscalingMode) -> Result<()> {
+        let mut current_mode = self.inner.upscaling_mode.lock().unwrap();
+        *current_mode = mode;
+        drop(current_mode);
+
+        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            self.apply_upscaling_settings(mpv, mode)?;
+        }
+        Ok(())
+    }
+
+    pub async fn get_upscaling_mode(&self) -> UpscalingMode {
+        *self.inner.upscaling_mode.lock().unwrap()
+    }
+
+    pub async fn cycle_upscaling_mode(&self) -> Result<UpscalingMode> {
+        let current = self.get_upscaling_mode().await;
+        let next = current.next();
+        self.set_upscaling_mode(next).await?;
+        Ok(next)
+    }
+
+    fn apply_upscaling_settings(&self, mpv: &Mpv, mode: UpscalingMode) -> Result<()> {
+        // Clear any existing shaders first
+        mpv.set_property("glsl-shaders", "").unwrap_or(());
+
+        // Get the shader directory path
+        let shader_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .map(|p| p.join("../share/reel/shaders"))
+            .or_else(|| {
+                // Fallback to development path
+                std::env::current_dir()
+                    .ok()
+                    .map(|p| p.join("assets/shaders"))
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("assets/shaders"));
+
+        match mode {
+            UpscalingMode::None => {
+                // Use basic bilinear scaling
+                mpv.set_property("scale", "bilinear").unwrap_or(());
+                mpv.set_property("cscale", "bilinear").unwrap_or(());
+                mpv.set_property("dscale", "bilinear").unwrap_or(());
+                mpv.set_property("sigmoid-upscaling", false).unwrap_or(());
+                mpv.set_property("deband", false).unwrap_or(());
+                debug!("Upscaling disabled - using bilinear");
+            }
+            UpscalingMode::HighQuality => {
+                // Use FSRCNNX shader for high quality upscaling
+                let shader_path = shader_dir.join("FSRCNNX_x2_8-0-4-1.glsl");
+                if shader_path.exists() {
+                    mpv.set_property("glsl-shaders", shader_path.to_str().unwrap_or(""))
+                        .unwrap_or(());
+                    debug!("High quality upscaling enabled with FSRCNNX shader");
+                } else {
+                    // Fallback to built-in high quality scalers
+                    mpv.set_property("scale", "ewa_lanczossharp").unwrap_or(());
+                    mpv.set_property("cscale", "ewa_lanczossharp").unwrap_or(());
+                    mpv.set_property("dscale", "mitchell").unwrap_or(());
+                    mpv.set_property("sigmoid-upscaling", true).unwrap_or(());
+                    mpv.set_property("deband", true).unwrap_or(());
+                    mpv.set_property("deband-iterations", 2).unwrap_or(());
+                    mpv.set_property("deband-threshold", 48).unwrap_or(());
+                    mpv.set_property("deband-range", 16).unwrap_or(());
+                    mpv.set_property("deband-grain", 24).unwrap_or(());
+                    debug!(
+                        "High quality upscaling enabled with built-in scalers (shader not found)"
+                    );
+                }
+            }
+            UpscalingMode::FSR => {
+                // AMD FSR shader
+                let shader_path = shader_dir.join("FSR.glsl");
+                if shader_path.exists() {
+                    mpv.set_property("glsl-shaders", shader_path.to_str().unwrap_or(""))
+                        .unwrap_or(());
+                    debug!("FSR upscaling enabled with shader");
+                } else {
+                    // Fallback to spline36
+                    mpv.set_property("scale", "spline36").unwrap_or(());
+                    mpv.set_property("cscale", "spline36").unwrap_or(());
+                    mpv.set_property("dscale", "mitchell").unwrap_or(());
+                    mpv.set_property("sigmoid-upscaling", true).unwrap_or(());
+                    mpv.set_property("deband", true).unwrap_or(());
+                    debug!("FSR upscaling mode set with fallback (shader not found)");
+                }
+            }
+            UpscalingMode::Anime => {
+                // Anime4K shaders - combine Clamp Highlights and Upscale
+                let clamp_path = shader_dir.join("Anime4K_Clamp_Highlights.glsl");
+                let upscale_path = shader_dir.join("Anime4K_Upscale_CNN_x2_M.glsl");
+
+                if clamp_path.exists() && upscale_path.exists() {
+                    // Use both shaders in sequence for best results
+                    let shader_list = format!(
+                        "{}:{}",
+                        clamp_path.to_str().unwrap_or(""),
+                        upscale_path.to_str().unwrap_or("")
+                    );
+                    mpv.set_property("glsl-shaders", shader_list.as_str())
+                        .unwrap_or(());
+                    debug!("Anime upscaling enabled with Anime4K shaders");
+                } else if upscale_path.exists() {
+                    // Use only upscale if clamp is missing
+                    mpv.set_property("glsl-shaders", upscale_path.to_str().unwrap_or(""))
+                        .unwrap_or(());
+                    debug!("Anime upscaling enabled with Anime4K upscale only");
+                } else {
+                    // Fallback to optimized built-in settings for anime
+                    mpv.set_property("scale", "ewa_lanczossharp").unwrap_or(());
+                    mpv.set_property("cscale", "ewa_lanczossoft").unwrap_or(());
+                    mpv.set_property("dscale", "mitchell").unwrap_or(());
+                    mpv.set_property("sigmoid-upscaling", false).unwrap_or(());
+                    mpv.set_property("deband", true).unwrap_or(());
+                    mpv.set_property("deband-iterations", 4).unwrap_or(());
+                    mpv.set_property("deband-threshold", 64).unwrap_or(());
+                    mpv.set_property("deband-range", 16).unwrap_or(());
+                    mpv.set_property("deband-grain", 48).unwrap_or(());
+                    debug!("Anime upscaling mode set with fallback (shaders not found)");
+                }
+            }
+        }
+
+        info!("Upscaling mode changed to: {}", mode.to_string());
+        Ok(())
     }
 }
 
