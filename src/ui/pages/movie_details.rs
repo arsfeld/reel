@@ -7,7 +7,9 @@ use tracing::{error, info};
 
 use crate::backends::traits::MediaBackend;
 use crate::models::{Movie, StreamInfo};
+use crate::services::DataService;
 use crate::state::AppState;
+use crate::ui::viewmodels::{DetailsViewModel, ViewModel};
 use crate::utils::{ImageLoader, ImageSize};
 
 // Global image loader instance
@@ -82,9 +84,11 @@ mod imp {
         pub file_size_label: TemplateChild<gtk4::Label>,
 
         pub state: RefCell<Option<Arc<AppState>>>,
+        pub viewmodel: RefCell<Option<Arc<DetailsViewModel>>>,
         pub current_movie: RefCell<Option<Movie>>,
         pub on_play_clicked: RefCell<Option<Box<dyn Fn(&Movie)>>>,
         pub load_generation: RefCell<u64>,
+        pub property_subscriptions: RefCell<Vec<tokio::sync::broadcast::Receiver<()>>>,
     }
 
     impl Default for MovieDetailsPage {
@@ -119,9 +123,11 @@ mod imp {
                 file_size_row: Default::default(),
                 file_size_label: Default::default(),
                 state: RefCell::new(None),
+                viewmodel: RefCell::new(None),
                 current_movie: RefCell::new(None),
                 on_play_clicked: RefCell::new(None),
                 load_generation: RefCell::new(0),
+                property_subscriptions: RefCell::new(Vec::new()),
             }
         }
     }
@@ -180,8 +186,69 @@ glib::wrapper! {
 impl MovieDetailsPage {
     pub fn new(state: Arc<AppState>) -> Self {
         let page: Self = glib::Object::new();
+        let data_service = state.data_service.clone();
+        let viewmodel = Arc::new(DetailsViewModel::new(data_service));
+
+        // Initialize ViewModel with EventBus
+        glib::spawn_future_local({
+            let vm = viewmodel.clone();
+            let event_bus = state.event_bus.clone();
+            async move {
+                use crate::ui::viewmodels::ViewModel;
+                vm.initialize(event_bus).await;
+            }
+        });
+
         page.imp().state.replace(Some(state));
+        page.imp().viewmodel.replace(Some(viewmodel));
+
+        // Set up property subscriptions
+        page.setup_property_bindings();
+
         page
+    }
+
+    fn setup_property_bindings(&self) {
+        let imp = self.imp();
+        let page_weak = self.downgrade();
+
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            // Subscribe to current_item property
+            if let Some(mut subscriber) = viewmodel.subscribe_to_property("current_item") {
+                let page_weak_clone = page_weak.clone();
+                glib::spawn_future_local(async move {
+                    while subscriber.wait_for_change().await {
+                        if let Some(page) = page_weak_clone.upgrade() {
+                            page.on_current_item_changed().await;
+                        }
+                    }
+                });
+            }
+
+            // Subscribe to is_loading property
+            if let Some(mut subscriber) = viewmodel.subscribe_to_property("is_loading") {
+                let page_weak_clone = page_weak.clone();
+                glib::spawn_future_local(async move {
+                    while subscriber.wait_for_change().await {
+                        if let Some(page) = page_weak_clone.upgrade() {
+                            page.on_loading_changed().await;
+                        }
+                    }
+                });
+            }
+
+            // Subscribe to is_watched property
+            if let Some(mut subscriber) = viewmodel.subscribe_to_property("is_watched") {
+                let page_weak_clone = page_weak.clone();
+                glib::spawn_future_local(async move {
+                    while subscriber.wait_for_change().await {
+                        if let Some(page) = page_weak_clone.upgrade() {
+                            page.on_watched_changed().await;
+                        }
+                    }
+                });
+            }
+        }
     }
 
     pub fn load_movie(&self, movie: Movie) {
@@ -189,62 +256,88 @@ impl MovieDetailsPage {
 
         let imp = self.imp();
 
-        // Increment generation to cancel previous loads
-        let generation = {
-            let mut current_gen = imp.load_generation.borrow_mut();
-            *current_gen += 1;
-            *current_gen
-        };
-
-        // Clear previous images and show placeholder immediately
-        imp.movie_poster.set_paintable(gtk4::gdk::Paintable::NONE);
-        imp.movie_backdrop.set_paintable(gtk4::gdk::Paintable::NONE);
-        imp.poster_placeholder.set_visible(true);
-
-        // Store current movie
+        // Store current movie for compatibility
         imp.current_movie.replace(Some(movie.clone()));
 
-        // Set basic info immediately (we have this data already)
-        imp.movie_title.set_label(&movie.title);
+        // Use ViewModel to load the media details
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let viewmodel = viewmodel.clone();
+            let movie_id = movie.id.clone();
 
-        // Show loading state for stream info
-        imp.stream_info_list.set_visible(false);
-
-        // Load everything else asynchronously
-        let page_weak = self.downgrade();
-        let movie_clone = movie.clone();
-        glib::spawn_future_local(async move {
-            if let Some(page) = page_weak.upgrade() {
-                // Check if this is still the current load operation
-                if *page.imp().load_generation.borrow() != generation {
-                    info!("Cancelling outdated movie load operation");
-                    return;
+            glib::spawn_future_local(async move {
+                if let Err(e) = viewmodel.load_media(movie_id).await {
+                    error!("Failed to load movie through ViewModel: {}", e);
                 }
-
-                // Display movie info
-                page.display_movie_info(&movie_clone).await;
-
-                // Check again before loading stream info
-                if *page.imp().load_generation.borrow() != generation {
-                    return;
-                }
-
-                // Load stream info
-                page.load_stream_info(&movie_clone).await;
-
-                // Check again before updating UI
-                if *page.imp().load_generation.borrow() != generation {
-                    return;
-                }
-
-                // Update watched button state
-                page.update_watched_button(&movie_clone);
-            }
-        });
+            });
+        }
     }
 
-    async fn display_movie_info(&self, movie: &Movie) {
+    async fn on_current_item_changed(&self) {
         let imp = self.imp();
+
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            if let Some(detailed_info) = viewmodel.current_item().get().await {
+                self.display_media_info(&detailed_info).await;
+            } else {
+                // Clear UI when no item is loaded
+                imp.movie_poster.set_paintable(gtk4::gdk::Paintable::NONE);
+                imp.movie_backdrop.set_paintable(gtk4::gdk::Paintable::NONE);
+                imp.poster_placeholder.set_visible(true);
+            }
+        }
+    }
+
+    async fn on_loading_changed(&self) {
+        let imp = self.imp();
+
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let is_loading = viewmodel.is_loading().get().await;
+
+            if is_loading {
+                // Show loading state
+                imp.movie_poster.set_paintable(gtk4::gdk::Paintable::NONE);
+                imp.movie_backdrop.set_paintable(gtk4::gdk::Paintable::NONE);
+                imp.poster_placeholder.set_visible(true);
+                imp.stream_info_list.set_visible(false);
+            }
+        }
+    }
+
+    async fn on_watched_changed(&self) {
+        let imp = self.imp();
+
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let is_watched = viewmodel.is_watched().get().await;
+
+            if is_watched {
+                imp.watched_icon
+                    .set_icon_name(Some("checkbox-checked-symbolic"));
+                imp.watched_label.set_text("Watched");
+                imp.mark_watched_button.remove_css_class("suggested-action");
+            } else {
+                imp.watched_icon.set_icon_name(Some("checkbox-symbolic"));
+                imp.watched_label.set_text("Mark as Watched");
+                imp.mark_watched_button.add_css_class("suggested-action");
+            }
+        }
+    }
+
+    async fn display_media_info(
+        &self,
+        detailed_info: &crate::ui::viewmodels::details_view_model::DetailedMediaInfo,
+    ) {
+        let media = &detailed_info.media;
+        let metadata = &detailed_info.metadata;
+        let imp = self.imp();
+
+        // Extract movie from MediaItem enum
+        let movie = match media {
+            crate::models::MediaItem::Movie(movie) => movie,
+            _ => {
+                error!("MovieDetailsPage received non-movie MediaItem");
+                return;
+            }
+        };
 
         // Load backdrop image
         if let Some(backdrop_url) = &movie.backdrop_url {
@@ -303,17 +396,24 @@ impl MovieDetailsPage {
         }
 
         // Set duration
-        let duration_mins = movie.duration.as_secs() / 60;
-        let duration_hours = duration_mins / 60;
-        let remaining_mins = duration_mins % 60;
-        if duration_hours > 0 {
-            imp.duration_label
-                .set_text(&format!("{}h {}m", duration_hours, remaining_mins));
+        let duration_ms = movie.duration.as_millis() as i64;
+        if duration_ms > 0 {
+            let duration_secs = duration_ms / 1000;
+            let duration_mins = duration_secs / 60;
+            let duration_hours = duration_mins / 60;
+            let remaining_mins = duration_mins % 60;
+
+            if duration_hours > 0 {
+                imp.duration_label
+                    .set_text(&format!("{}h {}m", duration_hours, remaining_mins));
+            } else {
+                imp.duration_label
+                    .set_text(&format!("{} min", duration_mins));
+            }
+            imp.duration_box.set_visible(duration_mins > 0);
         } else {
-            imp.duration_label
-                .set_text(&format!("{} min", duration_mins));
+            imp.duration_box.set_visible(false);
         }
-        imp.duration_box.set_visible(duration_mins > 0);
 
         // Set synopsis
         if let Some(overview) = &movie.overview {
@@ -328,7 +428,7 @@ impl MovieDetailsPage {
             imp.genres_box.remove(&child);
         }
 
-        for genre in &movie.genres {
+        for genre in &metadata.genres {
             let genre_chip = adw::Bin::builder()
                 .css_classes(vec!["card", "compact"])
                 .build();
@@ -346,10 +446,19 @@ impl MovieDetailsPage {
             imp.genres_box.insert(&genre_chip, -1);
         }
 
-        imp.genres_box.set_visible(!movie.genres.is_empty());
+        imp.genres_box.set_visible(!metadata.genres.is_empty());
+
+        // Load stream info asynchronously
+        let movie_clone = movie.clone();
+        let page_weak = self.downgrade();
+        glib::spawn_future_local(async move {
+            if let Some(page) = page_weak.upgrade() {
+                page.load_stream_info(&movie_clone).await;
+            }
+        });
     }
 
-    async fn load_stream_info(&self, movie: &Movie) {
+    async fn load_stream_info(&self, movie: &crate::models::Movie) {
         let imp = self.imp();
 
         // Get backend and fetch stream info
@@ -418,20 +527,7 @@ impl MovieDetailsPage {
         imp.stream_info_list.set_visible(true);
     }
 
-    fn update_watched_button(&self, movie: &Movie) {
-        let imp = self.imp();
-
-        if movie.watched {
-            imp.watched_icon
-                .set_icon_name(Some("checkbox-checked-symbolic"));
-            imp.watched_label.set_text("Watched");
-            imp.mark_watched_button.remove_css_class("suggested-action");
-        } else {
-            imp.watched_icon.set_icon_name(Some("checkbox-symbolic"));
-            imp.watched_label.set_text("Mark as Watched");
-            imp.mark_watched_button.add_css_class("suggested-action");
-        }
-    }
+    // Removed - now handled by on_watched_changed via property binding
 
     fn on_play_clicked(&self) {
         if let Some(movie) = self.imp().current_movie.borrow().as_ref()
@@ -444,44 +540,16 @@ impl MovieDetailsPage {
     fn on_mark_watched_clicked(&self) {
         let imp = self.imp();
 
-        if let Some(movie) = imp.current_movie.borrow().as_ref() {
-            let movie = movie.clone();
-            let state = imp.state.borrow().clone();
-            let page_weak = self.downgrade();
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let viewmodel = viewmodel.clone();
 
             glib::spawn_future_local(async move {
-                if let Some(state) = state {
-                    let source_coordinator = state.get_source_coordinator();
-                    // Use the backend_id from the movie
-                    if let Some(backend) = source_coordinator.get_backend(&movie.backend_id).await {
-                        let result = if movie.watched {
-                            backend.mark_unwatched(&movie.id).await
-                        } else {
-                            backend.mark_watched(&movie.id).await
-                        };
+                let is_watched = viewmodel.is_watched().get().await;
 
-                        match result {
-                            Ok(_) => {
-                                info!(
-                                    "Successfully updated watch status for movie: {}",
-                                    movie.title
-                                );
-
-                                // Update the movie's watched status
-                                if let Some(page) = page_weak.upgrade() {
-                                    let mut updated_movie = movie.clone();
-                                    updated_movie.watched = !movie.watched;
-                                    page.imp()
-                                        .current_movie
-                                        .replace(Some(updated_movie.clone()));
-                                    page.update_watched_button(&updated_movie);
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to update watch status: {}", e);
-                            }
-                        }
-                    }
+                if is_watched {
+                    viewmodel.mark_as_unwatched().await;
+                } else {
+                    viewmodel.mark_as_watched().await;
                 }
             });
         }

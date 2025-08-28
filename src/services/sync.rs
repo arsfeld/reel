@@ -1,15 +1,16 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{debug, error, info, trace};
 
 use crate::backends::traits::MediaBackend;
+use crate::events::{DatabaseEvent, EventBus, EventPayload, EventType};
 use crate::models::{Library, MediaItem, Movie, Show};
-use crate::services::cache::CacheManager;
+use crate::services::data::DataService;
 use crate::utils::image_loader::{ImageLoader, ImageSize};
 
 #[derive(Debug, Clone)]
@@ -46,23 +47,46 @@ pub struct SyncResult {
     pub errors: Vec<String>,
 }
 
+/// Poster download request
+#[derive(Debug, Clone)]
+struct PosterDownloadRequest {
+    url: String,
+    size: ImageSize,
+    media_id: String,
+    media_type: String,
+}
+
 pub struct SyncManager {
-    cache: Arc<CacheManager>,
+    data_service: Arc<DataService>,
     sync_status: Arc<RwLock<HashMap<String, SyncStatus>>>,
     image_loader: Arc<ImageLoader>,
+    poster_download_queue: Arc<Mutex<VecDeque<PosterDownloadRequest>>>,
     poster_download_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     poster_download_cancel: Arc<Mutex<CancellationToken>>,
+    event_bus: Arc<EventBus>,
+    max_queue_size: usize,
+    // Throttle noisy logs when queue is full
+    queue_full_log_last: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 impl SyncManager {
-    pub fn new(cache: Arc<CacheManager>) -> Self {
-        Self {
-            cache,
+    pub fn new(data_service: Arc<DataService>, event_bus: Arc<EventBus>) -> Self {
+        let manager = Self {
+            data_service,
             sync_status: Arc::new(RwLock::new(HashMap::new())),
             image_loader: Arc::new(ImageLoader::new().expect("Failed to create ImageLoader")),
+            poster_download_queue: Arc::new(Mutex::new(VecDeque::new())),
             poster_download_handle: Arc::new(Mutex::new(None)),
             poster_download_cancel: Arc::new(Mutex::new(CancellationToken::new())),
-        }
+            event_bus: event_bus.clone(),
+            max_queue_size: 100, // Limit queue to 100 items at a time
+            queue_full_log_last: Arc::new(Mutex::new(None)),
+        };
+
+        // Start the background poster download processor
+        manager.start_poster_processor();
+
+        manager
     }
 
     /// Sync all data from a backend
@@ -85,12 +109,52 @@ impl SyncManager {
                 backend_id.to_string(),
                 SyncStatus::Syncing {
                     progress: 0.0,
-                    current_item: "Fetching libraries".to_string(),
+                    current_item: "Initializing source".to_string(),
                 },
             );
         }
 
         info!("Starting sync for backend: {}", backend_id);
+
+        // Emit sync started event
+        let _ = self
+            .event_bus
+            .publish(DatabaseEvent::new(
+                EventType::SyncStarted,
+                EventPayload::Sync {
+                    source_id: backend_id.to_string(),
+                    sync_type: "full".to_string(),
+                    progress: Some(0.0),
+                    items_synced: None,
+                    error: None,
+                },
+            ))
+            .await;
+
+        // Ensure source record exists in database before syncing libraries
+        // This prevents foreign key constraint violations
+        if let Err(e) = self.data_service.ensure_source_exists(backend_id).await {
+            error!("Failed to ensure source exists for {}: {}", backend_id, e);
+            errors.push(format!("Failed to ensure source exists: {}", e));
+
+            // Emit error event
+            let _ = self
+                .event_bus
+                .publish(DatabaseEvent::new(
+                    EventType::ErrorOccurred,
+                    EventPayload::System {
+                        message: format!(
+                            "Failed to ensure source exists for {}: {}",
+                            backend_id, e
+                        ),
+                        details: Some(serde_json::json!({
+                            "backend_id": backend_id,
+                            "error": e.to_string()
+                        })),
+                    },
+                ))
+                .await;
+        }
 
         // Fetch libraries
         match backend.get_libraries().await {
@@ -99,8 +163,7 @@ impl SyncManager {
 
                 // Cache libraries
                 for library in &libraries {
-                    let cache_key = format!("{}:library:{}", backend_id, library.id);
-                    if let Err(e) = self.cache.set_media(&cache_key, "library", library).await {
+                    if let Err(e) = self.data_service.store_library(library, backend_id).await {
                         error!("Failed to cache library {}: {}", library.id, e);
                         errors.push(format!("Failed to cache library {}: {}", library.id, e));
                     } else {
@@ -111,8 +174,8 @@ impl SyncManager {
                 // Cache the library list
                 let libraries_key = format!("{}:libraries", backend_id);
                 if let Err(e) = self
-                    .cache
-                    .set_media(&libraries_key, "library_list", &libraries)
+                    .data_service
+                    .store_library_list(&libraries_key, &libraries)
                     .await
                 {
                     error!("Failed to cache library list: {}", e);
@@ -134,6 +197,21 @@ impl SyncManager {
                             },
                         );
                     }
+
+                    // Emit sync progress event
+                    let _ = self
+                        .event_bus
+                        .publish(DatabaseEvent::new(
+                            EventType::SyncProgress,
+                            EventPayload::Sync {
+                                source_id: backend_id.to_string(),
+                                sync_type: "full".to_string(),
+                                progress: Some(progress),
+                                items_synced: Some(items_synced),
+                                error: None,
+                            },
+                        ))
+                        .await;
 
                     // Sync library content using generic method
                     if let Err(e) = self
@@ -161,7 +239,7 @@ impl SyncManager {
         let duration = start_time.elapsed();
         let success = errors.is_empty();
 
-        // Update final sync status
+        // Update final sync status and emit corresponding event
         {
             let mut status = self.sync_status.write().await;
             if success {
@@ -172,14 +250,45 @@ impl SyncManager {
                         items_synced,
                     },
                 );
+
+                // Emit sync completed event
+                let _ = self
+                    .event_bus
+                    .publish(DatabaseEvent::new(
+                        EventType::SyncCompleted,
+                        EventPayload::Sync {
+                            source_id: backend_id.to_string(),
+                            sync_type: "full".to_string(),
+                            progress: Some(100.0),
+                            items_synced: Some(items_synced),
+                            error: None,
+                        },
+                    ))
+                    .await;
             } else {
+                let error_msg = errors.join(", ");
                 status.insert(
                     backend_id.to_string(),
                     SyncStatus::Failed {
-                        error: errors.join(", "),
+                        error: error_msg.clone(),
                         at: Utc::now(),
                     },
                 );
+
+                // Emit sync failed event
+                let _ = self
+                    .event_bus
+                    .publish(DatabaseEvent::new(
+                        EventType::SyncFailed,
+                        EventPayload::Sync {
+                            source_id: backend_id.to_string(),
+                            sync_type: "full".to_string(),
+                            progress: None,
+                            items_synced: Some(items_synced),
+                            error: Some(error_msg),
+                        },
+                    ))
+                    .await;
             }
         }
 
@@ -219,6 +328,19 @@ impl SyncManager {
             library_type, library_id
         );
 
+        // Get existing items to detect new ones
+        let existing_items_key = format!("{}:library:{}:items", backend_id, library_id);
+        let existing_items: Vec<MediaItem> = self
+            .data_service
+            .get_media(&existing_items_key)
+            .await?
+            .unwrap_or_default();
+
+        let existing_ids: std::collections::HashSet<String> = existing_items
+            .iter()
+            .map(|item| item.id().to_string())
+            .collect();
+
         // Use the generic get_library_items method
         let items = backend
             .get_library_items(library_id)
@@ -226,6 +348,10 @@ impl SyncManager {
             .context("Failed to fetch library items")?;
 
         info!("Found {} items to sync", items.len());
+
+        // Collect IDs for batch event and detect new items
+        let mut media_ids = Vec::new();
+        let mut new_items = Vec::new();
 
         // Cache each item with its appropriate type
         for item in &items {
@@ -238,19 +364,51 @@ impl SyncManager {
                 MediaItem::Photo(_) => "photo",
             };
 
-            let cache_key = format!("{}:{}:{}", backend_id, item_type, item.id());
-            self.cache
-                .set_media(&cache_key, item_type, item)
+            // Include library_id in the cache key to help with foreign key relationships
+            let cache_key = format!("{}:{}:{}:{}", backend_id, library_id, item_type, item.id());
+            media_ids.push(cache_key.clone());
+
+            // Check if this is a new item
+            if !existing_ids.contains(&item.id().to_string()) {
+                new_items.push((item.clone(), cache_key.clone()));
+                debug!("Found new {} item: {}", item_type, item.id());
+            }
+
+            // Use silent storage to avoid individual events during sync
+            self.data_service
+                .store_media_item_silent(&cache_key, item)
                 .await
                 .context(format!("Failed to cache {} {}", item_type, item.id()))?;
         }
 
+        // Queue poster downloads for new items only
+        if !new_items.is_empty() {
+            info!(
+                "Queueing poster downloads for {} new items",
+                new_items.len()
+            );
+            for (item, cache_key) in &new_items {
+                self.queue_poster_download(item, cache_key).await;
+            }
+        }
+
+        // Emit batch created event for all synced items
+        if !media_ids.is_empty() {
+            let _ = self
+                .event_bus
+                .publish(DatabaseEvent::new(
+                    EventType::MediaBatchCreated,
+                    EventPayload::MediaBatch {
+                        ids: media_ids,
+                        library_id: library_id.to_string(),
+                        source_id: backend_id.to_string(),
+                    },
+                ))
+                .await;
+        }
+
         // Cache the item list for this library
-        let items_key = format!("{}:library:{}:items", backend_id, library_id);
-        self.cache
-            .set_media(&items_key, "item_list", &items)
-            .await
-            .context("Failed to cache item list")?;
+        // Items list no longer needs to be cached - individual items are stored in the database
 
         // Also maintain backward compatibility by caching typed lists
         match library_type {
@@ -262,10 +420,7 @@ impl SyncManager {
                         _ => None,
                     })
                     .collect();
-                let movies_key = format!("{}:library:{}:movies", backend_id, library_id);
-                self.cache
-                    .set_media(&movies_key, "movie_list", &movies)
-                    .await?;
+                // Movie lists no longer need separate caching - individual items are stored in the database
             }
             crate::models::LibraryType::Shows => {
                 let shows: Vec<Show> = items
@@ -275,16 +430,46 @@ impl SyncManager {
                         _ => None,
                     })
                     .collect();
-                let shows_key = format!("{}:library:{}:shows", backend_id, library_id);
-                self.cache
-                    .set_media(&shows_key, "show_list", &shows)
-                    .await?;
+                // Show lists no longer need separate caching - individual items are stored in the database
+
+                // Sync episodes for each show
+                for show in &shows {
+                    if let Err(e) = self
+                        .sync_show_episodes(backend_id, library_id, &show.id, backend.clone())
+                        .await
+                    {
+                        error!("Failed to sync episodes for show {}: {}", show.id, e);
+                    }
+                }
             }
             _ => {}
         }
 
-        // Start background poster downloads after caching items
-        self.download_posters_background(&items).await;
+        // Update library item count in database and emit event
+        let item_count = items.len() as i32;
+        // Update item count in database
+        if let Err(e) = self
+            .data_service
+            .update_library_item_count(library_id, item_count)
+            .await
+        {
+            error!(
+                "Failed to update library item count for {}: {}",
+                library_id, e
+            );
+        }
+        // Emit library item count changed event
+        let _ = self
+            .event_bus
+            .publish(DatabaseEvent::new(
+                EventType::LibraryItemCountChanged,
+                EventPayload::Library {
+                    id: library_id.to_string(),
+                    source_id: backend_id.to_string(),
+                    item_count: Some(item_count),
+                },
+            ))
+            .await;
 
         Ok(())
     }
@@ -297,12 +482,34 @@ impl SyncManager {
 
     /// Get cached libraries for a backend
     pub async fn get_cached_libraries(&self, backend_id: &str) -> Result<Vec<Library>> {
+        // First try to get from memory cache (fast path)
         let libraries_key = format!("{}:libraries", backend_id);
-        Ok(self
-            .cache
-            .get_media(&libraries_key)
-            .await?
-            .unwrap_or_default())
+        if let Some(libraries) = self.data_service.get_media(&libraries_key).await? {
+            return Ok(libraries);
+        }
+
+        // Fallback to database when memory cache is empty (e.g., on startup)
+        let db_libraries = self.data_service.get_libraries(backend_id).await?;
+        let libraries: Vec<Library> = db_libraries
+            .into_iter()
+            .map(|lib| {
+                use crate::models::LibraryType;
+                Library {
+                    id: lib.id,
+                    title: lib.title,
+                    library_type: match lib.library_type.as_str() {
+                        "Movies" => LibraryType::Movies,
+                        "Shows" => LibraryType::Shows,
+                        "Music" => LibraryType::Music,
+                        "Photos" => LibraryType::Photos,
+                        _ => LibraryType::Mixed,
+                    },
+                    icon: lib.icon,
+                }
+            })
+            .collect();
+
+        Ok(libraries)
     }
 
     /// Get cached movies for a library
@@ -312,13 +519,21 @@ impl SyncManager {
         library_id: &str,
     ) -> Result<Vec<Movie>> {
         let movies_key = format!("{}:library:{}:movies", backend_id, library_id);
-        Ok(self.cache.get_media(&movies_key).await?.unwrap_or_default())
+        Ok(self
+            .data_service
+            .get_media(&movies_key)
+            .await?
+            .unwrap_or_default())
     }
 
     /// Get cached shows for a library
     pub async fn get_cached_shows(&self, backend_id: &str, library_id: &str) -> Result<Vec<Show>> {
         let shows_key = format!("{}:library:{}:shows", backend_id, library_id);
-        Ok(self.cache.get_media(&shows_key).await?.unwrap_or_default())
+        Ok(self
+            .data_service
+            .get_media(&shows_key)
+            .await?
+            .unwrap_or_default())
     }
 
     /// Get cached items for a library (generic)
@@ -328,7 +543,11 @@ impl SyncManager {
         library_id: &str,
     ) -> Result<Vec<MediaItem>> {
         let items_key = format!("{}:library:{}:items", backend_id, library_id);
-        Ok(self.cache.get_media(&items_key).await?.unwrap_or_default())
+        Ok(self
+            .data_service
+            .get_media(&items_key)
+            .await?
+            .unwrap_or_default())
     }
 
     /// Get item count for a library
@@ -339,143 +558,315 @@ impl SyncManager {
             .len()
     }
 
-    /// Extract poster URLs from media items
-    fn extract_poster_urls(&self, items: &[MediaItem]) -> Vec<(String, ImageSize)> {
-        let mut urls = Vec::new();
-
-        for item in items {
-            let poster_url = match item {
-                MediaItem::Movie(m) => m.poster_url.as_ref(),
-                MediaItem::Show(s) => s.poster_url.as_ref(),
-                MediaItem::Episode(e) => e.show_poster_url.as_ref().or(e.thumbnail_url.as_ref()),
-                MediaItem::MusicAlbum(a) => a.cover_url.as_ref(),
-                MediaItem::MusicTrack(t) => t.cover_url.as_ref(),
-                MediaItem::Photo(p) => p.thumbnail_url.as_ref(),
-            };
-
-            if let Some(url) = poster_url {
-                // Download small size for list views by default
-                urls.push((url.clone(), ImageSize::Small));
-            }
-
-            // Also get backdrop URLs for movies and shows
-            match item {
-                MediaItem::Movie(m) => {
-                    if let Some(backdrop) = &m.backdrop_url {
-                        urls.push((backdrop.clone(), ImageSize::Medium));
-                    }
-                }
-                MediaItem::Show(s) => {
-                    if let Some(backdrop) = &s.backdrop_url {
-                        urls.push((backdrop.clone(), ImageSize::Medium));
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        urls
+    /// Queue poster download for a single media item (can be called externally)
+    pub async fn queue_media_poster(&self, media_item: &MediaItem, media_id: &str) {
+        self.queue_poster_download(media_item, media_id).await;
     }
 
-    /// Download posters in background with low priority
-    async fn download_posters_background(&self, items: &[MediaItem]) {
-        let all_urls = self.extract_poster_urls(items);
+    /// Get current poster queue size
+    pub async fn get_poster_queue_size(&self) -> usize {
+        let queue = self.poster_download_queue.lock().await;
+        queue.len()
+    }
 
-        if all_urls.is_empty() {
-            return;
-        }
+    /// Sync episodes for a show
+    async fn sync_show_episodes(
+        &self,
+        backend_id: &str,
+        library_id: &str,
+        show_id: &str,
+        backend: Arc<dyn MediaBackend>,
+    ) -> Result<()> {
+        info!("Syncing episodes for show {}", show_id);
 
-        // Check which images are not already cached
-        let cached_status = self.image_loader.batch_check_cached(all_urls.clone()).await;
-        let urls_to_download: Vec<(String, ImageSize)> = all_urls
-            .into_iter()
-            .zip(cached_status.iter())
-            .filter_map(
-                |(url_size, &is_cached)| {
-                    if !is_cached { Some(url_size) } else { None }
-                },
-            )
-            .collect();
+        // Get the show details first to know how many seasons it has
+        // For now, we'll try to sync the first 10 seasons (most shows don't have more)
+        // In a production system, we'd want to get season info from the backend
+        const MAX_SEASONS: u32 = 10;
 
-        if urls_to_download.is_empty() {
-            info!(
-                "All {} posters already cached, skipping background download",
-                cached_status.len()
-            );
-            return;
-        }
+        for season_number in 1..=MAX_SEASONS {
+            match backend.get_episodes(show_id, season_number).await {
+                Ok(episodes) if !episodes.is_empty() => {
+                    info!(
+                        "Found {} episodes for show {} season {}",
+                        episodes.len(),
+                        show_id,
+                        season_number
+                    );
 
-        info!(
-            "Starting background download of {} posters ({} already cached)",
-            urls_to_download.len(),
-            cached_status.len() - urls_to_download.len()
-        );
+                    // Convert episodes to MediaItem::Episode and store
+                    for episode in episodes {
+                        let episode_item = MediaItem::Episode(episode.clone());
+                        // Include library_id in the cache key for proper database storage
+                        // Format: backend_id:library_id:episode:episode_id
+                        let cache_key =
+                            format!("{}:{}:episode:{}", backend_id, library_id, episode.id);
 
-        // Cancel any existing download and create a new cancellation token
-        self.cancel_background_downloads().await;
+                        // Store the episode silently during sync
+                        if let Err(e) = self
+                            .data_service
+                            .store_media_item_silent(&cache_key, &episode_item)
+                            .await
+                        {
+                            error!(
+                                "Failed to cache episode {} s{}e{}: {}",
+                                episode.id, season_number, episode.episode_number, e
+                            );
+                            // Continue with other episodes instead of aborting the whole show
+                            continue;
+                        }
 
-        // Create a new cancellation token for this download session
-        let cancel_token = CancellationToken::new();
-        {
-            let mut cancel_guard = self.poster_download_cancel.lock().await;
-            *cancel_guard = cancel_token.clone();
-        }
-
-        // Clone what we need for the background task
-        let image_loader = self.image_loader.clone();
-
-        // Spawn a low-priority background task
-        let handle = tokio::spawn(async move {
-            // Add a small delay to let UI operations take priority
-            tokio::select! {
-                _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {},
-                _ = cancel_token.cancelled() => {
-                    info!("Background poster download cancelled before starting");
-                    return;
+                        // Queue poster downloads for the episode
+                        self.queue_poster_download(&episode_item, &cache_key).await;
+                    }
+                }
+                Ok(_) => {
+                    // Empty season, stop trying higher seasons
+                    debug!(
+                        "No episodes found for show {} season {}, stopping",
+                        show_id, season_number
+                    );
+                    break;
+                }
+                Err(e) => {
+                    // Log error but continue with other seasons
+                    debug!(
+                        "Failed to get episodes for show {} season {}: {}",
+                        show_id, season_number, e
+                    );
+                    // Some backends might return error for non-existent seasons
+                    // Continue trying a few more seasons before giving up
+                    if season_number > 1 {
+                        // If we got an error after season 1, assume no more seasons
+                        break;
+                    }
                 }
             }
+        }
 
-            // Process in small batches to avoid overwhelming the system
-            const BATCH_SIZE: usize = 10;
-            let mut downloaded_count = 0;
+        Ok(())
+    }
 
-            for chunk in urls_to_download.chunks(BATCH_SIZE) {
-                // Check for cancellation before processing each batch
+    /// Queue poster download for a media item
+    async fn queue_poster_download(&self, item: &MediaItem, media_id: &str) {
+        let mut queue = self.poster_download_queue.lock().await;
+
+        // Skip if queue is full
+        if queue.len() >= self.max_queue_size {
+            // Rate-limit this log to avoid flooding
+            let mut last_guard = self.queue_full_log_last.lock().await;
+            let now = std::time::Instant::now();
+            let should_log = match *last_guard {
+                None => true,
+                Some(last) => now.duration_since(last) > std::time::Duration::from_secs(2),
+            };
+            if should_log {
+                debug!("Poster download queue is full, skipping more items...");
+                *last_guard = Some(now);
+            } else {
+                trace!("Poster queue full; skipping {}", media_id);
+            }
+            return;
+        }
+
+        // Extract poster URLs for this specific item
+        let poster_url = match item {
+            MediaItem::Movie(m) => m.poster_url.as_ref(),
+            MediaItem::Show(s) => s.poster_url.as_ref(),
+            MediaItem::Episode(e) => e.show_poster_url.as_ref().or(e.thumbnail_url.as_ref()),
+            MediaItem::MusicAlbum(a) => a.cover_url.as_ref(),
+            MediaItem::MusicTrack(t) => t.cover_url.as_ref(),
+            MediaItem::Photo(p) => p.thumbnail_url.as_ref(),
+        };
+
+        let media_type = match item {
+            MediaItem::Movie(_) => "movie",
+            MediaItem::Show(_) => "show",
+            MediaItem::Episode(_) => "episode",
+            MediaItem::MusicAlbum(_) => "album",
+            MediaItem::MusicTrack(_) => "track",
+            MediaItem::Photo(_) => "photo",
+        };
+
+        // Queue poster if available
+        if let Some(url) = poster_url {
+            // Check if not already cached
+            if !self
+                .image_loader
+                .batch_check_cached(vec![(url.clone(), ImageSize::Small)])
+                .await[0]
+            {
+                queue.push_back(PosterDownloadRequest {
+                    url: url.clone(),
+                    size: ImageSize::Small,
+                    media_id: media_id.to_string(),
+                    media_type: media_type.to_string(),
+                });
+            }
+        }
+
+        // Also queue backdrop URLs for movies and shows
+        match item {
+            MediaItem::Movie(m) => {
+                if let Some(backdrop) = &m.backdrop_url {
+                    if !self
+                        .image_loader
+                        .batch_check_cached(vec![(backdrop.clone(), ImageSize::Medium)])
+                        .await[0]
+                    {
+                        queue.push_back(PosterDownloadRequest {
+                            url: backdrop.clone(),
+                            size: ImageSize::Medium,
+                            media_id: media_id.to_string(),
+                            media_type: "movie_backdrop".to_string(),
+                        });
+                    }
+                }
+            }
+            MediaItem::Show(s) => {
+                if let Some(backdrop) = &s.backdrop_url {
+                    if !self
+                        .image_loader
+                        .batch_check_cached(vec![(backdrop.clone(), ImageSize::Medium)])
+                        .await[0]
+                    {
+                        queue.push_back(PosterDownloadRequest {
+                            url: backdrop.clone(),
+                            size: ImageSize::Medium,
+                            media_id: media_id.to_string(),
+                            media_type: "show_backdrop".to_string(),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Start the background poster download processor
+    fn start_poster_processor(&self) {
+        let queue = self.poster_download_queue.clone();
+        let image_loader = self.image_loader.clone();
+        let event_bus = self.event_bus.clone();
+        let cancel_token = CancellationToken::new();
+        let cancel_clone = cancel_token.clone();
+
+        // Store the cancellation token
+        let poster_download_cancel = self.poster_download_cancel.clone();
+
+        // Emit BackgroundTaskStarted event
+        let event = DatabaseEvent::new(
+            EventType::BackgroundTaskStarted,
+            EventPayload::System {
+                message: "Poster download processor started".to_string(),
+                details: Some(serde_json::json!({
+                    "task_type": "poster_download_processor",
+                    "batch_size": 5
+                })),
+            },
+        );
+
+        if let Err(e) = futures::executor::block_on(event_bus.publish(event)) {
+            tracing::warn!("Failed to publish BackgroundTaskStarted event: {}", e);
+        }
+
+        // Spawn the processor task
+        let handle = tokio::spawn(async move {
+            {
+                let mut cancel_guard = poster_download_cancel.lock().await;
+                *cancel_guard = cancel_clone;
+            }
+
+            info!("Started poster download processor");
+
+            loop {
+                // Check for cancellation
                 if cancel_token.is_cancelled() {
-                    info!(
-                        "Background poster download cancelled after {} downloads",
-                        downloaded_count
-                    );
-                    return;
+                    info!("Poster download processor cancelled");
+                    break;
                 }
 
-                let chunk_vec: Vec<(String, ImageSize)> = chunk.to_vec();
-                let batch_size = chunk_vec.len();
+                // Process queue in batches
+                const BATCH_SIZE: usize = 5;
+                let mut batch = Vec::new();
 
-                // Use warm_cache which will only download images not already cached
-                // This provides additional safety against duplicate downloads
-                image_loader.warm_cache(chunk_vec).await;
-                downloaded_count += batch_size;
+                {
+                    let mut queue_guard = queue.lock().await;
+                    for _ in 0..BATCH_SIZE {
+                        if let Some(request) = queue_guard.pop_front() {
+                            batch.push(request);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                if batch.is_empty() {
+                    // Queue is empty, wait a bit before checking again
+                    tokio::select! {
+                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {},
+                        _ = cancel_token.cancelled() => {
+                            info!("Poster download processor cancelled while idle");
+                            break;
+                        }
+                    }
+                    continue;
+                }
+
+                // Download the batch
+                debug!("Processing batch of {} poster downloads", batch.len());
+
+                let urls_to_download: Vec<(String, ImageSize)> = batch
+                    .iter()
+                    .map(|req| (req.url.clone(), req.size))
+                    .collect();
+
+                // Download images
+                image_loader.warm_cache(urls_to_download).await;
+
+                // Log completion for debugging
+                for req in &batch {
+                    debug!(
+                        "Downloaded poster for {} ({})",
+                        req.media_id, req.media_type
+                    );
+                }
 
                 // Small delay between batches to keep priority low
                 tokio::select! {
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)) => {},
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {},
                     _ = cancel_token.cancelled() => {
-                        info!("Background poster download cancelled after {} downloads", downloaded_count);
-                        return;
+                        info!("Poster download processor cancelled between batches");
+                        break;
                     }
                 }
             }
 
-            info!(
-                "Completed background poster downloads: {} images",
-                downloaded_count
+            info!("Poster download processor stopped");
+
+            // Emit BackgroundTaskCompleted event
+            let completed_event = DatabaseEvent::new(
+                EventType::BackgroundTaskCompleted,
+                EventPayload::System {
+                    message: "Poster download processor completed".to_string(),
+                    details: Some(serde_json::json!({
+                        "task_type": "poster_download_processor",
+                        "status": "completed"
+                    })),
+                },
             );
+
+            if let Err(e) = event_bus.publish(completed_event).await {
+                tracing::warn!("Failed to publish BackgroundTaskCompleted event: {}", e);
+            }
         });
 
-        // Store the handle so we can cancel it later if needed
-        let mut handle_guard = self.poster_download_handle.lock().await;
-        *handle_guard = Some(handle);
+        // Store the handle
+        let poster_download_handle = self.poster_download_handle.clone();
+        tokio::spawn(async move {
+            let mut handle_guard = poster_download_handle.lock().await;
+            *handle_guard = Some(handle);
+        });
     }
 
     /// Cancel any existing background poster downloads

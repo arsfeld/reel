@@ -67,6 +67,7 @@ mod imp {
         pub all_libraries: RefCell<Vec<(crate::models::Library, usize)>>,
         pub navigation_stack: RefCell<Vec<String>>, // Track navigation history
         pub header_add_button: RefCell<Option<gtk4::Button>>, // Track add button in header
+        pub sidebar_viewmodel: RefCell<Option<Arc<crate::ui::viewmodels::SidebarViewModel>>>,
     }
 
     #[glib::object_subclass]
@@ -170,6 +171,33 @@ impl ReelMainWindow {
         window.imp().state.replace(Some(state.clone()));
         window.imp().config.replace(Some(config));
 
+        // Initialize SidebarViewModel
+        let sidebar_vm = Arc::new(crate::ui::viewmodels::SidebarViewModel::new(
+            state.data_service.clone(),
+        ));
+        window
+            .imp()
+            .sidebar_viewmodel
+            .replace(Some(sidebar_vm.clone()));
+
+        // Initialize the ViewModel with the event bus
+        let event_bus = state.event_bus.clone();
+        let sidebar_vm_clone = sidebar_vm.clone();
+        let window_weak_for_vm = window.downgrade();
+        glib::spawn_future_local(async move {
+            use crate::ui::viewmodels::ViewModel;
+            sidebar_vm_clone.initialize(event_bus).await;
+
+            // Set up subscription to sources property
+            if let Some(window) = window_weak_for_vm.upgrade() {
+                window.setup_sidebar_subscriptions();
+
+                // Initial load should happen after ViewModel is initialized and subscriptions are set up
+                tracing::info!("SidebarViewModel initialized, triggering initial data load");
+                sidebar_vm_clone.refresh().await;
+            }
+        });
+
         // Setup actions
         window.setup_actions(app);
 
@@ -181,10 +209,7 @@ impl ReelMainWindow {
             }
         });
 
-        // FIRST: Try to load any cached data immediately (before authentication)
-        window.load_cached_data_on_startup(state.clone());
-
-        // THEN: Check for existing backends and load them
+        // Check for existing backends and load them (SidebarViewModel will handle cached data display)
         window.check_and_load_backends(state);
 
         // Subscribe to user changes
@@ -239,128 +264,6 @@ impl ReelMainWindow {
         }
     }
 
-    fn load_cached_data_on_startup(&self, state: Arc<AppState>) {
-        let window_weak = self.downgrade();
-
-        // Immediately try to load cached data without waiting for authentication
-        glib::spawn_future_local(async move {
-            if let Some(window) = window_weak.upgrade() {
-                info!("Checking for cached data on startup...");
-
-                // Get all providers from source coordinator
-                let source_coordinator = state.get_source_coordinator();
-                // Load saved providers first
-                if let Err(e) = source_coordinator.get_auth_manager().load_providers().await {
-                    error!("Failed to load providers: {}", e);
-                }
-
-                let providers = source_coordinator
-                    .get_auth_manager()
-                    .get_all_providers()
-                    .await;
-                if providers.is_empty() {
-                    info!("No auth providers found, skipping cache load");
-                    return;
-                }
-
-                // Use the sync manager from AppState
-                let sync_manager = state.sync_manager.clone();
-                let mut has_any_cached_data = false;
-                let mut backends_libraries = Vec::new();
-                let provider_count = providers.len();
-
-                // Try to load cached data from all providers
-                for provider in &providers {
-                    let provider_id = provider.id();
-                    info!("Checking cached data for provider: {}", provider_id);
-
-                    match sync_manager.get_cached_libraries(provider_id).await {
-                        Ok(libraries) if !libraries.is_empty() => {
-                            info!(
-                                "Found {} cached libraries for provider {}",
-                                libraries.len(),
-                                provider_id
-                            );
-
-                            // Build library list with counts
-                            let mut library_info = Vec::new();
-
-                            for library in &libraries {
-                                use crate::models::LibraryType;
-                                let item_count = match library.library_type {
-                                    LibraryType::Movies => {
-                                        match sync_manager
-                                            .get_cached_movies(provider_id, &library.id)
-                                            .await
-                                        {
-                                            Ok(movies) => movies.len(),
-                                            Err(_) => 0,
-                                        }
-                                    }
-                                    LibraryType::Shows => {
-                                        match sync_manager
-                                            .get_cached_shows(provider_id, &library.id)
-                                            .await
-                                        {
-                                            Ok(shows) => shows.len(),
-                                            Err(_) => 0,
-                                        }
-                                    }
-                                    _ => 0,
-                                };
-
-                                library_info.push((library.clone(), item_count));
-                            }
-
-                            if !library_info.is_empty() {
-                                backends_libraries.push((provider_id.to_string(), library_info));
-                                has_any_cached_data = true;
-                            }
-                        }
-                        Ok(_) => {
-                            info!("No cached libraries for provider {}", provider_id);
-                        }
-                        Err(e) => {
-                            info!(
-                                "Could not load cached libraries for provider {}: {}",
-                                provider_id, e
-                            );
-                        }
-                    }
-                }
-
-                if has_any_cached_data {
-                    info!(
-                        "Found cached data from {} providers, showing immediately",
-                        backends_libraries.len()
-                    );
-
-                    // Hide welcome page and show libraries immediately
-                    window.imp().welcome_page.set_visible(false);
-                    window.imp().sources_container.set_visible(true);
-                    window.imp().home_group.set_visible(true);
-
-                    // Update UI with all backends' libraries
-                    window.update_all_backends_libraries(backends_libraries);
-
-                    // Update subtle status for cached data
-                    window.imp().status_container.set_visible(true);
-                    window.imp().status_label.set_text(&format!(
-                        "{} source{} (cached)",
-                        provider_count,
-                        if provider_count == 1 { "" } else { "s" }
-                    ));
-                    window
-                        .imp()
-                        .status_icon
-                        .set_icon_name(Some("folder-remote-symbolic"));
-                } else {
-                    info!("No cached data found from any provider");
-                }
-            }
-        });
-    }
-
     fn check_and_load_backends(&self, state: Arc<AppState>) {
         let window_weak = self.downgrade();
 
@@ -412,19 +315,7 @@ impl ReelMainWindow {
 
                 if connected_count > 0 {
                     info!("Successfully initialized {} backends", connected_count);
-                    window.update_connection_status(true).await;
-
-                    // Update subtle status
-                    window.imp().status_container.set_visible(true);
-                    window.imp().status_label.set_text(&format!(
-                        "{} source{} connected",
-                        connected_count,
-                        if connected_count == 1 { "" } else { "s" }
-                    ));
-                    window
-                        .imp()
-                        .status_icon
-                        .set_icon_name(Some("network-transmit-receive-symbolic"));
+                    // Status is now managed by SidebarViewModel - no manual updates needed
 
                     // Refresh all libraries
                     window.refresh_all_libraries().await;
@@ -455,16 +346,7 @@ impl ReelMainWindow {
                             providers.len()
                         );
 
-                        // Show subtle authentication needed status
-                        window.imp().status_container.set_visible(true);
-                        window
-                            .imp()
-                            .status_label
-                            .set_text("Authentication required");
-                        window
-                            .imp()
-                            .status_icon
-                            .set_icon_name(Some("dialog-password-symbolic"));
+                        // Status is now managed by SidebarViewModel - no manual updates needed
                     }
                 }
             }
@@ -476,26 +358,150 @@ impl ReelMainWindow {
         // For now, we'll handle updates manually when auth completes
     }
 
-    pub async fn update_connection_status(&self, connected: bool) {
-        let imp = self.imp();
+    fn setup_sidebar_subscriptions(&self) {
+        if let Some(sidebar_vm) = self.imp().sidebar_viewmodel.borrow().as_ref() {
+            // Subscribe to sources changes
+            let mut sources_subscriber = sidebar_vm.sources().subscribe();
+            let window_weak = self.downgrade();
 
-        if connected {
-            // Don't set default values here - let update_user_display handle the details
-            imp.welcome_page.set_visible(false); // Hide welcome message
-            imp.home_group.set_visible(true);
-            imp.sources_container.set_visible(true);
+            glib::spawn_future_local(async move {
+                while sources_subscriber.wait_for_change().await {
+                    if let Some(window) = window_weak.upgrade() {
+                        window.update_sidebar_from_viewmodel();
+                    }
+                }
+            });
 
-            // Show subtle status
-            imp.status_container.set_visible(true);
-            imp.status_label.set_text("Connected");
-            imp.status_icon
-                .set_icon_name(Some("network-transmit-receive-symbolic"));
-        } else {
-            imp.status_container.set_visible(false);
-            imp.welcome_page.set_visible(true); // Show welcome message
-            imp.home_group.set_visible(false);
-            imp.sources_container.set_visible(false);
+            // Subscribe to status text changes
+            let mut status_subscriber = sidebar_vm.status_text().subscribe();
+            let window_weak = self.downgrade();
+
+            glib::spawn_future_local(async move {
+                while status_subscriber.wait_for_change().await {
+                    if let Some(window) = window_weak.upgrade() {
+                        if let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref() {
+                            let text = vm.status_text().get().await;
+                            window.imp().status_label.set_text(&text);
+                        }
+                    }
+                }
+            });
+
+            // Subscribe to status icon changes
+            let mut icon_subscriber = sidebar_vm.status_icon().subscribe();
+            let window_weak = self.downgrade();
+
+            glib::spawn_future_local(async move {
+                while icon_subscriber.wait_for_change().await {
+                    if let Some(window) = window_weak.upgrade() {
+                        if let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref() {
+                            let icon = vm.status_icon().get().await;
+                            window.imp().status_icon.set_icon_name(Some(&icon));
+                        }
+                    }
+                }
+            });
+
+            // Subscribe to spinner visibility
+            let mut spinner_subscriber = sidebar_vm.show_spinner().subscribe();
+            let window_weak = self.downgrade();
+
+            glib::spawn_future_local(async move {
+                while spinner_subscriber.wait_for_change().await {
+                    if let Some(window) = window_weak.upgrade() {
+                        if let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref() {
+                            let show = vm.show_spinner().get().await;
+                            window.imp().sync_spinner.set_visible(show);
+                            window.imp().sync_spinner.set_spinning(show);
+                        }
+                    }
+                }
+            });
+
+            // Subscribe to connection status
+            let mut connected_subscriber = sidebar_vm.is_connected().subscribe();
+            let window_weak = self.downgrade();
+
+            glib::spawn_future_local(async move {
+                while connected_subscriber.wait_for_change().await {
+                    if let Some(window) = window_weak.upgrade() {
+                        if let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref() {
+                            let connected = vm.is_connected().get().await;
+                            let imp = window.imp();
+
+                            if connected {
+                                imp.welcome_page.set_visible(false);
+                                imp.home_group.set_visible(true);
+                                imp.sources_container.set_visible(true);
+                                imp.status_container.set_visible(true);
+                            } else {
+                                // Only show welcome if we truly have no data
+                                let sources = vm.sources().get().await;
+                                if sources.is_empty() {
+                                    imp.welcome_page.set_visible(true);
+                                    imp.home_group.set_visible(false);
+                                    imp.sources_container.set_visible(false);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
         }
+    }
+
+    fn update_sidebar_from_viewmodel(&self) {
+        if let Some(sidebar_vm) = self.imp().sidebar_viewmodel.borrow().as_ref() {
+            let sidebar_vm = sidebar_vm.clone();
+            let window_weak = self.downgrade();
+
+            glib::spawn_future_local(async move {
+                let sources = sidebar_vm.sources().get().await;
+
+                if let Some(window) = window_weak.upgrade() {
+                    // Convert ViewModel data to the format expected by update_all_backends_libraries
+                    let mut backends_libraries = Vec::new();
+
+                    for source in sources {
+                        let libraries: Vec<(crate::models::Library, usize)> = source
+                            .libraries
+                            .iter()
+                            .map(|lib| {
+                                let library = crate::models::Library {
+                                    id: lib.id.clone(),
+                                    title: lib.title.clone(),
+                                    library_type: match lib.library_type.as_str() {
+                                        "movies" => crate::models::LibraryType::Movies,
+                                        "shows" => crate::models::LibraryType::Shows,
+                                        "music" => crate::models::LibraryType::Music,
+                                        "photos" => crate::models::LibraryType::Photos,
+                                        _ => crate::models::LibraryType::Mixed,
+                                    },
+                                    icon: lib.icon.clone(),
+                                };
+                                (library, lib.item_count as usize)
+                            })
+                            .collect();
+
+                        if !libraries.is_empty() {
+                            backends_libraries.push((source.id.clone(), libraries));
+                        }
+                    }
+
+                    // Update the UI
+                    window.update_all_backends_libraries(backends_libraries);
+                }
+            });
+        }
+    }
+
+    pub async fn update_connection_status(&self, connected: bool) {
+        // Visibility is now managed by SidebarViewModel subscriptions
+        // This method can be removed once all callers are updated
+        tracing::info!(
+            "update_connection_status called with {} - this should be handled by SidebarViewModel",
+            connected
+        );
     }
 
     pub async fn update_user_display_with_backend(
@@ -503,112 +509,17 @@ impl ReelMainWindow {
         user: Option<crate::models::User>,
         backend: Arc<dyn crate::backends::traits::MediaBackend>,
     ) {
-        let imp = self.imp();
-        info!(
-            "update_user_display_with_backend called with user: {:?}",
-            user.as_ref().map(|u| &u.username)
+        // Status is now managed by SidebarViewModel - no manual updates needed
+        // This method can be removed once all callers are updated
+        tracing::info!(
+            "update_user_display_with_backend called - this should be handled by SidebarViewModel"
         );
-
-        if let Some(user) = user {
-            info!(
-                "Active backend found, is_initialized: {}",
-                backend.is_initialized().await
-            );
-            if backend.is_initialized().await {
-                // Get backend info using the trait method
-                let backend_info = backend.get_backend_info().await;
-                info!("Got backend info: {:?}", backend_info);
-
-                // Check if we're in offline mode
-                if user.id == "offline"
-                    && backend_info.connection_type
-                        == crate::backends::traits::ConnectionType::Unknown
-                {
-                    // We have cached credentials but can't connect
-                    imp.status_container.set_visible(true);
-                    imp.status_label.set_text("Offline (cached)");
-                    imp.status_icon
-                        .set_icon_name(Some("network-offline-symbolic"));
-                } else {
-                    // Create detailed status based on connection type
-                    use crate::backends::traits::ConnectionType;
-                    let (status_text, icon_name) = match backend_info.connection_type {
-                        ConnectionType::Local => ("Connected (local)", "network-wired-symbolic"),
-                        ConnectionType::Remote => {
-                            ("Connected (remote)", "network-wireless-symbolic")
-                        }
-                        ConnectionType::Relay => ("Connected (relay)", "network-cellular-symbolic"),
-                        ConnectionType::Offline => ("Offline (cached)", "network-offline-symbolic"),
-                        ConnectionType::Unknown => {
-                            ("Connected", "network-transmit-receive-symbolic")
-                        }
-                    };
-
-                    imp.status_container.set_visible(true);
-                    imp.status_label.set_text(status_text);
-                    imp.status_icon.set_icon_name(Some(icon_name));
-                }
-            } else {
-                imp.status_container.set_visible(true);
-                imp.status_label.set_text("Authenticated");
-                imp.status_icon.set_icon_name(Some("network-idle-symbolic"));
-            }
-        } else {
-            imp.status_container.set_visible(false);
-        }
     }
 
     pub async fn update_user_display(&self, user: Option<crate::models::User>) {
-        let imp = self.imp();
-
-        if let Some(user) = user {
-            // Check if backend is initialized
-            let state = self.imp().state.borrow().as_ref().unwrap().clone();
-
-            // Skip updating connection status if no backends are configured
-            let all_backends = state.source_coordinator.get_all_backends().await;
-            if all_backends.is_empty() {
-                return;
-            }
-
-            // TODO: Update this to handle multiple backends properly
-            // For now, we'll just skip the status update
-            if let Some((backend_id, backend)) = all_backends.into_iter().next() {
-                if backend.is_initialized().await {
-                    // Get backend info using the trait method
-                    let backend_info = backend.get_backend_info().await;
-
-                    // Create detailed status based on connection type
-                    use crate::backends::traits::ConnectionType;
-                    let (status_text, icon_name) = match backend_info.connection_type {
-                        ConnectionType::Local => ("Connected (local)", "network-wired-symbolic"),
-                        ConnectionType::Remote => {
-                            ("Connected (remote)", "network-wireless-symbolic")
-                        }
-                        ConnectionType::Relay => ("Connected (relay)", "network-cellular-symbolic"),
-                        ConnectionType::Offline => ("Offline (cached)", "network-offline-symbolic"),
-                        ConnectionType::Unknown => {
-                            ("Connected", "network-transmit-receive-symbolic")
-                        }
-                    };
-
-                    imp.status_container.set_visible(true);
-                    imp.status_label.set_text(status_text);
-                    imp.status_icon.set_icon_name(Some(icon_name));
-                } else {
-                    imp.status_container.set_visible(true);
-                    imp.status_label.set_text("Authenticated");
-                    imp.status_icon.set_icon_name(Some("network-idle-symbolic"));
-                }
-            } else {
-                imp.status_container.set_visible(true);
-                imp.status_label.set_text("Not connected");
-                imp.status_icon
-                    .set_icon_name(Some("network-offline-symbolic"));
-            }
-        } else {
-            imp.status_container.set_visible(false);
-        }
+        // Status is now managed by SidebarViewModel - no manual updates needed
+        // This method can be removed once all callers are updated
+        tracing::info!("update_user_display called - this should be handled by SidebarViewModel");
     }
 
     pub fn show_auth_dialog(&self) {
@@ -639,23 +550,18 @@ impl ReelMainWindow {
                     {
                         info!("Backend initialized after auth dialog closed");
 
-                        // Update backend selector with new backend
+                        // Backend status is now managed by SidebarViewModel
                         window.update_backend_selector().await;
 
-                        // Update connection status
-                        window.update_connection_status(true).await;
-
-                        // Update user display
-                        if let Some(user) = state_for_async.get_user().await {
-                            window
-                                .update_user_display_with_backend(Some(user), backend.clone())
-                                .await;
+                        // FIRST: Load cached data immediately via SidebarViewModel
+                        info!(
+                            "Refreshing SidebarViewModel for newly authenticated backend: {}",
+                            backend_id
+                        );
+                        if let Some(sidebar_vm) = window.imp().sidebar_viewmodel.borrow().as_ref() {
+                            use crate::ui::viewmodels::ViewModel;
+                            sidebar_vm.refresh().await;
                         }
-
-                        // FIRST: Load cached data immediately
-                        // Load cached libraries for the newly authenticated backend
-                        info!("Loading cached libraries for backend: {}", backend_id);
-                        window.load_cached_libraries_for_backend(&backend_id).await;
 
                         // THEN: Start background sync
                         let backend_clone = backend.clone();
@@ -664,8 +570,7 @@ impl ReelMainWindow {
                         glib::spawn_future_local(async move {
                             if let Some(window) = window_weak.upgrade() {
                                 info!("Starting background sync after auth...");
-                                // Show sync progress
-                                window.show_sync_progress(true);
+                                // Sync progress is now managed by SidebarViewModel
 
                                 // Start sync with backend ID
                                 // Use the same backend_id from outer scope
@@ -679,8 +584,7 @@ impl ReelMainWindow {
                                         .await;
                                 }
 
-                                // Hide sync progress
-                                window.show_sync_progress(false);
+                                // Sync progress is now managed by SidebarViewModel
                             }
                         });
                     }
@@ -693,8 +597,14 @@ impl ReelMainWindow {
         info!("Showing preferences");
 
         if let Some(config) = self.imp().config.borrow().as_ref() {
-            let prefs_window = crate::ui::PreferencesWindow::new(self, config.clone());
-            prefs_window.present();
+            if let Some(state) = self.imp().state.borrow().as_ref() {
+                let prefs_window = crate::ui::PreferencesWindow::new(
+                    self,
+                    config.clone(),
+                    state.event_bus.clone(),
+                );
+                prefs_window.present();
+            }
         }
     }
 
@@ -711,26 +621,6 @@ impl ReelMainWindow {
 
         about.set_transient_for(Some(self));
         about.present();
-    }
-
-    pub fn update_libraries(&self, libraries: Vec<(crate::models::Library, usize)>) {
-        // For single backend, use update_all_backends_libraries
-        let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        let libraries_clone = libraries.clone();
-        let window_weak = self.downgrade();
-
-        glib::spawn_future_local(async move {
-            if let Some(window) = window_weak.upgrade() {
-                // Load libraries for all backends
-                let all_backends = state.source_coordinator.get_all_backends().await;
-                let backends_libraries: Vec<(String, Vec<(crate::models::Library, usize)>)> =
-                    all_backends
-                        .into_iter()
-                        .map(|(backend_id, _)| (backend_id, libraries_clone.clone()))
-                        .collect();
-                window.update_all_backends_libraries(backends_libraries);
-            }
-        });
     }
 
     pub fn update_all_backends_libraries(
@@ -905,129 +795,47 @@ impl ReelMainWindow {
     }
 
     pub fn show_sync_progress(&self, syncing: bool) {
-        self.imp().sync_spinner.set_visible(syncing);
-        self.imp().sync_spinner.set_spinning(syncing);
-    }
-
-    pub async fn load_cached_libraries_for_backend(&self, backend_id: &str) {
-        info!("Loading libraries from cache...");
-
-        // Get sync manager from AppState
-        let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        let sync_manager = state.sync_manager.clone();
-
-        // Get cached libraries and update UI
-        match sync_manager.get_cached_libraries(backend_id).await {
-            Ok(libraries) => {
-                if libraries.is_empty() {
-                    info!("No cached libraries found");
-                    return;
-                }
-
-                info!("Found {} cached libraries", libraries.len());
-
-                // Build library list with counts
-                let mut library_info = Vec::new();
-
-                for library in &libraries {
-                    use crate::models::LibraryType;
-                    let item_count = match library.library_type {
-                        LibraryType::Movies => {
-                            // Get movie count for this library
-                            match sync_manager
-                                .get_cached_movies(backend_id, &library.id)
-                                .await
-                            {
-                                Ok(movies) => movies.len(),
-                                Err(_) => 0,
-                            }
-                        }
-                        LibraryType::Shows => {
-                            // Get show count for this library
-                            match sync_manager.get_cached_shows(backend_id, &library.id).await {
-                                Ok(shows) => shows.len(),
-                                Err(_) => 0,
-                            }
-                        }
-                        _ => {
-                            // For other library types, we don't have counts yet
-                            0
-                        }
-                    };
-
-                    library_info.push((library.clone(), item_count));
-                }
-
-                info!("Updating UI with {} cached libraries", library_info.len());
-                self.update_libraries(library_info);
-
-                // Show home page instead of empty state if we have libraries
-                self.show_home_page();
-            }
-            Err(e) => {
-                info!("No cached libraries available: {}", e);
-            }
-        }
+        // Sync progress is now managed by SidebarViewModel subscriptions
+        // This method can be removed once all callers are updated
+        tracing::info!(
+            "show_sync_progress called with {} - this should be handled by SidebarViewModel",
+            syncing
+        );
     }
 
     fn show_sources_page(&self) {
         info!("show_sources_page called");
         let imp = self.imp();
 
-        // Clear header end widgets first
-        self.clear_header_end_widgets();
-
-        // Remove any filter controls since sources page doesn't need them
-        if let Some(filter_controls) = imp.filter_controls.borrow().as_ref() {
-            imp.content_header.remove(filter_controls);
-        }
-        imp.filter_controls.replace(None);
+        // Prepare for navigation
+        self.prepare_navigation();
 
         // Get or create content stack
-        let content_stack = if imp.content_stack.borrow().is_none() {
-            let stack = gtk4::Stack::new();
-            stack.add_named(&*imp.empty_state, Some("empty"));
-            imp.content_toolbar.set_content(Some(&stack));
-            imp.content_stack.replace(Some(stack.clone()));
-            stack
-        } else {
-            imp.content_stack.borrow().as_ref().unwrap().clone()
-        };
+        let content_stack = self.ensure_content_stack();
 
         // Create sources page if it doesn't exist
         if content_stack.child_by_name("sources").is_none()
             && let Some(state) = &*imp.state.borrow()
         {
-            let sources_page = pages::SourcesPage::new(state.clone());
+            // Create sources page with header setup callback
+            let header_ref = imp.content_header.clone();
+            let add_button_ref = imp.header_add_button.clone();
+            let sources_page =
+                pages::SourcesPage::new(state.clone(), move |title_label, add_button| {
+                    // Set the header title
+                    header_ref.set_title_widget(Some(title_label));
+
+                    // Add the button to header and store reference
+                    header_ref.pack_end(add_button);
+                    add_button_ref.replace(Some(add_button.clone()));
+                });
+
             content_stack.add_named(&sources_page, Some("sources"));
             imp.sources_page.replace(Some(sources_page));
         }
 
         // Show the sources page
         content_stack.set_visible_child_name("sources");
-
-        // Update header title
-        imp.content_header
-            .set_title_widget(Some(&gtk4::Label::new(Some("Sources & Accounts"))));
-
-        // Add "Add Source" button to header
-        let add_button = gtk4::Button::builder()
-            .icon_name("list-add-symbolic")
-            .tooltip_text("Add Source")
-            .css_classes(vec!["suggested-action"])
-            .build();
-
-        if let Some(sources_page) = imp.sources_page.borrow().as_ref() {
-            let sources_page_weak = sources_page.downgrade();
-            add_button.connect_clicked(move |_| {
-                if let Some(sources_page) = sources_page_weak.upgrade() {
-                    sources_page.show_add_source_dialog();
-                }
-            });
-        }
-
-        imp.content_header.pack_end(&add_button);
-        imp.header_add_button.replace(Some(add_button));
     }
 
     fn clear_header_end_widgets(&self) {
@@ -1043,61 +851,33 @@ impl ReelMainWindow {
     fn show_home_page(&self) {
         let imp = self.imp();
 
-        // Clear header end widgets
-        self.clear_header_end_widgets();
-
-        // Remove any filter controls since homepage doesn't need them
-        if let Some(filter_controls) = imp.filter_controls.borrow().as_ref() {
-            imp.content_header.remove(filter_controls);
-        }
-        imp.filter_controls.replace(None);
+        // Prepare for navigation
+        self.prepare_navigation();
 
         // Get or create content stack
-        let content_stack = if imp.content_stack.borrow().is_none() {
-            let stack = gtk4::Stack::new();
-            stack.add_named(&*imp.empty_state, Some("empty"));
-            imp.content_toolbar.set_content(Some(&stack));
-            imp.content_stack.replace(Some(stack.clone()));
-            stack
-        } else {
-            imp.content_stack.borrow().as_ref().unwrap().clone()
-        };
+        let content_stack = self.ensure_content_stack();
 
         // Create home page if it doesn't exist
         if content_stack.child_by_name("home").is_none() {
             if let Some(state) = &*imp.state.borrow() {
-                let home_page = pages::HomePage::new(state.clone());
-
-                // Set up media selected callback - same as library view
+                // Create home page with header setup and navigation callbacks
+                let header_ref = imp.content_header.clone();
                 let window_weak = self.downgrade();
-                let state_clone = state.clone();
-                home_page.set_on_media_selected(move |media_item| {
-                    info!("HomePage - Media selected: {}", media_item.title());
-                    if let Some(window) = window_weak.upgrade() {
-                        let media_item = media_item.clone();
-                        let state = state_clone.clone();
-                        glib::spawn_future_local(async move {
-                            use crate::models::MediaItem;
-                            match &media_item {
-                                MediaItem::Movie(movie) => {
-                                    info!("HomePage - Navigating to movie details");
-                                    window.show_movie_details(movie.clone(), state).await;
-                                }
-                                MediaItem::Episode(_) => {
-                                    info!("HomePage - Navigating to episode player");
-                                    window.show_player(&media_item, state).await;
-                                }
-                                MediaItem::Show(show) => {
-                                    info!("HomePage - Navigating to show details");
-                                    window.show_show_details(show.clone(), state).await;
-                                }
-                                _ => {
-                                    info!("HomePage - Unsupported media type");
-                                }
-                            }
-                        });
-                    }
-                });
+
+                let home_page = pages::HomePage::new(
+                    state.clone(),
+                    move |title_label| {
+                        // Set the header title
+                        header_ref.set_title_widget(Some(title_label));
+                    },
+                    move |nav_request| {
+                        if let Some(window) = window_weak.upgrade() {
+                            glib::spawn_future_local(async move {
+                                window.navigate_to(nav_request).await;
+                            });
+                        }
+                    },
+                );
 
                 content_stack.add_named(&home_page, Some("home"));
                 imp.home_page.replace(Some(home_page));
@@ -1111,10 +891,6 @@ impl ReelMainWindow {
 
         // Show the home page
         content_stack.set_visible_child_name("home");
-
-        // Update header title
-        imp.content_header
-            .set_title_widget(Some(&gtk4::Label::new(Some("Home"))));
     }
 
     pub async fn trigger_sync(&self, state: Arc<AppState>) {
@@ -1180,8 +956,7 @@ impl ReelMainWindow {
 
         let all_backends = state.source_coordinator.get_all_backends().await;
 
-        // Show sync progress
-        self.show_sync_progress(true);
+        // Sync progress is now managed by SidebarViewModel
 
         // Sync each backend sequentially
         for (backend_id, backend) in all_backends {
@@ -1201,8 +976,7 @@ impl ReelMainWindow {
             }
         }
 
-        // Hide sync progress
-        self.show_sync_progress(false);
+        // Sync progress is now managed by SidebarViewModel
 
         // Refresh all libraries display
         self.refresh_all_libraries().await;
@@ -1231,8 +1005,7 @@ impl ReelMainWindow {
         let state = self.imp().state.borrow().as_ref().unwrap().clone();
 
         if let Some(backend) = state.source_coordinator.get_backend(backend_id).await {
-            // Show sync progress
-            self.show_sync_progress(true);
+            // Sync progress is now managed by SidebarViewModel
 
             let sync_manager = state.sync_manager.clone();
             match sync_manager.sync_backend(backend_id, backend).await {
@@ -1247,8 +1020,7 @@ impl ReelMainWindow {
                 }
             }
 
-            // Hide sync progress
-            self.show_sync_progress(false);
+            // Sync progress is now managed by SidebarViewModel
 
             // Refresh all libraries display
             self.refresh_all_libraries().await;
@@ -1324,153 +1096,66 @@ impl ReelMainWindow {
     }
 
     async fn refresh_all_libraries(&self) {
-        let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        let all_backends = state.source_coordinator.get_all_backends().await;
-
-        let sync_manager = state.sync_manager.clone();
-        let mut backends_libraries = Vec::new();
-
-        for (backend_id, _backend) in all_backends {
-            // Get cached libraries for this backend
-            match sync_manager.get_cached_libraries(&backend_id).await {
-                Ok(libraries) => {
-                    // Build library list with counts
-                    let mut library_info = Vec::new();
-
-                    for library in &libraries {
-                        use crate::models::LibraryType;
-                        let item_count = match library.library_type {
-                            LibraryType::Movies => {
-                                match sync_manager
-                                    .get_cached_movies(&backend_id, &library.id)
-                                    .await
-                                {
-                                    Ok(movies) => movies.len(),
-                                    Err(_) => 0,
-                                }
-                            }
-                            LibraryType::Shows => {
-                                match sync_manager
-                                    .get_cached_shows(&backend_id, &library.id)
-                                    .await
-                                {
-                                    Ok(shows) => shows.len(),
-                                    Err(_) => 0,
-                                }
-                            }
-                            _ => 0,
-                        };
-
-                        library_info.push((library.clone(), item_count));
-                    }
-
-                    if !library_info.is_empty() {
-                        backends_libraries.push((backend_id.clone(), library_info));
-                    }
-                }
-                Err(e) => {
-                    info!("No cached libraries for backend {}: {}", backend_id, e);
-                }
-            }
+        // Only refresh the SidebarViewModel - it will handle updating the UI via reactive properties
+        if let Some(sidebar_vm) = self.imp().sidebar_viewmodel.borrow().as_ref() {
+            use crate::ui::viewmodels::ViewModel;
+            sidebar_vm.refresh().await;
+            tracing::info!("Refreshed SidebarViewModel - UI will update via reactive properties");
+        } else {
+            tracing::warn!("SidebarViewModel not found during refresh_all_libraries");
         }
-
-        // Update the UI with all backends' libraries
-        self.update_all_backends_libraries(backends_libraries);
     }
 
     pub async fn show_movie_details(&self, movie: crate::models::Movie, state: Arc<AppState>) {
         let imp = self.imp();
 
-        // Get or create content stack
-        let content_stack = if imp.content_stack.borrow().is_none() {
-            let stack = gtk4::Stack::builder()
-                .transition_type(gtk4::StackTransitionType::SlideLeftRight)
-                .transition_duration(300)
-                .build();
+        // Prepare navigation and get stack
+        self.prepare_navigation();
+        let content_stack = self.ensure_content_stack();
 
-            // Set the stack as content
-            imp.content_toolbar.set_content(Some(&stack));
-            imp.content_stack.replace(Some(stack.clone()));
-
-            stack
-        } else {
-            imp.content_stack.borrow().as_ref().unwrap().clone()
-        };
+        // Set transition for details pages
+        content_stack.set_transition_type(gtk4::StackTransitionType::SlideLeftRight);
+        content_stack.set_transition_duration(300);
 
         // Create or get movie details page
-        let movie_details_page = {
-            // Check if page exists (drop borrow immediately)
-            let page_exists = imp.movie_details_page.borrow().is_some();
-
-            if page_exists {
-                // Get the page with a fresh borrow
-                let page = imp.movie_details_page.borrow().as_ref().unwrap().clone();
-
-                // Page exists, make sure it's in the stack
-                if content_stack.child_by_name("movie_details").is_none() {
-                    content_stack.add_named(&page, Some("movie_details"));
-                }
-                page
-            } else {
-                // Create new page
-                let page = crate::ui::pages::MovieDetailsPage::new(state.clone());
-
-                // Set callback for when play is clicked
-                let window_weak = self.downgrade();
-                let state_clone = state.clone();
-                page.set_on_play_clicked(move |movie| {
-                    if let Some(window) = window_weak.upgrade() {
-                        let movie_item = crate::models::MediaItem::Movie(movie.clone());
-                        let state = state_clone.clone();
-                        glib::spawn_future_local(async move {
-                            window.show_player(&movie_item, state).await;
-                        });
-                    }
-                });
-
-                // Store the page
-                imp.movie_details_page.replace(Some(page.clone()));
-
-                // Add to content stack
-                content_stack.add_named(&page, Some("movie_details"));
-
-                page
+        let movie_details_page = if let Some(page) = imp.movie_details_page.borrow().as_ref() {
+            // Page exists, make sure it's in the stack
+            if content_stack.child_by_name("movie_details").is_none() {
+                content_stack.add_named(page, Some("movie_details"));
             }
+            page.clone()
+        } else {
+            // Create new page
+            let page = crate::ui::pages::MovieDetailsPage::new(state.clone());
+
+            // Set callback for when play is clicked
+            let window_weak = self.downgrade();
+            page.set_on_play_clicked(move |movie| {
+                if let Some(window) = window_weak.upgrade() {
+                    let movie_item = crate::models::MediaItem::Movie(movie.clone());
+                    glib::spawn_future_local(async move {
+                        use crate::ui::navigation::NavigationRequest;
+                        window
+                            .navigate_to(NavigationRequest::ShowPlayer(movie_item))
+                            .await;
+                    });
+                }
+            });
+
+            // Store and add to stack
+            imp.movie_details_page.replace(Some(page.clone()));
+            content_stack.add_named(&page, Some("movie_details"));
+            page
         };
 
-        // Update the content page title immediately
+        // Update the content page title
         imp.content_page.set_title(&movie.title);
 
         // Load the movie (non-blocking)
         movie_details_page.load_movie(movie.clone());
 
-        // Remove any existing back button
-        if let Some(old_button) = imp.back_button.borrow().as_ref() {
-            imp.content_header.remove(old_button);
-        }
-
-        // Create a new back button for the header bar
-        let back_button = gtk4::Button::builder()
-            .icon_name("go-previous-symbolic")
-            .tooltip_text("Back to Library")
-            .build();
-
-        let window_weak = self.downgrade();
-        back_button.connect_clicked(move |_| {
-            if let Some(window) = window_weak.upgrade() {
-                // Go back to library view or home
-                if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
-                    if stack.child_by_name("library").is_some() {
-                        stack.set_visible_child_name("library");
-                    } else if stack.child_by_name("home").is_some() {
-                        stack.set_visible_child_name("home");
-                    }
-                }
-            }
-        });
-
-        imp.content_header.pack_start(&back_button);
-        imp.back_button.replace(Some(back_button));
+        // Setup back button
+        self.setup_back_button("Back to Library");
 
         // Show the movie details page
         content_stack.set_visible_child_name("movie_details");
@@ -1479,93 +1164,53 @@ impl ReelMainWindow {
     pub async fn show_show_details(&self, show: crate::models::Show, state: Arc<AppState>) {
         let imp = self.imp();
 
-        // Get or create content stack
-        let content_stack = if imp.content_stack.borrow().is_none() {
-            let stack = gtk4::Stack::builder()
-                .transition_type(gtk4::StackTransitionType::SlideLeftRight)
-                .transition_duration(300)
-                .build();
+        // Prepare navigation and get stack
+        self.prepare_navigation();
+        let content_stack = self.ensure_content_stack();
 
-            // Set the stack as content
-            imp.content_toolbar.set_content(Some(&stack));
-            imp.content_stack.replace(Some(stack.clone()));
-
-            stack
-        } else {
-            imp.content_stack.borrow().as_ref().unwrap().clone()
-        };
+        // Set transition for details pages
+        content_stack.set_transition_type(gtk4::StackTransitionType::SlideLeftRight);
+        content_stack.set_transition_duration(300);
 
         // Create or get show details page
-        let show_details_page = {
-            // Check if page exists (drop borrow immediately)
-            let page_exists = imp.show_details_page.borrow().is_some();
-
-            if page_exists {
-                // Get the page with a fresh borrow
-                let page = imp.show_details_page.borrow().as_ref().unwrap().clone();
-
-                // Page exists, make sure it's in the stack
-                if content_stack.child_by_name("show_details").is_none() {
-                    content_stack.add_named(page.widget(), Some("show_details"));
-                }
-                page
-            } else {
-                // Create new page
-                let page = crate::ui::pages::ShowDetailsPage::new(state.clone());
-
-                // Set callback for when episode is selected
-                let window_weak = self.downgrade();
-                let state_clone = state.clone();
-                page.set_on_episode_selected(move |episode| {
-                    if let Some(window) = window_weak.upgrade() {
-                        let episode_item = crate::models::MediaItem::Episode(episode.clone());
-                        let state = state_clone.clone();
-                        glib::spawn_future_local(async move {
-                            window.show_player(&episode_item, state).await;
-                        });
-                    }
-                });
-
-                // Store the page
-                imp.show_details_page.replace(Some(page.clone()));
-
-                // Add to content stack
+        let show_details_page = if let Some(page) = imp.show_details_page.borrow().as_ref() {
+            // Page exists, make sure it's in the stack
+            if content_stack.child_by_name("show_details").is_none() {
                 content_stack.add_named(page.widget(), Some("show_details"));
-
-                page
             }
+            page.clone()
+        } else {
+            // Create new page
+            let page = crate::ui::pages::ShowDetailsPage::new(state.clone());
+
+            // Set callback for when episode is selected
+            let window_weak = self.downgrade();
+            page.set_on_episode_selected(move |episode| {
+                if let Some(window) = window_weak.upgrade() {
+                    let episode_item = crate::models::MediaItem::Episode(episode.clone());
+                    glib::spawn_future_local(async move {
+                        use crate::ui::navigation::NavigationRequest;
+                        window
+                            .navigate_to(NavigationRequest::ShowPlayer(episode_item))
+                            .await;
+                    });
+                }
+            });
+
+            // Store and add to stack
+            imp.show_details_page.replace(Some(page.clone()));
+            content_stack.add_named(page.widget(), Some("show_details"));
+            page
         };
 
-        // Update the content page title immediately
+        // Update the content page title
         imp.content_page.set_title(&show.title);
 
         // Load the show (non-blocking)
         show_details_page.load_show(show.clone());
 
-        // Remove any existing back button
-        if let Some(old_button) = imp.back_button.borrow().as_ref() {
-            imp.content_header.remove(old_button);
-        }
-
-        // Create a new back button for the header bar
-        let back_button = gtk4::Button::builder()
-            .icon_name("go-previous-symbolic")
-            .tooltip_text("Back to Library")
-            .build();
-
-        let window_weak = self.downgrade();
-        back_button.connect_clicked(move |_| {
-            if let Some(window) = window_weak.upgrade() {
-                // Go back to library view
-                if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
-                    stack.set_visible_child_name("library");
-                }
-            }
-        });
-
-        // Add the back button to the header bar (pack_start)
-        imp.content_header.pack_start(&back_button);
-        imp.back_button.replace(Some(back_button));
+        // Setup back button
+        self.setup_back_button("Back to Library");
 
         // Show the show details page
         content_stack.set_visible_child_name("show_details");
@@ -1877,112 +1522,65 @@ impl ReelMainWindow {
     async fn show_library_view(&self, backend_id: String, library: crate::models::Library) {
         let imp = self.imp();
 
-        // Get or create content stack
-        let content_stack = if imp.content_stack.borrow().is_none() {
-            let stack = gtk4::Stack::builder()
-                .transition_type(gtk4::StackTransitionType::SlideLeftRight)
-                .transition_duration(300)
-                .build();
+        // Prepare navigation and get stack
+        self.prepare_navigation();
+        let content_stack = self.ensure_content_stack();
 
-            // Add the empty state as the default page
-            stack.add_named(&*imp.empty_state, Some("empty"));
-
-            // Set the stack as content of the toolbar view
-            imp.content_toolbar.set_content(Some(&stack));
-
-            imp.content_stack.replace(Some(stack.clone()));
-            stack
-        } else {
-            imp.content_stack.borrow().as_ref().unwrap().clone()
-        };
+        // Set transition for library pages
+        content_stack.set_transition_type(gtk4::StackTransitionType::SlideLeftRight);
+        content_stack.set_transition_duration(300);
 
         // Create or get library view
         let library_view = {
-            let existing_view = imp.library_view.borrow();
-            existing_view.as_ref().cloned()
-        }
-        .unwrap_or_else(|| {
-            let state = imp.state.borrow().as_ref().unwrap().clone();
-            let view = crate::ui::pages::LibraryView::new(state.clone());
+            // Check if we already have a library view
+            let existing_view = imp.library_view.borrow().as_ref().cloned();
 
-            // Set the media selected callback to handle different media types
-            let window_weak = self.downgrade();
-            let state_clone = state.clone();
-            view.set_on_media_selected(move |media_item| {
-                info!(
-                    "MainWindow - Media selected callback triggered: {}",
-                    media_item.title()
-                );
-                if let Some(window) = window_weak.upgrade() {
-                    let media_item = media_item.clone();
-                    let state = state_clone.clone();
-                    debug!(
-                        "MainWindow - Spawning navigation task for: {}",
-                        media_item.title()
-                    );
-                    glib::spawn_future_local(async move {
-                        use crate::models::MediaItem;
-                        info!(
-                            "MainWindow - Processing media selection: {}",
-                            media_item.title()
-                        );
-                        match &media_item {
-                            MediaItem::Movie(movie) => {
-                                // Movies go to movie details page
-                                info!("MainWindow - Movie selected, navigating to movie details");
-                                window.show_movie_details(movie.clone(), state).await;
-                            }
-                            MediaItem::Show(show) => {
-                                // Shows go to episode selection
-                                info!("MainWindow - Show selected, navigating to show details");
-                                window.show_show_details(show.clone(), state).await;
-                            }
-                            _ => {
-                                // Other media types could be handled here
-                                info!("MainWindow - Unsupported media type selected");
-                            }
-                        }
-                    });
-                } else {
-                    error!("MainWindow - Failed to upgrade window weak reference!");
-                }
-            });
+            if let Some(view) = existing_view {
+                view
+            } else {
+                // Create new library view
+                let state = imp.state.borrow().as_ref().unwrap().clone();
+                let view = crate::ui::pages::LibraryView::new(state.clone());
 
-            imp.library_view.replace(Some(view.clone()));
+                // Set the media selected callback to handle different media types
+                let window_weak = self.downgrade();
+                view.set_on_media_selected(move |media_item| {
+                    info!("Library - Media selected: {}", media_item.title());
+                    if let Some(window) = window_weak.upgrade() {
+                        let media_item = media_item.clone();
+                        glib::spawn_future_local(async move {
+                            use crate::models::MediaItem;
+                            use crate::ui::navigation::NavigationRequest;
+                            let nav_request = match &media_item {
+                                MediaItem::Movie(movie) => {
+                                    NavigationRequest::ShowMovieDetails(movie.clone())
+                                }
+                                MediaItem::Show(show) => {
+                                    NavigationRequest::ShowShowDetails(show.clone())
+                                }
+                                MediaItem::Episode(_) => NavigationRequest::ShowPlayer(media_item),
+                                _ => {
+                                    info!("Library - Unsupported media type");
+                                    return;
+                                }
+                            };
+                            window.navigate_to(nav_request).await;
+                        });
+                    }
+                });
 
-            // Add to content stack
-            content_stack.add_named(&view, Some("library"));
-
-            view
-        });
+                // Store the view and add to stack
+                imp.library_view.replace(Some(view.clone()));
+                content_stack.add_named(&view, Some("library"));
+                view
+            }
+        };
 
         // Update the content page title
         imp.content_page.set_title(&library.title);
 
-        // Remove any existing back button and filter controls
-        if let Some(old_button) = imp.back_button.borrow().as_ref() {
-            imp.content_header.remove(old_button);
-        }
-        if let Some(old_controls) = imp.filter_controls.borrow().as_ref() {
-            imp.content_header.remove(old_controls);
-        }
-
-        // Create a new back button for the header bar
-        let back_button = gtk4::Button::builder()
-            .icon_name("go-previous-symbolic")
-            .tooltip_text("Back to Libraries")
-            .build();
-
-        let window_weak = self.downgrade();
-        back_button.connect_clicked(move |_| {
-            if let Some(window) = window_weak.upgrade() {
-                window.show_libraries_view();
-            }
-        });
-
-        // Add the back button to the header bar
-        imp.content_header.pack_start(&back_button);
-        imp.back_button.replace(Some(back_button));
+        // Setup back button
+        self.setup_back_button("Back to Libraries");
 
         // Update header bar title
         imp.content_header.set_title_widget(Some(
@@ -1994,6 +1592,10 @@ impl ReelMainWindow {
         ));
 
         // Create filter controls for the header bar
+        // Remove any existing filter controls to avoid duplicates when navigating
+        if let Some(prev_controls) = imp.filter_controls.borrow().as_ref() {
+            imp.content_header.remove(prev_controls);
+        }
         let filter_controls = self.create_filter_controls(&library_view);
         imp.content_header.pack_end(&filter_controls);
         imp.filter_controls.replace(Some(filter_controls));
@@ -2017,6 +1619,9 @@ impl ReelMainWindow {
 
         let imp = self.imp();
 
+        // Prepare navigation (clears headers)
+        self.prepare_navigation();
+
         // Show empty state in content area
         if let Some(stack) = imp.content_stack.borrow().as_ref() {
             stack.set_visible_child_name("empty");
@@ -2025,16 +1630,11 @@ impl ReelMainWindow {
         // Reset content page title
         imp.content_page.set_title("Content");
 
-        // Remove back button and filter controls if they exist
+        // Clear back button completely
         if let Some(back_button) = imp.back_button.borrow().as_ref() {
             imp.content_header.remove(back_button);
         }
         imp.back_button.replace(None);
-
-        if let Some(filter_controls) = imp.filter_controls.borrow().as_ref() {
-            imp.content_header.remove(filter_controls);
-        }
-        imp.filter_controls.replace(None);
 
         // Reset header bar title
         imp.content_header.set_title_widget(gtk4::Widget::NONE);
@@ -2183,6 +1783,104 @@ impl ReelMainWindow {
     pub async fn update_backend_selector(&self) {
         // Backend selector is now deprecated - we show all backends at once
         // Sources button is always visible at the bottom
+    }
+
+    // Generic navigation handler
+    pub async fn navigate_to(&self, request: crate::ui::navigation::NavigationRequest) {
+        use crate::ui::navigation::NavigationRequest;
+
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+
+        match request {
+            NavigationRequest::ShowHome => {
+                self.show_home_page();
+            }
+            NavigationRequest::ShowSources => {
+                self.show_sources_page();
+            }
+            NavigationRequest::ShowMovieDetails(movie) => {
+                self.show_movie_details(movie, state).await;
+            }
+            NavigationRequest::ShowShowDetails(show) => {
+                self.show_show_details(show, state).await;
+            }
+            NavigationRequest::ShowPlayer(media_item) => {
+                self.show_player(&media_item, state).await;
+            }
+            NavigationRequest::ShowLibrary(backend_id, library) => {
+                self.show_library_view(backend_id, library).await;
+            }
+            NavigationRequest::GoBack => {
+                // Navigate back in history
+                if let Some(stack) = self.imp().content_stack.borrow().as_ref() {
+                    // Pop from navigation stack if available
+                    if let Some(previous_page) = self.imp().navigation_stack.borrow_mut().pop() {
+                        stack.set_visible_child_name(&previous_page);
+                    } else {
+                        // Default to home
+                        self.show_home_page();
+                    }
+                }
+            }
+        }
+    }
+
+    // Helper to ensure content stack exists
+    fn ensure_content_stack(&self) -> gtk4::Stack {
+        let imp = self.imp();
+
+        if imp.content_stack.borrow().is_none() {
+            let stack = gtk4::Stack::new();
+            stack.add_named(&*imp.empty_state, Some("empty"));
+            imp.content_toolbar.set_content(Some(&stack));
+            imp.content_stack.replace(Some(stack.clone()));
+            stack
+        } else {
+            imp.content_stack.borrow().as_ref().unwrap().clone()
+        }
+    }
+
+    // Helper to prepare for page navigation
+    fn prepare_navigation(&self) {
+        let imp = self.imp();
+
+        // Clear header end widgets
+        self.clear_header_end_widgets();
+
+        // Remove any filter controls
+        if let Some(filter_controls) = imp.filter_controls.borrow().as_ref() {
+            imp.content_header.remove(filter_controls);
+        }
+        imp.filter_controls.replace(None);
+    }
+
+    // Helper to setup back button
+    fn setup_back_button(&self, tooltip: &str) {
+        let imp = self.imp();
+
+        // Remove any existing back button
+        if let Some(old_button) = imp.back_button.borrow().as_ref() {
+            imp.content_header.remove(old_button);
+        }
+
+        // Create a new back button
+        let back_button = gtk4::Button::builder()
+            .icon_name("go-previous-symbolic")
+            .tooltip_text(tooltip)
+            .build();
+
+        let window_weak = self.downgrade();
+        back_button.connect_clicked(move |_| {
+            if let Some(window) = window_weak.upgrade() {
+                glib::spawn_future_local(async move {
+                    use crate::ui::navigation::NavigationRequest;
+                    window.navigate_to(NavigationRequest::GoBack).await;
+                });
+            }
+        });
+
+        imp.content_header.pack_start(&back_button);
+        imp.back_button.replace(Some(back_button));
     }
 
     // Backend switching removed - each view must track its own backend_id

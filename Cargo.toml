@@ -42,6 +42,10 @@ toml = "0.9"
 
 # Database and caching
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+sea-orm = { version = "1.1", features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros", "with-chrono", "with-json", "with-uuid"] }
+sea-orm-migration = { version = "1.1", features = ["runtime-tokio-native-tls", "sqlx-sqlite"] }
+sea-query = "0.32"
+sea-query-binder = { version = "0.7", features = ["sqlx-sqlite"] }
 
 # Error handling
 anyhow = "1.0"
