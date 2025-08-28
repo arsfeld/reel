@@ -7,7 +7,9 @@ use tracing::{debug, error, info};
 
 use crate::backends::traits::MediaBackend;
 use crate::models::{Episode, Show};
+use crate::services::DataService;
 use crate::state::AppState;
+use crate::ui::viewmodels::{DetailsViewModel, ViewModel};
 use crate::utils::{ImageLoader, ImageSize};
 
 // Global image loader instance
@@ -76,10 +78,12 @@ mod imp {
         pub content_rating_label: TemplateChild<gtk4::Label>,
 
         pub state: RefCell<Option<Arc<AppState>>>,
+        pub viewmodel: RefCell<Option<Arc<DetailsViewModel>>>,
         pub current_show: RefCell<Option<Show>>,
         pub current_season: RefCell<Option<u32>>,
         pub on_episode_selected: RefCell<Option<Box<dyn Fn(&Episode)>>>,
         pub load_generation: RefCell<u64>,
+        pub property_subscriptions: RefCell<Vec<tokio::sync::broadcast::Receiver<()>>>,
     }
 
     impl Default for ShowDetailsPage {
@@ -111,10 +115,12 @@ mod imp {
                 content_rating_row: Default::default(),
                 content_rating_label: Default::default(),
                 state: RefCell::new(None),
+                viewmodel: RefCell::new(None),
                 current_show: RefCell::new(None),
                 current_season: RefCell::new(None),
                 on_episode_selected: RefCell::new(None),
                 load_generation: RefCell::new(0),
+                property_subscriptions: RefCell::new(Vec::new()),
             }
         }
     }
@@ -180,8 +186,93 @@ glib::wrapper! {
 impl ShowDetailsPage {
     pub fn new(state: Arc<AppState>) -> Self {
         let page: Self = glib::Object::new();
+        let data_service = state.data_service.clone();
+        let viewmodel = Arc::new(DetailsViewModel::new(data_service));
+
+        // Initialize ViewModel with EventBus
+        glib::spawn_future_local({
+            let vm = viewmodel.clone();
+            let event_bus = state.event_bus.clone();
+            async move {
+                use crate::ui::viewmodels::ViewModel;
+                vm.initialize(event_bus).await;
+            }
+        });
+
         page.imp().state.replace(Some(state));
+        page.imp().viewmodel.replace(Some(viewmodel));
+
+        // Set up property subscriptions
+        page.setup_property_bindings();
+
         page
+    }
+
+    fn setup_property_bindings(&self) {
+        let imp = self.imp();
+        let page_weak = self.downgrade();
+
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            // Subscribe to current_item property
+            if let Some(mut subscriber) = viewmodel.subscribe_to_property("current_item") {
+                let page_weak_clone = page_weak.clone();
+                glib::spawn_future_local(async move {
+                    while subscriber.wait_for_change().await {
+                        if let Some(page) = page_weak_clone.upgrade() {
+                            page.on_current_item_changed().await;
+                        }
+                    }
+                });
+            }
+
+            // Subscribe to is_loading property
+            if let Some(mut subscriber) = viewmodel.subscribe_to_property("is_loading") {
+                let page_weak_clone = page_weak.clone();
+                glib::spawn_future_local(async move {
+                    while subscriber.wait_for_change().await {
+                        if let Some(page) = page_weak_clone.upgrade() {
+                            page.on_loading_changed().await;
+                        }
+                    }
+                });
+            }
+
+            // Subscribe to is_watched property
+            if let Some(mut subscriber) = viewmodel.subscribe_to_property("is_watched") {
+                let page_weak_clone = page_weak.clone();
+                glib::spawn_future_local(async move {
+                    while subscriber.wait_for_change().await {
+                        if let Some(page) = page_weak_clone.upgrade() {
+                            page.on_watched_changed().await;
+                        }
+                    }
+                });
+            }
+
+            // Subscribe to episodes property
+            if let Some(mut subscriber) = viewmodel.subscribe_to_property("episodes") {
+                let page_weak_clone = page_weak.clone();
+                glib::spawn_future_local(async move {
+                    while subscriber.wait_for_change().await {
+                        if let Some(page) = page_weak_clone.upgrade() {
+                            page.on_episodes_changed().await;
+                        }
+                    }
+                });
+            }
+
+            // Subscribe to seasons property
+            if let Some(mut subscriber) = viewmodel.subscribe_to_property("seasons") {
+                let page_weak_clone = page_weak.clone();
+                glib::spawn_future_local(async move {
+                    while subscriber.wait_for_change().await {
+                        if let Some(page) = page_weak_clone.upgrade() {
+                            page.on_seasons_changed().await;
+                        }
+                    }
+                });
+            }
+        }
     }
 
     pub fn load_show(&self, show: Show) {
@@ -189,91 +280,130 @@ impl ShowDetailsPage {
 
         let imp = self.imp();
 
-        // Increment generation to cancel previous loads
-        let generation = {
-            let mut current_gen = imp.load_generation.borrow_mut();
-            *current_gen += 1;
-            *current_gen
-        };
-
-        // Clear previous images and show placeholder immediately
-        imp.show_poster.set_paintable(gtk4::gdk::Paintable::NONE);
-        imp.show_backdrop.set_paintable(gtk4::gdk::Paintable::NONE);
-        imp.poster_placeholder.set_visible(true);
-
-        // Clear existing episodes
-        self.clear_episodes();
-
-        // Store current show
+        // Store current show for compatibility
         imp.current_show.replace(Some(show.clone()));
 
-        // Set basic info immediately
-        imp.show_title.set_label(&show.title);
+        // Use ViewModel to load the media details
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let viewmodel = viewmodel.clone();
+            let show_id = show.id.clone();
 
-        // Setup season dropdown immediately
-        let season_labels: Vec<String> = show
-            .seasons
-            .iter()
-            .map(|s| format!("Season {}", s.season_number))
-            .collect();
-
-        let string_list =
-            gtk4::StringList::new(&season_labels.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-        imp.season_dropdown.set_model(Some(&string_list));
-
-        // Load everything else asynchronously
-        let page_weak = self.downgrade();
-        let show_clone = show.clone();
-        glib::spawn_future_local(async move {
-            if let Some(page) = page_weak.upgrade() {
-                // Check if this is still the current load operation
-                if *page.imp().load_generation.borrow() != generation {
-                    info!("Cancelling outdated show load operation");
-                    return;
+            glib::spawn_future_local(async move {
+                if let Err(e) = viewmodel.load_media(show_id).await {
+                    error!("Failed to load show through ViewModel: {}", e);
                 }
-
-                // Display show info
-                page.display_show_info(&show_clone).await;
-
-                // Check again before finding next episode
-                if *page.imp().load_generation.borrow() != generation {
-                    return;
-                }
-
-                // Find the season with the next unwatched episode
-                let target_season = page.find_next_unwatched_season(&show_clone).await;
-
-                // Select the appropriate season
-                if let Some((season_index, season_num)) = target_season {
-                    page.imp().season_dropdown.set_selected(season_index as u32);
-                    page.imp().current_season.replace(Some(season_num));
-
-                    // Load episodes for the selected season
-                    page.load_episodes_with_highlight(season_num).await;
-                } else if !show_clone.seasons.is_empty() {
-                    // No unwatched episodes found, default to first season
-                    page.imp().season_dropdown.set_selected(0);
-                    let first_season_num = show_clone
-                        .seasons
-                        .first()
-                        .map(|s| s.season_number)
-                        .unwrap_or(1);
-                    page.load_episodes(first_season_num).await;
-                }
-
-                // Check again before updating UI
-                if *page.imp().load_generation.borrow() != generation {
-                    return;
-                }
-
-                // Update watched button for current season
-                page.update_watched_button();
-            }
-        });
+            });
+        }
     }
 
-    async fn display_show_info(&self, show: &Show) {
+    async fn on_current_item_changed(&self) {
         let imp = self.imp();
+
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            if let Some(detailed_info) = viewmodel.current_item().get().await {
+                self.display_media_info(&detailed_info).await;
+            } else {
+                // Clear UI when no item is loaded
+                imp.show_poster.set_paintable(gtk4::gdk::Paintable::NONE);
+                imp.show_backdrop.set_paintable(gtk4::gdk::Paintable::NONE);
+                imp.poster_placeholder.set_visible(true);
+                self.clear_episodes();
+            }
+        }
+    }
+
+    async fn on_loading_changed(&self) {
+        let imp = self.imp();
+
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let is_loading = viewmodel.is_loading().get().await;
+
+            if is_loading {
+                // Show loading state
+                imp.show_poster.set_paintable(gtk4::gdk::Paintable::NONE);
+                imp.show_backdrop.set_paintable(gtk4::gdk::Paintable::NONE);
+                imp.poster_placeholder.set_visible(true);
+                self.clear_episodes();
+            }
+        }
+    }
+
+    async fn on_watched_changed(&self) {
+        let imp = self.imp();
+
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let is_watched = viewmodel.is_watched().get().await;
+
+            if is_watched {
+                imp.watched_icon
+                    .set_icon_name(Some("checkbox-checked-symbolic"));
+                imp.watched_label.set_text("Season Watched");
+                imp.mark_watched_button.remove_css_class("suggested-action");
+            } else {
+                imp.watched_icon
+                    .set_icon_name(Some("object-select-symbolic"));
+                imp.watched_label.set_text("Mark Season as Watched");
+                imp.mark_watched_button.add_css_class("suggested-action");
+            }
+        }
+    }
+
+    async fn on_episodes_changed(&self) {
+        // Episodes have been updated, refresh the display
+        // This is called when episodes are loaded from the database
+        // The actual display update happens in load_episodes which reads from the ViewModel
+        debug!("Episodes changed in ViewModel");
+    }
+
+    async fn on_seasons_changed(&self) {
+        let imp = self.imp();
+
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let seasons = viewmodel.seasons().get().await;
+
+            if !seasons.is_empty() {
+                // Update season dropdown with available seasons
+                let season_strings: Vec<String> =
+                    seasons.iter().map(|s| format!("Season {}", s)).collect();
+
+                let string_list = gtk4::StringList::new(
+                    &season_strings
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>(),
+                );
+                imp.season_dropdown.set_model(Some(&string_list));
+
+                // Show the seasons box
+                imp.seasons_box.set_visible(true);
+                imp.seasons_label
+                    .set_text(&format!("{} Seasons", seasons.len()));
+
+                // Select the first season by default
+                imp.season_dropdown.set_selected(0);
+            } else {
+                // Hide season selector if no seasons
+                imp.seasons_box.set_visible(false);
+            }
+        }
+    }
+
+    async fn display_media_info(
+        &self,
+        detailed_info: &crate::ui::viewmodels::details_view_model::DetailedMediaInfo,
+    ) {
+        let media = &detailed_info.media;
+        let metadata = &detailed_info.metadata;
+        let imp = self.imp();
+
+        // Extract show from MediaItem enum
+        let show = match media {
+            crate::models::MediaItem::Show(show) => show,
+            _ => {
+                error!("ShowDetailsPage received non-show MediaItem");
+                return;
+            }
+        };
 
         // Load backdrop image with enhanced styling
         if let Some(backdrop_url) = &show.backdrop_url {
@@ -334,10 +464,10 @@ impl ShowDetailsPage {
             imp.rating_box.set_visible(false);
         }
 
-        // Set seasons count
-        imp.seasons_label
-            .set_text(&format!("{} seasons", show.seasons.len()));
-        imp.seasons_box.set_visible(true);
+        // Set seasons count - for shows, we'll need to extract this from metadata or use a default
+        // Since we don't have season info in the database entity, we'll hide this for now
+        // TODO: Extract season information from metadata or add to database schema
+        imp.seasons_box.set_visible(false);
 
         // Set synopsis
         if let Some(overview) = &show.overview {
@@ -352,7 +482,7 @@ impl ShowDetailsPage {
             imp.genres_box.remove(&child);
         }
 
-        for genre in &show.genres {
+        for genre in &metadata.genres {
             let genre_chip = adw::Bin::builder()
                 .css_classes(vec!["card", "compact", "genre-chip"])
                 .build();
@@ -370,7 +500,18 @@ impl ShowDetailsPage {
             imp.genres_box.insert(&genre_chip, -1);
         }
 
-        imp.genres_box.set_visible(!show.genres.is_empty());
+        imp.genres_box.set_visible(!metadata.genres.is_empty());
+
+        // Load episodes for the first season
+        // For now, try to load season 1 episodes
+        // TODO: Properly handle season selection from show metadata
+        let show_id = show.id.clone();
+        let page_weak = self.downgrade();
+        glib::spawn_future_local(async move {
+            if let Some(page) = page_weak.upgrade() {
+                page.load_episodes_for_show(&show_id, 1).await;
+            }
+        });
     }
 
     async fn load_episodes(&self, season_number: u32) {
@@ -381,36 +522,37 @@ impl ShowDetailsPage {
         // Clear existing episodes
         self.clear_episodes();
 
-        // Store current season
+        // Store current season for compatibility
         imp.current_season.replace(Some(season_number));
 
-        // Get the show
-        if let Some(show) = imp.current_show.borrow().as_ref() {
-            // Get backend and fetch episodes
-            if let Some(state) = imp.state.borrow().as_ref() {
-                let backend_id = &show.backend_id;
-                if let Some(backend) = state.source_coordinator.get_backend(backend_id).await {
-                    match backend.get_episodes(&show.id, season_number).await {
-                        Ok(episodes) => {
-                            // Update episode count
-                            imp.episodes_count_label
-                                .set_text(&format!("{} episodes", episodes.len()));
+        // Use ViewModel to load episodes
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let viewmodel = viewmodel.clone();
 
-                            // Add episode cards
-                            for episode in episodes {
-                                self.add_episode_card(episode, false);
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to load episodes: {}", e);
-                            // Show error message
-                            let error_label = gtk4::Label::builder()
-                                .label(format!("Failed to load episodes: {}", e))
-                                .css_classes(vec!["error"])
-                                .build();
-                            imp.episodes_box.append(&error_label);
+            match viewmodel.select_season(season_number as i32).await {
+                Ok(_) => {
+                    // Get episodes from ViewModel
+                    let episodes_models = viewmodel.episodes().get().await;
+
+                    // Update episode count
+                    imp.episodes_count_label
+                        .set_text(&format!("{} episodes", episodes_models.len()));
+
+                    // Convert MediaItem enums to Episode structs for display
+                    for episode_item in episodes_models {
+                        if let crate::models::MediaItem::Episode(episode) = episode_item {
+                            self.add_episode_card(episode, false);
                         }
                     }
+                }
+                Err(e) => {
+                    error!("Failed to load episodes: {}", e);
+                    // Show error message
+                    let error_label = gtk4::Label::builder()
+                        .label(format!("Failed to load episodes: {}", e))
+                        .css_classes(vec!["error"])
+                        .build();
+                    imp.episodes_box.append(&error_label);
                 }
             }
         }
@@ -704,63 +846,75 @@ impl ShowDetailsPage {
         imp.episodes_count_label.set_text("");
     }
 
-    fn update_watched_button(&self) {
-        let imp = self.imp();
-
-        // For now, just show generic "Mark Season as Watched"
-        // Could be enhanced to check if all episodes in season are watched
-        imp.watched_icon
-            .set_icon_name(Some("object-select-symbolic"));
-        imp.watched_label.set_text("Mark Season as Watched");
-    }
+    // Removed - now handled by on_watched_changed via property binding
 
     async fn on_season_changed(&self, index: u32) {
         if let Some(show) = self.imp().current_show.borrow().as_ref()
             && let Some(season) = show.seasons.get(index as usize)
         {
             self.load_episodes(season.season_number).await;
-            self.update_watched_button();
+            // TODO: Implement update_watched_button if needed
+        }
+    }
+
+    async fn load_episodes_for_show(&self, show_id: &str, season_number: u32) {
+        let imp = self.imp();
+
+        // Clear existing episodes
+        self.clear_episodes();
+
+        // Store current season for compatibility
+        imp.current_season.replace(Some(season_number));
+
+        // Use ViewModel to load episodes
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let viewmodel = viewmodel.clone();
+
+            match viewmodel.select_season(season_number as i32).await {
+                Ok(_) => {
+                    // Get episodes from ViewModel
+                    let episodes_models = viewmodel.episodes().get().await;
+
+                    // Update episode count
+                    imp.episodes_count_label
+                        .set_text(&format!("{} episodes", episodes_models.len()));
+
+                    // Convert and add episode cards
+                    for episode_item in episodes_models {
+                        if let crate::models::MediaItem::Episode(episode) = episode_item {
+                            self.add_episode_card(episode, false);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to load episodes: {}", e);
+                }
+            }
         }
     }
 
     fn on_mark_watched_clicked(&self) {
         let imp = self.imp();
 
-        let current_season = *imp.current_season.borrow();
-        let show = imp.current_show.borrow().clone();
-
-        if let Some(current_season) = current_season
-            && let Some(show) = show
-        {
-            let show_id = show.id.clone();
-            let season = current_season;
-            let state = imp.state.borrow().clone();
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let viewmodel = viewmodel.clone();
 
             glib::spawn_future_local(async move {
-                if let Some(state) = state {
-                    let source_coordinator = state.get_source_coordinator();
-                    // Use the backend_id from the show
-                    if let Some(backend) = source_coordinator.get_backend(&show.backend_id).await {
-                        // Get all episodes for the season
-                        match backend.get_episodes(&show_id, season).await {
-                            Ok(episodes) => {
-                                // Mark all episodes as watched
-                                for episode in episodes {
-                                    if episode.view_count == 0
-                                        && let Err(e) = backend.mark_watched(&episode.id).await
-                                    {
-                                        error!(
-                                            "Failed to mark episode {} as watched: {}",
-                                            episode.id, e
-                                        );
-                                    }
-                                }
-                                info!("Marked season {} as watched", season);
-                            }
-                            Err(e) => {
-                                error!("Failed to get episodes for marking watched: {}", e);
-                            }
-                        }
+                let is_watched = viewmodel.is_watched().get().await;
+
+                // If there's a current season (showing episodes), mark the season
+                // Otherwise mark the show itself
+                if viewmodel.current_season().get().await.is_some() {
+                    if is_watched {
+                        viewmodel.mark_season_as_unwatched().await;
+                    } else {
+                        viewmodel.mark_season_as_watched().await;
+                    }
+                } else {
+                    if is_watched {
+                        viewmodel.mark_as_unwatched().await;
+                    } else {
+                        viewmodel.mark_as_watched().await;
                     }
                 }
             });
@@ -774,6 +928,81 @@ impl ShowDetailsPage {
         self.imp()
             .on_episode_selected
             .replace(Some(Box::new(callback)));
+    }
+
+    async fn convert_media_item_to_episode(
+        &self,
+        media_item: &crate::db::entities::MediaItemModel,
+    ) -> Option<Episode> {
+        use std::time::Duration;
+
+        // Only convert if this is actually an episode
+        if media_item.media_type != "episode" {
+            return None;
+        }
+
+        let imp = self.imp();
+
+        // Get playback information
+        let (watched, view_count, last_watched_at, playback_position) =
+            if let Some(state) = imp.state.borrow().as_ref() {
+                match state
+                    .data_service
+                    .get_playback_progress(&media_item.id)
+                    .await
+                {
+                    Ok(Some((position_ms, duration_ms))) => {
+                        let watched = position_ms as f64 / duration_ms as f64 > 0.9;
+                        let position = Duration::from_millis(position_ms);
+                        (watched, if watched { 1 } else { 0 }, None, Some(position))
+                    }
+                    _ => (false, 0, None, None),
+                }
+            } else {
+                (false, 0, None, None)
+            };
+
+        // Extract episode-specific metadata
+        let (air_date, show_title, show_poster_url) = if let Some(metadata) = &media_item.metadata {
+            let metadata_json: serde_json::Value = metadata.clone().into();
+            let air_date = metadata_json
+                .get("air_date")
+                .and_then(|v| v.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            let show_title = metadata_json
+                .get("show_title")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let show_poster_url = metadata_json
+                .get("show_poster_url")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            (air_date, show_title, show_poster_url)
+        } else {
+            (None, None, None)
+        };
+
+        Some(Episode {
+            id: media_item.id.clone(),
+            backend_id: media_item.source_id.clone(),
+            show_id: media_item.parent_id.clone(),
+            title: media_item.title.clone(),
+            season_number: media_item.season_number.unwrap_or(0) as u32,
+            episode_number: media_item.episode_number.unwrap_or(0) as u32,
+            duration: Duration::from_millis(media_item.duration_ms.unwrap_or(0) as u64),
+            thumbnail_url: media_item.poster_url.clone(),
+            overview: media_item.overview.clone(),
+            air_date,
+            watched,
+            view_count,
+            last_watched_at,
+            playback_position,
+            show_title,
+            show_poster_url,
+            intro_marker: None,
+            credits_marker: None,
+        })
     }
 
     pub fn widget(&self) -> &gtk4::Box {

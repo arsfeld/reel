@@ -9,7 +9,7 @@ use crate::backends::{
     traits::MediaBackend,
 };
 use crate::models::{AuthProvider, Library, Source, SourceType};
-use crate::services::{AuthManager, CacheManager, SyncManager};
+use crate::services::{AuthManager, DataService, SyncManager};
 
 /// Status of a media source connection
 #[derive(Debug, Clone)]
@@ -47,7 +47,7 @@ pub struct SourceCoordinator {
     auth_manager: Arc<AuthManager>,
     backend_manager: Arc<RwLock<BackendManager>>,
     sync_manager: Arc<SyncManager>,
-    cache_manager: Arc<CacheManager>,
+    data_service: Arc<DataService>,
     source_statuses: Arc<RwLock<HashMap<String, SourceStatus>>>,
 }
 
@@ -56,13 +56,13 @@ impl SourceCoordinator {
         auth_manager: Arc<AuthManager>,
         backend_manager: Arc<RwLock<BackendManager>>,
         sync_manager: Arc<SyncManager>,
-        cache_manager: Arc<CacheManager>,
+        data_service: Arc<DataService>,
     ) -> Self {
         Self {
             auth_manager,
             backend_manager,
             sync_manager,
-            cache_manager,
+            data_service,
             source_statuses: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -491,19 +491,17 @@ impl SourceCoordinator {
                 provider,
                 source.clone(),
                 self.auth_manager.clone(),
-                Some(self.cache_manager.clone()),
             )?),
             AuthProvider::JellyfinAuth { .. } => Arc::new(JellyfinBackend::from_auth(
                 provider,
                 source.clone(),
                 self.auth_manager.clone(),
-                Some(self.cache_manager.clone()),
             )?),
             AuthProvider::LocalFiles { .. } => Arc::new(LocalBackend::from_auth(
                 provider,
                 source.clone(),
                 self.auth_manager.clone(),
-                Some(self.cache_manager.clone()),
+                Some(self.data_service.clone()),
             )?),
             _ => return Err(anyhow!("Unsupported provider type")),
         };

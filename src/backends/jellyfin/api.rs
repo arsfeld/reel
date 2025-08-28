@@ -11,7 +11,6 @@ use crate::models::{
     Episode, HomeSection, HomeSectionType, Library, LibraryType, MediaItem, Movie, Resolution,
     Season, Show, StreamInfo, User,
 };
-use crate::services::cache::CacheManager;
 
 const JELLYFIN_CLIENT_NAME: &str = "Reel";
 const JELLYFIN_VERSION: &str = "0.1.0";
@@ -23,20 +22,18 @@ pub struct JellyfinApi {
     api_key: String,
     user_id: String,
     device_id: String,
-    cache: Option<Arc<CacheManager>>,
     backend_id: String,
 }
 
 impl JellyfinApi {
     pub fn new(base_url: String, api_key: String, user_id: String) -> Self {
-        Self::with_cache(base_url, api_key, user_id, None, "jellyfin".to_string())
+        Self::with_backend_id(base_url, api_key, user_id, "jellyfin".to_string())
     }
 
-    pub fn with_cache(
+    pub fn with_backend_id(
         base_url: String,
         api_key: String,
         user_id: String,
-        cache: Option<Arc<CacheManager>>,
         backend_id: String,
     ) -> Self {
         let client = reqwest::Client::builder()
@@ -52,7 +49,6 @@ impl JellyfinApi {
             api_key,
             user_id,
             device_id,
-            cache,
             backend_id,
         }
     }
@@ -453,8 +449,16 @@ impl JellyfinApi {
     }
 
     pub async fn get_episodes(&self, season_id: &str) -> Result<Vec<Episode>> {
+        self.get_episodes_with_segments(season_id, false).await
+    }
+
+    pub async fn get_episodes_with_segments(
+        &self,
+        season_id: &str,
+        include_segments: bool,
+    ) -> Result<Vec<Episode>> {
         let url = format!(
-            "{}/Users/{}/Items?ParentId={}&Fields=Overview,MediaStreams,DateCreated&SortBy=IndexNumber",
+            "{}/Users/{}/Items?ParentId={}&IncludeItemTypes=Episode&Fields=Overview,MediaStreams,DateCreated&SortBy=IndexNumber",
             self.base_url, self.user_id, season_id
         );
 
@@ -475,41 +479,49 @@ impl JellyfinApi {
         for item in items_response.items {
             let duration = Duration::from_secs(item.run_time_ticks.unwrap_or(0) / 10_000_000);
 
-            // Try to get media segments for chapter markers
-            let (intro_marker, credits_marker) = if let Ok(segments) =
-                self.get_media_segments(&item.id).await
-            {
-                let mut intro = None;
-                let mut credits = None;
+            // Only try to get media segments if explicitly requested (e.g., for individual episode details)
+            let (intro_marker, credits_marker) = if include_segments {
+                if let Ok(segments) = self.get_media_segments(&item.id).await {
+                    let mut intro = None;
+                    let mut credits = None;
 
-                for segment in segments {
-                    match segment.segment_type {
-                        MediaSegmentType::Intro => {
-                            intro = Some(crate::models::ChapterMarker {
-                                start_time: Duration::from_secs(segment.start_ticks / 10_000_000),
-                                end_time: Duration::from_secs(segment.end_ticks / 10_000_000),
-                                marker_type: crate::models::ChapterType::Intro,
-                            });
+                    for segment in segments {
+                        match segment.segment_type {
+                            MediaSegmentType::Intro => {
+                                intro = Some(crate::models::ChapterMarker {
+                                    start_time: Duration::from_secs(
+                                        segment.start_ticks / 10_000_000,
+                                    ),
+                                    end_time: Duration::from_secs(segment.end_ticks / 10_000_000),
+                                    marker_type: crate::models::ChapterType::Intro,
+                                });
+                            }
+                            MediaSegmentType::Credits | MediaSegmentType::Outro => {
+                                credits = Some(crate::models::ChapterMarker {
+                                    start_time: Duration::from_secs(
+                                        segment.start_ticks / 10_000_000,
+                                    ),
+                                    end_time: Duration::from_secs(segment.end_ticks / 10_000_000),
+                                    marker_type: crate::models::ChapterType::Credits,
+                                });
+                            }
+                            _ => {}
                         }
-                        MediaSegmentType::Credits | MediaSegmentType::Outro => {
-                            credits = Some(crate::models::ChapterMarker {
-                                start_time: Duration::from_secs(segment.start_ticks / 10_000_000),
-                                end_time: Duration::from_secs(segment.end_ticks / 10_000_000),
-                                marker_type: crate::models::ChapterType::Credits,
-                            });
-                        }
-                        _ => {}
                     }
-                }
 
-                (intro, credits)
+                    (intro, credits)
+                } else {
+                    (None, None)
+                }
             } else {
+                // Skip media segments during bulk sync to avoid excessive API calls
                 (None, None)
             };
 
             episodes.push(Episode {
                 id: item.id.clone(),
                 backend_id: self.backend_id.clone(),
+                show_id: item.series_id.clone(),
                 title: item.name,
                 season_number: item.parent_index_number.unwrap_or(0) as u32,
                 episode_number: item.index_number.unwrap_or(0) as u32,
@@ -885,6 +897,7 @@ impl JellyfinApi {
                 Ok(Some(Episode {
                     id: next_item.id.clone(),
                     backend_id: self.backend_id.clone(),
+                    show_id: next_item.series_id.clone(),
                     title: next_item.name.clone(),
                     season_number: next_item.parent_index_number.unwrap_or(0) as u32,
                     episode_number: next_item.index_number.unwrap_or(0) as u32,
@@ -1021,6 +1034,7 @@ impl JellyfinApi {
                     results.push(MediaItem::Episode(Episode {
                         id: item.id.clone(),
                         backend_id: self.backend_id.clone(),
+                        show_id: item.series_id.clone(),
                         title: item.name,
                         season_number: item.parent_index_number.unwrap_or(0) as u32,
                         episode_number: item.index_number.unwrap_or(0) as u32,
@@ -1200,6 +1214,7 @@ impl JellyfinApi {
                     Some(MediaItem::Episode(Episode {
                         id: item.id.clone(),
                         backend_id: self.backend_id.clone(),
+                        show_id: item.series_id.clone(),
                         title: item.name,
                         season_number: item.parent_index_number.unwrap_or(0) as u32,
                         episode_number: item.index_number.unwrap_or(0) as u32,

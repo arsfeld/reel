@@ -8,6 +8,8 @@ mod app;
 mod backends;
 mod config;
 mod constants;
+mod db;
+mod events;
 mod models;
 mod player;
 mod services;

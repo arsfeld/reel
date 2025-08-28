@@ -1,0 +1,652 @@
+use super::{Property, PropertySubscriber, ViewModel};
+use crate::events::{DatabaseEvent, EventBus, EventFilter, EventPayload, EventType};
+use crate::models::{Episode, MediaItem, Movie, Show};
+use crate::services::DataService;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::{debug, error};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaMetadata {
+    pub cast: Vec<Person>,
+    pub crew: Vec<Person>,
+    pub genres: Vec<String>,
+    pub studios: Vec<String>,
+    pub tags: Vec<String>,
+    pub content_rating: Option<String>,
+    pub original_title: Option<String>,
+    pub tagline: Option<String>,
+    pub runtime_minutes: Option<i32>,
+    pub release_date: Option<chrono::NaiveDate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Person {
+    pub name: String,
+    pub role: Option<String>,
+    pub photo_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RelatedMedia {
+    pub similar: Vec<MediaItem>,
+    pub recommended: Vec<MediaItem>,
+    pub from_same_series: Vec<MediaItem>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DetailedMediaInfo {
+    pub media: MediaItem,
+    pub metadata: MediaMetadata,
+    pub playback_progress: Option<(u64, u64)>, // (position_ms, duration_ms)
+    pub related: RelatedMedia,
+}
+
+pub struct DetailsViewModel {
+    data_service: Arc<DataService>,
+    current_item: Property<Option<DetailedMediaInfo>>,
+    media_id: Property<Option<String>>,
+    is_loading: Property<bool>,
+    error: Property<Option<String>>,
+    is_favorite: Property<bool>,
+    is_watched: Property<bool>,
+    user_rating: Property<Option<f32>>,
+    related_items: Property<RelatedMedia>,
+    show_more_info: Property<bool>,
+    selected_tab: Property<DetailTab>,
+    // Episode-specific properties for shows
+    current_season: Property<Option<i32>>,
+    episodes: Property<Vec<MediaItem>>,
+    seasons: Property<Vec<i32>>,
+    is_loading_episodes: Property<bool>,
+    event_bus: Option<Arc<EventBus>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DetailTab {
+    Overview,
+    Cast,
+    Crew,
+    Related,
+    Reviews,
+    Technical,
+}
+
+impl DetailsViewModel {
+    pub fn new(data_service: Arc<DataService>) -> Self {
+        Self {
+            data_service,
+            current_item: Property::new(None, "current_item"),
+            media_id: Property::new(None, "media_id"),
+            is_loading: Property::new(false, "is_loading"),
+            error: Property::new(None, "error"),
+            is_favorite: Property::new(false, "is_favorite"),
+            is_watched: Property::new(false, "is_watched"),
+            user_rating: Property::new(None, "user_rating"),
+            related_items: Property::new(
+                RelatedMedia {
+                    similar: Vec::new(),
+                    recommended: Vec::new(),
+                    from_same_series: Vec::new(),
+                },
+                "related_items",
+            ),
+            show_more_info: Property::new(false, "show_more_info"),
+            selected_tab: Property::new(DetailTab::Overview, "selected_tab"),
+            current_season: Property::new(None, "current_season"),
+            episodes: Property::new(Vec::new(), "episodes"),
+            seasons: Property::new(Vec::new(), "seasons"),
+            is_loading_episodes: Property::new(false, "is_loading_episodes"),
+            event_bus: None,
+        }
+    }
+
+    pub async fn load_media(&self, media_id: String) -> Result<()> {
+        self.is_loading.set(true).await;
+        self.error.set(None).await;
+        self.media_id.set(Some(media_id.clone())).await;
+
+        match self.data_service.get_media_item(&media_id).await {
+            Ok(Some(media)) => {
+                let metadata = self.extract_metadata(&media).await;
+
+                let playback_progress = self
+                    .data_service
+                    .get_playback_progress(&media_id)
+                    .await
+                    .ok()
+                    .flatten();
+
+                if let Some((position_ms, duration_ms)) = playback_progress {
+                    // Consider watched if >90% complete
+                    let watched = position_ms as f64 / duration_ms as f64 > 0.9;
+                    self.is_watched.set(watched).await;
+                }
+
+                let related = self.load_related_media(&media).await;
+                self.related_items.set(related.clone()).await;
+
+                let detailed_info = DetailedMediaInfo {
+                    media: media.clone(),
+                    metadata,
+                    playback_progress,
+                    related,
+                };
+
+                self.current_item.set(Some(detailed_info)).await;
+
+                // If this is a show, load episodes for the first season
+                if matches!(media, MediaItem::Show(_)) {
+                    self.load_seasons_for_show(&media).await;
+
+                    // Load episodes for the first season
+                    if let Some(first_season) = self.seasons.get().await.first() {
+                        let _ = self
+                            .load_episodes_for_season(&media_id, *first_season)
+                            .await;
+                    }
+                }
+
+                self.is_loading.set(false).await;
+
+                Ok(())
+            }
+            Ok(None) => {
+                let msg = format!("Media item {} not found", media_id);
+                self.error.set(Some(msg.clone())).await;
+                self.is_loading.set(false).await;
+                Err(anyhow::anyhow!(msg))
+            }
+            Err(e) => {
+                error!("Failed to load media details: {}", e);
+                self.error.set(Some(e.to_string())).await;
+                self.is_loading.set(false).await;
+                Err(e)
+            }
+        }
+    }
+
+    // Removed - no longer needed, using proper From/TryFrom traits
+
+    async fn extract_metadata(&self, media: &MediaItem) -> MediaMetadata {
+        // Extract genres and runtime based on media type
+        let genres = match media {
+            MediaItem::Movie(m) => m.genres.clone(),
+            MediaItem::Show(s) => s.genres.clone(),
+            MediaItem::MusicAlbum(a) => a.genres.clone(),
+            _ => Vec::new(),
+        };
+
+        let runtime_minutes = match media {
+            MediaItem::Movie(m) => Some((m.duration.as_secs() / 60) as i32),
+            MediaItem::Episode(e) => Some((e.duration.as_secs() / 60) as i32),
+            _ => None,
+        };
+
+        MediaMetadata {
+            cast: Vec::new(),
+            crew: Vec::new(),
+            genres,
+            studios: Vec::new(),
+            tags: Vec::new(),
+            content_rating: None,
+            original_title: None,
+            tagline: None,
+            runtime_minutes,
+            release_date: None,
+        }
+    }
+
+    async fn load_related_media(&self, media: &MediaItem) -> RelatedMedia {
+        let mut similar = Vec::new();
+        let mut recommended = Vec::new();
+        let mut from_same_series = Vec::new();
+
+        // Extract library_id from the media item's ID (format: "backend_id:library_id:type:item_id")
+        let library_id = media.id().split(':').nth(1).unwrap_or_default().to_string();
+
+        if let Ok(library_items) = self.data_service.get_media_items(&library_id).await {
+            let media_genres = match media {
+                MediaItem::Movie(m) => &m.genres,
+                MediaItem::Show(s) => &s.genres,
+                MediaItem::MusicAlbum(a) => &a.genres,
+                _ => {
+                    return RelatedMedia {
+                        similar,
+                        recommended,
+                        from_same_series,
+                    };
+                }
+            };
+
+            let media_rating = match media {
+                MediaItem::Movie(m) => m.rating,
+                MediaItem::Show(s) => s.rating,
+                _ => None,
+            };
+
+            for item in library_items.iter().take(100) {
+                if item.id() == media.id() {
+                    continue;
+                }
+
+                // Get genres for the current item
+                let item_genres = match item {
+                    MediaItem::Movie(m) => &m.genres,
+                    MediaItem::Show(s) => &s.genres,
+                    MediaItem::MusicAlbum(a) => &a.genres,
+                    _ => continue,
+                };
+
+                // Check genre overlap
+                let genre_overlap = media_genres
+                    .iter()
+                    .filter(|g| item_genres.contains(g))
+                    .count();
+
+                if genre_overlap > 0 && similar.len() < 10 {
+                    similar.push(item.clone());
+                }
+
+                // Check rating similarity
+                let item_rating = match item {
+                    MediaItem::Movie(m) => m.rating,
+                    MediaItem::Show(s) => s.rating,
+                    _ => None,
+                };
+
+                if let (Some(rating1), Some(rating2)) = (media_rating, item_rating) {
+                    if (rating1 - rating2).abs() < 0.5 && recommended.len() < 10 {
+                        recommended.push(item.clone());
+                    }
+                }
+
+                // Check if both are episodes from the same show
+                if let (MediaItem::Episode(ep1), MediaItem::Episode(ep2)) = (media, item) {
+                    if ep1.show_id.as_ref() == ep2.show_id.as_ref() {
+                        from_same_series.push(item.clone());
+                    }
+                }
+            }
+        }
+
+        RelatedMedia {
+            similar,
+            recommended,
+            from_same_series,
+        }
+    }
+
+    pub async fn toggle_favorite(&self) {
+        let is_fav = !self.is_favorite.get().await;
+        self.is_favorite.set(is_fav).await;
+    }
+
+    pub async fn mark_as_watched(&self) {
+        self.is_watched.set(true).await;
+
+        if let Some(media_id) = self.media_id.get().await {
+            if let Some(info) = self.current_item.get().await {
+                let duration_ms = match &info.media {
+                    MediaItem::Movie(movie) => movie.duration.as_millis() as i64,
+                    MediaItem::Show(_) => 0, // Shows don't have duration
+                    MediaItem::Episode(episode) => episode.duration.as_millis() as i64,
+                    _ => 0,
+                };
+
+                let _ = self
+                    .data_service
+                    .update_playback_progress(
+                        &media_id,
+                        duration_ms, // Mark as watched by setting position = duration
+                        duration_ms,
+                        true, // watched
+                    )
+                    .await;
+            }
+        }
+    }
+
+    pub async fn mark_as_unwatched(&self) {
+        self.is_watched.set(false).await;
+
+        if let Some(media_id) = self.media_id.get().await {
+            if let Ok(Some((_, duration_ms))) =
+                self.data_service.get_playback_progress(&media_id).await
+            {
+                // Reset playback progress to beginning
+                let _ = self
+                    .data_service
+                    .update_playback_progress(
+                        &media_id,
+                        0, // position_ms
+                        duration_ms as i64,
+                        false, // watched
+                    )
+                    .await;
+            }
+        }
+    }
+
+    pub async fn set_user_rating(&self, rating: f32) {
+        self.user_rating.set(Some(rating)).await;
+    }
+
+    pub async fn select_tab(&self, tab: DetailTab) {
+        self.selected_tab.set(tab).await;
+    }
+
+    pub async fn toggle_more_info(&self) {
+        let show = !self.show_more_info.get().await;
+        self.show_more_info.set(show).await;
+    }
+
+    /// Load episodes for a specific season of a show
+    pub async fn load_episodes_for_season(&self, show_id: &str, season_number: i32) -> Result<()> {
+        self.is_loading_episodes.set(true).await;
+        self.current_season.set(Some(season_number)).await;
+
+        match self
+            .data_service
+            .get_episodes_by_season(show_id, season_number)
+            .await
+        {
+            Ok(episodes) => {
+                self.episodes.set(episodes.clone()).await;
+                self.is_loading_episodes.set(false).await;
+
+                // Check if the entire season is watched
+                let all_watched = if !episodes.is_empty() {
+                    let mut watched_count = 0;
+                    for episode in &episodes {
+                        if let Ok(Some((position_ms, duration_ms))) =
+                            self.data_service.get_playback_progress(episode.id()).await
+                        {
+                            if position_ms as f64 / duration_ms as f64 > 0.9 {
+                                watched_count += 1;
+                            }
+                        }
+                    }
+                    watched_count == episodes.len()
+                } else {
+                    false
+                };
+
+                self.is_watched.set(all_watched).await;
+                Ok(())
+            }
+            Err(e) => {
+                error!(
+                    "Failed to load episodes for season {}: {}",
+                    season_number, e
+                );
+                self.is_loading_episodes.set(false).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Load all episodes for a show
+    pub async fn load_all_episodes_for_show(&self, show_id: &str) -> Result<Vec<MediaItem>> {
+        match self.data_service.get_episodes_by_show(show_id).await {
+            Ok(episodes) => Ok(episodes),
+            Err(e) => {
+                error!("Failed to load episodes for show {}: {}", show_id, e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Determine available seasons from episodes in the database
+    async fn load_seasons_for_show(&self, show: &MediaItem) {
+        let show_id = match show {
+            MediaItem::Show(s) => &s.id,
+            _ => return, // Not a show
+        };
+
+        if let Ok(all_episodes) = self.data_service.get_episodes_by_show(show_id).await {
+            let mut seasons: Vec<i32> = all_episodes
+                .iter()
+                .filter_map(|item| {
+                    if let MediaItem::Episode(ep) = item {
+                        Some(ep.season_number as i32)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            seasons.sort();
+
+            self.seasons.set(seasons).await;
+        } else {
+            // Default to a reasonable number of seasons if we can't load episodes
+            self.seasons.set(vec![1]).await;
+        }
+    }
+
+    /// Mark all episodes in the current season as watched
+    pub async fn mark_season_as_watched(&self) {
+        if let Some(season) = self.current_season.get().await {
+            let episodes = self.episodes.get().await;
+            for episode_item in episodes {
+                if let MediaItem::Episode(episode) = episode_item {
+                    let duration_ms = episode.duration.as_millis() as i64;
+                    let _ = self
+                        .data_service
+                        .update_playback_progress(&episode.id, duration_ms, duration_ms, true)
+                        .await;
+                }
+            }
+            self.is_watched.set(true).await;
+        }
+    }
+
+    /// Mark all episodes in the current season as unwatched
+    pub async fn mark_season_as_unwatched(&self) {
+        if let Some(_season) = self.current_season.get().await {
+            let episodes = self.episodes.get().await;
+            for episode_item in episodes {
+                if let MediaItem::Episode(episode) = episode_item {
+                    let duration_ms = episode.duration.as_millis() as i64;
+                    let _ = self
+                        .data_service
+                        .update_playback_progress(&episode.id, 0, duration_ms, false)
+                        .await;
+                }
+            }
+            self.is_watched.set(false).await;
+        }
+    }
+
+    /// Change to a different season
+    pub async fn select_season(&self, season_number: i32) -> Result<()> {
+        if let Some(media_id) = self.media_id.get().await {
+            self.load_episodes_for_season(&media_id, season_number)
+                .await
+        } else {
+            Err(anyhow::anyhow!("No media loaded"))
+        }
+    }
+
+    async fn handle_event(&self, event: DatabaseEvent) {
+        if let Some(media_id) = self.media_id.get().await {
+            match event.event_type {
+                // Perform a targeted, silent merge to avoid toggling is_loading
+                EventType::MediaUpdated => {
+                    if let EventPayload::Media { id, .. } = event.payload {
+                        if id == media_id {
+                            if let Ok(Some(updated_item)) =
+                                self.data_service.get_media_item(&media_id).await
+                            {
+                                // Update current detailed info in place without resetting the UI
+                                if let Some(mut info) = self.current_item.get().await {
+                                    // Refresh lightweight metadata from the updated item
+                                    let new_metadata = self.extract_metadata(&updated_item).await;
+                                    info.media = updated_item;
+                                    info.metadata = new_metadata;
+                                    // Preserve playback_progress and related items
+                                    self.current_item.set(Some(info)).await;
+                                } else {
+                                    // If nothing loaded yet, avoid loader: set minimal info
+                                    let metadata = self.extract_metadata(&updated_item).await;
+                                    let minimal = DetailedMediaInfo {
+                                        media: updated_item,
+                                        metadata,
+                                        playback_progress: None,
+                                        related: RelatedMedia {
+                                            similar: vec![],
+                                            recommended: vec![],
+                                            from_same_series: vec![],
+                                        },
+                                    };
+                                    self.current_item.set(Some(minimal)).await;
+                                }
+                            }
+                        }
+                    }
+                }
+                EventType::MediaDeleted => {
+                    if let EventPayload::Media { id, .. } = event.payload {
+                        if id == media_id {
+                            self.current_item.set(None).await;
+                            self.error
+                                .set(Some("Media item has been deleted".to_string()))
+                                .await;
+                        }
+                    }
+                }
+                EventType::PlaybackPositionUpdated | EventType::PlaybackCompleted => {
+                    if let EventPayload::Playback {
+                        media_id: event_media_id,
+                        ..
+                    } = event.payload
+                    {
+                        if event_media_id == media_id {
+                            if let Ok(Some((position_ms, duration_ms))) =
+                                self.data_service.get_playback_progress(&media_id).await
+                            {
+                                let watched = position_ms as f64 / duration_ms as f64 > 0.9;
+                                self.is_watched.set(watched).await;
+
+                                if let Some(mut info) = self.current_item.get().await {
+                                    info.playback_progress = Some((position_ms, duration_ms));
+                                    self.current_item.set(Some(info)).await;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn current_item(&self) -> &Property<Option<DetailedMediaInfo>> {
+        &self.current_item
+    }
+
+    pub fn is_loading(&self) -> &Property<bool> {
+        &self.is_loading
+    }
+
+    pub fn is_favorite(&self) -> &Property<bool> {
+        &self.is_favorite
+    }
+
+    pub fn is_watched(&self) -> &Property<bool> {
+        &self.is_watched
+    }
+
+    pub fn related_items(&self) -> &Property<RelatedMedia> {
+        &self.related_items
+    }
+
+    pub fn selected_tab(&self) -> &Property<DetailTab> {
+        &self.selected_tab
+    }
+
+    pub fn current_season(&self) -> &Property<Option<i32>> {
+        &self.current_season
+    }
+
+    pub fn episodes(&self) -> &Property<Vec<MediaItem>> {
+        &self.episodes
+    }
+
+    pub fn seasons(&self) -> &Property<Vec<i32>> {
+        &self.seasons
+    }
+
+    pub fn is_loading_episodes(&self) -> &Property<bool> {
+        &self.is_loading_episodes
+    }
+}
+
+#[async_trait::async_trait]
+impl ViewModel for DetailsViewModel {
+    async fn initialize(&self, event_bus: Arc<EventBus>) {
+        let filter = EventFilter::new().with_types(vec![
+            EventType::MediaUpdated,
+            EventType::MediaDeleted,
+            EventType::PlaybackPositionUpdated,
+            EventType::PlaybackCompleted,
+        ]);
+
+        let mut subscriber = event_bus.subscribe_filtered(filter);
+        let self_clone = self.clone();
+
+        tokio::spawn(async move {
+            while let Ok(event) = subscriber.recv().await {
+                self_clone.handle_event(event).await;
+            }
+        });
+    }
+
+    fn subscribe_to_property(&self, property_name: &str) -> Option<PropertySubscriber> {
+        match property_name {
+            "current_item" => Some(self.current_item.subscribe()),
+            "is_loading" => Some(self.is_loading.subscribe()),
+            "is_favorite" => Some(self.is_favorite.subscribe()),
+            "is_watched" => Some(self.is_watched.subscribe()),
+            "related_items" => Some(self.related_items.subscribe()),
+            "selected_tab" => Some(self.selected_tab.subscribe()),
+            _ => None,
+        }
+    }
+
+    async fn refresh(&self) {
+        if let Some(media_id) = self.media_id.get().await {
+            let _ = self.load_media(media_id).await;
+        }
+    }
+
+    fn dispose(&self) {}
+}
+
+impl Clone for DetailsViewModel {
+    fn clone(&self) -> Self {
+        Self {
+            data_service: self.data_service.clone(),
+            current_item: self.current_item.clone(),
+            media_id: self.media_id.clone(),
+            is_loading: self.is_loading.clone(),
+            error: self.error.clone(),
+            is_favorite: self.is_favorite.clone(),
+            is_watched: self.is_watched.clone(),
+            user_rating: self.user_rating.clone(),
+            related_items: self.related_items.clone(),
+            show_more_info: self.show_more_info.clone(),
+            selected_tab: self.selected_tab.clone(),
+            current_season: self.current_season.clone(),
+            episodes: self.episodes.clone(),
+            seasons: self.seasons.clone(),
+            is_loading_episodes: self.is_loading_episodes.clone(),
+            event_bus: self.event_bus.clone(),
+        }
+    }
+}

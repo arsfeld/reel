@@ -1,18 +1,22 @@
 use gtk4::{gdk, glib, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
-use libadwaita::prelude::*;
 use once_cell::sync::Lazy;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use tracing::{error, info, trace};
 
 use crate::constants::*;
-use crate::models::{Library, LibraryType, MediaItem};
+use crate::models::{Episode, Library, MediaItem, Movie, Show};
 use crate::state::AppState;
-use crate::ui::filters::{FilterManager, SortOrder, WatchStatus};
+use crate::ui::filters::{FilterManager, WatchStatus};
+use crate::ui::viewmodels::library_view_model::LibraryViewModel;
 use crate::utils::{ImageLoader, ImageSize};
+use chrono::Utc;
+use sea_orm::prelude::Json;
+use serde_json::Value;
+use std::time::Duration;
 
 // Global image loader instance
 static IMAGE_LOADER: Lazy<ImageLoader> =
@@ -37,6 +41,8 @@ mod imp {
         pub all_media_items: RefCell<Vec<MediaItem>>,
         pub filtered_items: RefCell<Vec<MediaItem>>,
         pub cards_by_index: RefCell<HashMap<usize, MediaCard>>,
+        pub cards_by_id: RefCell<HashMap<String, MediaCard>>,
+        pub view_model: RefCell<Option<Arc<LibraryViewModel>>>,
     }
 
     impl std::fmt::Debug for LibraryView {
@@ -73,6 +79,8 @@ mod imp {
                 all_media_items: RefCell::new(Vec::new()),
                 filtered_items: RefCell::new(Vec::new()),
                 cards_by_index: RefCell::new(HashMap::new()),
+                cards_by_id: RefCell::new(HashMap::new()),
+                view_model: RefCell::new(None),
             }
         }
     }
@@ -107,6 +115,24 @@ impl LibraryView {
             .property("orientation", gtk4::Orientation::Vertical)
             .property("spacing", 0)
             .build();
+
+        // Initialize ViewModel with data service from state
+        let data_service = state.data_service.clone();
+        let view_model = Arc::new(LibraryViewModel::new(data_service));
+        view.imp().view_model.replace(Some(view_model.clone()));
+
+        // Initialize ViewModel with EventBus
+        glib::spawn_future_local({
+            let vm = view_model.clone();
+            let event_bus = state.event_bus.clone();
+            async move {
+                use crate::ui::viewmodels::ViewModel;
+                vm.initialize(event_bus).await;
+            }
+        });
+
+        // Subscribe to ViewModel property changes
+        view.setup_viewmodel_bindings(view_model);
 
         view.imp().state.replace(Some(state));
         view.imp().current_view_size.replace(ImageSize::Medium);
@@ -223,64 +249,354 @@ impl LibraryView {
         // We'll connect button clicks directly on cards instead of flow box activation
     }
 
+    fn setup_viewmodel_bindings(&self, view_model: Arc<LibraryViewModel>) {
+        let weak_self = self.downgrade();
+
+        // Subscribe to filtered items changes (these are what should be displayed)
+        let mut items_subscriber = view_model.filtered_items().subscribe();
+        glib::spawn_future_local(async move {
+            while items_subscriber.wait_for_change().await {
+                if let Some(view) = weak_self.upgrade() {
+                    if let Some(vm) = &*view.imp().view_model.borrow() {
+                        let items = vm.filtered_items().get().await;
+                        view.update_items_from_viewmodel(items);
+                    }
+                }
+            }
+        });
+
+        // Subscribe to loading state
+        let weak_self_loading = self.downgrade();
+        let mut loading_subscriber = view_model.is_loading().subscribe();
+        glib::spawn_future_local(async move {
+            while loading_subscriber.wait_for_change().await {
+                if let Some(view) = weak_self_loading.upgrade() {
+                    if let Some(vm) = &*view.imp().view_model.borrow() {
+                        let is_loading = vm.is_loading().get().await;
+                        if let Some(stack) = view.imp().stack.borrow().as_ref() {
+                            if is_loading {
+                                stack.set_visible_child_name("loading");
+                            } else {
+                                // Check ViewModel's filtered_items instead of local copy
+                                let vm_items = vm.filtered_items().get().await;
+                                if vm_items.is_empty() {
+                                    stack.set_visible_child_name("empty");
+                                } else {
+                                    stack.set_visible_child_name("content");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Subscribe to error state
+        let weak_self_error = self.downgrade();
+        let mut error_subscriber = view_model.error().subscribe();
+        glib::spawn_future_local(async move {
+            while error_subscriber.wait_for_change().await {
+                if let Some(view) = weak_self_error.upgrade() {
+                    if let Some(vm) = &*view.imp().view_model.borrow() {
+                        if let Some(err_msg) = vm.error().get().await {
+                            tracing::error!("Library error: {}", err_msg);
+                            // Could show error in UI here
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn update_items_from_viewmodel(&self, items: Vec<crate::models::MediaItem>) {
+        trace!("Received {} items from ViewModel", items.len());
+        // Items are already MediaItem, no conversion needed
+        self.display_media_items(items);
+    }
+
+    fn convert_db_item_to_ui_model(
+        &self,
+        db_item: crate::db::entities::media_items::Model,
+    ) -> Option<MediaItem> {
+        match db_item.media_type.as_str() {
+            "movie" => {
+                let movie = Movie {
+                    id: db_item.id,
+                    backend_id: db_item.source_id,
+                    title: db_item.title,
+                    year: db_item.year.map(|y| y as u32),
+                    duration: Duration::from_millis(db_item.duration_ms.unwrap_or(0) as u64),
+                    rating: db_item.rating,
+                    poster_url: db_item.poster_url,
+                    backdrop_url: db_item.backdrop_url,
+                    overview: db_item.overview,
+                    genres: self.extract_genres_from_json(&db_item.genres),
+                    cast: self.extract_cast_from_metadata(&db_item.metadata),
+                    crew: self.extract_crew_from_metadata(&db_item.metadata),
+                    added_at: db_item.added_at.map(|dt| dt.and_utc()),
+                    updated_at: Some(db_item.updated_at.and_utc()),
+                    watched: self.extract_watched_status(&db_item.metadata),
+                    view_count: self
+                        .extract_number_from_metadata(&db_item.metadata, "view_count")
+                        .unwrap_or(0),
+                    last_watched_at: self
+                        .extract_datetime_from_metadata(&db_item.metadata, "last_watched_at"),
+                    playback_position: self.extract_playback_position(&db_item.metadata),
+                    intro_marker: None,
+                    credits_marker: None,
+                };
+                Some(MediaItem::Movie(movie))
+            }
+            "show" => {
+                let show = Show {
+                    id: db_item.id,
+                    backend_id: db_item.source_id,
+                    title: db_item.title,
+                    year: db_item.year.map(|y| y as u32),
+                    seasons: Vec::new(), // TODO: Load seasons separately
+                    rating: db_item.rating,
+                    poster_url: db_item.poster_url,
+                    backdrop_url: db_item.backdrop_url,
+                    overview: db_item.overview,
+                    genres: self.extract_genres_from_json(&db_item.genres),
+                    cast: self.extract_cast_from_metadata(&db_item.metadata),
+                    added_at: db_item.added_at.map(|dt| dt.and_utc()),
+                    updated_at: Some(db_item.updated_at.and_utc()),
+                    watched_episode_count: 0, // TODO: Get from progress tracking
+                    total_episode_count: 0,   // TODO: Calculate from episodes
+                    last_watched_at: None,    // TODO: Get from playback progress
+                };
+                Some(MediaItem::Show(show))
+            }
+            "episode" => {
+                let episode = Episode {
+                    id: db_item.id,
+                    backend_id: db_item.source_id,
+                    show_id: db_item.parent_id,
+                    title: db_item.title,
+                    season_number: self
+                        .extract_number_from_metadata(&db_item.metadata, "season_number")
+                        .unwrap_or(1),
+                    episode_number: self
+                        .extract_number_from_metadata(&db_item.metadata, "episode_number")
+                        .unwrap_or(1),
+                    duration: Duration::from_millis(db_item.duration_ms.unwrap_or(0) as u64),
+                    thumbnail_url: db_item.poster_url, // Episodes use poster_url for thumbnail
+                    overview: db_item.overview,
+                    air_date: db_item.added_at.map(|dt| dt.and_utc()),
+                    watched: self.extract_watched_status(&db_item.metadata),
+                    view_count: self
+                        .extract_number_from_metadata(&db_item.metadata, "view_count")
+                        .unwrap_or(0),
+                    last_watched_at: self
+                        .extract_datetime_from_metadata(&db_item.metadata, "last_watched_at"),
+                    playback_position: self.extract_playback_position(&db_item.metadata),
+                    show_title: self.extract_from_metadata(&db_item.metadata, "show_title"),
+                    show_poster_url: db_item.backdrop_url, // Use backdrop for show poster
+                    intro_marker: None,
+                    credits_marker: None,
+                };
+                Some(MediaItem::Episode(episode))
+            }
+            _ => {
+                trace!("Unsupported media type: {}", db_item.media_type);
+                None
+            }
+        }
+    }
+
+    fn extract_genres_from_json(&self, genres_json: &Option<Json>) -> Vec<String> {
+        genres_json
+            .as_ref()
+            .and_then(|json| serde_json::from_value(json.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    fn extract_from_metadata(&self, metadata: &Option<Json>, key: &str) -> Option<String> {
+        metadata
+            .as_ref()
+            .and_then(|json| {
+                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
+                    .ok()
+            })
+            .and_then(|obj| obj.get(key).and_then(|v| v.as_str().map(String::from)))
+    }
+
+    fn extract_number_from_metadata(&self, metadata: &Option<Json>, key: &str) -> Option<u32> {
+        metadata
+            .as_ref()
+            .and_then(|json| {
+                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
+                    .ok()
+            })
+            .and_then(|obj| obj.get(key).cloned())
+            .and_then(|v| {
+                // Try as number first, then as string that can be parsed
+                v.as_u64()
+                    .map(|n| n as u32)
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+    }
+
+    fn extract_cast_from_metadata(&self, metadata: &Option<Json>) -> Vec<crate::models::Person> {
+        metadata
+            .as_ref()
+            .and_then(|json| {
+                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
+                    .ok()
+            })
+            .and_then(|obj| obj.get("cast").cloned())
+            .and_then(|cast_val| {
+                serde_json::from_value::<Vec<serde_json::Map<String, Value>>>(cast_val).ok()
+            })
+            .map(|cast_array| {
+                cast_array
+                    .into_iter()
+                    .filter_map(|member| {
+                        let name = member.get("name")?.as_str()?.to_string();
+                        let character = member
+                            .get("character")
+                            .and_then(|c| c.as_str())
+                            .map(String::from);
+                        let profile_url = member
+                            .get("profile_path")
+                            .and_then(|p| p.as_str())
+                            .map(String::from);
+
+                        Some(crate::models::Person {
+                            id: member
+                                .get("id")
+                                .and_then(|id| id.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            name,
+                            role: character,
+                            image_url: profile_url,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn extract_crew_from_metadata(&self, metadata: &Option<Json>) -> Vec<crate::models::Person> {
+        metadata
+            .as_ref()
+            .and_then(|json| {
+                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
+                    .ok()
+            })
+            .and_then(|obj| obj.get("crew").cloned())
+            .and_then(|crew_val| {
+                serde_json::from_value::<Vec<serde_json::Map<String, Value>>>(crew_val).ok()
+            })
+            .map(|crew_array| {
+                crew_array
+                    .into_iter()
+                    .filter_map(|member| {
+                        let name = member.get("name")?.as_str()?.to_string();
+                        let job = member.get("job")?.as_str()?.to_string();
+                        let department = member
+                            .get("department")
+                            .and_then(|d| d.as_str())
+                            .map(String::from);
+                        let profile_url = member
+                            .get("profile_path")
+                            .and_then(|p| p.as_str())
+                            .map(String::from);
+
+                        Some(crate::models::Person {
+                            id: member
+                                .get("id")
+                                .and_then(|id| id.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            name,
+                            role: Some(job),
+                            image_url: profile_url,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn extract_watched_status(&self, metadata: &Option<Json>) -> bool {
+        metadata
+            .as_ref()
+            .and_then(|json| {
+                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
+                    .ok()
+            })
+            .and_then(|obj| obj.get("watched").cloned())
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    fn extract_datetime_from_metadata(
+        &self,
+        metadata: &Option<Json>,
+        key: &str,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        metadata
+            .as_ref()
+            .and_then(|json| {
+                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
+                    .ok()
+            })
+            .and_then(|obj| obj.get(key).cloned())
+            .and_then(|v| v.as_str().map(String::from))
+            .and_then(|date_str| chrono::DateTime::parse_from_rfc3339(&date_str).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    }
+
+    fn extract_playback_position(&self, metadata: &Option<Json>) -> Option<std::time::Duration> {
+        metadata
+            .as_ref()
+            .and_then(|json| {
+                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
+                    .ok()
+            })
+            .and_then(|obj| obj.get("playback_position_ms").cloned())
+            .and_then(|v| v.as_u64())
+            .map(|ms| std::time::Duration::from_millis(ms))
+    }
+
     pub async fn load_library(&self, backend_id: String, library: Library) {
         info!("Loading library: {} ({})", library.title, library.id);
 
         let imp = self.imp();
 
-        // Store backend ID and library
-        imp.backend_id.replace(Some(backend_id.clone()));
-        imp.library.replace(Some(library.clone()));
-
-        // Show loading state
+        // Show loading state immediately when switching libraries
         if let Some(stack) = imp.stack.borrow().as_ref() {
             stack.set_visible_child_name("loading");
         }
 
-        // Load media items based on library type
-        let state = imp.state.borrow().as_ref().unwrap().clone();
-        let sync_manager = state.sync_manager.clone();
+        // Store backend ID and library
+        imp.backend_id.replace(Some(backend_id.clone()));
+        imp.library.replace(Some(library.clone()));
 
-        let media_items = match library.library_type {
-            LibraryType::Movies => {
-                match sync_manager
-                    .get_cached_movies(&backend_id, &library.id)
-                    .await
-                {
-                    Ok(movies) => movies.into_iter().map(MediaItem::Movie).collect::<Vec<_>>(),
-                    Err(e) => {
-                        error!("Failed to load movies: {}", e);
-                        Vec::new()
+        // Use ViewModel for loading - no fallback
+        if let Some(view_model) = imp.view_model.borrow().as_ref() {
+            match view_model.set_library(library.id.clone()).await {
+                Ok(_) => {
+                    trace!("Library loaded via ViewModel");
+                    // ViewModel handles everything through property bindings
+                }
+                Err(e) => {
+                    error!("Failed to load library via ViewModel: {}", e);
+                    // Show error state
+                    if let Some(stack) = imp.stack.borrow().as_ref() {
+                        stack.set_visible_child_name("empty");
                     }
                 }
             }
-            LibraryType::Shows => {
-                match sync_manager
-                    .get_cached_shows(&backend_id, &library.id)
-                    .await
-                {
-                    Ok(shows) => shows.into_iter().map(MediaItem::Show).collect::<Vec<_>>(),
-                    Err(e) => {
-                        error!("Failed to load shows: {}", e);
-                        Vec::new()
-                    }
-                }
+        } else {
+            error!("No ViewModel available for library loading");
+            if let Some(stack) = imp.stack.borrow().as_ref() {
+                stack.set_visible_child_name("empty");
             }
-            _ => {
-                info!(
-                    "Library type {:?} not yet implemented",
-                    library.library_type
-                );
-                Vec::new()
-            }
-        };
-
-        // Store all media items
-        self.imp().all_media_items.replace(media_items.clone());
-
-        // Apply filters and display items
-        // Removed predictive preloading - cards will load images on-demand
-        self.apply_filters();
+        }
     }
 
     async fn preload_initial_images(&self, items: &[MediaItem]) {
@@ -292,9 +608,9 @@ impl LibraryView {
     fn display_media_items(&self, items: Vec<MediaItem>) {
         let imp = self.imp();
 
-        // Store filtered items for batch loading
+        // Store new filtered items
+        let old_items = imp.filtered_items.borrow().clone();
         imp.filtered_items.replace(items.clone());
-        imp.cards_by_index.borrow_mut().clear();
 
         let flow_box = imp.flow_box.borrow().clone();
         let scrolled_window = imp.scrolled_window.borrow().clone();
@@ -302,105 +618,307 @@ impl LibraryView {
         let current_size = *imp.current_view_size.borrow();
 
         if let Some(flow_box) = flow_box {
-            // Clear existing items
-            while let Some(child) = flow_box.first_child() {
-                flow_box.remove(&child);
-            }
-
             if items.is_empty() {
+                // Clear and show empty state
+                while let Some(child) = flow_box.first_child() {
+                    flow_box.remove(&child);
+                }
+                imp.cards_by_index.borrow_mut().clear();
+                imp.cards_by_id.borrow_mut().clear();
+
                 // Show empty state
                 if let Some(stack) = stack {
                     stack.set_visible_child_name("empty");
                 }
             } else {
-                // Store items for lazy creation
-                let items_rc = Rc::new(items);
-                let cards_rc = Rc::new(RefCell::new(Vec::new()));
+                // Perform differential update only if we have existing items
+                if !old_items.is_empty() && self.should_use_differential_update(&old_items, &items)
+                {
+                    self.differential_update_items(&flow_box, &old_items, &items, current_size);
+                } else {
+                    // Full refresh for initial load or major changes
+                    self.full_refresh_items(&flow_box, items, current_size, scrolled_window, stack);
+                }
+            }
+        }
+    }
 
-                // Function to create cards in batches
-                let weak_self = self.downgrade();
-                let flow_box_weak = flow_box.downgrade();
-                let cards_for_create = cards_rc.clone();
-                let items_for_create = items_rc.clone();
+    /// Check if we should use differential update (for minor changes) or full refresh
+    fn should_use_differential_update(
+        &self,
+        old_items: &[MediaItem],
+        new_items: &[MediaItem],
+    ) -> bool {
+        // Use differential update for small changes to avoid flicker
+        // Full refresh for major changes or different ordering
 
-                let create_cards_batch = Rc::new(move |start: usize, end: usize| {
-                    if let Some(view) = weak_self.upgrade()
-                        && let Some(flow_box) = flow_box_weak.upgrade()
-                    {
-                        let mut cards = cards_for_create.borrow_mut();
-                        let mut cards_by_index = view.imp().cards_by_index.borrow_mut();
+        // If more than 50% of items changed, do full refresh
+        let changed_threshold = old_items.len() / 2;
+        let mut changes = 0;
 
-                        for i in start..end.min(items_for_create.len()) {
-                            if i >= cards.len() {
-                                // Create card only if not already created
-                                if let Some(item) = items_for_create.get(i) {
-                                    let card = MediaCard::new(item.clone(), current_size);
+        for old_item in old_items {
+            if !new_items.iter().any(|new| new.id() == old_item.id()) {
+                changes += 1;
+                if changes > changed_threshold {
+                    return false;
+                }
+            }
+        }
 
-                                    // Connect click handler to each card
-                                    let view_weak = view.downgrade();
-                                    let item_clone = card.media_item();
-                                    card.connect_clicked(move |_| {
-                                        if let Some(view) = view_weak.upgrade() {
-                                            info!("Media item selected: {}", item_clone.title());
-                                            if let Some(callback) =
-                                                view.imp().on_media_selected.borrow().as_ref()
-                                            {
-                                                callback(&item_clone);
-                                            }
-                                        }
-                                    });
+        true
+    }
 
-                                    let child = gtk4::FlowBoxChild::new();
-                                    child.set_child(Some(&card));
-                                    flow_box.append(&child);
-                                    cards.push(card.clone());
-                                    cards_by_index.insert(i, card);
-                                }
-                            }
+    /// Perform differential update - only add/remove changed items
+    fn differential_update_items(
+        &self,
+        flow_box: &gtk4::FlowBox,
+        old_items: &[MediaItem],
+        new_items: &[MediaItem],
+        current_size: ImageSize,
+    ) {
+        let imp = self.imp();
+        let mut cards_by_index = imp.cards_by_index.borrow_mut();
+        let mut cards_by_id = imp.cards_by_id.borrow_mut();
+
+        // Build lookup maps
+        let old_ids: std::collections::HashSet<String> =
+            old_items.iter().map(|item| item.id().to_string()).collect();
+        let new_ids: std::collections::HashSet<String> =
+            new_items.iter().map(|item| item.id().to_string()).collect();
+
+        // Find items to remove
+        let to_remove: Vec<String> = old_ids.difference(&new_ids).cloned().collect();
+
+        // Find items to add
+        let to_add: Vec<String> = new_ids.difference(&old_ids).cloned().collect();
+
+        // Update existing cards' content for items present in both sets (e.g., progress changes)
+        let common_ids: Vec<String> = old_ids.intersection(&new_ids).cloned().collect();
+        let new_by_id: HashMap<String, &MediaItem> = new_items
+            .iter()
+            .map(|it| (it.id().to_string(), it))
+            .collect();
+        for id in common_ids {
+            if let Some(card) = cards_by_id.get(&id) {
+                if let Some(new_item) = new_by_id.get(&id) {
+                    card.update_content((*new_item).clone());
+                }
+            }
+        }
+
+        // Remove cards for items that are no longer in the list
+        if !to_remove.is_empty() {
+            let mut child = flow_box.first_child();
+            while let Some(flow_child) = child {
+                let next = flow_child.next_sibling();
+
+                if let Some(fc) = flow_child.downcast_ref::<gtk4::FlowBoxChild>() {
+                    if let Some(card) = fc.child().and_then(|w| w.downcast::<MediaCard>().ok()) {
+                        let card_id = card.media_item().id().to_string();
+                        if to_remove.contains(&card_id) {
+                            flow_box.remove(&flow_child);
+                            // Remove from maps
+                            cards_by_index.retain(|_, c| c.media_item().id() != card_id);
+                            cards_by_id.remove(&card_id);
+                        }
+                    }
+                }
+
+                child = next;
+            }
+        }
+
+        // Add new cards for items that weren't in the old list
+        for (idx, item) in new_items.iter().enumerate() {
+            let item_id = item.id().to_string();
+            if to_add.contains(&item_id) {
+                let card = MediaCard::new(item.clone(), current_size);
+
+                // Connect click handler
+                let view_weak = self.downgrade();
+                let item_clone = item.clone();
+                card.connect_clicked(move |_| {
+                    if let Some(view) = view_weak.upgrade() {
+                        info!("Media item selected: {}", item_clone.title());
+                        if let Some(callback) = view.imp().on_media_selected.borrow().as_ref() {
+                            callback(&item_clone);
                         }
                     }
                 });
 
-                // Defer initial card creation to avoid blocking
-                let create_initial = create_cards_batch.clone();
-                let weak_self = self.downgrade();
-                glib::idle_add_local_once(move || {
-                    create_initial(0, INITIAL_CARDS_TO_CREATE);
+                let child = gtk4::FlowBoxChild::new();
+                child.set_child(Some(&card));
 
-                    // Simplified: trigger load directly on created cards
-                    if let Some(view) = weak_self.upgrade() {
-                        glib::timeout_add_local_once(
-                            std::time::Duration::from_millis(100),
-                            move || {
-                                // Trigger load on initial visible cards
-                                let cards = view.imp().cards_by_index.borrow();
-                                for i in 0..INITIAL_IMAGES_TO_LOAD.min(cards.len()) {
-                                    if let Some(card) = cards.get(&i) {
-                                        card.trigger_load(ImageSize::Medium);
-                                    }
-                                }
-                            },
-                        );
-                    }
-                });
-
-                // Show content
-                if let Some(stack) = stack {
-                    stack.set_visible_child_name("content");
+                // Insert at correct position
+                if idx < flow_box.observe_children().n_items() as usize {
+                    flow_box.insert(&child, idx as i32);
+                } else {
+                    flow_box.append(&child);
                 }
 
-                // Set up progressive loading with card creation and batch loading
-                if let Some(scrolled_window) = scrolled_window {
-                    self.setup_progressive_loading_with_batch(
-                        scrolled_window,
-                        flow_box.clone(),
-                        create_cards_batch.clone(),
-                        cards_rc.clone(),
-                        items_rc.len(),
-                    );
-                }
+                cards_by_index.insert(idx, card.clone());
+                cards_by_id.insert(item_id, card.clone());
+
+                // Trigger load for new card
+                card.trigger_load(current_size);
             }
         }
+
+        // Reorder if needed (only if items are the same but order changed)
+        if to_add.is_empty() && to_remove.is_empty() && old_items.len() == new_items.len() {
+            // Check if order changed
+            let order_changed = old_items
+                .iter()
+                .zip(new_items.iter())
+                .any(|(old, new)| old.id() != new.id());
+
+            if order_changed {
+                // For reordering, it's simpler to rebuild
+                self.full_refresh_items(&flow_box, new_items.to_vec(), current_size, None, None);
+            } else {
+                // Ensure indices map matches current children
+                drop(cards_by_index);
+                self.rebuild_cards_index_map(flow_box);
+            }
+        } else {
+            // After structural changes, rebuild index map
+            drop(cards_by_index);
+            self.rebuild_cards_index_map(flow_box);
+        }
+
+        // Show content
+        if let Some(stack) = imp.stack.borrow().as_ref() {
+            stack.set_visible_child_name("content");
+        }
+    }
+
+    /// Perform full refresh - clear and recreate all items
+    fn full_refresh_items(
+        &self,
+        flow_box: &gtk4::FlowBox,
+        items: Vec<MediaItem>,
+        current_size: ImageSize,
+        scrolled_window: Option<gtk4::ScrolledWindow>,
+        stack: Option<gtk4::Stack>,
+    ) {
+        let imp = self.imp();
+        imp.cards_by_index.borrow_mut().clear();
+        imp.cards_by_id.borrow_mut().clear();
+
+        // Clear existing items
+        while let Some(child) = flow_box.first_child() {
+            flow_box.remove(&child);
+        }
+
+        if !items.is_empty() {
+            // Store items for lazy creation
+            let items_rc = Rc::new(items);
+            let cards_rc = Rc::new(RefCell::new(Vec::new()));
+
+            // Function to create cards in batches
+            let weak_self = self.downgrade();
+            let flow_box_weak = flow_box.downgrade();
+            let cards_for_create = cards_rc.clone();
+            let items_for_create = items_rc.clone();
+
+            let create_cards_batch = Rc::new(move |start: usize, end: usize| {
+                if let Some(view) = weak_self.upgrade()
+                    && let Some(flow_box) = flow_box_weak.upgrade()
+                {
+                    let mut cards = cards_for_create.borrow_mut();
+                    let mut cards_by_index = view.imp().cards_by_index.borrow_mut();
+                    let mut cards_by_id = view.imp().cards_by_id.borrow_mut();
+
+                    for i in start..end.min(items_for_create.len()) {
+                        if i >= cards.len() {
+                            // Create card only if not already created
+                            if let Some(item) = items_for_create.get(i) {
+                                let card = MediaCard::new(item.clone(), current_size);
+
+                                // Connect click handler to each card
+                                let view_weak = view.downgrade();
+                                let item_clone = card.media_item();
+                                card.connect_clicked(move |_| {
+                                    if let Some(view) = view_weak.upgrade() {
+                                        info!("Media item selected: {}", item_clone.title());
+                                        if let Some(callback) =
+                                            view.imp().on_media_selected.borrow().as_ref()
+                                        {
+                                            callback(&item_clone);
+                                        }
+                                    }
+                                });
+
+                                let child = gtk4::FlowBoxChild::new();
+                                child.set_child(Some(&card));
+                                flow_box.append(&child);
+                                let id_key = item.id().to_string();
+                                cards.push(card.clone());
+                                cards_by_index.insert(i, card.clone());
+                                cards_by_id.insert(id_key, card);
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Defer initial card creation to avoid blocking
+            let create_initial = create_cards_batch.clone();
+            let weak_self = self.downgrade();
+            glib::idle_add_local_once(move || {
+                create_initial(0, INITIAL_CARDS_TO_CREATE);
+
+                // Simplified: trigger load directly on created cards
+                if let Some(view) = weak_self.upgrade() {
+                    glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(100),
+                        move || {
+                            // Trigger load on initial visible cards
+                            let cards_idx = view.imp().cards_by_index.borrow();
+                            for i in 0..INITIAL_IMAGES_TO_LOAD.min(cards_idx.len()) {
+                                if let Some(card) = cards_idx.get(&i) {
+                                    card.trigger_load(ImageSize::Medium);
+                                }
+                            }
+                        },
+                    );
+                }
+            });
+
+            // Show content
+            if let Some(ref stack) = stack {
+                stack.set_visible_child_name("content");
+            }
+
+            // Set up progressive loading with card creation and batch loading
+            if let Some(ref scrolled_window) = scrolled_window {
+                self.setup_progressive_loading_with_batch(
+                    scrolled_window.clone(),
+                    flow_box.clone(),
+                    create_cards_batch.clone(),
+                    cards_rc.clone(),
+                    items_rc.len(),
+                );
+            }
+            // Ensure index map consistency after creation
+            self.rebuild_cards_index_map(flow_box);
+        }
+    }
+
+    fn rebuild_cards_index_map(&self, flow_box: &gtk4::FlowBox) {
+        let mut index_map: HashMap<usize, MediaCard> = HashMap::new();
+        let mut idx = 0usize;
+        let mut child = flow_box.first_child();
+        while let Some(flow_child) = child {
+            if let Some(fc) = flow_child.downcast_ref::<gtk4::FlowBoxChild>() {
+                if let Some(card) = fc.child().and_then(|w| w.downcast::<MediaCard>().ok()) {
+                    index_map.insert(idx, card);
+                }
+                idx += 1;
+            }
+            child = flow_child.next_sibling();
+        }
+        self.imp().cards_by_index.replace(index_map);
     }
 
     fn setup_progressive_loading(
@@ -520,37 +1038,94 @@ impl LibraryView {
     }
 
     pub fn apply_filters(&self) {
-        let imp = self.imp();
-        let all_items = imp.all_media_items.borrow().clone();
-        let filter_manager = imp.filter_manager.borrow();
-
-        // Apply all filters using the FilterManager
-        let filtered_items = filter_manager.apply_filters(all_items);
-
-        info!(
-            "Applied filters: {} items shown of {} total",
-            filtered_items.len(),
-            imp.all_media_items.borrow().len()
-        );
-
-        // Display filtered items
-        self.display_media_items(filtered_items);
+        // Filters are now handled by the ViewModel
+        // This method is kept for backward compatibility but does nothing
+        info!("apply_filters called - now handled by ViewModel");
     }
 
     pub fn update_watch_status_filter(&self, status: WatchStatus) {
-        let imp = self.imp();
-        imp.filter_manager.borrow_mut().set_watch_status(status);
-        self.apply_filters();
+        if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
+            let vm_status = match status {
+                WatchStatus::All => crate::ui::viewmodels::library_view_model::WatchStatus::All,
+                WatchStatus::Watched => {
+                    crate::ui::viewmodels::library_view_model::WatchStatus::Watched
+                }
+                WatchStatus::Unwatched => {
+                    crate::ui::viewmodels::library_view_model::WatchStatus::Unwatched
+                }
+                WatchStatus::InProgress => {
+                    crate::ui::viewmodels::library_view_model::WatchStatus::InProgress
+                }
+            };
+            let vm_clone = view_model.clone();
+            glib::spawn_future_local(async move {
+                vm_clone.set_watch_status(vm_status).await;
+            });
+        }
     }
 
-    pub fn update_sort_order(&self, order: SortOrder) {
-        let imp = self.imp();
-        imp.filter_manager.borrow_mut().set_sort_order(order);
-        self.apply_filters();
+    pub fn update_sort_order(&self, order: crate::ui::filters::SortOrder) {
+        if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
+            let vm_sort_order = match order {
+                crate::ui::filters::SortOrder::TitleAsc => {
+                    crate::ui::viewmodels::library_view_model::SortOrder::TitleAsc
+                }
+                crate::ui::filters::SortOrder::TitleDesc => {
+                    crate::ui::viewmodels::library_view_model::SortOrder::TitleDesc
+                }
+                crate::ui::filters::SortOrder::YearAsc => {
+                    crate::ui::viewmodels::library_view_model::SortOrder::YearAsc
+                }
+                crate::ui::filters::SortOrder::YearDesc => {
+                    crate::ui::viewmodels::library_view_model::SortOrder::YearDesc
+                }
+                crate::ui::filters::SortOrder::RatingAsc => {
+                    crate::ui::viewmodels::library_view_model::SortOrder::RatingAsc
+                }
+                crate::ui::filters::SortOrder::RatingDesc => {
+                    crate::ui::viewmodels::library_view_model::SortOrder::RatingDesc
+                }
+                crate::ui::filters::SortOrder::DateAddedAsc => {
+                    crate::ui::viewmodels::library_view_model::SortOrder::AddedAsc
+                }
+                crate::ui::filters::SortOrder::DateAddedDesc => {
+                    crate::ui::viewmodels::library_view_model::SortOrder::AddedDesc
+                }
+                crate::ui::filters::SortOrder::DateWatchedAsc => {
+                    crate::ui::viewmodels::library_view_model::SortOrder::AddedAsc
+                } // Fallback to AddedAsc
+                crate::ui::filters::SortOrder::DateWatchedDesc => {
+                    crate::ui::viewmodels::library_view_model::SortOrder::AddedDesc
+                } // Fallback to AddedDesc
+            };
+            let vm_clone = view_model.clone();
+            glib::spawn_future_local(async move {
+                vm_clone.set_sort_order(vm_sort_order).await;
+            });
+        }
     }
 
     pub fn get_filter_manager(&self) -> std::cell::Ref<FilterManager> {
         self.imp().filter_manager.borrow()
+    }
+
+    pub fn search(&self, query: String) {
+        if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
+            let vm_clone = view_model.clone();
+            glib::spawn_future_local(async move {
+                vm_clone.search(query).await;
+            });
+        }
+    }
+
+    pub fn refresh(&self) {
+        if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
+            let vm_clone = view_model.clone();
+            glib::spawn_future_local(async move {
+                use crate::ui::viewmodels::ViewModel;
+                let _ = vm_clone.refresh().await;
+            });
+        }
     }
 
     /// Simplified: Just trigger load on visible cards

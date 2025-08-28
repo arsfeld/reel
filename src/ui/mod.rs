@@ -2,8 +2,10 @@ pub mod auth_dialog;
 pub mod components;
 pub mod filters;
 pub mod main_window;
+pub mod navigation;
 pub mod pages;
 pub mod preferences_window;
+pub mod viewmodels;
 pub mod widgets;
 
 // Export the Blueprint-based components

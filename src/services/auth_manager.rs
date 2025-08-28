@@ -7,6 +7,10 @@ use uuid::Uuid;
 
 use crate::backends::plex::PlexAuth;
 use crate::config::Config;
+use crate::events::{
+    event_bus::EventBus,
+    types::{DatabaseEvent, EventPayload, EventType},
+};
 use crate::models::{AuthProvider, NetworkAuthType, NetworkCredentialData, Source, SourceType};
 
 /// Manages authentication providers and their credentials
@@ -14,13 +18,15 @@ use crate::models::{AuthProvider, NetworkAuthType, NetworkCredentialData, Source
 pub struct AuthManager {
     providers: Arc<RwLock<HashMap<String, AuthProvider>>>,
     config: Arc<RwLock<Config>>,
+    event_bus: Arc<EventBus>,
 }
 
 impl AuthManager {
-    pub fn new(config: Arc<RwLock<Config>>) -> Self {
+    pub fn new(config: Arc<RwLock<Config>>, event_bus: Arc<EventBus>) -> Self {
         Self {
             providers: Arc::new(RwLock::new(HashMap::new())),
             config,
+            event_bus,
         }
     }
 
@@ -104,6 +110,19 @@ impl AuthManager {
         // Store token in keyring
         self.store_credentials(&provider_id, "token", token)?;
 
+        // Emit UserAuthenticated event
+        let event = DatabaseEvent::new(
+            EventType::UserAuthenticated,
+            EventPayload::User {
+                user_id: user.username.clone(),
+                action: "plex_account_added".to_string(),
+            },
+        );
+
+        if let Err(e) = self.event_bus.publish(event).await {
+            tracing::warn!("Failed to publish UserAuthenticated event: {}", e);
+        }
+
         // Discover servers (this will also cache them)
         let sources = self.discover_plex_sources(&provider_id).await?;
 
@@ -148,6 +167,19 @@ impl AuthManager {
         // Store credentials in keyring
         self.store_credentials(&provider_id, "password", password)?;
         self.store_credentials(&provider_id, "token", access_token)?;
+
+        // Emit UserAuthenticated event
+        let event = DatabaseEvent::new(
+            EventType::UserAuthenticated,
+            EventPayload::User {
+                user_id: username.to_string(),
+                action: "jellyfin_auth_added".to_string(),
+            },
+        );
+
+        if let Err(e) = self.event_bus.publish(event).await {
+            tracing::warn!("Failed to publish UserAuthenticated event: {}", e);
+        }
 
         // Create the source
         let source = Source::new(
@@ -407,6 +439,12 @@ impl AuthManager {
 
     /// Remove a provider and all associated sources
     pub async fn remove_provider(&self, provider_id: &str) -> Result<()> {
+        // Get provider info before removing for event
+        let provider = {
+            let providers = self.providers.read().await;
+            providers.get(provider_id).cloned()
+        };
+
         let mut providers = self.providers.write().await;
 
         // Clean up keyring entries
@@ -414,10 +452,34 @@ impl AuthManager {
 
         // Remove from in-memory providers
         providers.remove(provider_id);
+        drop(providers);
 
         // Remove from config and persist to disk
         let mut config = self.config.write().await;
         config.remove_auth_provider(provider_id)?;
+        drop(config);
+
+        // Emit UserLoggedOut event if provider existed
+        if let Some(auth_provider) = provider {
+            let user_id = match auth_provider {
+                AuthProvider::PlexAccount { username, .. } => username,
+                AuthProvider::JellyfinAuth { username, .. } => username,
+                AuthProvider::NetworkCredentials { display_name, .. } => display_name,
+                AuthProvider::LocalFiles { id } => id,
+            };
+
+            let event = DatabaseEvent::new(
+                EventType::UserLoggedOut,
+                EventPayload::User {
+                    user_id,
+                    action: "provider_removed".to_string(),
+                },
+            );
+
+            if let Err(e) = self.event_bus.publish(event).await {
+                tracing::warn!("Failed to publish UserLoggedOut event: {}", e);
+            }
+        }
 
         Ok(())
     }
@@ -709,6 +771,7 @@ impl Default for AuthManager {
     fn default() -> Self {
         // Create a default config wrapped in Arc<RwLock>
         let config = Arc::new(RwLock::new(Config::default()));
-        Self::new(config)
+        let event_bus = Arc::new(EventBus::new(1000));
+        Self::new(config, event_bus)
     }
 }

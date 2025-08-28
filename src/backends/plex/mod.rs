@@ -20,7 +20,7 @@ use crate::models::{
     AuthProvider, ChapterMarker, Credentials, Episode, Library, Movie, Show, Source, SourceType,
     StreamInfo, User,
 };
-use crate::services::{auth_manager::AuthManager, cache::CacheManager};
+use crate::services::auth_manager::AuthManager;
 
 pub struct PlexBackend {
     client: Client,
@@ -31,7 +31,6 @@ pub struct PlexBackend {
     api: Arc<RwLock<Option<PlexApi>>>,
     server_name: Arc<RwLock<Option<String>>>,
     server_info: Arc<RwLock<Option<ServerInfo>>>,
-    cache: Option<Arc<CacheManager>>,
     auth_provider: Option<AuthProvider>,
     source: Option<Source>,
     auth_manager: Option<Arc<AuthManager>>,
@@ -51,10 +50,6 @@ impl PlexBackend {
     }
 
     pub fn with_id(id: String) -> Self {
-        Self::with_cache(id, None)
-    }
-
-    pub fn with_cache(id: String, cache: Option<Arc<CacheManager>>) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -69,7 +64,6 @@ impl PlexBackend {
             api: Arc::new(RwLock::new(None)),
             server_name: Arc::new(RwLock::new(None)),
             server_info: Arc::new(RwLock::new(None)),
-            cache,
             auth_provider: None,
             source: None,
             auth_manager: None,
@@ -81,7 +75,6 @@ impl PlexBackend {
         auth_provider: AuthProvider,
         source: Source,
         auth_manager: Arc<AuthManager>,
-        cache: Option<Arc<CacheManager>>,
     ) -> Result<Self> {
         // Validate that this is a Plex auth provider
         if !matches!(auth_provider, AuthProvider::PlexAccount { .. }) {
@@ -107,15 +100,10 @@ impl PlexBackend {
             api: Arc::new(RwLock::new(None)),
             server_name: Arc::new(RwLock::new(Some(source.name.clone()))),
             server_info: Arc::new(RwLock::new(None)),
-            cache,
             auth_provider: Some(auth_provider),
             source: Some(source),
             auth_manager: Some(auth_manager),
         })
-    }
-
-    pub fn set_cache(&mut self, cache: Arc<CacheManager>) {
-        self.cache = Some(cache);
     }
 
     pub async fn get_server_info(&self) -> Option<ServerInfo> {
@@ -247,13 +235,8 @@ impl PlexBackend {
         // Store the base URL
         *self.base_url.write().await = Some(connection.uri.clone());
 
-        // Create the API client with cache
-        let api = PlexApi::with_cache(
-            connection.uri.clone(),
-            token,
-            self.cache.clone(),
-            self.backend_id.clone(),
-        );
+        // Create the API client
+        let api = PlexApi::with_backend_id(connection.uri.clone(), token, self.backend_id.clone());
         *self.api.write().await = Some(api);
 
         Ok(())
@@ -607,11 +590,10 @@ impl MediaBackend for PlexBackend {
             } else {
                 tracing::info!("URL {} is reachable, using it", url);
 
-                // Create and store the API client with cache
-                let api = PlexApi::with_cache(
+                // Create and store the API client
+                let api = PlexApi::with_backend_id(
                     url.clone(),
                     token.to_string(),
-                    self.cache.clone(),
                     self.backend_id.clone(),
                 );
                 *self.api.write().await = Some(api);
@@ -664,11 +646,10 @@ impl MediaBackend for PlexBackend {
                                     uri: best_conn.uri.clone(),
                                 });
 
-                                // Create and store the API client with cache
-                                let api = PlexApi::with_cache(
+                                // Create and store the API client
+                                let api = PlexApi::with_backend_id(
                                     best_conn.uri.clone(),
                                     token.to_string(),
-                                    self.cache.clone(),
                                     self.backend_id.clone(),
                                 );
                                 *self.api.write().await = Some(api);
@@ -791,9 +772,26 @@ impl MediaBackend for PlexBackend {
             media_id,
             self.backend_id
         );
+
+        // Extract the actual Plex rating key from the composite ID
+        // Format: "backend_id:library_id:type:rating_key" or variations
+        let rating_key = if media_id.contains(':') {
+            // Split and get the last part which should be the rating key
+            media_id.split(':').last().unwrap_or(media_id)
+        } else {
+            // If no separator, assume it's already just the rating key
+            media_id
+        };
+
+        tracing::info!(
+            "Extracted rating key: {} from media_id: {}",
+            rating_key,
+            media_id
+        );
+
         let api = self.get_api().await?;
         tracing::info!("Got API client, fetching stream URL from Plex API");
-        let result = api.get_stream_url(media_id).await;
+        let result = api.get_stream_url(rating_key).await;
         match &result {
             Ok(info) => tracing::info!("Successfully got stream URL: {}", info.url),
             Err(e) => tracing::error!("Failed to get stream URL: {}", e),
@@ -807,18 +805,39 @@ impl MediaBackend for PlexBackend {
         position: Duration,
         duration: Duration,
     ) -> Result<()> {
+        // Extract the actual Plex rating key from the composite ID
+        let rating_key = if media_id.contains(':') {
+            media_id.split(':').last().unwrap_or(media_id)
+        } else {
+            media_id
+        };
+
         let api = self.get_api().await?;
-        api.update_progress(media_id, position, duration).await
+        api.update_progress(rating_key, position, duration).await
     }
 
     async fn mark_watched(&self, media_id: &str) -> Result<()> {
+        // Extract the actual Plex rating key from the composite ID
+        let rating_key = if media_id.contains(':') {
+            media_id.split(':').last().unwrap_or(media_id)
+        } else {
+            media_id
+        };
+
         let api = self.get_api().await?;
-        api.mark_watched(media_id).await
+        api.mark_watched(rating_key).await
     }
 
     async fn mark_unwatched(&self, media_id: &str) -> Result<()> {
+        // Extract the actual Plex rating key from the composite ID
+        let rating_key = if media_id.contains(':') {
+            media_id.split(':').last().unwrap_or(media_id)
+        } else {
+            media_id
+        };
+
         let api = self.get_api().await?;
-        api.mark_unwatched(media_id).await
+        api.mark_unwatched(rating_key).await
     }
 
     async fn get_watch_status(&self, media_id: &str) -> Result<super::traits::WatchStatus> {
@@ -953,5 +972,316 @@ impl fmt::Debug for PlexBackend {
                     .unwrap_or(false),
             )
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{AuthProvider, Source, SourceType};
+
+    #[test]
+    fn test_new() {
+        let backend = PlexBackend::new();
+        assert_eq!(backend.backend_id, "plex");
+    }
+
+    #[test]
+    fn test_with_id() {
+        let backend = PlexBackend::with_id("custom_plex_id".to_string());
+        assert_eq!(backend.backend_id, "custom_plex_id");
+    }
+
+    #[test]
+    fn test_from_auth_invalid_auth_provider() {
+        let auth_provider = AuthProvider::JellyfinAuth {
+            id: "jellyfin".to_string(),
+            server_url: "http://jellyfin.local".to_string(),
+            username: "user".to_string(),
+            user_id: "user123".to_string(),
+            access_token: "token123".to_string(),
+        };
+
+        let source = Source::new(
+            "source1".to_string(),
+            "Test Source".to_string(),
+            SourceType::PlexServer {
+                machine_id: "abc123".to_string(),
+                owned: true,
+            },
+            Some("jellyfin".to_string()),
+        );
+
+        let auth_manager = Arc::new(AuthManager::new());
+        let result = PlexBackend::from_auth(auth_provider, source, auth_manager);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid auth provider type")
+        );
+    }
+
+    #[test]
+    fn test_from_auth_invalid_source_type() {
+        let auth_provider = AuthProvider::PlexAccount {
+            id: "plex".to_string(),
+            username: "user".to_string(),
+            email: "user@example.com".to_string(),
+            token: "token123".to_string(),
+            refresh_token: None,
+            token_expiry: None,
+        };
+
+        let source = Source::new(
+            "source1".to_string(),
+            "Test Source".to_string(),
+            SourceType::JellyfinServer,
+            Some("plex".to_string()),
+        );
+
+        let auth_manager = Arc::new(AuthManager::new());
+        let result = PlexBackend::from_auth(auth_provider, source, auth_manager);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid source type")
+        );
+    }
+
+    #[test]
+    fn test_from_auth_valid() {
+        let auth_provider = AuthProvider::PlexAccount {
+            id: "plex".to_string(),
+            username: "user".to_string(),
+            email: "user@example.com".to_string(),
+            token: "token123".to_string(),
+            refresh_token: None,
+            token_expiry: None,
+        };
+
+        let mut source = Source::new(
+            "source1".to_string(),
+            "Test Plex Server".to_string(),
+            SourceType::PlexServer {
+                machine_id: "abc123".to_string(),
+                owned: true,
+            },
+            Some("plex".to_string()),
+        );
+        source.connection_info.primary_url = Some("http://plex.local".to_string());
+
+        let auth_manager = Arc::new(AuthManager::new());
+        let result = PlexBackend::from_auth(auth_provider, source.clone(), auth_manager);
+
+        assert!(result.is_ok());
+        let backend = result.unwrap();
+        assert_eq!(backend.backend_id, "source1");
+    }
+
+    #[tokio::test]
+    async fn test_get_server_info_none() {
+        let backend = PlexBackend::new();
+        let info = backend.get_server_info().await;
+        assert!(info.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_server_info_with_data() {
+        let backend = PlexBackend::new();
+
+        let server_info = ServerInfo {
+            name: "Test Server".to_string(),
+            is_local: true,
+            is_relay: false,
+            uri: "http://192.168.1.100:32400".to_string(),
+        };
+
+        *backend.server_info.write().await = Some(server_info.clone());
+
+        let retrieved = backend.get_server_info().await;
+        assert!(retrieved.is_some());
+        let info = retrieved.unwrap();
+        assert_eq!(info.name, "Test Server");
+        assert!(info.is_local);
+        assert!(!info.is_relay);
+        assert_eq!(info.uri, "http://192.168.1.100:32400");
+    }
+
+    #[tokio::test]
+    async fn test_get_api_client_none() {
+        let backend = PlexBackend::new();
+        let api = backend.get_api_client().await;
+        assert!(api.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_check_connectivity_no_credentials() {
+        let backend = PlexBackend::new();
+        let connected = backend.check_connectivity().await;
+        assert!(!connected);
+    }
+
+    #[test]
+    fn test_token_obfuscation() {
+        let token = "my_secret_token_123";
+        let obfuscated: Vec<u8> = token
+            .bytes()
+            .enumerate()
+            .map(|(i, b)| b ^ ((i as u8) + 42))
+            .collect();
+
+        let deobfuscated: Vec<u8> = obfuscated
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| b ^ ((i as u8) + 42))
+            .collect();
+
+        let recovered = String::from_utf8(deobfuscated).unwrap();
+        assert_eq!(recovered, token);
+    }
+
+    #[tokio::test]
+    async fn test_is_initialized_false() {
+        let backend = PlexBackend::new();
+        assert!(!backend.is_initialized().await);
+    }
+
+    #[tokio::test]
+    async fn test_is_initialized_partial() {
+        let backend = PlexBackend::new();
+
+        // Set only token
+        *backend.auth_token.write().await = Some("token".to_string());
+        assert!(!backend.is_initialized().await);
+
+        // Set token and URL
+        *backend.base_url.write().await = Some("http://plex.local".to_string());
+        assert!(!backend.is_initialized().await);
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_with_token() {
+        let backend = PlexBackend::new();
+
+        // This will fail in test as we don't have a real Plex server
+        let result = backend
+            .authenticate(Credentials::Token {
+                token: "fake_token".to_string(),
+            })
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_invalid_credentials_type() {
+        let backend = PlexBackend::new();
+
+        let result = backend
+            .authenticate(Credentials::UsernamePassword {
+                username: "user".to_string(),
+                password: "pass".to_string(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("only supports token authentication")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_backend_id() {
+        let backend = PlexBackend::with_id("test_backend_123".to_string());
+        let id = backend.get_backend_id().await;
+        assert_eq!(id, "test_backend_123");
+    }
+
+    #[tokio::test]
+    async fn test_get_last_sync_time_none() {
+        let backend = PlexBackend::new();
+        let time = backend.get_last_sync_time().await;
+        assert!(time.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_last_sync_time_with_value() {
+        let backend = PlexBackend::new();
+        let now = Utc::now();
+
+        *backend.last_sync_time.write().await = Some(now);
+
+        let time = backend.get_last_sync_time().await;
+        assert!(time.is_some());
+        assert_eq!(time.unwrap(), now);
+    }
+
+    #[tokio::test]
+    async fn test_supports_offline() {
+        let backend = PlexBackend::new();
+        assert!(backend.supports_offline().await);
+    }
+
+    #[tokio::test]
+    async fn test_get_backend_info_unknown() {
+        let backend = PlexBackend::new();
+        let info = backend.get_backend_info().await;
+
+        assert_eq!(info.name, "plex");
+        assert_eq!(info.display_name, "Plex");
+        assert!(matches!(
+            info.backend_type,
+            super::super::traits::BackendType::Plex
+        ));
+        assert_eq!(
+            info.connection_type,
+            super::super::traits::ConnectionType::Unknown
+        );
+        assert!(!info.is_local);
+        assert!(!info.is_relay);
+    }
+
+    #[tokio::test]
+    async fn test_get_backend_info_with_server() {
+        let backend = PlexBackend::with_id("my_plex".to_string());
+
+        *backend.server_info.write().await = Some(ServerInfo {
+            name: "Home Server".to_string(),
+            is_local: true,
+            is_relay: false,
+            uri: "http://192.168.1.100:32400".to_string(),
+        });
+
+        let info = backend.get_backend_info().await;
+
+        assert_eq!(info.name, "my_plex");
+        assert_eq!(info.display_name, "Plex (Home Server)");
+        assert!(matches!(
+            info.backend_type,
+            super::super::traits::BackendType::Plex
+        ));
+        assert!(info.is_local);
+        assert!(!info.is_relay);
+        assert_eq!(info.server_name, Some("Home Server".to_string()));
+    }
+
+    #[test]
+    fn test_debug_impl() {
+        let backend = PlexBackend::new();
+        let debug_str = format!("{:?}", backend);
+
+        assert!(debug_str.contains("PlexBackend"));
+        assert!(debug_str.contains("backend_id"));
+        assert!(debug_str.contains("has_base_url"));
+        assert!(debug_str.contains("has_auth_token"));
     }
 }

@@ -6,14 +6,28 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::config::Config;
+use crate::events::{
+    event_bus::EventBus,
+    types::{DatabaseEvent, EventPayload, EventType},
+};
 use tokio::sync::RwLock;
 
 mod imp {
     use super::*;
 
-    #[derive(Debug, Default)]
+    #[derive(Default)]
     pub struct PreferencesWindow {
         pub config: RefCell<Option<Arc<RwLock<Config>>>>,
+        pub event_bus: RefCell<Option<Arc<EventBus>>>,
+    }
+
+    impl std::fmt::Debug for PreferencesWindow {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("PreferencesWindow")
+                .field("config", &"Arc<RwLock<Config>>")
+                .field("event_bus", &"Arc<EventBus>")
+                .finish()
+        }
     }
 
     #[glib::object_subclass]
@@ -43,7 +57,11 @@ glib::wrapper! {
 }
 
 impl PreferencesWindow {
-    pub fn new(parent: &impl IsA<gtk4::Window>, config: Arc<RwLock<Config>>) -> Self {
+    pub fn new(
+        parent: &impl IsA<gtk4::Window>,
+        config: Arc<RwLock<Config>>,
+        event_bus: Arc<EventBus>,
+    ) -> Self {
         let window: Self = glib::Object::builder()
             .property("title", "Preferences")
             .property("modal", true)
@@ -53,6 +71,7 @@ impl PreferencesWindow {
             .build();
 
         window.imp().config.replace(Some(config));
+        window.imp().event_bus.replace(Some(event_bus));
         window
     }
 
@@ -159,12 +178,29 @@ impl PreferencesWindow {
         // Save theme preference
         if let Some(config_arc) = self.imp().config.borrow().as_ref() {
             let config_arc = config_arc.clone();
+            let event_bus = self.imp().event_bus.borrow().as_ref().cloned();
             let theme = theme.to_string();
             glib::spawn_future_local(async move {
                 let mut config = config_arc.write().await;
-                config.general.theme = theme;
+                let old_theme = config.general.theme.clone();
+                config.general.theme = theme.clone();
                 if let Err(e) = config.save() {
                     error!("Failed to save theme preference: {}", e);
+                } else if old_theme != theme {
+                    // Emit UserPreferencesChanged event
+                    if let Some(bus) = event_bus {
+                        let event = DatabaseEvent::new(
+                            EventType::UserPreferencesChanged,
+                            EventPayload::User {
+                                user_id: "local_user".to_string(),
+                                action: format!("theme_changed_to_{}", theme),
+                            },
+                        );
+
+                        if let Err(e) = bus.publish(event).await {
+                            tracing::warn!("Failed to publish UserPreferencesChanged event: {}", e);
+                        }
+                    }
                 }
             });
         }
@@ -176,6 +212,7 @@ impl PreferencesWindow {
         // Save player backend preference
         if let Some(config_arc) = self.imp().config.borrow().as_ref() {
             let config_arc = config_arc.clone();
+            let event_bus = self.imp().event_bus.borrow().as_ref().cloned();
             let backend_str = backend.to_string();
             let window_weak = self.downgrade();
 
@@ -191,6 +228,20 @@ impl PreferencesWindow {
 
                 // Only notify if the backend actually changed
                 if old_backend != backend_str {
+                    // Emit UserPreferencesChanged event
+                    if let Some(bus) = event_bus {
+                        let event = DatabaseEvent::new(
+                            EventType::UserPreferencesChanged,
+                            EventPayload::User {
+                                user_id: "local_user".to_string(),
+                                action: format!("player_backend_changed_to_{}", backend_str),
+                            },
+                        );
+
+                        if let Err(e) = bus.publish(event).await {
+                            tracing::warn!("Failed to publish UserPreferencesChanged event: {}", e);
+                        }
+                    }
                     info!(
                         "Player backend changed from '{}' to '{}'",
                         old_backend, backend_str
