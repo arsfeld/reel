@@ -20,7 +20,7 @@ use crate::models::{
     AuthProvider, Credentials, Episode, HomeSection, Library, MediaItem, Movie, Show, Source,
     SourceType, StreamInfo, User,
 };
-use crate::services::{auth_manager::AuthManager, cache::CacheManager};
+use crate::services::auth_manager::AuthManager;
 
 pub struct JellyfinBackend {
     client: Client,
@@ -31,7 +31,6 @@ pub struct JellyfinBackend {
     last_sync_time: Arc<RwLock<Option<DateTime<Utc>>>>,
     api: Arc<RwLock<Option<JellyfinApi>>>,
     server_name: Arc<RwLock<Option<String>>>,
-    cache: Option<Arc<CacheManager>>,
     auth_provider: Option<AuthProvider>,
     source: Option<Source>,
     auth_manager: Option<Arc<AuthManager>>,
@@ -52,10 +51,6 @@ impl JellyfinBackend {
     }
 
     pub fn with_id(id: String) -> Self {
-        Self::with_cache(id, None)
-    }
-
-    pub fn with_cache(id: String, cache: Option<Arc<CacheManager>>) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -70,7 +65,6 @@ impl JellyfinBackend {
             last_sync_time: Arc::new(RwLock::new(None)),
             api: Arc::new(RwLock::new(None)),
             server_name: Arc::new(RwLock::new(None)),
-            cache,
             auth_provider: None,
             source: None,
             auth_manager: None,
@@ -82,7 +76,6 @@ impl JellyfinBackend {
         auth_provider: AuthProvider,
         source: Source,
         auth_manager: Arc<AuthManager>,
-        cache: Option<Arc<CacheManager>>,
     ) -> Result<Self> {
         // Validate that this is a Jellyfin auth provider
         if !matches!(auth_provider, AuthProvider::JellyfinAuth { .. }) {
@@ -115,15 +108,10 @@ impl JellyfinBackend {
             last_sync_time: Arc::new(RwLock::new(None)),
             api: Arc::new(RwLock::new(None)),
             server_name: Arc::new(RwLock::new(Some(source.name.clone()))),
-            cache,
             auth_provider: Some(auth_provider),
             source: Some(source),
             auth_manager: Some(auth_manager),
         })
-    }
-
-    pub fn set_cache(&mut self, cache: Arc<CacheManager>) {
-        self.cache = Some(cache);
     }
 
     pub async fn set_base_url(&self, url: &str) {
@@ -271,11 +259,10 @@ impl JellyfinBackend {
         *self.api_key.write().await = Some(auth_response.access_token.clone());
         *self.user_id.write().await = Some(auth_response.user.id.clone());
 
-        let api = JellyfinApi::with_cache(
+        let api = JellyfinApi::with_backend_id(
             base_url.to_string(),
             auth_response.access_token.clone(),
             auth_response.user.id.clone(),
-            self.cache.clone(),
             self.backend_id.clone(),
         );
 
@@ -411,13 +398,7 @@ impl MediaBackend for JellyfinBackend {
         *self.api_key.write().await = Some(api_key.clone());
         *self.user_id.write().await = Some(user_id.clone());
 
-        let api = JellyfinApi::with_cache(
-            base_url,
-            api_key,
-            user_id,
-            self.cache.clone(),
-            self.backend_id.clone(),
-        );
+        let api = JellyfinApi::with_backend_id(base_url, api_key, user_id, self.backend_id.clone());
 
         match api.get_user().await {
             Ok(user) => {
@@ -465,11 +446,10 @@ impl MediaBackend for JellyfinBackend {
                     *self.api_key.write().await = Some(api_key.to_string());
                     *self.user_id.write().await = Some(user_id.to_string());
 
-                    let api = JellyfinApi::with_cache(
+                    let api = JellyfinApi::with_backend_id(
                         base_url.to_string(),
                         api_key.to_string(),
                         user_id.to_string(),
-                        self.cache.clone(),
                         self.backend_id.clone(),
                     );
 
@@ -503,14 +483,12 @@ impl MediaBackend for JellyfinBackend {
     async fn get_episodes(&self, show_id: &str, season: u32) -> Result<Vec<Episode>> {
         let api = self.ensure_api_initialized().await?;
 
-        let shows = api.get_shows(show_id).await?;
-        if let Some(show) = shows.first()
-            && let Some(season_info) = show.seasons.iter().find(|s| s.season_number == season)
-        {
+        let seasons = api.get_seasons(show_id).await?;
+        if let Some(season_info) = seasons.iter().find(|s| s.season_number == season) {
             return api.get_episodes(&season_info.id).await;
         }
 
-        Err(anyhow!("Season not found"))
+        Err(anyhow!("Failed to get seasons"))
     }
 
     async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo> {
@@ -602,6 +580,46 @@ impl MediaBackend for JellyfinBackend {
         api.get_home_sections().await
     }
 
+    async fn fetch_media_markers(
+        &self,
+        media_id: &str,
+    ) -> Result<(
+        Option<crate::models::ChapterMarker>,
+        Option<crate::models::ChapterMarker>,
+    )> {
+        let api = self.ensure_api_initialized().await?;
+
+        if let Ok(segments) = api.get_media_segments(media_id).await {
+            let mut intro = None;
+            let mut credits = None;
+
+            for segment in segments {
+                match segment.segment_type {
+                    crate::backends::jellyfin::api::MediaSegmentType::Intro => {
+                        intro = Some(crate::models::ChapterMarker {
+                            start_time: Duration::from_secs(segment.start_ticks / 10_000_000),
+                            end_time: Duration::from_secs(segment.end_ticks / 10_000_000),
+                            marker_type: crate::models::ChapterType::Intro,
+                        });
+                    }
+                    crate::backends::jellyfin::api::MediaSegmentType::Credits
+                    | crate::backends::jellyfin::api::MediaSegmentType::Outro => {
+                        credits = Some(crate::models::ChapterMarker {
+                            start_time: Duration::from_secs(segment.start_ticks / 10_000_000),
+                            end_time: Duration::from_secs(segment.end_ticks / 10_000_000),
+                            marker_type: crate::models::ChapterType::Credits,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+
+            Ok((intro, credits))
+        } else {
+            Ok((None, None))
+        }
+    }
+
     async fn get_backend_info(&self) -> BackendInfo {
         let server_name = self.server_name.read().await.clone();
         BackendInfo {
@@ -616,5 +634,311 @@ impl MediaBackend for JellyfinBackend {
             is_local: false,
             is_relay: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{AuthProvider, Source, SourceType};
+
+    #[test]
+    fn test_new() {
+        let backend = JellyfinBackend::new();
+        assert_eq!(backend.backend_id, "jellyfin");
+    }
+
+    #[test]
+    fn test_with_id() {
+        let backend = JellyfinBackend::with_id("custom_jellyfin".to_string());
+        assert_eq!(backend.backend_id, "custom_jellyfin");
+    }
+
+    #[test]
+    fn test_from_auth_invalid_auth_provider() {
+        let auth_provider = AuthProvider::PlexAccount {
+            id: "plex".to_string(),
+            username: "user".to_string(),
+            email: "user@example.com".to_string(),
+            token: "token123".to_string(),
+            refresh_token: None,
+            token_expiry: None,
+        };
+
+        let source = Source::new(
+            "source1".to_string(),
+            "Test Source".to_string(),
+            SourceType::JellyfinServer,
+            Some("plex".to_string()),
+        );
+
+        let auth_manager = Arc::new(AuthManager::new());
+        let result = JellyfinBackend::from_auth(auth_provider, source, auth_manager);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid auth provider type")
+        );
+    }
+
+    #[test]
+    fn test_from_auth_invalid_source_type() {
+        let auth_provider = AuthProvider::JellyfinAuth {
+            id: "jellyfin".to_string(),
+            server_url: "http://jellyfin.local".to_string(),
+            username: "user".to_string(),
+            user_id: "user123".to_string(),
+            access_token: "token123".to_string(),
+        };
+
+        let source = Source::new(
+            "source1".to_string(),
+            "Test Source".to_string(),
+            SourceType::PlexServer {
+                machine_id: "abc123".to_string(),
+                owned: true,
+            },
+            Some("jellyfin".to_string()),
+        );
+
+        let auth_manager = Arc::new(AuthManager::new());
+        let result = JellyfinBackend::from_auth(auth_provider, source, auth_manager);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid source type")
+        );
+    }
+
+    #[test]
+    fn test_from_auth_valid() {
+        let auth_provider = AuthProvider::JellyfinAuth {
+            id: "jellyfin".to_string(),
+            server_url: "http://jellyfin.local".to_string(),
+            username: "user".to_string(),
+            user_id: "user123".to_string(),
+            access_token: "token123".to_string(),
+        };
+
+        let mut source = Source::new(
+            "source1".to_string(),
+            "Test Jellyfin Server".to_string(),
+            SourceType::JellyfinServer,
+            Some("jellyfin".to_string()),
+        );
+        source.connection_info.primary_url = Some("http://jellyfin.local".to_string());
+
+        let auth_manager = Arc::new(AuthManager::new());
+        let result = JellyfinBackend::from_auth(auth_provider, source.clone(), auth_manager);
+
+        assert!(result.is_ok());
+        let backend = result.unwrap();
+        assert_eq!(backend.backend_id, "source1");
+    }
+
+    #[tokio::test]
+    async fn test_set_base_url() {
+        let backend = JellyfinBackend::new();
+        assert!(backend.base_url.read().await.is_none());
+
+        backend.set_base_url("http://test.jellyfin.local").await;
+
+        let url = backend.base_url.read().await.clone();
+        assert_eq!(url, Some("http://test.jellyfin.local".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_api_client_none() {
+        let backend = JellyfinBackend::new();
+        let api = backend.get_api_client().await;
+        assert!(api.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_is_initialized_false() {
+        let backend = JellyfinBackend::new();
+        assert!(!backend.is_initialized().await);
+    }
+
+    #[tokio::test]
+    async fn test_get_credentials_none() {
+        let backend = JellyfinBackend::new();
+        let creds = backend.get_credentials().await;
+        assert!(creds.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_credentials_with_values() {
+        let backend = JellyfinBackend::new();
+
+        *backend.api_key.write().await = Some("api_key_123".to_string());
+        *backend.user_id.write().await = Some("user_id_456".to_string());
+
+        let creds = backend.get_credentials().await;
+        assert!(creds.is_some());
+
+        let (api_key, user_id) = creds.unwrap();
+        assert_eq!(api_key, "api_key_123");
+        assert_eq!(user_id, "user_id_456");
+    }
+
+    #[test]
+    fn test_credentials_obfuscation() {
+        let creds = "http://server|api_key|user_id";
+        let obfuscated: Vec<u8> = creds
+            .bytes()
+            .enumerate()
+            .map(|(i, b)| b ^ ((i as u8) + 42))
+            .collect();
+
+        let deobfuscated: Vec<u8> = obfuscated
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| b ^ ((i as u8) + 42))
+            .collect();
+
+        let recovered = String::from_utf8(deobfuscated).unwrap();
+        assert_eq!(recovered, creds);
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_invalid_api_key() {
+        let backend = JellyfinBackend::new();
+
+        let result = backend
+            .authenticate(Credentials::ApiKey {
+                key: "some_key".to_string(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("API key authentication not supported")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_invalid_token_format() {
+        let backend = JellyfinBackend::new();
+
+        let result = backend
+            .authenticate(Credentials::Token {
+                token: "invalid_token".to_string(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid token format")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_valid_token_format() {
+        let backend = JellyfinBackend::new();
+
+        // This will fail since we don't have a real server, but it tests the token parsing
+        let result = backend
+            .authenticate(Credentials::Token {
+                token: "http://server|api_key|user_id".to_string(),
+            })
+            .await;
+
+        // Check that the values were parsed correctly
+        assert_eq!(
+            backend.base_url.read().await.clone(),
+            Some("http://server".to_string())
+        );
+        assert_eq!(
+            backend.api_key.read().await.clone(),
+            Some("api_key".to_string())
+        );
+        assert_eq!(
+            backend.user_id.read().await.clone(),
+            Some("user_id".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_backend_id() {
+        let backend = JellyfinBackend::with_id("test_jellyfin_123".to_string());
+        let id = backend.get_backend_id().await;
+        assert_eq!(id, "test_jellyfin_123");
+    }
+
+    #[tokio::test]
+    async fn test_get_last_sync_time_none() {
+        let backend = JellyfinBackend::new();
+        let time = backend.get_last_sync_time().await;
+        assert!(time.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_last_sync_time_with_value() {
+        let backend = JellyfinBackend::new();
+        let now = Utc::now();
+
+        *backend.last_sync_time.write().await = Some(now);
+
+        let time = backend.get_last_sync_time().await;
+        assert!(time.is_some());
+        assert_eq!(time.unwrap(), now);
+    }
+
+    #[tokio::test]
+    async fn test_supports_offline() {
+        let backend = JellyfinBackend::new();
+        assert!(backend.supports_offline().await);
+    }
+
+    #[tokio::test]
+    async fn test_get_backend_info_default() {
+        let backend = JellyfinBackend::new();
+        let info = backend.get_backend_info().await;
+
+        assert_eq!(info.name, "jellyfin");
+        assert_eq!(info.display_name, "Jellyfin");
+        assert!(matches!(info.backend_type, BackendType::Jellyfin));
+        assert_eq!(info.connection_type, ConnectionType::Remote);
+        assert!(!info.is_local);
+        assert!(!info.is_relay);
+        assert!(info.server_name.is_none());
+        assert!(info.server_version.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_backend_info_with_server_name() {
+        let backend = JellyfinBackend::with_id("my_jellyfin".to_string());
+
+        *backend.server_name.write().await = Some("Home Media Server".to_string());
+
+        let info = backend.get_backend_info().await;
+
+        assert_eq!(info.name, "my_jellyfin");
+        assert_eq!(info.display_name, "Home Media Server");
+        assert!(matches!(info.backend_type, BackendType::Jellyfin));
+        assert_eq!(info.server_name, Some("Home Media Server".to_string()));
+    }
+
+    #[test]
+    fn test_debug_impl() {
+        let backend = JellyfinBackend::new();
+        let debug_str = format!("{:?}", backend);
+
+        assert!(debug_str.contains("JellyfinBackend"));
+        assert!(debug_str.contains("backend_id"));
+        assert!(debug_str.contains("server_name"));
     }
 }

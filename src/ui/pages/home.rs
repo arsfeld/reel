@@ -10,6 +10,8 @@ use super::library::MediaCard;
 use crate::constants::*;
 use crate::models::{HomeSection, MediaItem};
 use crate::state::AppState;
+use crate::ui::navigation::NavigationRequest;
+use crate::ui::viewmodels::home_view_model::HomeViewModel;
 use crate::utils::{ImageLoader, ImageSize};
 
 mod imp {
@@ -25,6 +27,7 @@ mod imp {
         pub image_loader: RefCell<Option<Arc<ImageLoader>>>,
         pub section_cards: RefCell<HashMap<String, Vec<gtk4::Widget>>>,
         pub section_widgets: RefCell<HashMap<String, SectionWidgets>>,
+        pub view_model: RefCell<Option<Arc<HomeViewModel>>>,
     }
 
     pub struct SectionWidgets {
@@ -93,8 +96,34 @@ glib::wrapper! {
 }
 
 impl HomePage {
-    pub fn new(state: Arc<AppState>) -> Self {
+    pub fn new<F>(
+        state: Arc<AppState>,
+        setup_header: F,
+        navigation_handler: impl Fn(NavigationRequest) + 'static,
+    ) -> Self
+    where
+        F: Fn(&gtk4::Label) + 'static,
+    {
         let page: Self = glib::Object::builder().build();
+
+        // Initialize HomeViewModel
+        let data_service = state.data_service.clone();
+        let view_model = Arc::new(HomeViewModel::new(data_service));
+        page.imp().view_model.replace(Some(view_model.clone()));
+
+        // Initialize ViewModel with EventBus
+        glib::spawn_future_local({
+            let vm = view_model.clone();
+            let event_bus = state.event_bus.clone();
+            async move {
+                use crate::ui::viewmodels::ViewModel;
+                vm.initialize(event_bus).await;
+            }
+        });
+
+        // Setup ViewModel bindings
+        page.setup_viewmodel_bindings(view_model);
+
         page.imp().state.replace(Some(state.clone()));
 
         // Initialize image loader
@@ -102,10 +131,79 @@ impl HomePage {
             page.imp().image_loader.replace(Some(Arc::new(loader)));
         }
 
+        // Setup header
+        let title_label = gtk4::Label::new(Some("Home"));
+        setup_header(&title_label);
+
+        // Set up internal media selection handler
+        let state_clone = state.clone();
+        page.set_on_media_selected(move |media_item| {
+            info!("HomePage - Media selected: {}", media_item.title());
+
+            use crate::models::MediaItem;
+            match media_item {
+                MediaItem::Movie(movie) => {
+                    info!("HomePage - Navigating to movie details");
+                    navigation_handler(NavigationRequest::ShowMovieDetails(movie.clone()));
+                }
+                MediaItem::Episode(_) => {
+                    info!("HomePage - Navigating to episode player");
+                    navigation_handler(NavigationRequest::ShowPlayer(media_item.clone()));
+                }
+                MediaItem::Show(show) => {
+                    info!("HomePage - Navigating to show details");
+                    navigation_handler(NavigationRequest::ShowShowDetails(show.clone()));
+                }
+                _ => {
+                    info!("HomePage - Unsupported media type");
+                }
+            }
+        });
+
         // Load homepage data
         page.load_homepage();
 
         page
+    }
+
+    fn setup_viewmodel_bindings(&self, view_model: Arc<HomeViewModel>) {
+        let weak_self = self.downgrade();
+
+        // Subscribe to recent items changes
+        let mut recent_subscriber = view_model.recently_added().subscribe();
+        glib::spawn_future_local(async move {
+            while recent_subscriber.wait_for_change().await {
+                if let Some(page) = weak_self.upgrade() {
+                    // Refresh home sections when recent items update
+                    page.refresh_sections();
+                }
+            }
+        });
+
+        // Subscribe to continue watching changes
+        let weak_self_continue = self.downgrade();
+        let mut continue_subscriber = view_model.continue_watching().subscribe();
+        glib::spawn_future_local(async move {
+            while continue_subscriber.wait_for_change().await {
+                if let Some(page) = weak_self_continue.upgrade() {
+                    page.refresh_sections();
+                }
+            }
+        });
+
+        // Subscribe to loading state
+        let weak_self_loading = self.downgrade();
+        let mut loading_subscriber = view_model.is_loading().subscribe();
+        glib::spawn_future_local(async move {
+            while loading_subscriber.wait_for_change().await {
+                if let Some(page) = weak_self_loading.upgrade() {
+                    if let Some(vm) = &*page.imp().view_model.borrow() {
+                        let is_loading = vm.is_loading().get().await;
+                        info!("Home loading state: {}", is_loading);
+                    }
+                }
+            }
+        });
     }
 
     pub fn set_on_media_selected<F>(&self, callback: F)
@@ -117,6 +215,11 @@ impl HomePage {
             .replace(Some(Box::new(callback)));
     }
 
+    fn refresh_sections(&self) {
+        // Call the existing load_homepage which already refreshes everything
+        self.load_homepage();
+    }
+
     fn load_homepage(&self) {
         let imp = self.imp();
         let state = imp.state.borrow().clone().unwrap();
@@ -124,24 +227,47 @@ impl HomePage {
 
         glib::spawn_future_local(async move {
             let source_coordinator = state.get_source_coordinator();
-            // TODO: Home page needs to be refactored to show content from all backends
-            // or to accept a specific backend_id parameter
             let all_backends = source_coordinator.get_all_backends().await;
-            for (_backend_id, backend) in all_backends {
+            let backend_count = all_backends.len();
+            let mut all_sections = Vec::new();
+
+            // Collect sections from all backends
+            for (backend_id, backend) in all_backends {
                 match backend.get_home_sections().await {
-                    Ok(sections) => {
-                        info!("Loaded {} homepage sections", sections.len());
-                        let page_weak_clone = page_weak.clone();
-                        glib::idle_add_local_once(move || {
-                            if let Some(page) = page_weak_clone.upgrade() {
-                                page.sync_sections(sections);
+                    Ok(mut sections) => {
+                        info!(
+                            "Loaded {} homepage sections from backend {}",
+                            sections.len(),
+                            backend_id
+                        );
+                        // Prefix section IDs with backend_id to ensure uniqueness
+                        // and optionally enhance titles if there are multiple backends
+                        for section in &mut sections {
+                            section.id = format!("{}_{}", backend_id, section.id);
+                            // Only add backend prefix to title if we have multiple backends
+                            if backend_count > 1 {
+                                section.title = format!("{} ({})", section.title, backend_id);
                             }
-                        });
+                        }
+                        all_sections.extend(sections);
                     }
                     Err(e) => {
-                        error!("Failed to load homepage sections: {}", e);
+                        error!(
+                            "Failed to load homepage sections from backend {}: {}",
+                            backend_id, e
+                        );
                     }
                 }
+            }
+
+            // Now sync all sections at once
+            if !all_sections.is_empty() {
+                info!("Total sections from all backends: {}", all_sections.len());
+                glib::idle_add_local_once(move || {
+                    if let Some(page) = page_weak.upgrade() {
+                        page.sync_sections(all_sections);
+                    }
+                });
             }
         });
     }

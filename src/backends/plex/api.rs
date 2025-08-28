@@ -11,7 +11,6 @@ use crate::models::{
     ChapterMarker, ChapterType, Episode, HomeSection, HomeSectionType, Library, LibraryType,
     MediaItem, Movie, QualityOption, Resolution, Season, Show, StreamInfo,
 };
-use crate::services::cache::CacheManager;
 
 const PLEX_HEADERS: &[(&str, &str)] = &[
     ("X-Plex-Product", "Reel"),
@@ -26,21 +25,15 @@ pub struct PlexApi {
     client: reqwest::Client,
     base_url: String,
     auth_token: String,
-    cache: Option<Arc<CacheManager>>,
     backend_id: String,
 }
 
 impl PlexApi {
     pub fn new(base_url: String, auth_token: String) -> Self {
-        Self::with_cache(base_url, auth_token, None, "plex".to_string())
+        Self::with_backend_id(base_url, auth_token, "plex".to_string())
     }
 
-    pub fn with_cache(
-        base_url: String,
-        auth_token: String,
-        cache: Option<Arc<CacheManager>>,
-        backend_id: String,
-    ) -> Self {
+    pub fn with_backend_id(base_url: String, auth_token: String, backend_id: String) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -50,7 +43,6 @@ impl PlexApi {
             client,
             base_url,
             auth_token,
-            cache,
             backend_id,
         }
     }
@@ -296,6 +288,7 @@ impl PlexApi {
                 Episode {
                     id: meta.rating_key,
                     backend_id: self.backend_id.clone(),
+                    show_id: meta.grandparent_rating_key,
                     title: meta.title,
                     season_number: meta.parent_index.unwrap_or(0),
                     episode_number: meta.index.unwrap_or(0),
@@ -312,8 +305,11 @@ impl PlexApi {
                         .last_viewed_at
                         .and_then(|ts| DateTime::from_timestamp(ts, 0)),
                     playback_position: meta.view_offset.map(Duration::from_millis),
-                    show_title: None, // Show title not available in this context
-                    show_poster_url: None, // Show poster not available in this context
+                    show_title: meta.grandparent_title,
+                    show_poster_url: meta
+                        .grandparent_thumb
+                        .as_ref()
+                        .map(|t| self.build_image_url(t)),
                     intro_marker,
                     credits_marker,
                 }
@@ -629,10 +625,7 @@ impl PlexApi {
             }
         }
 
-        // Cache all items in a single batch if cache is available
-        if let Some(cache) = &self.cache {
-            self.batch_cache_items(&all_item_ids, &hubs_data).await?;
-        }
+        // Note: Caching is handled by SyncManager, not by the backend
 
         info!(
             "PlexApi::get_home_sections() - Total sections: {}",
@@ -763,86 +756,6 @@ impl PlexApi {
             hubs_data.len()
         );
         Ok(hubs_data)
-    }
-
-    /// Batch cache all items
-    async fn batch_cache_items(
-        &self,
-        item_ids: &HashSet<String>,
-        hubs_data: &HashMap<String, Vec<MediaItem>>,
-    ) -> Result<()> {
-        if let Some(cache) = &self.cache {
-            // Create a flat list of all items to cache
-            let mut items_to_cache = Vec::new();
-
-            for items in hubs_data.values() {
-                for item in items {
-                    let (id, media_type, data) = match item {
-                        MediaItem::Movie(m) => {
-                            if item_ids.contains(&m.id) {
-                                let cache_key = format!("{}:movie:{}", self.backend_id, m.id);
-                                (cache_key, "movie", serde_json::to_string(m)?)
-                            } else {
-                                continue;
-                            }
-                        }
-                        MediaItem::Show(s) => {
-                            if item_ids.contains(&s.id) {
-                                let cache_key = format!("{}:show:{}", self.backend_id, s.id);
-                                (cache_key, "show", serde_json::to_string(s)?)
-                            } else {
-                                continue;
-                            }
-                        }
-                        MediaItem::Episode(e) => {
-                            if item_ids.contains(&e.id) {
-                                let cache_key = format!("{}:episode:{}", self.backend_id, e.id);
-                                (cache_key, "episode", serde_json::to_string(e)?)
-                            } else {
-                                continue;
-                            }
-                        }
-                        _ => continue, // Ignore other media types for now
-                    };
-
-                    items_to_cache.push((id, media_type.to_string(), data));
-                }
-            }
-
-            // Cache all items concurrently
-            let cache_tasks: Vec<_> = items_to_cache
-                .into_iter()
-                .map(|(id, media_type, data)| {
-                    let cache = cache.clone();
-                    async move {
-                        // Parse the JSON back to the appropriate type and cache it
-                        if media_type == "movie" {
-                            if let Ok(movie) = serde_json::from_str::<Movie>(&data) {
-                                let _ = cache.set_media(&id, &media_type, &movie).await;
-                            }
-                        } else if media_type == "show" {
-                            if let Ok(show) = serde_json::from_str::<Show>(&data) {
-                                let _ = cache.set_media(&id, &media_type, &show).await;
-                            }
-                        } else if media_type == "episode"
-                            && let Ok(episode) = serde_json::from_str::<Episode>(&data)
-                        {
-                            let _ = cache.set_media(&id, &media_type, &episode).await;
-                        }
-                    }
-                })
-                .collect();
-
-            // Execute all cache operations
-            futures::future::join_all(cache_tasks).await;
-
-            debug!(
-                "PlexApi::batch_cache_items() - Cached {} items",
-                item_ids.len()
-            );
-        }
-
-        Ok(())
     }
 
     /// Get On Deck items (partially watched content)
@@ -1086,6 +999,7 @@ impl PlexApi {
                     credits_marker: None,
                     id: meta.rating_key,
                     backend_id: self.backend_id.clone(),
+                    show_id: meta.grandparent_rating_key,
                     title: meta.title,
                     season_number: meta.parent_index.unwrap_or(0),
                     episode_number: meta.index.unwrap_or(0),
@@ -1100,7 +1014,10 @@ impl PlexApi {
                         .map(|ts| DateTime::from_timestamp(ts, 0).unwrap()),
                     playback_position: meta.view_offset.map(Duration::from_millis),
                     show_title: meta.grandparent_title,
-                    show_poster_url: meta.grandparent_thumb.map(|t| self.build_image_url(&t)),
+                    show_poster_url: meta
+                        .grandparent_thumb
+                        .as_ref()
+                        .map(|t| self.build_image_url(t)),
                 };
                 Ok(MediaItem::Episode(episode))
             }
@@ -1388,6 +1305,9 @@ struct PlexEpisodeMetadata {
     view_count: Option<u32>,
     view_offset: Option<u64>,
     last_viewed_at: Option<i64>,
+    grandparent_rating_key: Option<String>,
+    grandparent_title: Option<String>,
+    grandparent_thumb: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1447,12 +1367,13 @@ struct PlexGenericMetadata {
     last_viewed_at: Option<i64>,
     added_at: Option<i64>,
     updated_at: Option<i64>,
-    parent_index: Option<u32>,         // Season number for episodes
-    index: Option<u32>,                // Episode number
-    viewed_leaf_count: Option<u32>,    // For shows
-    leaf_count: Option<u32>,           // Total episodes for shows
-    grandparent_title: Option<String>, // Show name for episodes
-    grandparent_thumb: Option<String>, // Show poster for episodes
+    parent_index: Option<u32>,              // Season number for episodes
+    index: Option<u32>,                     // Episode number
+    viewed_leaf_count: Option<u32>,         // For shows
+    leaf_count: Option<u32>,                // Total episodes for shows
+    grandparent_title: Option<String>,      // Show name for episodes
+    grandparent_thumb: Option<String>,      // Show poster for episodes
+    grandparent_rating_key: Option<String>, // Show ID for episodes
     #[serde(rename = "Genre", default)]
     genre: Option<Vec<PlexTag>>,
 }

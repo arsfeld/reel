@@ -9,6 +9,7 @@ use tracing::{error, info};
 use crate::models::{AuthProvider, Source};
 use crate::services::AuthManager;
 use crate::state::AppState;
+use crate::ui::viewmodels::sources_view_model::SourcesViewModel;
 
 mod imp {
     use super::*;
@@ -21,6 +22,7 @@ mod imp {
         pub state: RefCell<Option<Arc<AppState>>>,
         pub auth_manager: RefCell<Option<Arc<AuthManager>>>,
         pub provider_sections: RefCell<HashMap<String, ProviderSection>>,
+        pub view_model: RefCell<Option<Arc<SourcesViewModel>>>,
     }
 
     pub struct ProviderSection {
@@ -81,19 +83,92 @@ glib::wrapper! {
 }
 
 impl SourcesPage {
-    pub fn new(state: Arc<AppState>) -> Self {
+    pub fn new<F>(state: Arc<AppState>, setup_header: F) -> Self
+    where
+        F: Fn(&gtk4::Label, &gtk4::Button) + 'static,
+    {
         let page: Self = glib::Object::builder().build();
 
         // Create auth manager with config
-        let auth_manager = Arc::new(AuthManager::new(state.config.clone()));
+        let auth_manager = Arc::new(AuthManager::new(
+            state.config.clone(),
+            state.event_bus.clone(),
+        ));
+
+        // Initialize SourcesViewModel
+        let data_service = state.data_service.clone();
+        let view_model = Arc::new(SourcesViewModel::new(data_service));
+        page.imp().view_model.replace(Some(view_model.clone()));
+
+        // Initialize ViewModel with EventBus
+        glib::spawn_future_local({
+            let vm = view_model.clone();
+            let event_bus = state.event_bus.clone();
+            async move {
+                use crate::ui::viewmodels::ViewModel;
+                vm.initialize(event_bus).await;
+            }
+        });
+
+        // Setup ViewModel bindings
+        page.setup_viewmodel_bindings(view_model);
 
         page.imp().state.replace(Some(state.clone()));
         page.imp().auth_manager.replace(Some(auth_manager.clone()));
+
+        // Setup header with title and add button
+        let title_label = gtk4::Label::new(Some("Sources & Accounts"));
+        let add_button = gtk4::Button::builder()
+            .icon_name("list-add-symbolic")
+            .tooltip_text("Add Source")
+            .css_classes(vec!["suggested-action"])
+            .build();
+
+        // Connect add button to show dialog
+        let page_weak = page.downgrade();
+        add_button.connect_clicked(move |_| {
+            if let Some(page) = page_weak.upgrade() {
+                page.show_add_source_dialog();
+            }
+        });
+
+        // Call the header setup callback
+        setup_header(&title_label, &add_button);
 
         // Load existing providers
         page.load_providers();
 
         page
+    }
+
+    fn setup_viewmodel_bindings(&self, view_model: Arc<SourcesViewModel>) {
+        let weak_self = self.downgrade();
+
+        // Subscribe to sources changes
+        let mut sources_subscriber = view_model.sources().subscribe();
+        glib::spawn_future_local(async move {
+            while sources_subscriber.wait_for_change().await {
+                if let Some(page) = weak_self.upgrade() {
+                    // Refresh the sources display when ViewModel updates
+                    page.load_providers();
+                }
+            }
+        });
+
+        // Subscribe to sync status
+        let weak_self_sync = self.downgrade();
+        let mut sync_subscriber = view_model.sources().subscribe();
+        glib::spawn_future_local(async move {
+            while sync_subscriber.wait_for_change().await {
+                if let Some(page) = weak_self_sync.upgrade() {
+                    if let Some(vm) = &*page.imp().view_model.borrow() {
+                        // Could update UI to show sync progress
+                        let sources = vm.sources().get().await;
+                        info!("Sources: {:?}", sources);
+                    }
+                }
+            }
+        });
     }
 
     fn load_providers(&self) {

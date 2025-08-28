@@ -14,6 +14,7 @@ use crate::constants::PLAYER_CONTROLS_HIDE_DELAY_SECS;
 use crate::models::{Episode, MediaItem, Movie};
 use crate::player::Player;
 use crate::state::AppState;
+use crate::ui::viewmodels::player_view_model::PlayerViewModel;
 
 #[derive(Clone)]
 pub struct PlayerPage {
@@ -42,6 +43,7 @@ pub struct PlayerPage {
     loading_label: gtk4::Label,
     error_overlay: gtk4::Box,
     error_label: gtk4::Label,
+    view_model: Arc<PlayerViewModel>,
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -535,6 +537,20 @@ impl PlayerPage {
 
         info!("PlayerPage::new() - Player page initialization complete");
 
+        // Initialize PlayerViewModel with data service from state
+        let data_service = state.data_service.clone();
+        let view_model = Arc::new(PlayerViewModel::new(data_service));
+
+        // Initialize ViewModel with EventBus
+        glib::spawn_future_local({
+            let vm = view_model.clone();
+            let event_bus = state.event_bus.clone();
+            async move {
+                use crate::ui::viewmodels::ViewModel;
+                vm.initialize(event_bus).await;
+            }
+        });
+
         Self {
             widget,
             player,
@@ -561,6 +577,7 @@ impl PlayerPage {
             loading_label,
             error_overlay,
             error_label,
+            view_model,
         }
     }
 

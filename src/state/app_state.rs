@@ -7,8 +7,10 @@ use tracing::log::{info, warn};
 
 use crate::backends::BackendManager;
 use crate::config::Config;
+use crate::db::{Database, DatabaseConnection};
+use crate::events::EventBus;
 use crate::models::{Library, MediaItem, User};
-use crate::services::{CacheManager, SourceCoordinator, SyncManager, auth_manager::AuthManager};
+use crate::services::{DataService, SourceCoordinator, SyncManager, auth_manager::AuthManager};
 
 #[derive(Debug, Clone)]
 pub enum PlaybackState {
@@ -27,25 +29,45 @@ pub struct AppState {
     pub current_library: Arc<RwLock<Option<Library>>>,
     pub libraries: Arc<RwLock<HashMap<String, Vec<Library>>>>, // backend_id -> libraries
     pub library_items: Arc<RwLock<HashMap<String, Vec<MediaItem>>>>, // library_id -> items
-    pub cache_manager: Arc<CacheManager>,
+    pub data_service: Arc<DataService>,
     pub sync_manager: Arc<SyncManager>,
     pub playback_state: Arc<RwLock<PlaybackState>>,
     pub config: Arc<RwLock<Config>>,
+    pub database: Arc<Database>,
+    pub db_connection: DatabaseConnection,
+    pub event_bus: Arc<EventBus>, // Event bus is now a required part of AppState
 }
 
 impl AppState {
     pub fn new(config: Arc<RwLock<Config>>) -> Result<Self> {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async { Self::new_async(config).await })
+    }
+
+    async fn new_async(config: Arc<RwLock<Config>>) -> Result<Self> {
+        // Create database connection once
+        let database = Arc::new(Database::new().await?);
+        let db_connection = database.get_connection();
+
+        // Run migrations
+        database.migrate().await?;
+
+        // Create the event bus - this is central to the application
+        let event_bus = Arc::new(EventBus::new(1000));
+
         let backend_manager = Arc::new(RwLock::new(BackendManager::new()));
-        let auth_manager = Arc::new(AuthManager::new(config.clone()));
-        let cache_manager = Arc::new(CacheManager::new()?);
-        let sync_manager = Arc::new(SyncManager::new(cache_manager.clone()));
+        let auth_manager = Arc::new(AuthManager::new(config.clone(), event_bus.clone()));
+
+        // Pass database connection and event bus to DataService
+        let data_service = Arc::new(DataService::new(db_connection.clone(), event_bus.clone()));
+        let sync_manager = Arc::new(SyncManager::new(data_service.clone(), event_bus.clone()));
 
         // Create SourceCoordinator directly
         let source_coordinator = Arc::new(SourceCoordinator::new(
             auth_manager.clone(),
             backend_manager.clone(),
             sync_manager.clone(),
-            cache_manager.clone(),
+            data_service.clone(),
         ));
 
         Ok(Self {
@@ -56,10 +78,13 @@ impl AppState {
             current_library: Arc::new(RwLock::new(None)),
             libraries: Arc::new(RwLock::new(HashMap::new())),
             library_items: Arc::new(RwLock::new(HashMap::new())),
-            cache_manager,
+            data_service,
             sync_manager,
             playback_state: Arc::new(RwLock::new(PlaybackState::Idle)),
             config,
+            database,
+            db_connection,
+            event_bus,
         })
     }
 

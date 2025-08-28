@@ -1,6 +1,8 @@
 mod auth_provider;
 
-pub use auth_provider::{AuthProvider, NetworkAuthType, NetworkCredentialData, Source, SourceType};
+pub use auth_provider::{
+    AuthProvider, ConnectionInfo, NetworkAuthType, NetworkCredentialData, Source, SourceType,
+};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -86,7 +88,8 @@ pub struct Season {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Episode {
     pub id: String,
-    pub backend_id: String, // Which backend this episode came from
+    pub backend_id: String,      // Which backend this episode came from
+    pub show_id: Option<String>, // Parent show ID
     pub title: String,
     pub season_number: u32,
     pub episode_number: u32,

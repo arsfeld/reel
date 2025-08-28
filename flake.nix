@@ -26,6 +26,8 @@
           wrapGAppsHook4
           desktop-file-utils
           blueprint-compiler
+          meson
+          ninja
         ];
 
         buildInputs = with pkgs; [
@@ -309,6 +311,62 @@
           find . -maxdepth 1 -name "*.AppImage" -type f 2>/dev/null | xargs -I {} echo "  - AppImage: {}"
         '';
 
+        # Meson build commands
+        mesonSetup = pkgs.writeShellScriptBin "meson-setup" ''
+          echo "Setting up Meson build directory..."
+          meson setup builddir --prefix=$HOME/.local
+          echo "Meson build directory configured!"
+        '';
+
+        mesonBuild = pkgs.writeShellScriptBin "meson-build" ''
+          echo "Building with Meson..."
+          if [ ! -d builddir ]; then
+            echo "Build directory not found. Running meson setup first..."
+            meson setup builddir --prefix=$HOME/.local
+          fi
+          meson compile -C builddir
+          echo "Build complete!"
+        '';
+
+        mesonInstall = pkgs.writeShellScriptBin "meson-install" ''
+          echo "Installing with Meson..."
+          if [ ! -d builddir ]; then
+            echo "Build directory not found. Running meson setup first..."
+            meson setup builddir --prefix=$HOME/.local
+          fi
+          meson install -C builddir
+          echo "Installation complete!"
+        '';
+
+        mesonTest = pkgs.writeShellScriptBin "meson-test" ''
+          echo "Running Meson tests..."
+          if [ ! -d builddir ]; then
+            echo "Build directory not found. Running meson setup first..."
+            meson setup builddir --prefix=$HOME/.local
+          fi
+          meson test -C builddir
+        '';
+
+        mesonClean = pkgs.writeShellScriptBin "meson-clean" ''
+          echo "Cleaning Meson build directory..."
+          if [ -d builddir ]; then
+            rm -rf builddir
+            echo "Build directory removed."
+          else
+            echo "Build directory not found."
+          fi
+        '';
+
+        mesonDist = pkgs.writeShellScriptBin "meson-dist" ''
+          echo "Creating distribution tarball with Meson..."
+          if [ ! -d builddir ]; then
+            echo "Build directory not found. Running meson setup first..."
+            meson setup builddir --prefix=$HOME/.local
+          fi
+          meson dist -C builddir --no-tests
+          echo "Distribution tarball created in builddir/meson-dist/"
+        '';
+
         devTools = with pkgs; [
           # Development tools
           cargo-watch
@@ -366,6 +424,12 @@
             buildRpm
             buildAppImage
             buildAllPackages
+            mesonSetup
+            mesonBuild
+            mesonInstall
+            mesonTest
+            mesonClean
+            mesonDist
           ];
 
           shellHook = ''
@@ -380,6 +444,14 @@
             echo "  cargo run      - Run the application"
             echo "  cargo test     - Run tests"
             echo "  cargo watch    - Watch for changes and rebuild"
+            echo ""
+            echo "Meson build commands:"
+            echo "  meson-setup    - Setup Meson build directory"
+            echo "  meson-build    - Build with Meson"
+            echo "  meson-install  - Install with Meson"
+            echo "  meson-test     - Run Meson tests"
+            echo "  meson-clean    - Clean Meson build directory"
+            echo "  meson-dist     - Create distribution tarball"
             echo ""
             echo "Code quality commands:"
             echo "  format-code    - Format all Rust code with rustfmt"
