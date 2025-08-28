@@ -1614,6 +1614,7 @@ struct PlayerControls {
     audio_button: gtk4::MenuButton,
     subtitle_button: gtk4::MenuButton,
     quality_button: gtk4::MenuButton,
+    upscaling_button: gtk4::MenuButton,
     title_label: gtk4::Label,
     time_label: gtk4::Label,
     end_time_label: gtk4::Label,
@@ -1623,6 +1624,7 @@ struct PlayerControls {
     inhibit_cookie: Arc<RwLock<Option<u32>>>,
     backend: Arc<RwLock<Option<Arc<dyn MediaBackend>>>>,
     current_media_item: Arc<RwLock<Option<MediaItem>>>,
+    action_group: gio::SimpleActionGroup,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1856,6 +1858,13 @@ impl PlayerControls {
         quality_button.set_tooltip_text(Some("Video Quality"));
         right_section.append(&quality_button);
 
+        // Upscaling button
+        let upscaling_button = gtk4::MenuButton::new();
+        upscaling_button.set_icon_name("view-reveal-symbolic");
+        upscaling_button.add_css_class("flat");
+        upscaling_button.set_tooltip_text(Some("Video Upscaling"));
+        right_section.append(&upscaling_button);
+
         // Fullscreen button
         let fullscreen_button = gtk4::Button::from_icon_name("view-fullscreen-symbolic");
         fullscreen_button.add_css_class("flat");
@@ -1865,8 +1874,11 @@ impl PlayerControls {
 
         widget.append(&controls_row);
 
+        // Create the action group that will be shared by all menus
+        let action_group = gio::SimpleActionGroup::new();
+
         let controls = Self {
-            widget,
+            widget: widget.clone(),
             play_button: play_button.clone(),
             rewind_button: rewind_button.clone(),
             forward_button: forward_button.clone(),
@@ -1876,6 +1888,7 @@ impl PlayerControls {
             audio_button: audio_button.clone(),
             subtitle_button: subtitle_button.clone(),
             quality_button: quality_button.clone(),
+            upscaling_button: upscaling_button.clone(),
             title_label,
             time_label: time_label.clone(),
             end_time_label: end_time_label.clone(),
@@ -1885,7 +1898,11 @@ impl PlayerControls {
             inhibit_cookie,
             backend,
             current_media_item,
+            action_group: action_group.clone(),
         };
+
+        // Insert the action group into the widget hierarchy
+        widget.insert_action_group("player", Some(&action_group));
 
         // Set up click handler for end time label to cycle display modes
         let mode = controls.time_display_mode.clone();
@@ -2080,6 +2097,9 @@ impl PlayerControls {
                 }
             }
         });
+
+        // Setup upscaling menu
+        self.setup_upscaling_menu();
     }
 
     fn start_position_timer(&self) {
@@ -2233,62 +2253,55 @@ impl PlayerControls {
     }
 
     async fn setup_track_actions(&self) {
-        // Get the action group from the widget's root
-        if let Some(window) = self.widget.root() {
-            let action_group = gio::SimpleActionGroup::new();
+        // Use the shared action group from the struct
+        let action_group = &self.action_group;
 
-            // Add audio track actions
-            let audio_tracks = self.player.read().await.get_audio_tracks().await;
-            for (index, _name) in &audio_tracks {
-                let action = gio::SimpleAction::new(&format!("set-audio-track-{}", index), None);
+        // Add audio track actions
+        let audio_tracks = self.player.read().await.get_audio_tracks().await;
+        for (index, _name) in &audio_tracks {
+            let action = gio::SimpleAction::new(&format!("set-audio-track-{}", index), None);
+            let player = self.player.clone();
+            let track_index = *index;
+            action.connect_activate(move |_, _| {
+                let player = player.clone();
+                glib::spawn_future_local(async move {
+                    if let Err(e) = player.read().await.set_audio_track(track_index).await {
+                        error!("Failed to set audio track: {}", e);
+                    }
+                });
+            });
+            action_group.add_action(&action);
+        }
+
+        // Add subtitle track actions
+        let subtitle_tracks = self.player.read().await.get_subtitle_tracks().await;
+        for (index, _name) in &subtitle_tracks {
+            if *index < 0 {
+                let action = gio::SimpleAction::new("disable-subtitles", None);
+                let player = self.player.clone();
+                action.connect_activate(move |_, _| {
+                    let player = player.clone();
+                    glib::spawn_future_local(async move {
+                        if let Err(e) = player.read().await.set_subtitle_track(-1).await {
+                            error!("Failed to disable subtitles: {}", e);
+                        }
+                    });
+                });
+                action_group.add_action(&action);
+            } else {
+                let action = gio::SimpleAction::new(&format!("set-subtitle-track-{}", index), None);
                 let player = self.player.clone();
                 let track_index = *index;
                 action.connect_activate(move |_, _| {
                     let player = player.clone();
                     glib::spawn_future_local(async move {
-                        if let Err(e) = player.read().await.set_audio_track(track_index).await {
-                            error!("Failed to set audio track: {}", e);
+                        if let Err(e) = player.read().await.set_subtitle_track(track_index).await {
+                            error!("Failed to set subtitle track: {}", e);
                         }
                     });
                 });
                 action_group.add_action(&action);
             }
-
-            // Add subtitle track actions
-            let subtitle_tracks = self.player.read().await.get_subtitle_tracks().await;
-            for (index, _name) in &subtitle_tracks {
-                if *index < 0 {
-                    let action = gio::SimpleAction::new("disable-subtitles", None);
-                    let player = self.player.clone();
-                    action.connect_activate(move |_, _| {
-                        let player = player.clone();
-                        glib::spawn_future_local(async move {
-                            if let Err(e) = player.read().await.set_subtitle_track(-1).await {
-                                error!("Failed to disable subtitles: {}", e);
-                            }
-                        });
-                    });
-                    action_group.add_action(&action);
-                } else {
-                    let action =
-                        gio::SimpleAction::new(&format!("set-subtitle-track-{}", index), None);
-                    let player = self.player.clone();
-                    let track_index = *index;
-                    action.connect_activate(move |_, _| {
-                        let player = player.clone();
-                        glib::spawn_future_local(async move {
-                            if let Err(e) =
-                                player.read().await.set_subtitle_track(track_index).await
-                            {
-                                error!("Failed to set subtitle track: {}", e);
-                            }
-                        });
-                    });
-                    action_group.add_action(&action);
-                }
-            }
-
-            window.insert_action_group("player", Some(&action_group));
         }
     }
 
@@ -2371,57 +2384,117 @@ impl PlayerControls {
         self.quality_button.set_popover(Some(&quality_popover));
 
         // Set up actions for quality selection
-        debug!("PlayerControls::populate_quality_menu() - Getting window root");
-        if let Some(window) = self.widget.root() {
-            debug!("PlayerControls::populate_quality_menu() - Got window root, setting up actions");
-            let action_group = gio::SimpleActionGroup::new();
+        debug!("PlayerControls::populate_quality_menu() - Setting up quality actions");
+        let action_group = &self.action_group;
 
-            for (index, option) in stream_info.quality_options.iter().enumerate() {
-                let action = gio::SimpleAction::new(&format!("set-quality-{}", index), None);
-                let player = self.player.clone();
-                let url = option.url.clone();
-                action.connect_activate(move |_, _| {
-                    let player = player.clone();
-                    let url = url.clone();
-                    glib::spawn_future_local(async move {
-                        // Get current position before switching
-                        let position = {
-                            let player = player.read().await;
-                            player.get_position().await
-                        };
-
-                        // Load new quality URL
+        for (index, option) in stream_info.quality_options.iter().enumerate() {
+            let action = gio::SimpleAction::new(&format!("set-quality-{}", index), None);
+            let player = self.player.clone();
+            let url = option.url.clone();
+            action.connect_activate(move |_, _| {
+                let player = player.clone();
+                let url = url.clone();
+                glib::spawn_future_local(async move {
+                    // Get current position before switching
+                    let position = {
                         let player = player.read().await;
-                        if let Err(e) = player.load_media(&url).await {
-                            error!("Failed to switch quality: {}", e);
-                            return;
-                        }
+                        player.get_position().await
+                    };
 
-                        // Seek to previous position if available
-                        if let Some(pos) = position
-                            && let Err(e) = player.seek(pos).await
-                        {
-                            error!("Failed to seek after quality switch: {}", e);
-                        }
+                    // Load new quality URL
+                    let player = player.read().await;
+                    if let Err(e) = player.load_media(&url).await {
+                        error!("Failed to switch quality: {}", e);
+                        return;
+                    }
 
-                        // Resume playback
-                        if let Err(e) = player.play().await {
-                            error!("Failed to resume playback: {}", e);
-                        }
-                    });
+                    // Seek to previous position if available
+                    if let Some(pos) = position
+                        && let Err(e) = player.seek(pos).await
+                    {
+                        error!("Failed to seek after quality switch: {}", e);
+                    }
+
+                    // Resume playback
+                    if let Err(e) = player.play().await {
+                        error!("Failed to resume playback: {}", e);
+                    }
                 });
-                action_group.add_action(&action);
-            }
-
-            window.insert_action_group("player", Some(&action_group));
-            debug!("PlayerControls::populate_quality_menu() - Actions set up successfully");
-        } else {
-            debug!(
-                "PlayerControls::populate_quality_menu() - Window root not available yet, skipping action setup"
-            );
+            });
+            action_group.add_action(&action);
         }
+        debug!("PlayerControls::populate_quality_menu() - Actions set up successfully");
 
         debug!("PlayerControls::populate_quality_menu() - Complete");
+    }
+
+    fn setup_upscaling_menu(&self) {
+        // Create upscaling menu
+        let upscaling_menu = gio::Menu::new();
+
+        // Add upscaling options
+        upscaling_menu.append(Some("None"), Some("player.set-upscaling-none"));
+        upscaling_menu.append(Some("High Quality"), Some("player.set-upscaling-hq"));
+        upscaling_menu.append(Some("FSR"), Some("player.set-upscaling-fsr"));
+        upscaling_menu.append(Some("Anime4K"), Some("player.set-upscaling-anime"));
+
+        let upscaling_popover = gtk4::PopoverMenu::from_model(Some(&upscaling_menu));
+        self.upscaling_button.set_popover(Some(&upscaling_popover));
+
+        // Set up actions for upscaling selection
+        let action_group = &self.action_group;
+
+        // Add upscaling actions
+        use crate::player::UpscalingMode;
+        let modes = vec![
+            ("set-upscaling-none", UpscalingMode::None),
+            ("set-upscaling-hq", UpscalingMode::HighQuality),
+            ("set-upscaling-fsr", UpscalingMode::FSR),
+            ("set-upscaling-anime", UpscalingMode::Anime),
+        ];
+
+        for (action_name, mode) in modes {
+            let action = gio::SimpleAction::new(action_name, None);
+            let player = self.player.clone();
+            let upscaling_btn = self.upscaling_button.clone();
+
+            action.connect_activate(move |_, _| {
+                let player = player.clone();
+                let upscaling_btn = upscaling_btn.clone();
+                let mode = mode;
+
+                glib::spawn_future_local(async move {
+                    let player = player.read().await;
+
+                    // Check if we're using MPV player
+                    if let Player::Mpv(mpv_player) = &*player {
+                        match mpv_player.set_upscaling_mode(mode).await {
+                            Ok(_) => {
+                                let tooltip = format!("Upscaling: {}", mode.to_string());
+                                upscaling_btn.set_tooltip_text(Some(&tooltip));
+
+                                // Update icon based on mode
+                                let icon = match mode {
+                                    UpscalingMode::None => "view-reveal-symbolic",
+                                    UpscalingMode::HighQuality => "view-continuous-symbolic",
+                                    UpscalingMode::FSR => "view-fullscreen-symbolic",
+                                    UpscalingMode::Anime => "view-restore-symbolic",
+                                };
+                                upscaling_btn.set_icon_name(icon);
+
+                                info!("Set upscaling mode to: {}", mode.to_string());
+                            }
+                            Err(e) => {
+                                error!("Failed to set upscaling mode: {}", e);
+                            }
+                        }
+                    } else {
+                        debug!("Upscaling only supported with MPV player");
+                    }
+                });
+            });
+            action_group.add_action(&action);
+        }
     }
 }
 
