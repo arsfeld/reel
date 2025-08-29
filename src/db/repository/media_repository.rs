@@ -51,6 +51,7 @@ pub trait MediaRepository: Repository<MediaItemModel> {
     ) -> Result<Vec<MediaItemModel>>;
 }
 
+#[derive(Debug)]
 pub struct MediaRepositoryImpl {
     base: BaseRepository,
 }

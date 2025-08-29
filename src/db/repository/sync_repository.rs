@@ -204,7 +204,10 @@ impl SyncRepository for SyncRepositoryImpl {
                 s.status == "completed" && s.started_at.is_some() && s.completed_at.is_some()
             })
             .filter_map(|s| match (s.started_at, s.completed_at) {
-                (Some(start), Some(end)) => Some((end.timestamp() - start.timestamp()) as f64),
+                (Some(start), Some(end)) => {
+                    let duration = end.signed_duration_since(start);
+                    Some(duration.num_seconds() as f64)
+                }
                 _ => None,
             })
             .collect();
