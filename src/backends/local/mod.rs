@@ -191,7 +191,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::events::EventBus;
-    use crate::models::{AuthProvider, ConnectionInfo, Source, SourceType};
+    use crate::models::{AuthProvider, Source, SourceType};
     use std::panic::AssertUnwindSafe;
 
     #[test]
