@@ -13,6 +13,9 @@ flatpak-cargo-generator.py
 *.flatpak
 repo/
 
+# MacOS
+Generated/
+
 # IDE
 .vscode/
 .idea/

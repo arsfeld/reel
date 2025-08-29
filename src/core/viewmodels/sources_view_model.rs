@@ -313,6 +313,11 @@ impl SourcesViewModel {
     pub fn online_sources(&self) -> &Property<usize> {
         &self.online_sources
     }
+
+    pub async fn refresh(&self) -> anyhow::Result<()> {
+        // Load sources already handles loading state
+        self.load_sources().await
+    }
 }
 
 #[async_trait::async_trait]

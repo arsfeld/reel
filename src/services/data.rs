@@ -179,6 +179,7 @@ impl IntoEntity<crate::db::entities::MediaItemModel> for MediaItem {
     }
 }
 
+#[derive(Debug)]
 pub struct DataService {
     db: DatabaseConnection,
     media_repo: Arc<MediaRepositoryImpl>,

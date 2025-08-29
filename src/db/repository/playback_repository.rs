@@ -56,6 +56,7 @@ pub trait PlaybackRepository: Repository<PlaybackProgressModel> {
     async fn cleanup_old_entries(&self, days: i64) -> Result<u64>;
 }
 
+#[derive(Debug)]
 pub struct PlaybackRepositoryImpl {
     base: BaseRepository,
 }

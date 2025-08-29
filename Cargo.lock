@@ -3390,6 +3390,7 @@ dependencies = [
  "gtk4",
  "image",
  "keyring",
+ "lazy_static",
  "libadwaita",
  "libc",
  "libmpv2",

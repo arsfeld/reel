@@ -5,10 +5,10 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
+use super::filters::{SortOrder, WatchStatus};
+use super::pages;
 use crate::config::Config;
 use crate::state::AppState;
-use crate::ui::filters::{SortOrder, WatchStatus};
-use crate::ui::pages;
 use tokio::sync::RwLock;
 
 mod imp {
@@ -51,12 +51,12 @@ mod imp {
         pub state: RefCell<Option<Arc<AppState>>>,
         pub config: RefCell<Option<Arc<RwLock<Config>>>>,
         pub content_stack: RefCell<Option<gtk4::Stack>>,
-        pub home_page: RefCell<Option<crate::ui::pages::HomePage>>,
-        pub sources_page: RefCell<Option<crate::ui::pages::SourcesPage>>,
-        pub library_view: RefCell<Option<crate::ui::pages::LibraryView>>,
-        pub player_page: RefCell<Option<crate::ui::pages::PlayerPage>>,
-        pub show_details_page: RefCell<Option<crate::ui::pages::ShowDetailsPage>>,
-        pub movie_details_page: RefCell<Option<crate::ui::pages::MovieDetailsPage>>,
+        pub home_page: RefCell<Option<crate::platforms::gtk::ui::pages::HomePage>>,
+        pub sources_page: RefCell<Option<crate::platforms::gtk::ui::pages::SourcesPage>>,
+        pub library_view: RefCell<Option<crate::platforms::gtk::ui::pages::LibraryView>>,
+        pub player_page: RefCell<Option<crate::platforms::gtk::ui::pages::PlayerPage>>,
+        pub show_details_page: RefCell<Option<crate::platforms::gtk::ui::pages::ShowDetailsPage>>,
+        pub movie_details_page: RefCell<Option<crate::platforms::gtk::ui::pages::MovieDetailsPage>>,
         pub back_button: RefCell<Option<gtk4::Button>>,
         pub saved_window_size: RefCell<(i32, i32)>,
         pub filter_controls: RefCell<Option<gtk4::Box>>,
@@ -65,7 +65,8 @@ mod imp {
         pub all_libraries: RefCell<Vec<(crate::models::Library, usize)>>,
         pub navigation_stack: RefCell<Vec<String>>, // Track navigation history
         pub header_add_button: RefCell<Option<gtk4::Button>>, // Track add button in header
-        pub sidebar_viewmodel: RefCell<Option<Arc<crate::ui::viewmodels::SidebarViewModel>>>,
+        pub sidebar_viewmodel:
+            RefCell<Option<Arc<crate::platforms::gtk::ui::viewmodels::SidebarViewModel>>>,
     }
 
     #[glib::object_subclass]
@@ -170,9 +171,11 @@ impl ReelMainWindow {
         window.imp().config.replace(Some(config));
 
         // Initialize SidebarViewModel
-        let sidebar_vm = Arc::new(crate::ui::viewmodels::SidebarViewModel::new(
-            state.data_service.clone(),
-        ));
+        let sidebar_vm = Arc::new(
+            crate::platforms::gtk::ui::viewmodels::SidebarViewModel::new(
+                state.data_service.clone(),
+            ),
+        );
         window
             .imp()
             .sidebar_viewmodel
@@ -183,7 +186,7 @@ impl ReelMainWindow {
         let sidebar_vm_clone = sidebar_vm.clone();
         let window_weak_for_vm = window.downgrade();
         glib::spawn_future_local(async move {
-            use crate::ui::viewmodels::ViewModel;
+            use super::viewmodels::ViewModel;
             sidebar_vm_clone.initialize(event_bus).await;
 
             // Set up subscription to sources property
@@ -527,7 +530,7 @@ impl ReelMainWindow {
         let state = self.imp().state.borrow().as_ref().unwrap().clone();
 
         // Create and show auth dialog
-        let dialog = crate::ui::AuthDialog::new(state.clone());
+        let dialog = crate::platforms::gtk::ui::AuthDialog::new(state.clone());
         dialog.present(Some(self));
 
         // Start authentication automatically
@@ -557,7 +560,7 @@ impl ReelMainWindow {
                             backend_id
                         );
                         if let Some(sidebar_vm) = window.imp().sidebar_viewmodel.borrow().as_ref() {
-                            use crate::ui::viewmodels::ViewModel;
+                            use super::viewmodels::ViewModel;
                             sidebar_vm.refresh().await;
                         }
 
@@ -597,8 +600,11 @@ impl ReelMainWindow {
         if let Some(config) = self.imp().config.borrow().as_ref()
             && let Some(state) = self.imp().state.borrow().as_ref()
         {
-            let prefs_window =
-                crate::ui::PreferencesWindow::new(self, config.clone(), state.event_bus.clone());
+            let prefs_window = crate::platforms::gtk::ui::PreferencesWindow::new(
+                self,
+                config.clone(),
+                state.event_bus.clone(),
+            );
             prefs_window.present();
         }
     }
@@ -1093,7 +1099,7 @@ impl ReelMainWindow {
     async fn refresh_all_libraries(&self) {
         // Only refresh the SidebarViewModel - it will handle updating the UI via reactive properties
         if let Some(sidebar_vm) = self.imp().sidebar_viewmodel.borrow().as_ref() {
-            use crate::ui::viewmodels::ViewModel;
+            use super::viewmodels::ViewModel;
             sidebar_vm.refresh().await;
             tracing::info!("Refreshed SidebarViewModel - UI will update via reactive properties");
         } else {
@@ -1121,7 +1127,7 @@ impl ReelMainWindow {
             page.clone()
         } else {
             // Create new page
-            let page = crate::ui::pages::MovieDetailsPage::new(state.clone());
+            let page = crate::platforms::gtk::ui::pages::MovieDetailsPage::new(state.clone());
 
             // Set callback for when play is clicked
             let window_weak = self.downgrade();
@@ -1129,7 +1135,7 @@ impl ReelMainWindow {
                 if let Some(window) = window_weak.upgrade() {
                     let movie_item = crate::models::MediaItem::Movie(movie.clone());
                     glib::spawn_future_local(async move {
-                        use crate::ui::navigation::NavigationRequest;
+                        use super::navigation::NavigationRequest;
                         window
                             .navigate_to(NavigationRequest::ShowPlayer(movie_item))
                             .await;
@@ -1176,7 +1182,7 @@ impl ReelMainWindow {
             page.clone()
         } else {
             // Create new page
-            let page = crate::ui::pages::ShowDetailsPage::new(state.clone());
+            let page = crate::platforms::gtk::ui::pages::ShowDetailsPage::new(state.clone());
 
             // Set callback for when episode is selected
             let window_weak = self.downgrade();
@@ -1184,7 +1190,7 @@ impl ReelMainWindow {
                 if let Some(window) = window_weak.upgrade() {
                     let episode_item = crate::models::MediaItem::Episode(episode.clone());
                     glib::spawn_future_local(async move {
-                        use crate::ui::navigation::NavigationRequest;
+                        use super::navigation::NavigationRequest;
                         window
                             .navigate_to(NavigationRequest::ShowPlayer(episode_item))
                             .await;
@@ -1237,7 +1243,7 @@ impl ReelMainWindow {
             }
             page.clone()
         } else {
-            let page = crate::ui::pages::PlayerPage::new(state.clone());
+            let page = crate::platforms::gtk::ui::pages::PlayerPage::new(state.clone());
             self.imp().player_page.replace(Some(page.clone()));
             content_stack.add_named(page.widget(), Some("player"));
             page
@@ -1415,7 +1421,7 @@ impl ReelMainWindow {
             } else {
                 // Create new library view
                 let state = imp.state.borrow().as_ref().unwrap().clone();
-                let view = crate::ui::pages::LibraryView::new(state.clone());
+                let view = crate::platforms::gtk::ui::pages::LibraryView::new(state.clone());
 
                 // Set the media selected callback to handle different media types
                 let window_weak = self.downgrade();
@@ -1424,8 +1430,8 @@ impl ReelMainWindow {
                     if let Some(window) = window_weak.upgrade() {
                         let media_item = media_item.clone();
                         glib::spawn_future_local(async move {
+                            use super::navigation::NavigationRequest;
                             use crate::models::MediaItem;
-                            use crate::ui::navigation::NavigationRequest;
                             let nav_request = match &media_item {
                                 MediaItem::Movie(movie) => {
                                     NavigationRequest::ShowMovieDetails(movie.clone())
@@ -1522,7 +1528,10 @@ impl ReelMainWindow {
         }
     }
 
-    fn create_filter_controls(&self, library_view: &crate::ui::pages::LibraryView) -> gtk4::Box {
+    fn create_filter_controls(
+        &self,
+        library_view: &crate::platforms::gtk::ui::pages::LibraryView,
+    ) -> gtk4::Box {
         let controls_box = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Horizontal)
             .spacing(8)
@@ -1661,8 +1670,11 @@ impl ReelMainWindow {
     }
 
     // Generic navigation handler
-    pub async fn navigate_to(&self, request: crate::ui::navigation::NavigationRequest) {
-        use crate::ui::navigation::NavigationRequest;
+    pub async fn navigate_to(
+        &self,
+        request: crate::platforms::gtk::ui::navigation::NavigationRequest,
+    ) {
+        use super::navigation::NavigationRequest;
 
         let state = self.imp().state.borrow().as_ref().unwrap().clone();
 
@@ -1748,7 +1760,7 @@ impl ReelMainWindow {
         back_button.connect_clicked(move |_| {
             if let Some(window) = window_weak.upgrade() {
                 glib::spawn_future_local(async move {
-                    use crate::ui::navigation::NavigationRequest;
+                    use super::navigation::NavigationRequest;
                     window.navigate_to(NavigationRequest::GoBack).await;
                 });
             }

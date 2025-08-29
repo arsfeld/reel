@@ -9,9 +9,9 @@ use tracing::{error, info, trace};
 
 use crate::constants::*;
 use crate::models::{Episode, Library, MediaItem, Movie, Show};
+use crate::platforms::gtk::ui::filters::{FilterManager, WatchStatus};
+use crate::platforms::gtk::ui::viewmodels::library_view_model::LibraryViewModel;
 use crate::state::AppState;
-use crate::ui::filters::{FilterManager, WatchStatus};
-use crate::ui::viewmodels::library_view_model::LibraryViewModel;
 use crate::utils::{ImageLoader, ImageSize};
 use sea_orm::prelude::Json;
 use serde_json::Value;
@@ -125,7 +125,7 @@ impl LibraryView {
             let vm = view_model.clone();
             let event_bus = state.event_bus.clone();
             async move {
-                use crate::ui::viewmodels::ViewModel;
+                use crate::platforms::gtk::ui::viewmodels::ViewModel;
                 vm.initialize(event_bus).await;
             }
         });
@@ -1025,8 +1025,10 @@ impl LibraryView {
         info!("Navigating back to libraries");
         let mut widget: Option<gtk4::Widget> = self.parent();
         while let Some(w) = widget {
-            if w.type_() == crate::ui::main_window::ReelMainWindow::static_type() {
-                if let Some(window) = w.downcast_ref::<crate::ui::main_window::ReelMainWindow>() {
+            if w.type_() == crate::platforms::gtk::ui::main_window::ReelMainWindow::static_type() {
+                if let Some(window) =
+                    w.downcast_ref::<crate::platforms::gtk::ui::main_window::ReelMainWindow>()
+                {
                     window.show_libraries_view();
                 }
                 break;
@@ -1044,15 +1046,15 @@ impl LibraryView {
     pub fn update_watch_status_filter(&self, status: WatchStatus) {
         if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
             let vm_status = match status {
-                WatchStatus::All => crate::ui::viewmodels::library_view_model::WatchStatus::All,
+                WatchStatus::All => crate::platforms::gtk::ui::viewmodels::library_view_model::WatchStatus::All,
                 WatchStatus::Watched => {
-                    crate::ui::viewmodels::library_view_model::WatchStatus::Watched
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::WatchStatus::Watched
                 }
                 WatchStatus::Unwatched => {
-                    crate::ui::viewmodels::library_view_model::WatchStatus::Unwatched
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::WatchStatus::Unwatched
                 }
                 WatchStatus::InProgress => {
-                    crate::ui::viewmodels::library_view_model::WatchStatus::InProgress
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::WatchStatus::InProgress
                 }
             };
             let vm_clone = view_model.clone();
@@ -1062,38 +1064,38 @@ impl LibraryView {
         }
     }
 
-    pub fn update_sort_order(&self, order: crate::ui::filters::SortOrder) {
+    pub fn update_sort_order(&self, order: crate::platforms::gtk::ui::filters::SortOrder) {
         if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
             let vm_sort_order = match order {
-                crate::ui::filters::SortOrder::TitleAsc => {
-                    crate::ui::viewmodels::library_view_model::SortOrder::TitleAsc
+                crate::platforms::gtk::ui::filters::SortOrder::TitleAsc => {
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::TitleAsc
                 }
-                crate::ui::filters::SortOrder::TitleDesc => {
-                    crate::ui::viewmodels::library_view_model::SortOrder::TitleDesc
+                crate::platforms::gtk::ui::filters::SortOrder::TitleDesc => {
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::TitleDesc
                 }
-                crate::ui::filters::SortOrder::YearAsc => {
-                    crate::ui::viewmodels::library_view_model::SortOrder::YearAsc
+                crate::platforms::gtk::ui::filters::SortOrder::YearAsc => {
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::YearAsc
                 }
-                crate::ui::filters::SortOrder::YearDesc => {
-                    crate::ui::viewmodels::library_view_model::SortOrder::YearDesc
+                crate::platforms::gtk::ui::filters::SortOrder::YearDesc => {
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::YearDesc
                 }
-                crate::ui::filters::SortOrder::RatingAsc => {
-                    crate::ui::viewmodels::library_view_model::SortOrder::RatingAsc
+                crate::platforms::gtk::ui::filters::SortOrder::RatingAsc => {
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::RatingAsc
                 }
-                crate::ui::filters::SortOrder::RatingDesc => {
-                    crate::ui::viewmodels::library_view_model::SortOrder::RatingDesc
+                crate::platforms::gtk::ui::filters::SortOrder::RatingDesc => {
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::RatingDesc
                 }
-                crate::ui::filters::SortOrder::DateAddedAsc => {
-                    crate::ui::viewmodels::library_view_model::SortOrder::AddedAsc
+                crate::platforms::gtk::ui::filters::SortOrder::DateAddedAsc => {
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::AddedAsc
                 }
-                crate::ui::filters::SortOrder::DateAddedDesc => {
-                    crate::ui::viewmodels::library_view_model::SortOrder::AddedDesc
+                crate::platforms::gtk::ui::filters::SortOrder::DateAddedDesc => {
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::AddedDesc
                 }
-                crate::ui::filters::SortOrder::DateWatchedAsc => {
-                    crate::ui::viewmodels::library_view_model::SortOrder::AddedAsc
+                crate::platforms::gtk::ui::filters::SortOrder::DateWatchedAsc => {
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::AddedAsc
                 } // Fallback to AddedAsc
-                crate::ui::filters::SortOrder::DateWatchedDesc => {
-                    crate::ui::viewmodels::library_view_model::SortOrder::AddedDesc
+                crate::platforms::gtk::ui::filters::SortOrder::DateWatchedDesc => {
+                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::AddedDesc
                 } // Fallback to AddedDesc
             };
             let vm_clone = view_model.clone();
@@ -1120,7 +1122,7 @@ impl LibraryView {
         if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
             let vm_clone = view_model.clone();
             glib::spawn_future_local(async move {
-                use crate::ui::viewmodels::ViewModel;
+                use crate::platforms::gtk::ui::viewmodels::ViewModel;
                 let _ = vm_clone.refresh().await;
             });
         }

@@ -28,6 +28,7 @@ pub trait SourceRepository: Repository<SourceModel> {
     async fn update_last_sync(&self, id: &str) -> Result<()>;
 }
 
+#[derive(Debug)]
 pub struct SourceRepositoryImpl {
     base: BaseRepository,
 }

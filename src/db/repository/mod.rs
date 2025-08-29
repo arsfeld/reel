@@ -35,6 +35,7 @@ pub trait Repository<T> {
 }
 
 /// Base repository implementation holder
+#[derive(Debug)]
 pub struct BaseRepository {
     pub db: Arc<DatabaseConnection>,
     pub event_bus: Arc<EventBus>,
