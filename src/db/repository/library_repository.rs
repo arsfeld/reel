@@ -147,8 +147,8 @@ impl LibraryRepository for LibraryRepositoryImpl {
     }
 
     async fn get_total_item_count(&self) -> Result<i64> {
+        use sea_orm::QuerySelect;
         use sea_orm::sea_query::Expr;
-        use sea_orm::{QuerySelect, Select};
 
         let result = Library::find()
             .select_only()

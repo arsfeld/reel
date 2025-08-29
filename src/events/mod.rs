@@ -1,10 +1,8 @@
 pub mod event_bus;
 pub mod types;
 
-pub use event_bus::{EventBus, EventFilter, EventSubscriber};
-pub use types::{DatabaseEvent, EventPayload, EventPriority, EventType};
-
-use std::sync::Arc;
+pub use event_bus::{EventBus, EventFilter};
+pub use types::{DatabaseEvent, EventPayload, EventType};
 
 /// Event handler trait for processing events
 #[async_trait::async_trait]

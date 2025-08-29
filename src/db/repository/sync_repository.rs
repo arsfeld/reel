@@ -1,14 +1,11 @@
 use super::{BaseRepository, Repository};
 use crate::db::entities::{SyncStatus, SyncStatusActiveModel, SyncStatusModel, sync_status};
-use crate::events::{
-    event_bus::EventBus,
-    types::{DatabaseEvent, EventPayload, EventType},
-};
+use crate::events::event_bus::EventBus;
 use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set,
+    QueryFilter, QueryOrder, Set,
 };
 use std::sync::Arc;
 
@@ -183,9 +180,6 @@ impl SyncRepository for SyncRepositoryImpl {
     }
 
     async fn get_sync_stats(&self, source_id: &str) -> Result<SyncStats> {
-        use sea_orm::sea_query::Expr;
-        use sea_orm::{QuerySelect, Select};
-
         let syncs = self.find_by_source(source_id).await?;
 
         let total_syncs = syncs.len() as u64;

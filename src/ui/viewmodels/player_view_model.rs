@@ -7,7 +7,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tracing::{error, warn};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlaybackState {
@@ -436,16 +436,15 @@ impl PlayerViewModel {
     async fn handle_event(&self, event: DatabaseEvent) {
         match event.event_type {
             EventType::MediaUpdated | EventType::MediaDeleted => {
-                if let Some(current) = self.current_media.get().await {
-                    if let EventPayload::Media { id, .. } = event.payload {
-                        if id == current.id() {
-                            if event.event_type == EventType::MediaDeleted {
-                                self.stop().await;
-                                self.current_media.set(None).await;
-                            } else {
-                                let _ = self.load_media(id).await;
-                            }
-                        }
+                if let Some(current) = self.current_media.get().await
+                    && let EventPayload::Media { id, .. } = event.payload
+                    && id == current.id()
+                {
+                    if event.event_type == EventType::MediaDeleted {
+                        self.stop().await;
+                        self.current_media.set(None).await;
+                    } else {
+                        let _ = self.load_media(id).await;
                     }
                 }
             }

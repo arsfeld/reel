@@ -7,12 +7,8 @@ pub mod sidebar_view_model;
 pub mod sources_view_model;
 
 pub use details_view_model::DetailsViewModel;
-pub use home_view_model::HomeViewModel;
-pub use library_view_model::LibraryViewModel;
-pub use player_view_model::PlayerViewModel;
 pub use property::{Property, PropertySubscriber};
 pub use sidebar_view_model::SidebarViewModel;
-pub use sources_view_model::SourcesViewModel;
 
 use crate::events::EventBus;
 use std::sync::Arc;

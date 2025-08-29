@@ -196,11 +196,11 @@ impl HomePage {
         let mut loading_subscriber = view_model.is_loading().subscribe();
         glib::spawn_future_local(async move {
             while loading_subscriber.wait_for_change().await {
-                if let Some(page) = weak_self_loading.upgrade() {
-                    if let Some(vm) = &*page.imp().view_model.borrow() {
-                        let is_loading = vm.is_loading().get().await;
-                        info!("Home loading state: {}", is_loading);
-                    }
+                if let Some(page) = weak_self_loading.upgrade()
+                    && let Some(vm) = &*page.imp().view_model.borrow()
+                {
+                    let is_loading = vm.is_loading().get().await;
+                    info!("Home loading state: {}", is_loading);
                 }
             }
         });

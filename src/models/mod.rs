@@ -1,8 +1,6 @@
 mod auth_provider;
 
-pub use auth_provider::{
-    AuthProvider, ConnectionInfo, NetworkAuthType, NetworkCredentialData, Source, SourceType,
-};
+pub use auth_provider::{AuthProvider, NetworkAuthType, NetworkCredentialData, Source, SourceType};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
