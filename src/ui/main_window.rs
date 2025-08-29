@@ -1229,48 +1229,27 @@ impl ReelMainWindow {
 
         let imp = self.imp();
 
-        // Get or create content stack
-        debug!("MainWindow::show_player() - Getting content stack");
-        let content_stack = if imp.content_stack.borrow().is_none() {
-            info!("MainWindow::show_player() - Creating new content stack");
-            let stack = gtk4::Stack::builder()
-                .transition_type(gtk4::StackTransitionType::SlideLeftRight)
-                .transition_duration(300)
-                .build();
+        // Prepare navigation and get stack
+        self.prepare_navigation();
+        let content_stack = self.ensure_content_stack();
+        content_stack.set_transition_type(gtk4::StackTransitionType::SlideLeftRight);
+        content_stack.set_transition_duration(300);
 
-            // Set the stack as content
-            imp.content_toolbar.set_content(Some(&stack));
-            imp.content_stack.replace(Some(stack.clone()));
-
-            stack
+        // Create or reuse player page
+        let player_page = if let Some(page) = self.imp().player_page.borrow().as_ref() {
+            if content_stack.child_by_name("player").is_none() {
+                content_stack.add_named(page.widget(), Some("player"));
+            }
+            page.clone()
         } else {
-            debug!("MainWindow::show_player() - Using existing content stack");
-            imp.content_stack.borrow().as_ref().unwrap().clone()
+            let page = crate::ui::pages::PlayerPage::new(state.clone());
+            self.imp().player_page.replace(Some(page.clone()));
+            content_stack.add_named(page.widget(), Some("player"));
+            page
         };
 
-        // Always create a new player page to ensure we use the latest backend setting
-        debug!("MainWindow::show_player() - Creating fresh player page");
-
-        // Clear any existing player page first
-        if let Some(existing_page) = imp.player_page.borrow().as_ref() {
-            debug!("MainWindow::show_player() - Removing existing player page from stack");
-            content_stack.remove(existing_page.widget());
-        }
-        imp.player_page.replace(None);
-
-        info!("MainWindow::show_player() - Creating new player page with current backend");
-        let page = crate::ui::pages::PlayerPage::new(state.clone());
-        imp.player_page.replace(Some(page.clone()));
-
-        // Add to content stack
-        debug!("MainWindow::show_player() - Adding player page to content stack");
-        content_stack.add_named(page.widget(), Some("player"));
-        info!("MainWindow::show_player() - Player page added to stack with name 'player'");
-
-        let player_page = page;
-
         // Update the content page title first
-        imp.content_page.set_title(media_item.title());
+        self.imp().content_page.set_title(media_item.title());
         debug!("MainWindow::show_player() - Updated content page title");
 
         // Load the media (but don't block navigation on failure)
@@ -1284,7 +1263,6 @@ impl ReelMainWindow {
             dialog.set_default_response(Some("ok"));
             dialog.present(Some(self));
         }
-
         // Clear any existing back buttons from the main header
         if let Some(old_button) = imp.back_button.borrow().as_ref() {
             imp.content_header.remove(old_button);
@@ -1299,162 +1277,64 @@ impl ReelMainWindow {
         imp.content_toolbar
             .set_top_bar_style(adw::ToolbarStyle::Flat); // Make toolbar flat/hidden
 
-        // Create minimal OSD overlay buttons (back and close)
-        // Add them directly to the player's overlay to avoid duplication
-        let player_widget = player_page.widget();
-        if let Some(first_child) = player_widget.first_child()
-            && let Some(overlay) = first_child.downcast_ref::<gtk4::Overlay>()
-        {
-            // Create a minimal back button
-            let back_button = gtk4::Button::builder()
-                .icon_name("go-previous-symbolic")
-                .tooltip_text("Back")
-                .margin_top(12)
-                .margin_start(12)
-                .build();
-            back_button.add_css_class("osd");
-            back_button.add_css_class("circular");
+        // Configure back/close actions on the player page OSD buttons
+        let window_weak_close = self.downgrade();
+        player_page.set_on_close_clicked(move || {
+            if let Some(window) = window_weak_close.upgrade() {
+                window.close();
+            }
+        });
 
-            // Create a close button
-            let close_button = gtk4::Button::builder()
-                .icon_name("window-close-symbolic")
-                .tooltip_text("Close")
-                .margin_top(12)
-                .margin_end(12)
-                .build();
-            close_button.add_css_class("osd");
-            close_button.add_css_class("circular");
-
-            // Connect button handlers BEFORE adding to containers
-            // Connect close button handler
-            let window_weak_close = self.downgrade();
-            close_button.connect_clicked(move |_| {
-                if let Some(window) = window_weak_close.upgrade() {
-                    window.close();
+        let window_weak = self.downgrade();
+        player_page.set_on_back_clicked(move || {
+            if let Some(window) = window_weak.upgrade() {
+                // Stop the player
+                if let Some(player_page) = window.imp().player_page.borrow().as_ref() {
+                    let player_page = player_page.clone();
+                    glib::spawn_future_local(async move {
+                        player_page.stop().await;
+                    });
                 }
-            });
 
-            // Connect back button handler
-            let window_weak = self.downgrade();
-            back_button.connect_clicked(move |_| {
-                if let Some(window) = window_weak.upgrade() {
-                    // Stop the player
-                    if let Some(player_page) = window.imp().player_page.borrow().as_ref() {
-                        let player_page = player_page.clone();
-                        glib::spawn_future_local(async move {
-                            player_page.stop().await;
-                        });
-                    }
+                // Show header bar again and restore toolbar style
+                window.imp().content_header.set_visible(true);
+                window
+                    .imp()
+                    .content_toolbar
+                    .set_top_bar_style(adw::ToolbarStyle::Raised);
 
-                    // Show header bar again and restore toolbar style
-                    window.imp().content_header.set_visible(true);
-                    window
-                        .imp()
-                        .content_toolbar
-                        .set_top_bar_style(adw::ToolbarStyle::Raised);
+                // Restore window size
+                let (width, height) = *window.imp().saved_window_size.borrow();
+                window.set_default_size(width, height);
 
-                    // Restore window size
-                    let (width, height) = *window.imp().saved_window_size.borrow();
-                    window.set_default_size(width, height);
+                // Restore sidebar
+                if let Some(content) = window.content()
+                    && let Some(split_view) = content.downcast_ref::<adw::NavigationSplitView>()
+                {
+                    split_view.set_collapsed(false);
+                    split_view.set_show_content(true);
+                }
 
-                    // Restore sidebar
-                    if let Some(content) = window.content()
-                        && let Some(split_view) = content.downcast_ref::<adw::NavigationSplitView>()
+                // Navigate back to the previous page from navigation stack
+                let previous_page = window.imp().navigation_stack.borrow_mut().pop();
+                if let Some(page_name) = previous_page {
+                    if let Some(stack) = window.imp().content_stack.borrow().as_ref()
+                        && stack.child_by_name(&page_name).is_some()
                     {
-                        split_view.set_collapsed(false);
-                        split_view.set_show_content(true);
+                        stack.set_visible_child_name(&page_name);
                     }
-
-                    // Navigate back to the previous page from navigation stack
-                    let previous_page = window.imp().navigation_stack.borrow_mut().pop();
-                    if let Some(page_name) = previous_page {
-                        if let Some(stack) = window.imp().content_stack.borrow().as_ref()
-                            && stack.child_by_name(&page_name).is_some()
-                        {
-                            stack.set_visible_child_name(&page_name);
-                        }
-                    } else {
-                        // Fallback if no navigation history
-                        if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
-                            if stack.child_by_name("home").is_some() {
-                                stack.set_visible_child_name("home");
-                            } else if stack.child_by_name("library").is_some() {
-                                stack.set_visible_child_name("library");
-                            }
+                } else {
+                    // Fallback if no navigation history
+                    if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
+                        if stack.child_by_name("home").is_some() {
+                            stack.set_visible_child_name("home");
+                        } else if stack.child_by_name("library").is_some() {
+                            stack.set_visible_child_name("library");
                         }
                     }
                 }
-            });
-
-            // Add back button as separate overlay (top-left)
-            let back_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-            back_box.set_halign(gtk4::Align::Start);
-            back_box.set_valign(gtk4::Align::Start);
-            back_box.append(&back_button);
-            overlay.add_overlay(&back_box);
-
-            // Add close button as separate overlay (top-right)
-            let close_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-            close_box.set_halign(gtk4::Align::End);
-            close_box.set_valign(gtk4::Align::Start);
-            close_box.append(&close_button);
-            overlay.add_overlay(&close_box);
-
-            // Initially hide buttons, show on hover like player controls
-            back_box.set_visible(false);
-            back_box.set_opacity(0.0);
-            close_box.set_visible(false);
-            close_box.set_opacity(0.0);
-
-            // Set up hover detection for both buttons
-            let back_box_weak = back_box.downgrade();
-            let close_box_weak = close_box.downgrade();
-            let hide_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
-            let hover_controller = gtk4::EventControllerMotion::new();
-
-            let hide_timer_clone = hide_timer.clone();
-            hover_controller.connect_motion(move |_, _, _| {
-                // Show both buttons on hover
-                if let Some(back_box) = back_box_weak.upgrade() {
-                    back_box.set_visible(true);
-                    back_box.set_opacity(1.0);
-                }
-                if let Some(close_box) = close_box_weak.upgrade() {
-                    close_box.set_visible(true);
-                    close_box.set_opacity(1.0);
-                }
-
-                // Cancel previous timer
-                if let Some(timer_id) = hide_timer_clone.borrow_mut().take() {
-                    timer_id.remove();
-                }
-
-                // Hide again after same delay as player controls
-                let back_box_inner = back_box_weak.clone();
-                let close_box_inner = close_box_weak.clone();
-                let hide_timer_inner = hide_timer_clone.clone();
-                let timer_id = glib::timeout_add_local(
-                    std::time::Duration::from_secs(PLAYER_CONTROLS_HIDE_DELAY_SECS),
-                    move || {
-                        if let Some(back_box) = back_box_inner.upgrade() {
-                            back_box.set_opacity(0.0);
-                            back_box.set_visible(false);
-                        }
-                        if let Some(close_box) = close_box_inner.upgrade() {
-                            close_box.set_opacity(0.0);
-                            close_box.set_visible(false);
-                        }
-                        hide_timer_inner.borrow_mut().take();
-                        glib::ControlFlow::Break
-                    },
-                );
-                hide_timer_clone.borrow_mut().replace(timer_id);
-            });
-
-            overlay.add_controller(hover_controller);
-
-            // Button handlers already connected above
-        }
+            }
+        });
 
         // Save current window size before changing it
         let (current_width, current_height) = self.default_size();

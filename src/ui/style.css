@@ -309,47 +309,41 @@ preferencesgroup {
 
 .episode-card {
   border-radius: 10px;
-  background: @card_bg_color;
-  transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
-  overflow: hidden;
-  border: 1px solid alpha(@borders, 0.05);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08),
-              0 1px 2px rgba(0, 0, 0, 0.12);
+  background: transparent;
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: visible;
+  border: none;
+  box-shadow: none;
 }
 
 .episode-card:hover {
-  transform: translateY(-3px) scale(1.01);
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15),
-              0 4px 10px rgba(0, 0, 0, 0.12);
-  border-color: alpha(@borders, 0.08);
+  transform: translateY(-2px);
 }
 
 /* Highlight the next unwatched episode */
 .episode-card.next-unwatched {
-  border: 1px solid alpha(@accent_color, 0.5);
-  box-shadow: 0 0 8px alpha(@accent_color, 0.4),
-              0 0 16px alpha(@accent_color, 0.2),
-              0 2px 4px rgba(0, 0, 0, 0.1);
+  outline: 1px solid alpha(@accent_color, 0.45);
+  outline-offset: 6px;
+  border-radius: 14px;
 }
 
 .episode-card.next-unwatched:hover {
-  transform: translateY(-3px) scale(1.02);
-  box-shadow: 0 0 12px alpha(@accent_color, 0.5),
-              0 0 20px alpha(@accent_color, 0.25),
-              0 10px 20px rgba(0, 0, 0, 0.15);
-  border-color: alpha(@accent_color, 0.7);
+  transform: translateY(-2px) scale(1.01);
 }
 
 /* Episode thumbnail with rounded corners and subtle effects */
 .episode-thumbnail {
-  border-radius: 8px 8px 0 0;
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-radius: 12px;
+  background: transparent;
   overflow: hidden;
   position: relative;
+  filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.35))
+          drop-shadow(0 2px 6px rgba(0, 0, 0, 0.25));
+  transition: filter 200ms ease, transform 200ms ease;
 }
 
 .episode-thumbnail picture {
-  border-radius: 8px 8px 0 0;
+  border-radius: 12px;
 }
 
 /* Subtle vignette for depth */
@@ -357,11 +351,17 @@ preferencesgroup {
   content: '';
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at center,
-              transparent 60%,
-              rgba(0, 0, 0, 0.1) 100%);
+  background: radial-gradient(ellipse at center,
+              rgba(0, 0, 0, 0.0) 55%,
+              rgba(0, 0, 0, 0.14) 100%);
   pointer-events: none;
-  border-radius: 8px 8px 0 0;
+  border-radius: 12px;
+}
+
+/* Elevate thumbnail on hover */
+.episode-card:hover .episode-thumbnail {
+  filter: drop-shadow(0 16px 38px rgba(0, 0, 0, 0.45))
+          drop-shadow(0 6px 14px rgba(0, 0, 0, 0.3));
 }
 
 .episode-badge {
@@ -593,5 +593,4 @@ preferencesgroup {
 .episodes_box > * {
   margin: 4px;
 }
-
 

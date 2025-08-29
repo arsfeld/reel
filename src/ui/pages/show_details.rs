@@ -360,19 +360,26 @@ impl ShowDetailsPage {
 
         if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
             let seasons = viewmodel.seasons().get().await;
+            tracing::info!("ShowDetailsPage: seasons updated: {:?}", seasons);
 
             if !seasons.is_empty() {
                 // Update season dropdown with available seasons
                 let season_strings: Vec<String> =
                     seasons.iter().map(|s| format!("Season {}", s)).collect();
 
-                let string_list = gtk4::StringList::new(
-                    &season_strings
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>(),
-                );
+                // Build the StringList incrementally to avoid any transient lifetime issues
+                let string_list = gtk4::StringList::new(&[]);
+                for s in &season_strings {
+                    string_list.append(s);
+                }
                 imp.season_dropdown.set_model(Some(&string_list));
+                // Expression is optional for StringList; DropDown can display strings directly
+                // Clear any previous expression to use default string display
+                imp.season_dropdown.set_expression(gtk4::Expression::NONE);
+                // Ensure it has a reasonable width so text is visible
+                if imp.season_dropdown.width_request() <= 0 {
+                    imp.season_dropdown.set_width_request(140);
+                }
 
                 // Show the seasons box
                 imp.seasons_box.set_visible(true);
@@ -381,9 +388,42 @@ impl ShowDetailsPage {
 
                 // Select the first season by default
                 imp.season_dropdown.set_selected(0);
+                tracing::info!(
+                    "ShowDetailsPage: season dropdown model set ({} items), selected index 0",
+                    season_strings.len()
+                );
+
+                // Log current selection and model size just after updates
+                let selected_now = imp.season_dropdown.selected();
+                let model_items = imp
+                    .season_dropdown
+                    .model()
+                    .map(|m| m.n_items())
+                    .unwrap_or(0);
+                tracing::info!(
+                    "ShowDetailsPage: dropdown immediate state -> selected={} items={}",
+                    selected_now,
+                    model_items
+                );
+
+                // Some GTK versions briefly reset selection after setting model/expression.
+                // Apply a short delayed re-select to ensure we don't end up with (None).
+                let dropdown = imp.season_dropdown.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(20), move || {
+                    if dropdown.selected() == u32::MAX {
+                        dropdown.set_selected(0);
+                        tracing::info!("ShowDetailsPage: dropdown re-selected index 0 after delay");
+                    } else {
+                        tracing::info!(
+                            "ShowDetailsPage: dropdown selection persisted at {}",
+                            dropdown.selected()
+                        );
+                    }
+                });
             } else {
                 // Hide season selector if no seasons
                 imp.seasons_box.set_visible(false);
+                tracing::info!("ShowDetailsPage: seasons empty; hiding selector");
             }
         }
     }
@@ -670,8 +710,8 @@ impl ShowDetailsPage {
     fn add_episode_card(&self, episode: Episode, should_highlight: bool) {
         let imp = self.imp();
 
-        // Create episode card with enhanced styling
-        let mut card_classes = vec!["card", "episode-card", "flat"];
+        // Create episode card with enhanced styling (no default card background)
+        let mut card_classes = vec!["episode-card", "flat"];
         if should_highlight {
             card_classes.push("next-unwatched");
         }
@@ -792,15 +832,33 @@ impl ShowDetailsPage {
             .margin_end(16)
             .build();
 
-        // Episode title
+        // Episode title (fallback to SxE if missing)
+        let title_text = if episode.title.trim().is_empty() {
+            format!("S{}E{}", episode.season_number, episode.episode_number)
+        } else {
+            episode.title.clone()
+        };
         let title_label = gtk4::Label::builder()
-            .label(&episode.title)
+            .label(&title_text)
             .css_classes(vec!["heading"])
             .xalign(0.0)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
             .single_line_mode(true)
             .build();
         info_box.append(&title_label);
+
+        // Episode description (overview), if available
+        if let Some(overview) = &episode.overview {
+            if !overview.trim().is_empty() {
+                let desc_label = gtk4::Label::builder()
+                    .label(overview)
+                    .wrap(true)
+                    .xalign(0.0)
+                    .css_classes(vec!["dim-label"])
+                    .build();
+                info_box.append(&desc_label);
+            }
+        }
 
         // Episode duration and air date
         let metadata_box = gtk4::Box::builder()
@@ -849,11 +907,41 @@ impl ShowDetailsPage {
     // Removed - now handled by on_watched_changed via property binding
 
     async fn on_season_changed(&self, index: u32) {
-        if let Some(show) = self.imp().current_show.borrow().as_ref()
-            && let Some(season) = show.seasons.get(index as usize)
-        {
-            self.load_episodes(season.season_number).await;
-            // TODO: Implement update_watched_button if needed
+        let imp = self.imp();
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            let seasons = viewmodel.seasons().get().await;
+            tracing::info!(
+                "ShowDetailsPage: on_season_changed index={} seasons={:?}",
+                index,
+                seasons
+            );
+            if let Some(season_num) = seasons.get(index as usize) {
+                tracing::info!(
+                    "ShowDetailsPage: loading episodes for season {} (from ViewModel)",
+                    season_num
+                );
+                self.load_episodes(*season_num as u32).await;
+            } else if let Some(show) = imp.current_show.borrow().as_ref()
+                && let Some(season) = show.seasons.get(index as usize)
+            {
+                tracing::info!(
+                    "ShowDetailsPage: loading episodes for season {} (from metadata fallback)",
+                    season.season_number
+                );
+                // Fallback to metadata seasons if DB-derived seasons are unavailable
+                self.load_episodes(season.season_number).await;
+            } else {
+                tracing::warn!(
+                    "ShowDetailsPage: on_season_changed: no season found for index {} (vm len: {}, metadata len: {})",
+                    index,
+                    seasons.len(),
+                    imp.current_show
+                        .borrow()
+                        .as_ref()
+                        .map(|s| s.seasons.len())
+                        .unwrap_or(0)
+                );
+            }
         }
     }
 

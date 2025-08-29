@@ -1,1 +1,1 @@
-// Widget modules will be added here as needed
+pub mod player_overlay;

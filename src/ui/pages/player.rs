@@ -15,6 +15,7 @@ use crate::models::{Episode, MediaItem, Movie};
 use crate::player::Player;
 use crate::state::AppState;
 use crate::ui::viewmodels::player_view_model::PlayerViewModel;
+use crate::ui::widgets::player_overlay::ReelPlayerOverlayHost;
 
 #[derive(Clone)]
 pub struct PlayerPage {
@@ -23,6 +24,11 @@ pub struct PlayerPage {
     controls: PlayerControls,
     overlay: gtk4::Overlay,
     video_container: gtk4::Box,
+    controls_container: gtk4::Box,
+    top_left_osd: gtk4::Box,
+    top_right_osd: gtk4::Box,
+    back_button: gtk4::Button,
+    close_button: gtk4::Button,
     current_stream_info: Arc<RwLock<Option<crate::models::StreamInfo>>>,
     current_media_item: Arc<RwLock<Option<MediaItem>>>,
     state: Arc<AppState>,
@@ -56,6 +62,45 @@ impl std::fmt::Debug for PlayerPage {
 }
 
 impl PlayerPage {
+    async fn seek_with_retries(&self, position: Duration) {
+        use std::time::Duration as StdDuration;
+        let max_attempts = 8;
+        let mut attempt = 0;
+        // Backoff sequence in ms
+        let delays = [150, 250, 400, 600, 800, 1000, 1200, 1500];
+
+        loop {
+            attempt += 1;
+            let player = self.player.read().await;
+            match player.seek(position).await {
+                Ok(_) => {
+                    info!(
+                        "Seek successful on attempt {} at position {}s",
+                        attempt,
+                        position.as_secs()
+                    );
+                    break;
+                }
+                Err(e) => {
+                    if attempt >= max_attempts {
+                        error!("Failed to seek after {} attempts: {}", attempt, e);
+                        break;
+                    } else {
+                        debug!(
+                            "Seek attempt {} failed: {}. Retrying in {}ms",
+                            attempt,
+                            e,
+                            delays[attempt - 1]
+                        );
+                        drop(player);
+                        glib::timeout_future(StdDuration::from_millis(delays[attempt - 1] as u64))
+                            .await;
+                        continue;
+                    }
+                }
+            }
+        }
+    }
     pub fn new(state: Arc<AppState>) -> Self {
         info!("PlayerPage::new() - Creating new player page");
         // Create main container
@@ -65,19 +110,15 @@ impl PlayerPage {
         widget.add_css_class("player-page");
         debug!("PlayerPage::new() - Created main widget container");
 
-        // Create overlay for video and controls
-        let overlay = gtk4::Overlay::new();
-        overlay.set_vexpand(true);
-        overlay.set_hexpand(true);
-        overlay.set_can_focus(true);
-        overlay.set_focusable(true);
-
-        // Video container
-        let video_container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-        video_container.set_vexpand(true);
-        video_container.set_hexpand(true);
-        video_container.add_css_class("video-container");
-        overlay.set_child(Some(&video_container));
+        // Create host widget from CompositeTemplate and fetch children
+        let host = ReelPlayerOverlayHost::new();
+        let overlay = host.overlay().clone();
+        let video_container = host.video_container().clone();
+        let controls_container = host.controls_container().clone();
+        let top_left_osd = host.top_left_osd().clone();
+        let top_right_osd = host.top_right_osd().clone();
+        let back_button = host.back_button().clone();
+        let close_button = host.close_button().clone();
 
         // Create player based on config from AppState
         info!("PlayerPage::new() - Creating player");
@@ -98,88 +139,15 @@ impl PlayerPage {
         // Create inhibit cookie that will be shared with controls
         let inhibit_cookie = Arc::new(RwLock::new(None));
 
-        // Create skip intro button (initially hidden)
-        let skip_intro_button = gtk4::Button::builder()
-            .label("Skip Intro")
-            .visible(false)
-            .halign(gtk4::Align::End)
-            .valign(gtk4::Align::End)
-            .margin_bottom(20)
-            .margin_end(40)
-            .build();
-        skip_intro_button.add_css_class("osd");
-        skip_intro_button.add_css_class("pill");
-        overlay.add_overlay(&skip_intro_button);
+        // Grab overlay elements from blueprint
+        let skip_intro_button = host.skip_intro_button().clone();
+        let skip_credits_button = host.skip_credits_button().clone();
+        let auto_play_overlay = host.auto_play_overlay().clone();
+        let pip_container = host.pip_container().clone();
+        let play_now_button = host.play_now_button().clone();
+        let cancel_button = host.cancel_button().clone();
 
-        // Create skip credits button (initially hidden)
-        let skip_credits_button = gtk4::Button::builder()
-            .label("Skip Credits")
-            .visible(false)
-            .halign(gtk4::Align::End)
-            .valign(gtk4::Align::End)
-            .margin_bottom(20)
-            .margin_end(40)
-            .build();
-        skip_credits_button.add_css_class("osd");
-        skip_credits_button.add_css_class("pill");
-        overlay.add_overlay(&skip_credits_button);
-
-        // Create auto-play overlay (initially hidden)
-        let auto_play_overlay = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
-            .spacing(20)
-            .visible(false)
-            .halign(gtk4::Align::Center)
-            .valign(gtk4::Align::Center)
-            .build();
-        auto_play_overlay.add_css_class("auto-play-overlay");
-
-        // PiP container for current episode
-        let pip_container = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
-            .width_request(320)
-            .height_request(180)
-            .build();
-        pip_container.add_css_class("pip-container");
-
-        // Next episode info container
-        let next_episode_container = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
-            .spacing(10)
-            .width_request(400)
-            .build();
-        next_episode_container.add_css_class("next-episode-info");
-
-        let next_up_label = gtk4::Label::builder().label("Up Next").xalign(0.0).build();
-        next_up_label.add_css_class("title-2");
-        next_episode_container.append(&next_up_label);
-
-        let next_episode_title = gtk4::Label::builder()
-            .label("")
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        next_episode_title.add_css_class("title-1");
-        next_episode_container.append(&next_episode_title);
-
-        let countdown_label = gtk4::Label::builder().label("").xalign(0.0).build();
-        countdown_label.add_css_class("dim-label");
-        next_episode_container.append(&countdown_label);
-
-        let button_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
-            .spacing(10)
-            .margin_top(20)
-            .build();
-
-        let play_now_button = gtk4::Button::builder().label("Play Now").build();
-        play_now_button.add_css_class("suggested-action");
-        button_box.append(&play_now_button);
-
-        let cancel_button = gtk4::Button::builder().label("Cancel").build();
-        button_box.append(&cancel_button);
-
-        // Wire up the buttons - for now just hide overlay and move video back
+        // Wire up auto-play actions to move video back
         let auto_play_overlay_for_play = auto_play_overlay.clone();
         let pip_for_play = pip_container.clone();
         let video_for_play = video_container.clone();
@@ -187,15 +155,11 @@ impl PlayerPage {
             info!("Play Now clicked - would load next episode");
             auto_play_overlay_for_play.set_visible(false);
 
-            // Move video back from PiP
             if let Some(video_widget) = pip_for_play.first_child() {
                 pip_for_play.remove(&video_widget);
-                video_widget.set_size_request(-1, -1); // Reset size
+                video_widget.set_size_request(-1, -1);
                 video_for_play.append(&video_widget);
             }
-
-            // TODO: The actual next episode loading will be implemented
-            // through a method call on the PlayerPage instance
         });
 
         let auto_play_overlay_for_cancel = auto_play_overlay.clone();
@@ -205,82 +169,21 @@ impl PlayerPage {
             info!("Cancel auto-play clicked");
             auto_play_overlay_for_cancel.set_visible(false);
 
-            // Move video back from PiP
             if let Some(video_widget) = pip_for_cancel.first_child() {
                 pip_for_cancel.remove(&video_widget);
-                video_widget.set_size_request(-1, -1); // Reset size
+                video_widget.set_size_request(-1, -1);
                 video_for_cancel.append(&video_widget);
             }
         });
 
-        next_episode_container.append(&button_box);
+        // Loading and error overlays from blueprint
+        let loading_overlay = host.loading_overlay().clone();
+        let loading_spinner = host.loading_spinner().clone();
+        let loading_label = host.loading_label().clone();
 
-        auto_play_overlay.append(&pip_container);
-        auto_play_overlay.append(&next_episode_container);
-        overlay.add_overlay(&auto_play_overlay);
-
-        // Create loading overlay
-        let loading_overlay = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
-            .spacing(20)
-            .visible(false)
-            .halign(gtk4::Align::Center)
-            .valign(gtk4::Align::Center)
-            .build();
-        loading_overlay.add_css_class("osd");
-        loading_overlay.add_css_class("loading-overlay");
-
-        let loading_spinner = gtk4::Spinner::builder()
-            .spinning(true)
-            .width_request(48)
-            .height_request(48)
-            .build();
-        loading_overlay.append(&loading_spinner);
-
-        let loading_label = gtk4::Label::builder().label("Loading media...").build();
-        loading_label.add_css_class("title-2");
-        loading_overlay.append(&loading_label);
-        overlay.add_overlay(&loading_overlay);
-
-        // Create error overlay
-        let error_overlay = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
-            .spacing(20)
-            .visible(false)
-            .halign(gtk4::Align::Center)
-            .valign(gtk4::Align::Center)
-            .margin_start(40)
-            .margin_end(40)
-            .build();
-        error_overlay.add_css_class("osd");
-        error_overlay.add_css_class("error-overlay");
-
-        let error_icon = gtk4::Image::builder()
-            .icon_name("dialog-error-symbolic")
-            .pixel_size(48)
-            .build();
-        error_overlay.append(&error_icon);
-
-        let error_label = gtk4::Label::builder()
-            .label("Failed to load media")
-            .wrap(true)
-            .max_width_chars(50)
-            .build();
-        error_label.add_css_class("title-2");
-        error_overlay.append(&error_label);
-
-        let retry_button = gtk4::Button::builder().label("Go Back").build();
-        retry_button.add_css_class("suggested-action");
-        error_overlay.append(&retry_button);
-
-        let hint_label = gtk4::Label::builder()
-            .label("Please check your server connection and try again")
-            .wrap(true)
-            .build();
-        hint_label.add_css_class("dim-label");
-        error_overlay.append(&hint_label);
-
-        overlay.add_overlay(&error_overlay);
+        let error_overlay = host.error_overlay().clone();
+        let error_label = host.error_label().clone();
+        let retry_button = host.retry_button().clone();
 
         // Connect retry button to go back to the previous page
         let error_overlay_for_retry = error_overlay.clone();
@@ -296,6 +199,24 @@ impl PlayerPage {
             }
         });
 
+        // Initialize PlayerViewModel with app state and event bus (create early so controls can use it)
+        let data_service = state.data_service.clone();
+        let view_model = Arc::new(PlayerViewModel::new(
+            data_service,
+            state.clone(),
+            state.event_bus.clone(),
+        ));
+
+        // Initialize ViewModel subscriptions
+        glib::spawn_future_local({
+            let vm = view_model.clone();
+            let event_bus = state.event_bus.clone();
+            async move {
+                use crate::ui::viewmodels::ViewModel;
+                vm.initialize(event_bus).await;
+            }
+        });
+
         // Create controls (backend and media item will be set when loading media)
         let controls = PlayerControls::new(
             player.clone(),
@@ -303,22 +224,41 @@ impl PlayerPage {
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
         );
-        controls.widget.set_valign(gtk4::Align::End);
-        controls.widget.set_margin_bottom(20);
-        // Hide controls by default - they'll show on mouse movement
-        controls.widget.set_visible(false);
-        overlay.add_overlay(&controls.widget);
+        // Inject controls widget into blueprint container
+        controls_container.append(&controls.widget);
 
-        // Set up hover detection for showing/hiding controls with fade animation
-        let controls_widget = controls.widget.clone();
+        // Set up hover detection for showing/hiding OSD (controls + corner buttons)
+        let controls_container_for_hover = controls_container.clone();
+        let top_left_osd_for_hover = top_left_osd.clone();
+        let top_right_osd_for_hover = top_right_osd.clone();
         let hide_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
         let hover_controller = gtk4::EventControllerMotion::new();
+        let widget_for_motion = widget.clone();
 
         let hide_timer_clone = hide_timer.clone();
         hover_controller.connect_motion(move |_, _, _| {
-            // Fade in controls quickly (200ms)
-            controls_widget.set_visible(true);
-            controls_widget.set_opacity(1.0);
+            // Fade in OSD quickly (200ms)
+            controls_container_for_hover.set_visible(true);
+            controls_container_for_hover.set_opacity(1.0);
+            top_left_osd_for_hover.set_visible(true);
+            top_left_osd_for_hover.set_opacity(1.0);
+            top_right_osd_for_hover.set_visible(true);
+            top_right_osd_for_hover.set_opacity(1.0);
+
+            // Show cursor on movement while in fullscreen
+            if let Some(window) = widget_for_motion
+                .root()
+                .and_then(|r| r.downcast::<gtk4::Window>().ok())
+            {
+                if window.is_fullscreen() {
+                    // Restore default cursor
+                    if let Some(cursor) = gdk::Cursor::from_name("default", None) {
+                        widget_for_motion.set_cursor(Some(&cursor));
+                    } else {
+                        widget_for_motion.set_cursor(None);
+                    }
+                }
+            }
 
             // Cancel previous timer if exists
             if let Some(timer_id) = hide_timer_clone.borrow_mut().take() {
@@ -326,14 +266,21 @@ impl PlayerPage {
             }
 
             // Hide again after configured delay of no movement
-            let controls_widget_inner = controls_widget.clone();
+            let controls_container_inner = controls_container_for_hover.clone();
+            let top_left_osd_inner = top_left_osd_for_hover.clone();
+            let top_right_osd_inner = top_right_osd_for_hover.clone();
             let hide_timer_inner = hide_timer_clone.clone();
+            // Clone widget reference for the timer closure to avoid moving outer capture
+            let widget_for_motion_for_timer = widget_for_motion.clone();
             let timer_id = glib::timeout_add_local(
                 std::time::Duration::from_secs(PLAYER_CONTROLS_HIDE_DELAY_SECS),
                 move || {
                     // Fade out animation
                     let fade_start_time = std::time::Instant::now();
-                    let controls_for_fade = controls_widget_inner.clone();
+                    let controls_for_fade = controls_container_inner.clone();
+                    let top_left_for_fade = top_left_osd_inner.clone();
+                    let top_right_for_fade = top_right_osd_inner.clone();
+                    let widget_for_fade = widget_for_motion_for_timer.clone();
 
                     glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
                         let elapsed = fade_start_time.elapsed().as_millis() as f64;
@@ -342,10 +289,29 @@ impl PlayerPage {
                         if elapsed >= fade_duration {
                             controls_for_fade.set_opacity(0.0);
                             controls_for_fade.set_visible(false);
+                            top_left_for_fade.set_opacity(0.0);
+                            top_left_for_fade.set_visible(false);
+                            top_right_for_fade.set_opacity(0.0);
+                            top_right_for_fade.set_visible(false);
+                            // Hide cursor when controls hidden and in fullscreen
+                            if let Some(window) = widget_for_fade
+                                .root()
+                                .and_then(|r| r.downcast::<gtk4::Window>().ok())
+                                && window.is_fullscreen()
+                            {
+                                if let Ok(texture) =
+                                    gdk::Texture::from_bytes(&glib::Bytes::from_static(&[0u8; 64]))
+                                {
+                                    let cursor = gdk::Cursor::from_texture(&texture, 0, 0, None);
+                                    widget_for_fade.set_cursor(Some(&cursor));
+                                }
+                            }
                             glib::ControlFlow::Break
                         } else {
                             let opacity = 1.0 - (elapsed / fade_duration);
                             controls_for_fade.set_opacity(opacity);
+                            top_left_for_fade.set_opacity(opacity);
+                            top_right_for_fade.set_opacity(opacity);
                             glib::ControlFlow::Continue
                         }
                     });
@@ -533,23 +499,65 @@ impl PlayerPage {
         // Add to video_container, not overlay - this way controls remain clickable
         video_container.add_controller(drag_gesture);
 
-        widget.append(&overlay);
+        // Use the host as the visual widget for the page
+        widget.append(&host);
 
         info!("PlayerPage::new() - Player page initialization complete");
 
-        // Initialize PlayerViewModel with data service from state
-        let data_service = state.data_service.clone();
-        let view_model = Arc::new(PlayerViewModel::new(data_service));
+        // Reactive UI bindings to ViewModel properties
 
-        // Initialize ViewModel with EventBus
-        glib::spawn_future_local({
+        // is_loading -> show/hide loading overlay
+        {
+            use crate::ui::viewmodels::ViewModel;
+            let mut sub = view_model
+                .subscribe_to_property("is_loading")
+                .unwrap_or_else(|| view_model.is_loading().subscribe());
+            let loading_overlay = loading_overlay.clone();
+            let error_overlay = error_overlay.clone();
+            let controls_container = controls_container.clone();
             let vm = view_model.clone();
-            let event_bus = state.event_bus.clone();
-            async move {
-                use crate::ui::viewmodels::ViewModel;
-                vm.initialize(event_bus).await;
-            }
-        });
+            glib::spawn_future_local(async move {
+                while sub.wait_for_change().await {
+                    let is_loading = vm.is_loading().get().await;
+                    if is_loading {
+                        loading_overlay.set_visible(true);
+                        error_overlay.set_visible(false);
+                        controls_container.set_visible(false);
+                    } else {
+                        loading_overlay.set_visible(false);
+                    }
+                }
+            });
+        }
+
+        // error -> show error overlay
+        {
+            use crate::ui::viewmodels::ViewModel;
+            let mut sub = view_model
+                .subscribe_to_property("error")
+                .unwrap_or_else(|| view_model.error().subscribe());
+            let error_overlay = error_overlay.clone();
+            let error_label = error_label.clone();
+            let loading_overlay = loading_overlay.clone();
+            let controls_container = controls_container.clone();
+            let vm = view_model.clone();
+            glib::spawn_future_local(async move {
+                while sub.wait_for_change().await {
+                    if let Some(msg) = vm.error().get().await {
+                        error_label.set_text(&msg);
+                        error_overlay.set_visible(true);
+                        loading_overlay.set_visible(false);
+                        controls_container.set_visible(false);
+                    } else {
+                        error_overlay.set_visible(false);
+                    }
+                }
+            });
+        }
+
+        // Set up controls event handlers and position timer now that VM is available
+        controls.setup_handlers(view_model.clone());
+        controls.start_position_timer();
 
         Self {
             widget,
@@ -557,6 +565,11 @@ impl PlayerPage {
             controls,
             overlay,
             video_container,
+            controls_container,
+            top_left_osd,
+            top_right_osd,
+            back_button,
+            close_button,
             current_stream_info: Arc::new(RwLock::new(None)),
             current_media_item: Arc::new(RwLock::new(None)),
             state,
@@ -585,7 +598,7 @@ impl PlayerPage {
         let loading_label = self.loading_label.clone();
         let loading_overlay = self.loading_overlay.clone();
         let error_overlay = self.error_overlay.clone();
-        let controls = self.controls.widget.clone();
+        let controls = self.controls_container.clone();
         let msg = message.to_string();
 
         glib::MainContext::default().spawn_local(async move {
@@ -600,7 +613,7 @@ impl PlayerPage {
         let error_label = self.error_label.clone();
         let error_overlay = self.error_overlay.clone();
         let loading_overlay = self.loading_overlay.clone();
-        let controls = self.controls.widget.clone();
+        let controls = self.controls_container.clone();
         let msg = message.to_string();
 
         glib::MainContext::default().spawn_local(async move {
@@ -614,7 +627,7 @@ impl PlayerPage {
     fn hide_overlays(&self) {
         let loading_overlay = self.loading_overlay.clone();
         let error_overlay = self.error_overlay.clone();
-        let controls = self.controls.widget.clone();
+        let controls = self.controls_container.clone();
 
         glib::MainContext::default().spawn_local(async move {
             loading_overlay.set_visible(false);
@@ -653,41 +666,25 @@ impl PlayerPage {
             // Update controls' backend reference
             *self.controls.backend.write().await = Some(backend.clone());
 
-            // Update loading message
+            // Use ViewModel to resolve stream URL and markers
             self.show_loading_state("Fetching stream URL...");
-
-            // Get stream URL from backend with timeout
-            debug!("PlayerPage::load_media() - Requesting stream URL from backend");
-            let stream_result = tokio::time::timeout(
-                Duration::from_secs(30),
-                backend.get_stream_url(media_item.id()),
-            )
-            .await;
-
-            let stream_info = match stream_result {
-                Ok(Ok(info)) => info,
-                Ok(Err(e)) => {
-                    error!("Failed to get stream URL: {}", e);
-                    let error_msg = if e.to_string().contains("401")
-                        || e.to_string().contains("Unauthorized")
-                    {
-                        "Authentication failed. Please re-add your Plex account."
-                    } else if e.to_string().contains("404") {
-                        "Media not found on server. It may have been deleted."
-                    } else if e.to_string().contains("connection")
-                        || e.to_string().contains("timed out")
-                    {
-                        "Cannot connect to Plex server. Check if the server is running and accessible."
-                    } else {
-                        "Failed to load media from server"
-                    };
-                    self.show_error_state(error_msg);
-                    return Err(e);
+            self.view_model.set_media_item(media_item.clone()).await;
+            if let Err(e) = self.view_model.load_stream_and_metadata().await {
+                // Prefer VM error message if present
+                if let Some(msg) = self.view_model.error().get().await {
+                    self.show_error_state(&msg);
+                } else {
+                    self.show_error_state("Failed to load media from server");
                 }
-                Err(_) => {
-                    let err = anyhow::anyhow!("Connection timeout");
-                    error!("Connection timeout while fetching stream URL");
-                    self.show_error_state("Connection timeout. The server is not responding.");
+                return Err(e);
+            }
+            // Retrieve stream info from VM
+            let stream_info = match self.view_model.stream_info().get().await {
+                Some(info) => info,
+                None => {
+                    let err = anyhow::anyhow!("Stream information unavailable");
+                    error!("PlayerPage::load_media() - VM did not provide stream info");
+                    self.show_error_state("Failed to load media stream");
                     return Err(err);
                 }
             };
@@ -768,18 +765,7 @@ impl PlayerPage {
                 }
             }
 
-            // Check if we should resume from a previous position
-            let resume_position = media_item.playback_position();
-            if let Some(position) = resume_position {
-                // Only resume if position is more than 10 seconds and less than 90% of duration
-                if position > Duration::from_secs(10) {
-                    info!("Resuming playback from position: {:?}", position);
-                    // Seek to the saved position
-                    if let Err(e) = player.seek(position).await {
-                        error!("Failed to seek to resume position: {}", e);
-                    }
-                }
-            }
+            // Do not seek yet; MPV may not have loaded the file. We'll retry after playback starts.
 
             // Update controls with media info and stream options
             debug!("PlayerPage::load_media() - Updating controls with media info");
@@ -799,7 +785,7 @@ impl PlayerPage {
             // Start position sync timer
             self.start_position_sync_timer().await;
 
-            // Resume from saved position if available
+            // Resume from saved position with retries for MPV/slow backends
             let resume_position = match media_item {
                 MediaItem::Movie(movie) => movie.playback_position,
                 MediaItem::Episode(episode) => episode.playback_position,
@@ -808,19 +794,11 @@ impl PlayerPage {
 
             if let Some(position) = resume_position {
                 info!(
-                    "PlayerPage::load_media() - Resuming from saved position: {:?} ({}s)",
+                    "PlayerPage::load_media() - Resuming from saved position: {:?} ({}s) with retries",
                     position,
                     position.as_secs()
                 );
-
-                // Add a small delay to ensure the player is ready
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-                if let Err(e) = player.seek(position).await {
-                    error!("Failed to seek to saved position: {}", e);
-                } else {
-                    info!("Successfully resumed from position: {:?}", position);
-                }
+                self.seek_with_retries(position).await;
             } else {
                 debug!("PlayerPage::load_media() - No saved position, starting from beginning");
             }
@@ -833,8 +811,45 @@ impl PlayerPage {
             // Add the hover controller after a delay to prevent initial control flash
             let overlay = self.overlay.clone();
             let hover_controller = self.hover_controller.clone();
+            // Clone fields needed for initial idle auto-hide
+            let controls_for_idle_init = self.controls_container.clone();
+            let tl_for_idle_init = self.top_left_osd.clone();
+            let tr_for_idle_init = self.top_right_osd.clone();
+            let widget_for_idle_init = self.widget.clone();
             glib::timeout_add_local(std::time::Duration::from_millis(1000), move || {
                 overlay.add_controller(hover_controller.as_ref().clone());
+                // Schedule an initial auto-hide if user is idle after entering playback/fullscreen
+                let controls = controls_for_idle_init.clone();
+                let tl = tl_for_idle_init.clone();
+                let tr = tr_for_idle_init.clone();
+                let widget_for_idle = widget_for_idle_init.clone();
+                glib::timeout_add_local(
+                    std::time::Duration::from_secs(PLAYER_CONTROLS_HIDE_DELAY_SECS),
+                    move || {
+                        // Only hide if currently fullscreen to avoid confusing windowed mode
+                        if let Some(window) = widget_for_idle
+                            .root()
+                            .and_then(|r| r.downcast::<gtk4::Window>().ok())
+                            && window.is_fullscreen()
+                        {
+                            controls.set_opacity(0.0);
+                            controls.set_visible(false);
+                            tl.set_opacity(0.0);
+                            tl.set_visible(false);
+                            tr.set_opacity(0.0);
+                            tr.set_visible(false);
+
+                            // Hide cursor on initial idle
+                            if let Ok(texture) =
+                                gdk::Texture::from_bytes(&glib::Bytes::from_static(&[0u8; 64]))
+                            {
+                                let cursor = gdk::Cursor::from_texture(&texture, 0, 0, None);
+                                widget_for_idle.set_cursor(Some(&cursor));
+                            }
+                        }
+                        glib::ControlFlow::Break
+                    },
+                );
                 glib::ControlFlow::Break
             });
 
@@ -858,59 +873,27 @@ impl PlayerPage {
             // Start monitoring for playback completion
             self.monitor_playback_completion(backend_id.to_string(), backend.clone());
 
-            // Fetch markers and setup skip handlers for both movies and episodes
+            // Setup skip handlers using markers from ViewModel (already fetched)
             match media_item.clone() {
                 MediaItem::Episode(mut episode) => {
-                    // Try to fetch markers from the backend
-                    match backend.fetch_media_markers(&episode.id).await {
-                        Ok((intro, credits)) => {
-                            episode.intro_marker = intro;
-                            episode.credits_marker = credits;
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to fetch markers for episode '{}': {}",
-                                episode.id, e
-                            );
-                        }
-                    }
+                    let (intro, credits) = self.view_model.markers().get().await;
+                    episode.intro_marker = intro;
+                    episode.credits_marker = credits;
 
                     self.setup_episode_features(episode);
                 }
                 MediaItem::Movie(mut movie) => {
-                    info!(
-                        "Loading movie '{}' (ID: {}), fetching markers...",
-                        movie.title, movie.id
-                    );
-                    // Try to fetch markers from the backend
-                    match backend.fetch_media_markers(&movie.id).await {
-                        Ok((intro, credits)) => {
-                            if intro.is_some() || credits.is_some() {
-                                info!("Successfully fetched markers for movie '{}':", movie.title);
-                                if let Some(ref intro_marker) = intro {
-                                    info!(
-                                        "  - Intro marker: {:?}s to {:?}s",
-                                        intro_marker.start_time.as_secs_f64(),
-                                        intro_marker.end_time.as_secs_f64()
-                                    );
-                                }
-                                if let Some(ref credits_marker) = credits {
-                                    info!(
-                                        "  - Credits marker: {:?}s to {:?}s",
-                                        credits_marker.start_time.as_secs_f64(),
-                                        credits_marker.end_time.as_secs_f64()
-                                    );
-                                }
-                            } else {
-                                info!("No markers found for movie '{}'", movie.title);
-                            }
-                            movie.intro_marker = intro;
-                            movie.credits_marker = credits;
-                        }
-                        Err(e) => {
-                            warn!("Failed to fetch markers for movie '{}': {}", movie.id, e);
-                        }
+                    let (intro, credits) = self.view_model.markers().get().await;
+                    if intro.is_some() || credits.is_some() {
+                        info!(
+                            "Markers for movie '{}': intro={:?} credits={:?}",
+                            movie.title, intro, credits
+                        );
+                    } else {
+                        info!("No markers found for movie '{}'", movie.title);
                     }
+                    movie.intro_marker = intro;
+                    movie.credits_marker = credits;
 
                     self.setup_movie_features(movie);
                 }
@@ -932,6 +915,14 @@ impl PlayerPage {
 
     pub fn widget(&self) -> &gtk4::Box {
         &self.widget
+    }
+
+    pub fn set_on_back_clicked<F: Fn() + 'static>(&self, f: F) {
+        self.back_button.connect_clicked(move |_| f());
+    }
+
+    pub fn set_on_close_clicked<F: Fn() + 'static>(&self, f: F) {
+        self.close_button.connect_clicked(move |_| f());
     }
 
     pub async fn stop(&self) {
@@ -1126,39 +1117,40 @@ impl PlayerPage {
             let skip_credits_btn = self.skip_credits_button.clone();
             let player = self.player.clone();
             let config = self.config.clone();
-            let intro_marker = movie.intro_marker.clone();
-            let credits_marker = movie.credits_marker.clone();
+            let view_model = self.view_model.clone();
 
             glib::timeout_add_local(Duration::from_millis(500), move || {
                 let skip_intro_btn = skip_intro_btn.clone();
                 let skip_credits_btn = skip_credits_btn.clone();
                 let player = player.clone();
                 let config = config.clone();
-                let intro_marker = intro_marker.clone();
-                let credits_marker = credits_marker.clone();
+                // Markers will be read from ViewModel each tick
+                let vm = view_model.clone();
 
                 glib::spawn_future_local(async move {
                     let player = player.read().await;
                     if let Some(position) = player.get_position().await {
-                        // Handle intro marker - only show if marker exists
-                        if config.playback.skip_intro
-                            && let Some(marker) = &intro_marker
-                        {
-                            // Show skip intro button during intro period
-                            if position >= marker.start_time && position < marker.end_time {
-                                skip_intro_btn.set_visible(true);
+                        let (intro_marker, credits_marker) = vm.markers().get().await;
+
+                        if config.playback.skip_intro {
+                            if let Some(marker) = &intro_marker {
+                                if position >= marker.start_time && position < marker.end_time {
+                                    skip_intro_btn.set_visible(true);
+                                } else {
+                                    skip_intro_btn.set_visible(false);
+                                }
                             } else {
                                 skip_intro_btn.set_visible(false);
                             }
                         }
 
-                        // Handle credits marker - only show if marker exists
-                        if config.playback.skip_credits
-                            && let Some(marker) = &credits_marker
-                        {
-                            // Show skip credits button during credits period
-                            if position >= marker.start_time {
-                                skip_credits_btn.set_visible(true);
+                        if config.playback.skip_credits {
+                            if let Some(marker) = &credits_marker {
+                                if position >= marker.start_time {
+                                    skip_credits_btn.set_visible(true);
+                                } else {
+                                    skip_credits_btn.set_visible(false);
+                                }
                             } else {
                                 skip_credits_btn.set_visible(false);
                             }
@@ -1291,39 +1283,40 @@ impl PlayerPage {
             let skip_credits_btn = self.skip_credits_button.clone();
             let player = self.player.clone();
             let config = self.config.clone();
-            let intro_marker = episode.intro_marker.clone();
-            let credits_marker = episode.credits_marker.clone();
+            let view_model = self.view_model.clone();
 
             glib::timeout_add_local(Duration::from_millis(500), move || {
                 let skip_intro_btn = skip_intro_btn.clone();
                 let skip_credits_btn = skip_credits_btn.clone();
                 let player = player.clone();
                 let config = config.clone();
-                let intro_marker = intro_marker.clone();
-                let credits_marker = credits_marker.clone();
+                // Markers will be read from ViewModel each tick
+                let vm = view_model.clone();
 
                 glib::spawn_future_local(async move {
                     let player = player.read().await;
                     if let Some(position) = player.get_position().await {
-                        // Handle intro marker - only show if marker exists
-                        if config.playback.skip_intro
-                            && let Some(marker) = &intro_marker
-                        {
-                            // Show skip intro button during intro period
-                            if position >= marker.start_time && position < marker.end_time {
-                                skip_intro_btn.set_visible(true);
+                        let (intro_marker, credits_marker) = vm.markers().get().await;
+
+                        if config.playback.skip_intro {
+                            if let Some(marker) = &intro_marker {
+                                if position >= marker.start_time && position < marker.end_time {
+                                    skip_intro_btn.set_visible(true);
+                                } else {
+                                    skip_intro_btn.set_visible(false);
+                                }
                             } else {
                                 skip_intro_btn.set_visible(false);
                             }
                         }
 
-                        // Handle credits marker - only show if marker exists
-                        if config.playback.skip_credits
-                            && let Some(marker) = &credits_marker
-                        {
-                            // Show skip credits button during credits period
-                            if position >= marker.start_time {
-                                skip_credits_btn.set_visible(true);
+                        if config.playback.skip_credits {
+                            if let Some(marker) = &credits_marker {
+                                if position >= marker.start_time {
+                                    skip_credits_btn.set_visible(true);
+                                } else {
+                                    skip_credits_btn.set_visible(false);
+                                }
                             } else {
                                 skip_credits_btn.set_visible(false);
                             }
@@ -1339,8 +1332,9 @@ impl PlayerPage {
     fn monitor_playback_completion(&self, _backend_id: String, backend: Arc<dyn MediaBackend>) {
         let player = self.player.clone();
         let current_media_item = self.current_media_item.clone();
+        let view_model = self.view_model.clone();
 
-        // Start periodic position syncing
+        // Start periodic position syncing (delegates to ViewModel persistence)
         self.start_position_sync(backend.clone());
 
         // Spawn a task to monitor player state
@@ -1367,11 +1361,10 @@ impl PlayerPage {
                             let duration = player.get_duration().await;
 
                             // Sync final position before marking as watched
-                            if let (Some(pos), Some(dur)) = (position, duration)
-                                && let Err(e) =
-                                    backend.update_progress(media_item.id(), pos, dur).await
-                            {
-                                error!("Failed to sync final playback position: {}", e);
+                            if let (Some(pos), Some(dur)) = (position, duration) {
+                                view_model
+                                    .save_progress_throttled(media_item.id(), pos, dur)
+                                    .await;
                             }
 
                             // If we've watched more than 90% of the content, mark as watched
@@ -1409,9 +1402,11 @@ impl PlayerPage {
         let player = self.player.clone();
         let current_media_item = self.current_media_item.clone();
         let mut last_sync_position = std::time::Duration::ZERO;
+        let view_model = self.view_model.clone();
 
         // Sync position every 10 seconds during playback
         glib::spawn_future_local(async move {
+            let backend = backend.clone();
             loop {
                 // Wait 10 seconds between syncs
                 glib::timeout_future(std::time::Duration::from_secs(10)).await;
@@ -1454,14 +1449,29 @@ impl PlayerPage {
                                         media_item.id()
                                     );
 
+                                    // Persist progress via ViewModel (debounced)
+                                    view_model
+                                        .save_progress_throttled(media_item.id(), pos, dur)
+                                        .await;
+                                    debug!("Position sync successful (VM)");
+
+                                    // Push progress to backend (Plex/Jellyfin) as well
                                     if let Err(e) =
                                         backend.update_progress(media_item.id(), pos, dur).await
                                     {
-                                        error!("Failed to sync playback position: {}", e);
+                                        tracing::debug!(
+                                            "Backend progress sync failed for {}: {}",
+                                            media_item.id(),
+                                            e
+                                        );
                                     } else {
-                                        debug!("Position sync successful");
-                                        last_sync_position = pos_duration;
+                                        tracing::debug!(
+                                            "Position sync successful (backend) id={} pos={}s",
+                                            media_item.id(),
+                                            pos.as_secs()
+                                        );
                                     }
+                                    last_sync_position = pos_duration;
                                 } else {
                                     trace!(
                                         "Skipping sync - position change too small: {}s vs {}s",
@@ -1532,17 +1542,17 @@ impl PlayerPage {
         self.stop_position_sync_timer().await;
 
         let player = self.player.clone();
-        let state = self.state.clone();
         let current_media_item = self.current_media_item.clone();
         let last_synced_position = self.last_synced_position.clone();
         let timer_ref = self.position_sync_timer.clone();
+        let view_model = self.view_model.clone();
 
         // Start a timer to sync position every 10 seconds
         let timer_id = glib::timeout_add_local(Duration::from_secs(10), move || {
             let player = player.clone();
-            let state = state.clone();
             let current_media_item = current_media_item.clone();
             let last_synced_position = last_synced_position.clone();
+            let vm = view_model.clone();
 
             glib::spawn_future_local(async move {
                 // Get current position
@@ -1559,24 +1569,12 @@ impl PlayerPage {
                     };
 
                     if should_sync {
-                        // Get media item and backend
+                        // Get media item and persist progress through ViewModel
                         if let Some(media_item) = &*current_media_item.read().await {
-                            let backend_id = media_item.backend_id();
-                            if let Some(backend) =
-                                state.source_coordinator.get_backend(backend_id).await
-                            {
-                                // Update progress on server
-                                let duration = media_item.duration().unwrap_or(Duration::ZERO);
-                                if let Err(e) = backend
-                                    .update_progress(media_item.id(), position, duration)
-                                    .await
-                                {
-                                    debug!("Failed to sync playback position: {}", e);
-                                } else {
-                                    debug!("Synced playback position: {:?}", position);
-                                    *last_synced_position.write().await = Some(position);
-                                }
-                            }
+                            let duration = media_item.duration().unwrap_or(Duration::ZERO);
+                            vm.save_progress_throttled(media_item.id(), position, duration)
+                                .await;
+                            *last_synced_position.write().await = Some(position);
                         }
                     }
                 }
@@ -1602,19 +1600,10 @@ impl PlayerPage {
         if let Some(position) = player.get_position().await
             && let Some(media_item) = &*self.current_media_item.read().await
         {
-            let backend_id = media_item.backend_id();
-            if let Some(backend) = self.state.source_coordinator.get_backend(backend_id).await {
-                // Update progress on server
-                let duration = media_item.duration().unwrap_or(Duration::ZERO);
-                if let Err(e) = backend
-                    .update_progress(media_item.id(), position, duration)
-                    .await
-                {
-                    error!("Failed to sync final playback position: {}", e);
-                } else {
-                    info!("Synced final playback position: {:?}", position);
-                }
-            }
+            let duration = media_item.duration().unwrap_or(Duration::ZERO);
+            self.view_model
+                .save_progress_throttled(media_item.id(), position, duration)
+                .await;
         }
     }
 }
@@ -1642,6 +1631,7 @@ struct PlayerControls {
     backend: Arc<RwLock<Option<Arc<dyn MediaBackend>>>>,
     current_media_item: Arc<RwLock<Option<MediaItem>>>,
     action_group: gio::SimpleActionGroup,
+    track_menu_retry_count: Arc<RwLock<u8>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1916,6 +1906,7 @@ impl PlayerControls {
             backend,
             current_media_item,
             action_group: action_group.clone(),
+            track_menu_retry_count: Arc::new(RwLock::new(0)),
         };
 
         // Insert the action group into the widget hierarchy
@@ -1936,16 +1927,11 @@ impl PlayerControls {
             });
         });
 
-        // Set up event handlers
-        controls.setup_handlers();
-
-        // Start position update timer
-        controls.start_position_timer();
-
+        // Return controls; caller sets up handlers and timers
         controls
     }
 
-    fn setup_handlers(&self) {
+    fn setup_handlers(&self, view_model: Arc<PlayerViewModel>) {
         let player = self.player.clone();
         let button = self.play_button.clone();
         let inhibit_cookie = self.inhibit_cookie.clone();
@@ -1954,6 +1940,7 @@ impl PlayerControls {
 
         // Play/pause button
         self.play_button.connect_clicked(move |btn| {
+            let view_model = view_model.clone();
             let player = player.clone();
             let button = button.clone();
             let inhibit_cookie = inhibit_cookie.clone();
@@ -1981,8 +1968,7 @@ impl PlayerControls {
                     Self::uninhibit_suspend_static(&widget, inhibit_cookie).await;
 
                     // Sync position when pausing
-                    if let Some(backend) = backend.read().await.as_ref()
-                        && let Some(media_item) = current_media_item.read().await.as_ref()
+                    if let Some(media_item) = current_media_item.read().await.as_ref()
                         && let (Some(position), Some(duration)) =
                             (player.get_position().await, player.get_duration().await)
                     {
@@ -1991,12 +1977,9 @@ impl PlayerControls {
                             position,
                             media_item.title()
                         );
-                        if let Err(e) = backend
-                            .update_progress(media_item.id(), position, duration)
-                            .await
-                        {
-                            error!("Failed to sync position on pause: {}", e);
-                        }
+                        view_model
+                            .save_progress_throttled(media_item.id(), position, duration)
+                            .await;
                     }
                 }
             });
@@ -2208,6 +2191,19 @@ impl PlayerControls {
 
     pub async fn populate_track_menus(&self) {
         // Create audio tracks menu
+        // Log backend + state for context
+        let player_locked = self.player.read().await;
+        let backend_name = match &*player_locked {
+            crate::player::Player::GStreamer(_) => "gstreamer",
+            crate::player::Player::Mpv(_) => "mpv",
+        };
+        let state = player_locked.get_state().await;
+        drop(player_locked);
+        debug!(
+            "populate_track_menus(): backend={} state={:?}",
+            backend_name, state
+        );
+
         let audio_menu = gio::Menu::new();
         let audio_tracks = self.player.read().await.get_audio_tracks().await;
         let _current_audio = self.player.read().await.get_current_audio_track().await;
@@ -2232,7 +2228,13 @@ impl PlayerControls {
         self.audio_button.set_popover(Some(&audio_popover));
 
         // Enable/disable button based on track availability
-        self.audio_button.set_sensitive(!audio_tracks.is_empty());
+        let audio_enabled = !audio_tracks.is_empty();
+        self.audio_button.set_sensitive(audio_enabled);
+        debug!(
+            "populate_track_menus(): audio_button sensitive={} (tracks={})",
+            audio_enabled,
+            audio_tracks.len()
+        );
 
         // Create subtitle tracks menu
         let subtitle_menu = gio::Menu::new();
@@ -2265,8 +2267,45 @@ impl PlayerControls {
         let subtitle_popover = gtk4::PopoverMenu::from_model(Some(&subtitle_menu));
         self.subtitle_button.set_popover(Some(&subtitle_popover));
 
+        debug!(
+            "populate_track_menus(): subtitle_button sensitive={} (tracks={})",
+            self.subtitle_button.is_sensitive(),
+            subtitle_tracks.len()
+        );
+
         // Set up actions for track selection
         self.setup_track_actions().await;
+
+        // If MPV hasn’t exposed tracks yet, retry a few times with small delays
+        let needs_retry_audio = audio_tracks.is_empty();
+        let needs_retry_subs = subtitle_tracks.is_empty()
+            || (subtitle_tracks.len() == 1 && subtitle_tracks[0].0 == -1);
+
+        if needs_retry_audio || needs_retry_subs {
+            let retries = *self.track_menu_retry_count.read().await;
+            if retries < 8 {
+                let self_clone = self.clone();
+                let next_retry = retries + 1;
+                *self.track_menu_retry_count.write().await = next_retry;
+                let delay_ms = 250u64;
+                debug!(
+                    "populate_track_menus(): scheduling retry {} in {}ms (audio_empty={} subs_empty_or_none={})",
+                    next_retry, delay_ms, needs_retry_audio, needs_retry_subs
+                );
+                glib::timeout_add_local(std::time::Duration::from_millis(delay_ms), move || {
+                    let again = self_clone.clone();
+                    glib::spawn_future_local(async move {
+                        again.populate_track_menus().await;
+                    });
+                    glib::ControlFlow::Break
+                });
+            } else {
+                debug!("populate_track_menus(): retries exhausted; leaving buttons as-is");
+            }
+        } else {
+            // Tracks found; reset retry counter
+            *self.track_menu_retry_count.write().await = 0;
+        }
     }
 
     async fn setup_track_actions(&self) {

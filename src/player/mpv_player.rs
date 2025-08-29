@@ -811,26 +811,36 @@ impl MpvPlayer {
         if let Some(ref mpv) = *self.inner.mpv.borrow()
             && let Ok(count) = mpv.get_property::<i64>("track-list/count")
         {
+            debug!("mpv: track-list/count={}", count);
             for i in 0..count {
                 let type_key = format!("track-list/{}/type", i);
-                if let Ok(track_type) = mpv.get_property::<String>(&type_key)
-                    && track_type == "audio"
-                {
-                    let id_key = format!("track-list/{}/id", i);
-                    let title_key = format!("track-list/{}/title", i);
-                    let lang_key = format!("track-list/{}/lang", i);
-
-                    if let Ok(id) = mpv.get_property::<i64>(&id_key) {
-                        let mut title = format!("Audio Track {}", id);
-
-                        if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
-                            title = track_title;
-                        } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
-                            title = format!("Audio Track {} ({})", id, lang);
+                match mpv.get_property::<String>(&type_key) {
+                    Ok(track_type) => {
+                        debug!("mpv: track {} type={} (expect audio)", i, track_type);
+                        if track_type != "audio" {
+                            continue;
                         }
-
-                        tracks.push((id as i32, title));
                     }
+                    Err(e) => {
+                        debug!("mpv: failed to get {}: {:?}", type_key, e);
+                        continue;
+                    }
+                }
+                let id_key = format!("track-list/{}/id", i);
+                let title_key = format!("track-list/{}/title", i);
+                let lang_key = format!("track-list/{}/lang", i);
+
+                if let Ok(id) = mpv.get_property::<i64>(&id_key) {
+                    let mut title = format!("Audio Track {}", id);
+
+                    if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
+                        title = track_title;
+                    } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
+                        title = format!("Audio Track {} ({})", id, lang);
+                    }
+
+                    debug!("mpv: audio id={} title={}", id, title);
+                    tracks.push((id as i32, title));
                 }
             }
         }
@@ -847,26 +857,36 @@ impl MpvPlayer {
         if let Some(ref mpv) = *self.inner.mpv.borrow()
             && let Ok(count) = mpv.get_property::<i64>("track-list/count")
         {
+            debug!("mpv: track-list/count={}", count);
             for i in 0..count {
                 let type_key = format!("track-list/{}/type", i);
-                if let Ok(track_type) = mpv.get_property::<String>(&type_key)
-                    && track_type == "sub"
-                {
-                    let id_key = format!("track-list/{}/id", i);
-                    let title_key = format!("track-list/{}/title", i);
-                    let lang_key = format!("track-list/{}/lang", i);
-
-                    if let Ok(id) = mpv.get_property::<i64>(&id_key) {
-                        let mut title = format!("Subtitle {}", id);
-
-                        if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
-                            title = track_title;
-                        } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
-                            title = format!("Subtitle {} ({})", id, lang);
+                match mpv.get_property::<String>(&type_key) {
+                    Ok(track_type) => {
+                        debug!("mpv: track {} type={} (expect sub)", i, track_type);
+                        if track_type != "sub" {
+                            continue;
                         }
-
-                        tracks.push((id as i32, title));
                     }
+                    Err(e) => {
+                        debug!("mpv: failed to get {}: {:?}", type_key, e);
+                        continue;
+                    }
+                }
+                let id_key = format!("track-list/{}/id", i);
+                let title_key = format!("track-list/{}/title", i);
+                let lang_key = format!("track-list/{}/lang", i);
+
+                if let Ok(id) = mpv.get_property::<i64>(&id_key) {
+                    let mut title = format!("Subtitle {}", id);
+
+                    if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
+                        title = track_title;
+                    } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
+                        title = format!("Subtitle {} ({})", id, lang);
+                    }
+
+                    debug!("mpv: subtitle id={} title={}", id, title);
+                    tracks.push((id as i32, title));
                 }
             }
         }

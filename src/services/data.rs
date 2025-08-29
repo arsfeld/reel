@@ -962,7 +962,27 @@ impl DataService {
 
         for model in models {
             match MediaItem::try_from(model) {
-                Ok(item) => items.push(item),
+                Ok(mut item) => {
+                    // Enrich episode with playback info
+                    if let MediaItem::Episode(ref mut ep) = item {
+                        if let Ok(Some(progress)) =
+                            self.playback_repo.find_by_media_id(&ep.id).await
+                        {
+                            use std::time::Duration as StdDuration;
+                            let position = StdDuration::from_millis(progress.position_ms as u64);
+                            let duration = StdDuration::from_millis(progress.duration_ms as u64);
+                            ep.playback_position = Some(position);
+                            // Consider watched either explicit flag or >90% complete
+                            let near_complete = progress.duration_ms > 0
+                                && (progress.position_ms as f64 / progress.duration_ms as f64)
+                                    > 0.9;
+                            ep.watched = progress.watched || near_complete;
+                            ep.view_count = progress.view_count as u32;
+                            ep.last_watched_at = progress.last_watched_at.map(|dt| dt.and_utc());
+                        }
+                    }
+                    items.push(item)
+                }
                 Err(e) => {
                     warn!("Failed to convert episode to domain model: {}", e);
                 }
@@ -986,7 +1006,26 @@ impl DataService {
 
         for model in models {
             match MediaItem::try_from(model) {
-                Ok(item) => items.push(item),
+                Ok(mut item) => {
+                    // Enrich episode with playback info
+                    if let MediaItem::Episode(ref mut ep) = item {
+                        if let Ok(Some(progress)) =
+                            self.playback_repo.find_by_media_id(&ep.id).await
+                        {
+                            use std::time::Duration as StdDuration;
+                            let position = StdDuration::from_millis(progress.position_ms as u64);
+                            let duration = StdDuration::from_millis(progress.duration_ms as u64);
+                            ep.playback_position = Some(position);
+                            let near_complete = progress.duration_ms > 0
+                                && (progress.position_ms as f64 / progress.duration_ms as f64)
+                                    > 0.9;
+                            ep.watched = progress.watched || near_complete;
+                            ep.view_count = progress.view_count as u32;
+                            ep.last_watched_at = progress.last_watched_at.map(|dt| dt.and_utc());
+                        }
+                    }
+                    items.push(item)
+                }
                 Err(e) => {
                     warn!("Failed to convert episode to domain model: {}", e);
                 }

@@ -26,6 +26,7 @@ fn main() {
         "media_card.blp",
         "movie_details.blp",
         "show_details.blp",
+        "player.blp",
     ];
 
     // Compile each Blueprint file to UI
@@ -68,6 +69,7 @@ fn main() {
     <file>media_card.ui</file>
     <file>movie_details.ui</file>
     <file>show_details.ui</file>
+    <file>player.ui</file>
     <file>style.css</file>
   </gresource>
 </gresources>"#
