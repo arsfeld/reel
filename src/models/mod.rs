@@ -305,6 +305,32 @@ impl MediaItem {
             _ => None,
         }
     }
+
+    // TODO: Helper methods for Cocoa frontend - some fields don't exist in current MediaItem structure
+    pub fn year(&self) -> Option<u32> {
+        match self {
+            MediaItem::Movie(m) => m.year,
+            MediaItem::Show(s) => s.year,
+            _ => None,
+        }
+    }
+
+    pub fn content_rating(&self) -> Option<&str> {
+        // TODO: content_rating field doesn't exist, stub for now
+        None
+    }
+
+    pub fn duration_millis(&self) -> Option<u64> {
+        self.duration().map(|d| d.as_millis() as u64)
+    }
+
+    pub fn rating(&self) -> Option<f32> {
+        match self {
+            MediaItem::Movie(m) => m.rating,
+            MediaItem::Show(s) => s.rating,
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -312,4 +338,21 @@ pub enum Credentials {
     UsernamePassword { username: String, password: String },
     Token { token: String },
     ApiKey { key: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlexCredentials {
+    pub auth_token: String,
+    pub client_id: String,
+    pub client_name: String,
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JellyfinCredentials {
+    pub server_url: String,
+    pub username: String,
+    pub access_token: String,
+    pub user_id: String,
+    pub device_id: String,
 }

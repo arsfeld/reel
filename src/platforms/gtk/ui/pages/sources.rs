@@ -7,9 +7,9 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::models::{AuthProvider, Source};
+use crate::platforms::gtk::ui::viewmodels::sources_view_model::SourcesViewModel;
 use crate::services::AuthManager;
 use crate::state::AppState;
-use crate::ui::viewmodels::sources_view_model::SourcesViewModel;
 
 mod imp {
     use super::*;
@@ -105,7 +105,7 @@ impl SourcesPage {
             let vm = view_model.clone();
             let event_bus = state.event_bus.clone();
             async move {
-                use crate::ui::viewmodels::ViewModel;
+                use crate::platforms::gtk::ui::viewmodels::ViewModel;
                 vm.initialize(event_bus).await;
             }
         });
@@ -747,7 +747,7 @@ impl SourcesPage {
 
         // Use the existing auth dialog
         if let Some(state) = self.imp().state.borrow().as_ref() {
-            let auth_dialog = crate::ui::AuthDialog::new(state.clone());
+            let auth_dialog = crate::platforms::gtk::ui::AuthDialog::new(state.clone());
             if let Some(window) = self.root().and_downcast::<gtk4::Window>() {
                 auth_dialog.present(Some(&window));
                 auth_dialog.start_auth();
@@ -767,8 +767,8 @@ impl SourcesPage {
         info!("Adding Jellyfin server");
 
         if let Some(state) = self.imp().state.borrow().as_ref() {
-            let auth_dialog = crate::ui::AuthDialog::new(state.clone());
-            auth_dialog.set_backend_type(crate::ui::BackendType::Jellyfin);
+            let auth_dialog = crate::platforms::gtk::ui::AuthDialog::new(state.clone());
+            auth_dialog.set_backend_type(crate::platforms::gtk::ui::BackendType::Jellyfin);
 
             if let Some(window) = self.root().and_downcast::<gtk4::Window>() {
                 auth_dialog.present(Some(&window));

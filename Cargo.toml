@@ -9,12 +9,20 @@ repository = "https://github.com/arsfeld/reel"
 keywords = ["media", "player", "plex", "jellyfin", "gnome"]
 categories = ["multimedia", "gui"]
 
+[lib]
+name = "reel_ffi"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["gtk"]
+gtk = ["dep:gtk4", "dep:gdk4", "dep:gdk-pixbuf", "dep:libadwaita", "dep:glib-build-tools"]
+
 [dependencies]
-# GTK and UI
-gtk4 = { version = "0.10", features = ["v4_14"] }
-gdk4 = { version = "0.10", features = ["v4_14"] }
-gdk-pixbuf = "0.21"
-libadwaita = { version = "0.8", features = ["v1_5"] }
+# GTK and UI (optional for GTK feature)
+gtk4 = { version = "0.10", features = ["v4_14"], optional = true }
+gdk4 = { version = "0.10", features = ["v4_14"], optional = true }
+gdk-pixbuf = { version = "0.21", optional = true }
+libadwaita = { version = "0.8", features = ["v1_5"], optional = true }
 
 # Media playback
 gstreamer = "0.24"
@@ -66,6 +74,7 @@ webp = "0.3"
 base64 = "0.22"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 lru = "0.12"
+lazy_static = "1.5"
 
 # Localization
 gettext-rs = { version = "0.7", features = ["gettext-system"] }
@@ -76,8 +85,7 @@ tempfile = "3.21"
 criterion = "0.7"
 
 [build-dependencies]
-glib-build-tools = "0.21"
-
+glib-build-tools = { version = "0.21", optional = true }
 
 [profile.release]
 lto = true
