@@ -3,16 +3,15 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::db::{
-    connection::{Database, DatabaseConnection},
+    connection::DatabaseConnection,
     entities::{LibraryModel, SourceModel},
     repository::{
         LibraryRepository, LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl,
-        PlaybackRepository, PlaybackRepositoryImpl, Repository, SourceRepository,
-        SourceRepositoryImpl,
+        PlaybackRepository, PlaybackRepositoryImpl, Repository, SourceRepositoryImpl,
     },
 };
 use crate::events::{DatabaseEvent, EventBus, EventPayload, EventType};
-use crate::models::{Episode, Library, MediaItem, Movie, MusicAlbum, MusicTrack, Photo, Show};
+use crate::models::{Library, MediaItem};
 use sea_orm::TransactionTrait;
 use sea_orm::prelude::Json;
 
@@ -49,7 +48,7 @@ impl IntoEntity<crate::db::entities::MediaItemModel> for MediaItem {
                 if movie.genres.is_empty() {
                     None
                 } else {
-                    serde_json::to_value(&movie.genres).ok().map(Json::from)
+                    serde_json::to_value(&movie.genres).ok()
                 },
                 "movie".to_string(),
             ),
@@ -64,7 +63,7 @@ impl IntoEntity<crate::db::entities::MediaItemModel> for MediaItem {
                 if show.genres.is_empty() {
                     None
                 } else {
-                    serde_json::to_value(&show.genres).ok().map(Json::from)
+                    serde_json::to_value(&show.genres).ok()
                 },
                 "show".to_string(),
             ),
@@ -172,7 +171,7 @@ impl IntoEntity<crate::db::entities::MediaItemModel> for MediaItem {
             genres,
             added_at: Some(chrono::Utc::now().naive_utc()),
             updated_at: chrono::Utc::now().naive_utc(),
-            metadata: Some(Json::from(serde_json::to_value(&self)?)),
+            metadata: Some((serde_json::to_value(&self)?)),
             parent_id,
             season_number,
             episode_number,
@@ -254,11 +253,11 @@ impl DataService {
         // LRU cache.get() mutates the cache (updates recency), so we need a write lock
         {
             let mut cache = self.memory_cache.write().await;
-            if let Some(cached) = cache.get(&format!("media:{}", id)) {
-                if let Ok(item) = serde_json::from_value::<T>(cached.clone()) {
-                    debug!("Media {} found in memory cache", id);
-                    return Ok(Some(item));
-                }
+            if let Some(cached) = cache.get(&format!("media:{}", id))
+                && let Ok(item) = serde_json::from_value::<T>(cached.clone())
+            {
+                debug!("Media {} found in memory cache", id);
+                return Ok(Some(item));
             }
         }
 
@@ -334,29 +333,27 @@ impl DataService {
             }
         } else {
             // Handle potential duplicate episodes defined by (parent_id, season, episode)
-            if model.media_type == "episode" {
-                if let (Some(ref parent), Some(season_no), Some(episode_no)) = (
+            if model.media_type == "episode"
+                && let (Some(parent), Some(season_no), Some(episode_no)) = (
                     model.parent_id.as_ref(),
                     model.season_number,
                     model.episode_number,
-                ) {
-                    if let Some(existing) = self
-                        .media_repo
-                        .find_episode_by_parent_season_episode(parent, season_no, episode_no)
-                        .await?
-                    {
-                        // Update existing episode row to avoid UNIQUE constraint violation
-                        let mut updated = model.clone();
-                        updated.id = existing.id;
-                        if emit_events {
-                            self.media_repo.update(updated).await?;
-                        } else {
-                            self.media_repo.update_silent(updated).await?;
-                        }
-                        // Since we performed an update, skip the insert path entirely
-                        return Ok(());
-                    }
+                )
+                && let Some(existing) = self
+                    .media_repo
+                    .find_episode_by_parent_season_episode(parent, season_no, episode_no)
+                    .await?
+            {
+                // Update existing episode row to avoid UNIQUE constraint violation
+                let mut updated = model.clone();
+                updated.id = existing.id;
+                if emit_events {
+                    self.media_repo.update(updated).await?;
+                } else {
+                    self.media_repo.update_silent(updated).await?;
                 }
+                // Since we performed an update, skip the insert path entirely
+                return Ok(());
             }
 
             if emit_events {
@@ -964,22 +961,20 @@ impl DataService {
             match MediaItem::try_from(model) {
                 Ok(mut item) => {
                     // Enrich episode with playback info
-                    if let MediaItem::Episode(ref mut ep) = item {
-                        if let Ok(Some(progress)) =
+                    if let MediaItem::Episode(ref mut ep) = item
+                        && let Ok(Some(progress)) =
                             self.playback_repo.find_by_media_id(&ep.id).await
-                        {
-                            use std::time::Duration as StdDuration;
-                            let position = StdDuration::from_millis(progress.position_ms as u64);
-                            let duration = StdDuration::from_millis(progress.duration_ms as u64);
-                            ep.playback_position = Some(position);
-                            // Consider watched either explicit flag or >90% complete
-                            let near_complete = progress.duration_ms > 0
-                                && (progress.position_ms as f64 / progress.duration_ms as f64)
-                                    > 0.9;
-                            ep.watched = progress.watched || near_complete;
-                            ep.view_count = progress.view_count as u32;
-                            ep.last_watched_at = progress.last_watched_at.map(|dt| dt.and_utc());
-                        }
+                    {
+                        use std::time::Duration as StdDuration;
+                        let position = StdDuration::from_millis(progress.position_ms as u64);
+                        let duration = StdDuration::from_millis(progress.duration_ms as u64);
+                        ep.playback_position = Some(position);
+                        // Consider watched either explicit flag or >90% complete
+                        let near_complete = progress.duration_ms > 0
+                            && (progress.position_ms as f64 / progress.duration_ms as f64) > 0.9;
+                        ep.watched = progress.watched || near_complete;
+                        ep.view_count = progress.view_count as u32;
+                        ep.last_watched_at = progress.last_watched_at.map(|dt| dt.and_utc());
                     }
                     items.push(item)
                 }
@@ -1008,21 +1003,19 @@ impl DataService {
             match MediaItem::try_from(model) {
                 Ok(mut item) => {
                     // Enrich episode with playback info
-                    if let MediaItem::Episode(ref mut ep) = item {
-                        if let Ok(Some(progress)) =
+                    if let MediaItem::Episode(ref mut ep) = item
+                        && let Ok(Some(progress)) =
                             self.playback_repo.find_by_media_id(&ep.id).await
-                        {
-                            use std::time::Duration as StdDuration;
-                            let position = StdDuration::from_millis(progress.position_ms as u64);
-                            let duration = StdDuration::from_millis(progress.duration_ms as u64);
-                            ep.playback_position = Some(position);
-                            let near_complete = progress.duration_ms > 0
-                                && (progress.position_ms as f64 / progress.duration_ms as f64)
-                                    > 0.9;
-                            ep.watched = progress.watched || near_complete;
-                            ep.view_count = progress.view_count as u32;
-                            ep.last_watched_at = progress.last_watched_at.map(|dt| dt.and_utc());
-                        }
+                    {
+                        use std::time::Duration as StdDuration;
+                        let position = StdDuration::from_millis(progress.position_ms as u64);
+                        let duration = StdDuration::from_millis(progress.duration_ms as u64);
+                        ep.playback_position = Some(position);
+                        let near_complete = progress.duration_ms > 0
+                            && (progress.position_ms as f64 / progress.duration_ms as f64) > 0.9;
+                        ep.watched = progress.watched || near_complete;
+                        ep.view_count = progress.view_count as u32;
+                        ep.last_watched_at = progress.last_watched_at.map(|dt| dt.and_utc());
                     }
                     items.push(item)
                 }
@@ -1061,10 +1054,10 @@ impl DataService {
             genres: None,
             added_at: Some(Utc::now().naive_utc()),
             updated_at: Utc::now().naive_utc(),
-            metadata: Some(sea_orm::entity::prelude::Json::from(serde_json::json!({
+            metadata: Some(serde_json::json!({
                 "episode_number": episode.episode_number,
                 "air_date": episode.air_date,
-            }))),
+            })),
             parent_id: Some(show_id.to_string()),
             season_number: Some(season_number),
             episode_number: Some(episode.episode_number as i32),

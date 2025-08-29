@@ -1,5 +1,5 @@
 use crate::models::{
-    ChapterMarker, Episode, MediaItem, Movie, MusicAlbum, MusicTrack, Person, Photo, Season, Show,
+    Episode, MediaItem, Movie, MusicAlbum, MusicTrack, Person, Photo, Season, Show,
 };
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -139,14 +139,14 @@ impl Model {
     pub fn get_genres(&self) -> Vec<String> {
         self.genres
             .as_ref()
-            .and_then(|j| serde_json::from_value::<Vec<String>>(j.clone().into()).ok())
+            .and_then(|j| serde_json::from_value::<Vec<String>>(j.clone()).ok())
             .unwrap_or_default()
     }
 
     pub fn get_metadata<T: for<'de> Deserialize<'de>>(&self) -> Option<T> {
         self.metadata
             .as_ref()
-            .and_then(|j| serde_json::from_value::<T>(j.clone().into()).ok())
+            .and_then(|j| serde_json::from_value::<T>(j.clone()).ok())
     }
 
     /// Check if this item is an episode
@@ -181,7 +181,7 @@ impl TryFrom<Model> for MediaItem {
         let metadata = model
             .metadata
             .as_ref()
-            .and_then(|json| serde_json::from_value::<serde_json::Value>(json.clone().into()).ok())
+            .and_then(|json| serde_json::from_value::<serde_json::Value>(json.clone()).ok())
             .unwrap_or_else(|| serde_json::json!({}));
 
         let genres = model.get_genres();
@@ -218,7 +218,7 @@ impl TryFrom<Model> for MediaItem {
                 let playback_position = metadata
                     .get("playback_position_ms")
                     .and_then(|v| v.as_u64())
-                    .map(|ms| Duration::from_millis(ms));
+                    .map(Duration::from_millis);
 
                 Ok(MediaItem::Movie(Movie {
                     id: model.id.clone(),
@@ -314,7 +314,7 @@ impl TryFrom<Model> for MediaItem {
                 let playback_position = metadata
                     .get("playback_position_ms")
                     .and_then(|v| v.as_u64())
-                    .map(|ms| Duration::from_millis(ms));
+                    .map(Duration::from_millis);
                 let air_date = metadata
                     .get("air_date")
                     .and_then(|v| v.as_str())
@@ -357,7 +357,7 @@ impl TryFrom<Model> for MediaItem {
                 let album_duration = metadata
                     .get("total_duration_ms")
                     .and_then(|v| v.as_u64())
-                    .map(|ms| Duration::from_millis(ms))
+                    .map(Duration::from_millis)
                     .unwrap_or(duration);
 
                 Ok(MediaItem::MusicAlbum(MusicAlbum {

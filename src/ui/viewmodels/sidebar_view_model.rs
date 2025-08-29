@@ -1,5 +1,5 @@
 use super::{Property, PropertySubscriber, ViewModel};
-use crate::events::{DatabaseEvent, EventBus, EventPayload, EventType};
+use crate::events::{EventBus, EventPayload, EventType};
 use crate::services::data::DataService;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -432,35 +432,34 @@ impl ViewModel for SidebarViewModel {
                             source_id,
                             item_count,
                         } = &event.payload
+                            && let Some(new_count) = item_count
                         {
-                            if let Some(new_count) = item_count {
-                                tracing::info!(
-                                    "SidebarViewModel received LibraryItemCountChanged for library {} with count {}",
-                                    library_id,
-                                    new_count
-                                );
+                            tracing::info!(
+                                "SidebarViewModel received LibraryItemCountChanged for library {} with count {}",
+                                library_id,
+                                new_count
+                            );
 
-                                // Update the specific library's item count in memory
-                                let mut current_sources = sources.get().await;
-                                let mut updated = false;
+                            // Update the specific library's item count in memory
+                            let mut current_sources = sources.get().await;
+                            let mut updated = false;
 
-                                for source in &mut current_sources {
-                                    if source.id == *source_id {
-                                        for library in &mut source.libraries {
-                                            if library.id == *library_id {
-                                                library.item_count = *new_count;
-                                                updated = true;
-                                                break;
-                                            }
+                            for source in &mut current_sources {
+                                if source.id == *source_id {
+                                    for library in &mut source.libraries {
+                                        if library.id == *library_id {
+                                            library.item_count = *new_count;
+                                            updated = true;
+                                            break;
                                         }
-                                        break;
                                     }
+                                    break;
                                 }
+                            }
 
-                                if updated {
-                                    // Update the sources property to trigger UI refresh
-                                    let _ = sources.set(current_sources).await;
-                                }
+                            if updated {
+                                // Update the sources property to trigger UI refresh
+                                let _ = sources.set(current_sources).await;
                             }
                         }
                     }

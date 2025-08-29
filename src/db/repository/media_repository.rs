@@ -349,7 +349,7 @@ impl MediaRepository for MediaRepositoryImpl {
     async fn update_metadata(&self, id: &str, metadata: serde_json::Value) -> Result<()> {
         if let Some(item) = self.find_by_id(id).await? {
             let mut active_model: MediaItemActiveModel = item.into();
-            active_model.metadata = Set(Some(Json::from(metadata)));
+            active_model.metadata = Set(Some(metadata));
             active_model.updated_at = Set(chrono::Utc::now().naive_utc());
             active_model.update(self.base.db.as_ref()).await?;
         }

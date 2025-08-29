@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
-use tracing::{debug, error, info, trace, warn};
+use tracing::trace;
 
 /// Event subscriber handle
 pub struct EventSubscriber {
@@ -62,6 +62,12 @@ pub struct EventFilter {
     min_priority: Option<EventPriority>,
 }
 
+impl Default for EventFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EventFilter {
     pub fn new() -> Self {
         Self {
@@ -88,10 +94,10 @@ impl EventFilter {
 
     pub fn matches(&self, event: &DatabaseEvent) -> bool {
         // Check event type
-        if let Some(ref types) = self.event_types {
-            if !types.contains(&event.event_type) {
-                return false;
-            }
+        if let Some(ref types) = self.event_types
+            && !types.contains(&event.event_type)
+        {
+            return false;
         }
 
         // Check source
@@ -103,10 +109,10 @@ impl EventFilter {
         }
 
         // Check priority
-        if let Some(min_priority) = self.min_priority {
-            if event.priority < min_priority {
-                return false;
-            }
+        if let Some(min_priority) = self.min_priority
+            && event.priority < min_priority
+        {
+            return false;
         }
 
         true

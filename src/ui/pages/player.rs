@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 use crate::backends::traits::MediaBackend;
 use crate::config::Config;
@@ -249,14 +249,13 @@ impl PlayerPage {
             if let Some(window) = widget_for_motion
                 .root()
                 .and_then(|r| r.downcast::<gtk4::Window>().ok())
+                && window.is_fullscreen()
             {
-                if window.is_fullscreen() {
-                    // Restore default cursor
-                    if let Some(cursor) = gdk::Cursor::from_name("default", None) {
-                        widget_for_motion.set_cursor(Some(&cursor));
-                    } else {
-                        widget_for_motion.set_cursor(None);
-                    }
+                // Restore default cursor
+                if let Some(cursor) = gdk::Cursor::from_name("default", None) {
+                    widget_for_motion.set_cursor(Some(&cursor));
+                } else {
+                    widget_for_motion.set_cursor(None);
                 }
             }
 
@@ -298,13 +297,11 @@ impl PlayerPage {
                                 .root()
                                 .and_then(|r| r.downcast::<gtk4::Window>().ok())
                                 && window.is_fullscreen()
-                            {
-                                if let Ok(texture) =
+                                && let Ok(texture) =
                                     gdk::Texture::from_bytes(&glib::Bytes::from_static(&[0u8; 64]))
-                                {
-                                    let cursor = gdk::Cursor::from_texture(&texture, 0, 0, None);
-                                    widget_for_fade.set_cursor(Some(&cursor));
-                                }
+                            {
+                                let cursor = gdk::Cursor::from_texture(&texture, 0, 0, None);
+                                widget_for_fade.set_cursor(Some(&cursor));
                             }
                             glib::ControlFlow::Break
                         } else {

@@ -2,15 +2,12 @@ use super::{BaseRepository, Repository};
 use crate::db::entities::{
     PlaybackProgress, PlaybackProgressActiveModel, PlaybackProgressModel, playback_progress,
 };
-use crate::events::{
-    event_bus::EventBus,
-    types::{DatabaseEvent, EventPayload, EventType},
-};
+use crate::events::event_bus::EventBus;
 use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set,
+    QueryFilter, QueryOrder, Set,
 };
 use std::sync::Arc;
 
@@ -184,7 +181,7 @@ impl PlaybackRepository for PlaybackRepositoryImpl {
 
         let now = chrono::Utc::now().naive_utc();
 
-        if let Some(mut progress) = existing {
+        if let Some(progress) = existing {
             // Update existing progress
             let mut active_model: PlaybackProgressActiveModel = progress.clone().into();
             active_model.position_ms = Set(position_ms);
@@ -224,7 +221,7 @@ impl PlaybackRepository for PlaybackRepositoryImpl {
             self.find_by_media_id(media_id).await?
         };
 
-        if let Some(mut p) = progress {
+        if let Some(p) = progress {
             let mut active_model: PlaybackProgressActiveModel = p.clone().into();
             active_model.watched = Set(true);
             active_model.view_count = Set(p.view_count + 1);
@@ -273,8 +270,6 @@ impl PlaybackRepository for PlaybackRepositoryImpl {
     }
 
     async fn cleanup_old_entries(&self, days: i64) -> Result<u64> {
-        use sea_orm::sea_query::Expr;
-
         let cutoff_date = chrono::Utc::now().naive_utc() - chrono::Duration::days(days);
 
         let result = PlaybackProgress::delete_many()

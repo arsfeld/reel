@@ -405,31 +405,31 @@ fn default_cache_secs() -> u32 {
 
 // Skip serializing helper functions
 fn is_default_theme(value: &str) -> bool {
-    value == &default_theme()
+    value == default_theme()
 }
 
 fn is_default_language(value: &str) -> bool {
-    value == &default_language()
+    value == default_language()
 }
 
 fn is_default_player_backend(value: &str) -> bool {
-    value == &default_player_backend()
+    value == default_player_backend()
 }
 
 fn is_true(value: &bool) -> bool {
-    *value == true
+    *value
 }
 
 fn is_false(value: &bool) -> bool {
-    *value == false
+    !(*value)
 }
 
 fn is_default_subtitle(value: &str) -> bool {
-    value == &default_subtitle()
+    value == default_subtitle()
 }
 
 fn is_default_audio(value: &str) -> bool {
-    value == &default_audio()
+    value == default_audio()
 }
 
 fn is_default_timeout(value: &u64) -> bool {
@@ -445,7 +445,7 @@ fn is_default_cache_size(value: &u64) -> bool {
 }
 
 fn is_default_plex_url(value: &str) -> bool {
-    value == &default_plex_url()
+    value == default_plex_url()
 }
 
 fn is_default_auto_play_delay(value: &u64) -> bool {
