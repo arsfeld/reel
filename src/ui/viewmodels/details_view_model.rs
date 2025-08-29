@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaMetadata {
@@ -139,11 +139,19 @@ impl DetailsViewModel {
                 self.current_item.set(Some(detailed_info)).await;
 
                 // If this is a show, load episodes for the first season
-                if matches!(media, MediaItem::Show(_)) {
+                if let MediaItem::Show(show) = &media {
+                    info!(
+                        "DetailsViewModel::load_media: show loaded id={} title={}",
+                        show.id, show.title
+                    );
                     self.load_seasons_for_show(&media).await;
 
                     // Load episodes for the first season
                     if let Some(first_season) = self.seasons.get().await.first() {
+                        info!(
+                            "DetailsViewModel::load_media: first season determined: {}",
+                            first_season
+                        );
                         let _ = self
                             .load_episodes_for_season(&media_id, *first_season)
                             .await;
@@ -346,6 +354,10 @@ impl DetailsViewModel {
 
     /// Load episodes for a specific season of a show
     pub async fn load_episodes_for_season(&self, show_id: &str, season_number: i32) -> Result<()> {
+        info!(
+            "DetailsViewModel::load_episodes_for_season: show_id={} season={} (begin)",
+            show_id, season_number
+        );
         self.is_loading_episodes.set(true).await;
         self.current_season.set(Some(season_number)).await;
 
@@ -355,6 +367,10 @@ impl DetailsViewModel {
             .await
         {
             Ok(episodes) => {
+                info!(
+                    "DetailsViewModel::load_episodes_for_season: loaded {} episodes",
+                    episodes.len()
+                );
                 self.episodes.set(episodes.clone()).await;
                 self.is_loading_episodes.set(false).await;
 
@@ -408,6 +424,11 @@ impl DetailsViewModel {
         };
 
         if let Ok(all_episodes) = self.data_service.get_episodes_by_show(show_id).await {
+            info!(
+                "DetailsViewModel::load_seasons_for_show: show_id={} episodes_in_db={}",
+                show_id,
+                all_episodes.len()
+            );
             let mut seasons: Vec<i32> = all_episodes
                 .iter()
                 .filter_map(|item| {
@@ -421,10 +442,21 @@ impl DetailsViewModel {
                 .into_iter()
                 .collect();
             seasons.sort();
+            info!("Computed seasons list: {:?}", seasons);
 
-            self.seasons.set(seasons).await;
+            if seasons.is_empty() {
+                // Fallback: show at least one season so UI can operate
+                info!("Seasons list empty, falling back to [1]");
+                self.seasons.set(vec![1]).await;
+            } else {
+                self.seasons.set(seasons).await;
+            }
         } else {
             // Default to a reasonable number of seasons if we can't load episodes
+            info!(
+                "get_episodes_by_show failed for {}, defaulting seasons to [1]",
+                show_id
+            );
             self.seasons.set(vec![1]).await;
         }
     }
@@ -466,6 +498,10 @@ impl DetailsViewModel {
     /// Change to a different season
     pub async fn select_season(&self, season_number: i32) -> Result<()> {
         if let Some(media_id) = self.media_id.get().await {
+            info!(
+                "DetailsViewModel::select_season: media_id={} season={}",
+                media_id, season_number
+            );
             self.load_episodes_for_season(&media_id, season_number)
                 .await
         } else {
@@ -615,6 +651,10 @@ impl ViewModel for DetailsViewModel {
             "is_watched" => Some(self.is_watched.subscribe()),
             "related_items" => Some(self.related_items.subscribe()),
             "selected_tab" => Some(self.selected_tab.subscribe()),
+            // Added: expose episode/season updates to the UI
+            "episodes" => Some(self.episodes.subscribe()),
+            "seasons" => Some(self.seasons.subscribe()),
+            "is_loading_episodes" => Some(self.is_loading_episodes.subscribe()),
             _ => None,
         }
     }
