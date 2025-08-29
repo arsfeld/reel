@@ -7,6 +7,7 @@
     <file preprocess="xml-stripblanks">blueprints/media_card.blp</file>
     <file preprocess="xml-stripblanks">blueprints/movie_details.blp</file>
     <file preprocess="xml-stripblanks">blueprints/show_details.blp</file>
+    <file preprocess="xml-stripblanks">blueprints/player.blp</file>
     <file>style.css</file>
     <file alias="icons/scalable/apps/dev.arsfeld.Reel.svg">../../logo.svg</file>
   </gresource>
