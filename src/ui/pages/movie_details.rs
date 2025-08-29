@@ -7,7 +7,6 @@ use tracing::{error, info};
 
 use crate::backends::traits::MediaBackend;
 use crate::models::{Movie, StreamInfo};
-use crate::services::DataService;
 use crate::state::AppState;
 use crate::ui::viewmodels::{DetailsViewModel, ViewModel};
 use crate::utils::{ImageLoader, ImageSize};

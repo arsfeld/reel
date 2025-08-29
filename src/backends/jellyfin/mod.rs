@@ -201,17 +201,17 @@ impl JellyfinBackend {
         let service = "dev.arsfeld.Reel";
         let account = &format!("{}_jellyfin", self.backend_id);
 
-        if let Ok(entry) = keyring::Entry::new(service, account) {
-            if let Ok(creds) = entry.get_password() {
-                let parts: Vec<&str> = creds.split('|').collect();
-                if parts.len() == 3 {
-                    info!("Loaded credentials from keyring for {}", self.backend_id);
-                    return Ok(Some((
-                        parts[0].to_string(),
-                        parts[1].to_string(),
-                        parts[2].to_string(),
-                    )));
-                }
+        if let Ok(entry) = keyring::Entry::new(service, account)
+            && let Ok(creds) = entry.get_password()
+        {
+            let parts: Vec<&str> = creds.split('|').collect();
+            if parts.len() == 3 {
+                info!("Loaded credentials from keyring for {}", self.backend_id);
+                return Ok(Some((
+                    parts[0].to_string(),
+                    parts[1].to_string(),
+                    parts[2].to_string(),
+                )));
             }
         }
 

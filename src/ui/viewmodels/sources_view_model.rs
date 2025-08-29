@@ -7,7 +7,7 @@ use crate::services::DataService;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
@@ -129,10 +129,10 @@ impl SourcesViewModel {
         match self.data_service.remove_source(&source_id).await {
             Ok(_) => {
                 info!("Source removed: {}", source_id);
-                if let Some(selected) = self.selected_source.get().await {
-                    if selected.id == source_id {
-                        self.selected_source.set(None).await;
-                    }
+                if let Some(selected) = self.selected_source.get().await
+                    && selected.id == source_id
+                {
+                    self.selected_source.set(None).await;
                 }
                 self.load_sources().await
             }
@@ -246,20 +246,19 @@ impl SourcesViewModel {
                     progress,
                     ..
                 } = event.payload
+                    && let Some(progress) = progress
                 {
-                    if let Some(progress) = progress {
-                        self.sync_in_progress
-                            .update(|map| {
-                                map.insert(source_id.clone(), progress);
-                            })
-                            .await;
+                    self.sync_in_progress
+                        .update(|map| {
+                            map.insert(source_id.clone(), progress);
+                        })
+                        .await;
 
-                        let mut sources = self.sources.get().await;
-                        if let Some(info) = sources.iter_mut().find(|s| s.source.id == source_id) {
-                            info.sync_progress = progress;
-                        }
-                        self.sources.set(sources).await;
+                    let mut sources = self.sources.get().await;
+                    if let Some(info) = sources.iter_mut().find(|s| s.source.id == source_id) {
+                        info.sync_progress = progress;
                     }
+                    self.sources.set(sources).await;
                 }
             }
             EventType::SyncCompleted | EventType::SyncFailed => {

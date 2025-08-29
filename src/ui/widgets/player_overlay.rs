@@ -74,6 +74,12 @@ glib::wrapper! {
         @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget, gtk4::Orientable;
 }
 
+impl Default for ReelPlayerOverlayHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReelPlayerOverlayHost {
     pub fn new() -> Self {
         glib::Object::new()

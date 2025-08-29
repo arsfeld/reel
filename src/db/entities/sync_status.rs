@@ -59,10 +59,9 @@ impl SyncType {
             Some(SyncType::Incremental)
         } else if let Some(id) = s.strip_prefix("library:") {
             Some(SyncType::Library(id.to_string()))
-        } else if let Some(id) = s.strip_prefix("media:") {
-            Some(SyncType::Media(id.to_string()))
         } else {
-            None
+            s.strip_prefix("media:")
+                .map(|id| SyncType::Media(id.to_string()))
         }
     }
 }

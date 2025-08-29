@@ -1,13 +1,11 @@
 use super::{Property, PropertySubscriber, ViewModel};
 use crate::events::{DatabaseEvent, EventBus, EventFilter, EventPayload, EventType};
-use crate::models::{Episode, MediaItem, Movie, Show};
+use crate::models::MediaItem;
 use crate::services::DataService;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaMetadata {
@@ -266,17 +264,18 @@ impl DetailsViewModel {
                     _ => None,
                 };
 
-                if let (Some(rating1), Some(rating2)) = (media_rating, item_rating) {
-                    if (rating1 - rating2).abs() < 0.5 && recommended.len() < 10 {
-                        recommended.push(item.clone());
-                    }
+                if let (Some(rating1), Some(rating2)) = (media_rating, item_rating)
+                    && (rating1 - rating2).abs() < 0.5
+                    && recommended.len() < 10
+                {
+                    recommended.push(item.clone());
                 }
 
                 // Check if both are episodes from the same show
-                if let (MediaItem::Episode(ep1), MediaItem::Episode(ep2)) = (media, item) {
-                    if ep1.show_id.as_ref() == ep2.show_id.as_ref() {
-                        from_same_series.push(item.clone());
-                    }
+                if let (MediaItem::Episode(ep1), MediaItem::Episode(ep2)) = (media, item)
+                    && ep1.show_id.as_ref() == ep2.show_id.as_ref()
+                {
+                    from_same_series.push(item.clone());
                 }
             }
         }
@@ -296,46 +295,45 @@ impl DetailsViewModel {
     pub async fn mark_as_watched(&self) {
         self.is_watched.set(true).await;
 
-        if let Some(media_id) = self.media_id.get().await {
-            if let Some(info) = self.current_item.get().await {
-                let duration_ms = match &info.media {
-                    MediaItem::Movie(movie) => movie.duration.as_millis() as i64,
-                    MediaItem::Show(_) => 0, // Shows don't have duration
-                    MediaItem::Episode(episode) => episode.duration.as_millis() as i64,
-                    _ => 0,
-                };
+        if let Some(media_id) = self.media_id.get().await
+            && let Some(info) = self.current_item.get().await
+        {
+            let duration_ms = match &info.media {
+                MediaItem::Movie(movie) => movie.duration.as_millis() as i64,
+                MediaItem::Show(_) => 0, // Shows don't have duration
+                MediaItem::Episode(episode) => episode.duration.as_millis() as i64,
+                _ => 0,
+            };
 
-                let _ = self
-                    .data_service
-                    .update_playback_progress(
-                        &media_id,
-                        duration_ms, // Mark as watched by setting position = duration
-                        duration_ms,
-                        true, // watched
-                    )
-                    .await;
-            }
+            let _ = self
+                .data_service
+                .update_playback_progress(
+                    &media_id,
+                    duration_ms, // Mark as watched by setting position = duration
+                    duration_ms,
+                    true, // watched
+                )
+                .await;
         }
     }
 
     pub async fn mark_as_unwatched(&self) {
         self.is_watched.set(false).await;
 
-        if let Some(media_id) = self.media_id.get().await {
-            if let Ok(Some((_, duration_ms))) =
+        if let Some(media_id) = self.media_id.get().await
+            && let Ok(Some((_, duration_ms))) =
                 self.data_service.get_playback_progress(&media_id).await
-            {
-                // Reset playback progress to beginning
-                let _ = self
-                    .data_service
-                    .update_playback_progress(
-                        &media_id,
-                        0, // position_ms
-                        duration_ms as i64,
-                        false, // watched
-                    )
-                    .await;
-            }
+        {
+            // Reset playback progress to beginning
+            let _ = self
+                .data_service
+                .update_playback_progress(
+                    &media_id,
+                    0, // position_ms
+                    duration_ms as i64,
+                    false, // watched
+                )
+                .await;
         }
     }
 
@@ -380,10 +378,9 @@ impl DetailsViewModel {
                     for episode in &episodes {
                         if let Ok(Some((position_ms, duration_ms))) =
                             self.data_service.get_playback_progress(episode.id()).await
+                            && position_ms as f64 / duration_ms as f64 > 0.9
                         {
-                            if position_ms as f64 / duration_ms as f64 > 0.9 {
-                                watched_count += 1;
-                            }
+                            watched_count += 1;
                         }
                     }
                     watched_count == episodes.len()
@@ -514,46 +511,44 @@ impl DetailsViewModel {
             match event.event_type {
                 // Perform a targeted, silent merge to avoid toggling is_loading
                 EventType::MediaUpdated => {
-                    if let EventPayload::Media { id, .. } = event.payload {
-                        if id == media_id {
-                            if let Ok(Some(updated_item)) =
-                                self.data_service.get_media_item(&media_id).await
-                            {
-                                // Update current detailed info in place without resetting the UI
-                                if let Some(mut info) = self.current_item.get().await {
-                                    // Refresh lightweight metadata from the updated item
-                                    let new_metadata = self.extract_metadata(&updated_item).await;
-                                    info.media = updated_item;
-                                    info.metadata = new_metadata;
-                                    // Preserve playback_progress and related items
-                                    self.current_item.set(Some(info)).await;
-                                } else {
-                                    // If nothing loaded yet, avoid loader: set minimal info
-                                    let metadata = self.extract_metadata(&updated_item).await;
-                                    let minimal = DetailedMediaInfo {
-                                        media: updated_item,
-                                        metadata,
-                                        playback_progress: None,
-                                        related: RelatedMedia {
-                                            similar: vec![],
-                                            recommended: vec![],
-                                            from_same_series: vec![],
-                                        },
-                                    };
-                                    self.current_item.set(Some(minimal)).await;
-                                }
-                            }
+                    if let EventPayload::Media { id, .. } = event.payload
+                        && id == media_id
+                        && let Ok(Some(updated_item)) =
+                            self.data_service.get_media_item(&media_id).await
+                    {
+                        // Update current detailed info in place without resetting the UI
+                        if let Some(mut info) = self.current_item.get().await {
+                            // Refresh lightweight metadata from the updated item
+                            let new_metadata = self.extract_metadata(&updated_item).await;
+                            info.media = updated_item;
+                            info.metadata = new_metadata;
+                            // Preserve playback_progress and related items
+                            self.current_item.set(Some(info)).await;
+                        } else {
+                            // If nothing loaded yet, avoid loader: set minimal info
+                            let metadata = self.extract_metadata(&updated_item).await;
+                            let minimal = DetailedMediaInfo {
+                                media: updated_item,
+                                metadata,
+                                playback_progress: None,
+                                related: RelatedMedia {
+                                    similar: vec![],
+                                    recommended: vec![],
+                                    from_same_series: vec![],
+                                },
+                            };
+                            self.current_item.set(Some(minimal)).await;
                         }
                     }
                 }
                 EventType::MediaDeleted => {
-                    if let EventPayload::Media { id, .. } = event.payload {
-                        if id == media_id {
-                            self.current_item.set(None).await;
-                            self.error
-                                .set(Some("Media item has been deleted".to_string()))
-                                .await;
-                        }
+                    if let EventPayload::Media { id, .. } = event.payload
+                        && id == media_id
+                    {
+                        self.current_item.set(None).await;
+                        self.error
+                            .set(Some("Media item has been deleted".to_string()))
+                            .await;
                     }
                 }
                 EventType::PlaybackPositionUpdated | EventType::PlaybackCompleted => {
@@ -561,19 +556,16 @@ impl DetailsViewModel {
                         media_id: event_media_id,
                         ..
                     } = event.payload
+                        && event_media_id == media_id
+                        && let Ok(Some((position_ms, duration_ms))) =
+                            self.data_service.get_playback_progress(&media_id).await
                     {
-                        if event_media_id == media_id {
-                            if let Ok(Some((position_ms, duration_ms))) =
-                                self.data_service.get_playback_progress(&media_id).await
-                            {
-                                let watched = position_ms as f64 / duration_ms as f64 > 0.9;
-                                self.is_watched.set(watched).await;
+                        let watched = position_ms as f64 / duration_ms as f64 > 0.9;
+                        self.is_watched.set(watched).await;
 
-                                if let Some(mut info) = self.current_item.get().await {
-                                    info.playback_progress = Some((position_ms, duration_ms));
-                                    self.current_item.set(Some(info)).await;
-                                }
-                            }
+                        if let Some(mut info) = self.current_item.get().await {
+                            info.playback_progress = Some((position_ms, duration_ms));
+                            self.current_item.set(Some(info)).await;
                         }
                     }
                 }

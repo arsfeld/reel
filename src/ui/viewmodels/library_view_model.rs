@@ -1,11 +1,10 @@
 use super::{Property, PropertySubscriber, ViewModel};
 use crate::db::entities::libraries::Model as Library;
-use crate::db::repository::{LibraryRepository, MediaRepository};
+use crate::db::repository::MediaRepository;
 use crate::events::{DatabaseEvent, EventBus, EventFilter, EventType};
-use crate::models::{Episode, MediaItem, Movie, MusicAlbum, Show};
+use crate::models::MediaItem;
 use crate::services::DataService;
 use anyhow::Result;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -251,15 +250,15 @@ impl LibraryViewModel {
                         MediaItem::Movie(m) => m
                             .overview
                             .as_ref()
-                            .map_or(false, |o| o.to_lowercase().contains(&search_lower)),
+                            .is_some_and(|o| o.to_lowercase().contains(&search_lower)),
                         MediaItem::Show(s) => s
                             .overview
                             .as_ref()
-                            .map_or(false, |o| o.to_lowercase().contains(&search_lower)),
+                            .is_some_and(|o| o.to_lowercase().contains(&search_lower)),
                         MediaItem::Episode(e) => e
                             .overview
                             .as_ref()
-                            .map_or(false, |o| o.to_lowercase().contains(&search_lower)),
+                            .is_some_and(|o| o.to_lowercase().contains(&search_lower)),
                         _ => false,
                     };
 
@@ -322,8 +321,8 @@ impl LibraryViewModel {
             .collect();
 
         match sort_order {
-            SortOrder::TitleAsc => filtered.sort_by(|a, b| a.title().cmp(&b.title())),
-            SortOrder::TitleDesc => filtered.sort_by(|a, b| b.title().cmp(&a.title())),
+            SortOrder::TitleAsc => filtered.sort_by(|a, b| a.title().cmp(b.title())),
+            SortOrder::TitleDesc => filtered.sort_by(|a, b| b.title().cmp(a.title())),
             SortOrder::YearAsc => filtered.sort_by(|a, b| {
                 let a_year = Self::extract_year(a);
                 let b_year = Self::extract_year(b);
@@ -412,22 +411,22 @@ impl LibraryViewModel {
                 } = &event.payload
                 {
                     // Only process if this is the current library
-                    if let Some(current) = self.current_library.get().await {
-                        if current.id == *library_id {
-                            match self.data_service.get_media_items_by_ids(ids).await {
-                                Ok(updated_items) if !updated_items.is_empty() => {
-                                    // Merge into current items
-                                    self.merge_updated_items(updated_items).await;
-                                }
-                                Ok(_) => {}
-                                Err(e) => {
-                                    error!("Failed to fetch batch items: {}", e);
-                                    // Fall back to silent refresh
-                                    let _ = self.refresh_items_silently().await;
-                                }
+                    if let Some(current) = self.current_library.get().await
+                        && current.id == *library_id
+                    {
+                        match self.data_service.get_media_items_by_ids(ids).await {
+                            Ok(updated_items) if !updated_items.is_empty() => {
+                                // Merge into current items
+                                self.merge_updated_items(updated_items).await;
                             }
-                            return;
+                            Ok(_) => {}
+                            Err(e) => {
+                                error!("Failed to fetch batch items: {}", e);
+                                // Fall back to silent refresh
+                                let _ = self.refresh_items_silently().await;
+                            }
                         }
+                        return;
                     }
                 }
                 // Fallback: Previous batching behavior
@@ -459,39 +458,38 @@ impl LibraryViewModel {
             }
             EventType::MediaCreated | EventType::MediaUpdated | EventType::MediaDeleted => {
                 // Individual item changes - apply targeted updates when possible
-                if let crate::events::EventPayload::Media { id, library_id, .. } = &event.payload {
-                    if let Some(current) = self.current_library.get().await {
-                        if current.id == *library_id {
-                            match event.event_type {
-                                EventType::MediaDeleted => {
-                                    self.items
-                                        .update(|items| items.retain(|it| it.id() != id))
-                                        .await;
-                                    self.apply_filters_and_sort().await;
-                                }
-                                _ => match self.data_service.get_media_item(id).await {
-                                    Ok(Some(item)) => {
-                                        self.merge_updated_items(vec![item]).await;
-                                    }
-                                    Ok(None) => {}
-                                    Err(e) => {
-                                        error!("Failed to fetch media {}: {}", id, e);
-                                    }
-                                },
-                            }
-                            return;
+                if let crate::events::EventPayload::Media { id, library_id, .. } = &event.payload
+                    && let Some(current) = self.current_library.get().await
+                    && current.id == *library_id
+                {
+                    match event.event_type {
+                        EventType::MediaDeleted => {
+                            self.items
+                                .update(|items| items.retain(|it| it.id() != id))
+                                .await;
+                            self.apply_filters_and_sort().await;
                         }
+                        _ => match self.data_service.get_media_item(id).await {
+                            Ok(Some(item)) => {
+                                self.merge_updated_items(vec![item]).await;
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                error!("Failed to fetch media {}: {}", id, e);
+                            }
+                        },
                     }
+                    return;
                 }
                 // If not current library or no payload, debounce a small silent refresh when idle
                 if !self.is_syncing.get().await {
                     let mut batch = self.update_batch.lock().await;
                     let now = Instant::now();
-                    if let Some(last) = batch.last_update {
-                        if now.duration_since(last) < Duration::from_millis(800) {
-                            batch.pending_refresh = true;
-                            return;
-                        }
+                    if let Some(last) = batch.last_update
+                        && now.duration_since(last) < Duration::from_millis(800)
+                    {
+                        batch.pending_refresh = true;
+                        return;
                     }
                     batch.last_update = Some(now);
                     batch.pending_refresh = false;
@@ -500,10 +498,10 @@ impl LibraryViewModel {
                 }
             }
             EventType::LibraryUpdated => {
-                if let Some(lib) = self.current_library.get().await {
-                    if let Ok(Some(updated)) = self.data_service.get_library(&lib.id).await {
-                        self.current_library.set(Some(updated)).await;
-                    }
+                if let Some(lib) = self.current_library.get().await
+                    && let Ok(Some(updated)) = self.data_service.get_library(&lib.id).await
+                {
+                    self.current_library.set(Some(updated)).await;
                 }
             }
             EventType::PlaybackPositionUpdated => {

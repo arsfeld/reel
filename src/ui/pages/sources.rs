@@ -160,12 +160,12 @@ impl SourcesPage {
         let mut sync_subscriber = view_model.sources().subscribe();
         glib::spawn_future_local(async move {
             while sync_subscriber.wait_for_change().await {
-                if let Some(page) = weak_self_sync.upgrade() {
-                    if let Some(vm) = &*page.imp().view_model.borrow() {
-                        // Could update UI to show sync progress
-                        let sources = vm.sources().get().await;
-                        info!("Sources: {:?}", sources);
-                    }
+                if let Some(page) = weak_self_sync.upgrade()
+                    && let Some(vm) = &*page.imp().view_model.borrow()
+                {
+                    // Could update UI to show sync progress
+                    let sources = vm.sources().get().await;
+                    info!("Sources: {:?}", sources);
                 }
             }
         });

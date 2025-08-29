@@ -777,7 +777,7 @@ impl MediaBackend for PlexBackend {
         // Format: "backend_id:library_id:type:rating_key" or variations
         let rating_key = if media_id.contains(':') {
             // Split and get the last part which should be the rating key
-            media_id.split(':').last().unwrap_or(media_id)
+            media_id.split(':').next_back().unwrap_or(media_id)
         } else {
             // If no separator, assume it's already just the rating key
             media_id
@@ -807,7 +807,7 @@ impl MediaBackend for PlexBackend {
     ) -> Result<()> {
         // Extract the actual Plex rating key from the composite ID
         let rating_key = if media_id.contains(':') {
-            media_id.split(':').last().unwrap_or(media_id)
+            media_id.split(':').next_back().unwrap_or(media_id)
         } else {
             media_id
         };
@@ -819,7 +819,7 @@ impl MediaBackend for PlexBackend {
     async fn mark_watched(&self, media_id: &str) -> Result<()> {
         // Extract the actual Plex rating key from the composite ID
         let rating_key = if media_id.contains(':') {
-            media_id.split(':').last().unwrap_or(media_id)
+            media_id.split(':').next_back().unwrap_or(media_id)
         } else {
             media_id
         };
@@ -831,7 +831,7 @@ impl MediaBackend for PlexBackend {
     async fn mark_unwatched(&self, media_id: &str) -> Result<()> {
         // Extract the actual Plex rating key from the composite ID
         let rating_key = if media_id.contains(':') {
-            media_id.split(':').last().unwrap_or(media_id)
+            media_id.split(':').next_back().unwrap_or(media_id)
         } else {
             media_id
         };

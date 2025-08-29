@@ -7,7 +7,7 @@ pub mod sync_repository;
 use crate::events::event_bus::EventBus;
 use anyhow::Result;
 use async_trait::async_trait;
-use sea_orm::{DatabaseConnection, EntityTrait, TransactionTrait};
+use sea_orm::{DatabaseConnection, EntityTrait};
 use std::sync::Arc;
 
 /// Base repository trait that all repositories should implement
@@ -50,5 +50,4 @@ impl BaseRepository {
 pub use library_repository::{LibraryRepository, LibraryRepositoryImpl};
 pub use media_repository::{MediaRepository, MediaRepositoryImpl};
 pub use playback_repository::{PlaybackRepository, PlaybackRepositoryImpl};
-pub use source_repository::{SourceRepository, SourceRepositoryImpl};
-pub use sync_repository::{SyncRepository, SyncRepositoryImpl};
+pub use source_repository::SourceRepositoryImpl;

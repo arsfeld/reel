@@ -10,10 +10,6 @@ pub use libraries::{ActiveModel as LibraryActiveModel, Entity as Library, Model 
 pub use media_items::{
     ActiveModel as MediaItemActiveModel, Entity as MediaItem, Model as MediaItemModel,
 };
-pub use offline_content::{
-    ActiveModel as OfflineContentActiveModel, Entity as OfflineContent,
-    Model as OfflineContentModel,
-};
 pub use playback_progress::{
     ActiveModel as PlaybackProgressActiveModel, Entity as PlaybackProgress,
     Model as PlaybackProgressModel,

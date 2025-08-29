@@ -708,35 +708,33 @@ impl SyncManager {
         // Also queue backdrop URLs for movies and shows
         match item {
             MediaItem::Movie(m) => {
-                if let Some(backdrop) = &m.backdrop_url {
-                    if !self
+                if let Some(backdrop) = &m.backdrop_url
+                    && !self
                         .image_loader
                         .batch_check_cached(vec![(backdrop.clone(), ImageSize::Medium)])
                         .await[0]
-                    {
-                        queue.push_back(PosterDownloadRequest {
-                            url: backdrop.clone(),
-                            size: ImageSize::Medium,
-                            media_id: media_id.to_string(),
-                            media_type: "movie_backdrop".to_string(),
-                        });
-                    }
+                {
+                    queue.push_back(PosterDownloadRequest {
+                        url: backdrop.clone(),
+                        size: ImageSize::Medium,
+                        media_id: media_id.to_string(),
+                        media_type: "movie_backdrop".to_string(),
+                    });
                 }
             }
             MediaItem::Show(s) => {
-                if let Some(backdrop) = &s.backdrop_url {
-                    if !self
+                if let Some(backdrop) = &s.backdrop_url
+                    && !self
                         .image_loader
                         .batch_check_cached(vec![(backdrop.clone(), ImageSize::Medium)])
                         .await[0]
-                    {
-                        queue.push_back(PosterDownloadRequest {
-                            url: backdrop.clone(),
-                            size: ImageSize::Medium,
-                            media_id: media_id.to_string(),
-                            media_type: "show_backdrop".to_string(),
-                        });
-                    }
+                {
+                    queue.push_back(PosterDownloadRequest {
+                        url: backdrop.clone(),
+                        size: ImageSize::Medium,
+                        media_id: media_id.to_string(),
+                        media_type: "show_backdrop".to_string(),
+                    });
                 }
             }
             _ => {}

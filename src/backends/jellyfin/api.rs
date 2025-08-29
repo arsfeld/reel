@@ -2,7 +2,6 @@ use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;

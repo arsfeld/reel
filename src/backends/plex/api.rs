@@ -3,7 +3,6 @@ use chrono::{DateTime, Utc};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 

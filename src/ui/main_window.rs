@@ -2,12 +2,10 @@ use gtk4::{gio, glib, glib::clone, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
 use crate::config::Config;
-use crate::constants::PLAYER_CONTROLS_HIDE_DELAY_SECS;
 use crate::state::AppState;
 use crate::ui::filters::{SortOrder, WatchStatus};
 use crate::ui::pages;
@@ -378,11 +376,11 @@ impl ReelMainWindow {
 
             glib::spawn_future_local(async move {
                 while status_subscriber.wait_for_change().await {
-                    if let Some(window) = window_weak.upgrade() {
-                        if let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref() {
-                            let text = vm.status_text().get().await;
-                            window.imp().status_label.set_text(&text);
-                        }
+                    if let Some(window) = window_weak.upgrade()
+                        && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
+                    {
+                        let text = vm.status_text().get().await;
+                        window.imp().status_label.set_text(&text);
                     }
                 }
             });
@@ -393,11 +391,11 @@ impl ReelMainWindow {
 
             glib::spawn_future_local(async move {
                 while icon_subscriber.wait_for_change().await {
-                    if let Some(window) = window_weak.upgrade() {
-                        if let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref() {
-                            let icon = vm.status_icon().get().await;
-                            window.imp().status_icon.set_icon_name(Some(&icon));
-                        }
+                    if let Some(window) = window_weak.upgrade()
+                        && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
+                    {
+                        let icon = vm.status_icon().get().await;
+                        window.imp().status_icon.set_icon_name(Some(&icon));
                     }
                 }
             });
@@ -408,12 +406,12 @@ impl ReelMainWindow {
 
             glib::spawn_future_local(async move {
                 while spinner_subscriber.wait_for_change().await {
-                    if let Some(window) = window_weak.upgrade() {
-                        if let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref() {
-                            let show = vm.show_spinner().get().await;
-                            window.imp().sync_spinner.set_visible(show);
-                            window.imp().sync_spinner.set_spinning(show);
-                        }
+                    if let Some(window) = window_weak.upgrade()
+                        && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
+                    {
+                        let show = vm.show_spinner().get().await;
+                        window.imp().sync_spinner.set_visible(show);
+                        window.imp().sync_spinner.set_spinning(show);
                     }
                 }
             });
@@ -424,24 +422,24 @@ impl ReelMainWindow {
 
             glib::spawn_future_local(async move {
                 while connected_subscriber.wait_for_change().await {
-                    if let Some(window) = window_weak.upgrade() {
-                        if let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref() {
-                            let connected = vm.is_connected().get().await;
-                            let imp = window.imp();
+                    if let Some(window) = window_weak.upgrade()
+                        && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
+                    {
+                        let connected = vm.is_connected().get().await;
+                        let imp = window.imp();
 
-                            if connected {
-                                imp.welcome_page.set_visible(false);
-                                imp.home_group.set_visible(true);
-                                imp.sources_container.set_visible(true);
-                                imp.status_container.set_visible(true);
-                            } else {
-                                // Only show welcome if we truly have no data
-                                let sources = vm.sources().get().await;
-                                if sources.is_empty() {
-                                    imp.welcome_page.set_visible(true);
-                                    imp.home_group.set_visible(false);
-                                    imp.sources_container.set_visible(false);
-                                }
+                        if connected {
+                            imp.welcome_page.set_visible(false);
+                            imp.home_group.set_visible(true);
+                            imp.sources_container.set_visible(true);
+                            imp.status_container.set_visible(true);
+                        } else {
+                            // Only show welcome if we truly have no data
+                            let sources = vm.sources().get().await;
+                            if sources.is_empty() {
+                                imp.welcome_page.set_visible(true);
+                                imp.home_group.set_visible(false);
+                                imp.sources_container.set_visible(false);
                             }
                         }
                     }
@@ -596,15 +594,12 @@ impl ReelMainWindow {
     fn show_preferences(&self) {
         info!("Showing preferences");
 
-        if let Some(config) = self.imp().config.borrow().as_ref() {
-            if let Some(state) = self.imp().state.borrow().as_ref() {
-                let prefs_window = crate::ui::PreferencesWindow::new(
-                    self,
-                    config.clone(),
-                    state.event_bus.clone(),
-                );
-                prefs_window.present();
-            }
+        if let Some(config) = self.imp().config.borrow().as_ref()
+            && let Some(state) = self.imp().state.borrow().as_ref()
+        {
+            let prefs_window =
+                crate::ui::PreferencesWindow::new(self, config.clone(), state.event_bus.clone());
+            prefs_window.present();
         }
     }
 

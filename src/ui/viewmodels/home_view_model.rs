@@ -6,7 +6,7 @@ use crate::services::DataService;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::error;
 
 #[derive(Debug, Clone)]
 pub struct MediaSection {

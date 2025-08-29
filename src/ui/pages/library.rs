@@ -2,7 +2,7 @@ use gtk4::{gdk, glib, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use once_cell::sync::Lazy;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use tracing::{error, info, trace};
@@ -13,7 +13,6 @@ use crate::state::AppState;
 use crate::ui::filters::{FilterManager, WatchStatus};
 use crate::ui::viewmodels::library_view_model::LibraryViewModel;
 use crate::utils::{ImageLoader, ImageSize};
-use chrono::Utc;
 use sea_orm::prelude::Json;
 use serde_json::Value;
 use std::time::Duration;
@@ -256,11 +255,11 @@ impl LibraryView {
         let mut items_subscriber = view_model.filtered_items().subscribe();
         glib::spawn_future_local(async move {
             while items_subscriber.wait_for_change().await {
-                if let Some(view) = weak_self.upgrade() {
-                    if let Some(vm) = &*view.imp().view_model.borrow() {
-                        let items = vm.filtered_items().get().await;
-                        view.update_items_from_viewmodel(items);
-                    }
+                if let Some(view) = weak_self.upgrade()
+                    && let Some(vm) = &*view.imp().view_model.borrow()
+                {
+                    let items = vm.filtered_items().get().await;
+                    view.update_items_from_viewmodel(items);
                 }
             }
         });
@@ -270,20 +269,20 @@ impl LibraryView {
         let mut loading_subscriber = view_model.is_loading().subscribe();
         glib::spawn_future_local(async move {
             while loading_subscriber.wait_for_change().await {
-                if let Some(view) = weak_self_loading.upgrade() {
-                    if let Some(vm) = &*view.imp().view_model.borrow() {
-                        let is_loading = vm.is_loading().get().await;
-                        if let Some(stack) = view.imp().stack.borrow().as_ref() {
-                            if is_loading {
-                                stack.set_visible_child_name("loading");
+                if let Some(view) = weak_self_loading.upgrade()
+                    && let Some(vm) = &*view.imp().view_model.borrow()
+                {
+                    let is_loading = vm.is_loading().get().await;
+                    if let Some(stack) = view.imp().stack.borrow().as_ref() {
+                        if is_loading {
+                            stack.set_visible_child_name("loading");
+                        } else {
+                            // Check ViewModel's filtered_items instead of local copy
+                            let vm_items = vm.filtered_items().get().await;
+                            if vm_items.is_empty() {
+                                stack.set_visible_child_name("empty");
                             } else {
-                                // Check ViewModel's filtered_items instead of local copy
-                                let vm_items = vm.filtered_items().get().await;
-                                if vm_items.is_empty() {
-                                    stack.set_visible_child_name("empty");
-                                } else {
-                                    stack.set_visible_child_name("content");
-                                }
+                                stack.set_visible_child_name("content");
                             }
                         }
                     }
@@ -296,13 +295,12 @@ impl LibraryView {
         let mut error_subscriber = view_model.error().subscribe();
         glib::spawn_future_local(async move {
             while error_subscriber.wait_for_change().await {
-                if let Some(view) = weak_self_error.upgrade() {
-                    if let Some(vm) = &*view.imp().view_model.borrow() {
-                        if let Some(err_msg) = vm.error().get().await {
-                            tracing::error!("Library error: {}", err_msg);
-                            // Could show error in UI here
-                        }
-                    }
+                if let Some(view) = weak_self_error.upgrade()
+                    && let Some(vm) = &*view.imp().view_model.borrow()
+                    && let Some(err_msg) = vm.error().get().await
+                {
+                    tracing::error!("Library error: {}", err_msg);
+                    // Could show error in UI here
                 }
             }
         });
@@ -559,7 +557,7 @@ impl LibraryView {
             })
             .and_then(|obj| obj.get("playback_position_ms").cloned())
             .and_then(|v| v.as_u64())
-            .map(|ms| std::time::Duration::from_millis(ms))
+            .map(std::time::Duration::from_millis)
     }
 
     pub async fn load_library(&self, backend_id: String, library: Library) {
@@ -699,10 +697,10 @@ impl LibraryView {
             .map(|it| (it.id().to_string(), it))
             .collect();
         for id in common_ids {
-            if let Some(card) = cards_by_id.get(&id) {
-                if let Some(new_item) = new_by_id.get(&id) {
-                    card.update_content((*new_item).clone());
-                }
+            if let Some(card) = cards_by_id.get(&id)
+                && let Some(new_item) = new_by_id.get(&id)
+            {
+                card.update_content((*new_item).clone());
             }
         }
 
@@ -712,15 +710,15 @@ impl LibraryView {
             while let Some(flow_child) = child {
                 let next = flow_child.next_sibling();
 
-                if let Some(fc) = flow_child.downcast_ref::<gtk4::FlowBoxChild>() {
-                    if let Some(card) = fc.child().and_then(|w| w.downcast::<MediaCard>().ok()) {
-                        let card_id = card.media_item().id().to_string();
-                        if to_remove.contains(&card_id) {
-                            flow_box.remove(&flow_child);
-                            // Remove from maps
-                            cards_by_index.retain(|_, c| c.media_item().id() != card_id);
-                            cards_by_id.remove(&card_id);
-                        }
+                if let Some(fc) = flow_child.downcast_ref::<gtk4::FlowBoxChild>()
+                    && let Some(card) = fc.child().and_then(|w| w.downcast::<MediaCard>().ok())
+                {
+                    let card_id = card.media_item().id().to_string();
+                    if to_remove.contains(&card_id) {
+                        flow_box.remove(&flow_child);
+                        // Remove from maps
+                        cards_by_index.retain(|_, c| c.media_item().id() != card_id);
+                        cards_by_id.remove(&card_id);
                     }
                 }
 
@@ -774,7 +772,7 @@ impl LibraryView {
 
             if order_changed {
                 // For reordering, it's simpler to rebuild
-                self.full_refresh_items(&flow_box, new_items.to_vec(), current_size, None, None);
+                self.full_refresh_items(flow_box, new_items.to_vec(), current_size, None, None);
             } else {
                 // Ensure indices map matches current children
                 drop(cards_by_index);

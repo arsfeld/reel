@@ -7,7 +7,6 @@ use tracing::{debug, error, info};
 
 use crate::backends::traits::MediaBackend;
 use crate::models::{Episode, Show};
-use crate::services::DataService;
 use crate::state::AppState;
 use crate::ui::viewmodels::{DetailsViewModel, ViewModel};
 use crate::utils::{ImageLoader, ImageSize};
@@ -848,16 +847,16 @@ impl ShowDetailsPage {
         info_box.append(&title_label);
 
         // Episode description (overview), if available
-        if let Some(overview) = &episode.overview {
-            if !overview.trim().is_empty() {
-                let desc_label = gtk4::Label::builder()
-                    .label(overview)
-                    .wrap(true)
-                    .xalign(0.0)
-                    .css_classes(vec!["dim-label"])
-                    .build();
-                info_box.append(&desc_label);
-            }
+        if let Some(overview) = &episode.overview
+            && !overview.trim().is_empty()
+        {
+            let desc_label = gtk4::Label::builder()
+                .label(overview)
+                .wrap(true)
+                .xalign(0.0)
+                .css_classes(vec!["dim-label"])
+                .build();
+            info_box.append(&desc_label);
         }
 
         // Episode duration and air date
@@ -998,12 +997,10 @@ impl ShowDetailsPage {
                     } else {
                         viewmodel.mark_season_as_watched().await;
                     }
+                } else if is_watched {
+                    viewmodel.mark_as_unwatched().await;
                 } else {
-                    if is_watched {
-                        viewmodel.mark_as_unwatched().await;
-                    } else {
-                        viewmodel.mark_as_watched().await;
-                    }
+                    viewmodel.mark_as_watched().await;
                 }
             });
         }
@@ -1052,7 +1049,7 @@ impl ShowDetailsPage {
 
         // Extract episode-specific metadata
         let (air_date, show_title, show_poster_url) = if let Some(metadata) = &media_item.metadata {
-            let metadata_json: serde_json::Value = metadata.clone().into();
+            let metadata_json: serde_json::Value = metadata.clone();
             let air_date = metadata_json
                 .get("air_date")
                 .and_then(|v| v.as_str())
