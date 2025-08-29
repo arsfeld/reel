@@ -23,11 +23,25 @@
         rustBuildInputs = with pkgs; [
           rustToolchain
           pkg-config
-          wrapGAppsHook4
           desktop-file-utils
           blueprint-compiler
           meson
           ninja
+        ] ++ lib.optionals pkgs.stdenv.isLinux [
+          wrapGAppsHook4  # Linux-only for wrapping GTK apps
+        ];
+
+        # Platform-specific packages
+        linuxOnlyPackages = with pkgs; lib.optionals pkgs.stdenv.isLinux [
+          gst_all_1.gst-vaapi  # VA-API is Linux-only
+        ];
+
+        darwinOnlyPackages = with pkgs; lib.optionals pkgs.stdenv.isDarwin [
+          darwin.apple_sdk.frameworks.CoreFoundation
+          darwin.apple_sdk.frameworks.CoreServices
+          darwin.apple_sdk.frameworks.Security
+          darwin.apple_sdk.frameworks.SystemConfiguration
+          darwin.apple_sdk.frameworks.AppKit
         ];
 
         buildInputs = with pkgs; [
@@ -43,7 +57,6 @@
           gst_all_1.gst-plugins-bad
           gst_all_1.gst-plugins-ugly
           gst_all_1.gst-libav
-          gst_all_1.gst-vaapi
           gst_all_1.gst-plugins-rs  # Includes gtk4paintablesink
           
           # MPV for alternative player backend
@@ -73,7 +86,7 @@
           
           # Image processing
           librsvg
-        ];
+        ] ++ linuxOnlyPackages ++ darwinOnlyPackages;
 
         pythonWithPkgs = pkgs.python3.withPackages (ps: with ps; [
           aiohttp
@@ -375,10 +388,6 @@
           cargo-outdated
           cargo-nextest
           
-          # Package building tools (will be installed via cargo)
-          # cargo-deb and cargo-generate-rpm are installed as needed
-          appimage-run
-          
           # Database tools
           sqlx-cli
           
@@ -386,24 +395,28 @@
           # rustfmt and clippy are provided by rustToolchain
           pre-commit
           
-          # Debugging
-          gdb
-          valgrind
-          
           # Documentation
           mdbook
           
-          # Flatpak tools
-          appstream
-          flatpak-builder
+          # Flatpak tools (Linux-only)
           pythonWithPkgs
           
-          # Package testing tools
-          dpkg
-          rpm
+          # Common package testing tools
           file
           wget
+        ] ++ lib.optionals pkgs.stdenv.isLinux [
+          # Linux-specific tools
+          appimage-run
+          gdb
+          valgrind
+          appstream
+          flatpak-builder
+          dpkg
+          rpm
           fuse
+        ] ++ lib.optionals pkgs.stdenv.isDarwin [
+          # macOS-specific debugging tools
+          lldb
         ];
 
       in
@@ -413,23 +426,24 @@
           nativeBuildInputs = rustBuildInputs;
           
           packages = devTools ++ [
-            flatpakUpdateSources
-            flatpakBuild
-            flatpakBuildInstall
-            flatpakRun
-            flatpakLint
             formatCode
             clippyFix
-            buildDeb
-            buildRpm
-            buildAppImage
-            buildAllPackages
             mesonSetup
             mesonBuild
             mesonInstall
             mesonTest
             mesonClean
             mesonDist
+          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+            flatpakUpdateSources
+            flatpakBuild
+            flatpakBuildInstall
+            flatpakRun
+            flatpakLint
+            buildDeb
+            buildRpm
+            buildAppImage
+            buildAllPackages
           ];
 
           shellHook = ''
@@ -459,19 +473,21 @@
             echo "  cargo fmt      - Format code (standard)"
             echo "  cargo clippy   - Run linter (standard)"
             echo ""
-            echo "Package building commands:"
-            echo "  build-deb          - Build Debian package (.deb)"
-            echo "  build-rpm          - Build RPM package (.rpm)"
-            echo "  build-appimage     - Build AppImage"
-            echo "  build-all-packages - Build all package formats"
-            echo ""
-            echo "Flatpak commands:"
-            echo "  flatpak-update-sources - Update cargo-sources.json"
-            echo "  flatpak-build         - Build the flatpak"
-            echo "  flatpak-build-install - Build and install the flatpak"
-            echo "  flatpak-run           - Run the installed flatpak"
-            echo "  flatpak-lint          - Lint the flatpak manifest"
-            echo ""
+            ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+              echo "Package building commands:"
+              echo "  build-deb          - Build Debian package (.deb)"
+              echo "  build-rpm          - Build RPM package (.rpm)"
+              echo "  build-appimage     - Build AppImage"
+              echo "  build-all-packages - Build all package formats"
+              echo ""
+              echo "Flatpak commands:"
+              echo "  flatpak-update-sources - Update cargo-sources.json"
+              echo "  flatpak-build         - Build the flatpak"
+              echo "  flatpak-build-install - Build and install the flatpak"
+              echo "  flatpak-run           - Run the installed flatpak"
+              echo "  flatpak-lint          - Lint the flatpak manifest"
+              echo ""
+            ''}
             
             # Initialize pre-commit hooks if not already done
             if [ ! -f .git/hooks/pre-commit ]; then
@@ -482,7 +498,11 @@
             fi
             
             # Set up GStreamer plugin paths - include core gstreamer plugins
-            export GST_PLUGIN_SYSTEM_PATH_1_0="${pkgs.gst_all_1.gstreamer.out}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-ugly}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-libav}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-rs}/lib/gstreamer-1.0"
+            GST_PATHS="${pkgs.gst_all_1.gstreamer.out}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-ugly}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-libav}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-rs}/lib/gstreamer-1.0"
+            ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+              GST_PATHS="$GST_PATHS:${pkgs.gst_all_1.gst-vaapi}/lib/gstreamer-1.0"
+            ''}
+            export GST_PLUGIN_SYSTEM_PATH_1_0="$GST_PATHS"
             
             # Set up GTK schema paths
             export XDG_DATA_DIRS="${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk4}/share/gsettings-schemas/${pkgs.gtk4.name}:$XDG_DATA_DIRS"
@@ -500,11 +520,27 @@
             export MPV_NO_PKG_CONFIG=0
             export DEP_MPV_VERSION_MAJOR=2
             export DEP_MPV_VERSION_MINOR=5
+            
+            # Fix gettext-sys on macOS
+            ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+              export GETTEXT_DIR="${pkgs.gettext}"
+              export GETTEXT_LIB_DIR="${pkgs.gettext}/lib"
+              export GETTEXT_INCLUDE_DIR="${pkgs.gettext}/include"
+              export GETTEXT_BIN_DIR="${pkgs.gettext}/bin"
+              export GETTEXT_SYSTEM=1
+            ''}
           '';
 
           # Environment variables
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
+          
+          # Fix gettext-sys build on macOS
+          GETTEXT_DIR = if pkgs.stdenv.isDarwin then "${pkgs.gettext}" else "";
+          GETTEXT_LIB_DIR = if pkgs.stdenv.isDarwin then "${pkgs.gettext}/lib" else "";
+          GETTEXT_INCLUDE_DIR = if pkgs.stdenv.isDarwin then "${pkgs.gettext}/include" else "";
+          GETTEXT_BIN_DIR = if pkgs.stdenv.isDarwin then "${pkgs.gettext}/bin" else "";
+          GETTEXT_SYSTEM = if pkgs.stdenv.isDarwin then "1" else "";
         };
 
         packages.default = pkgs.rustPlatform.buildRustPackage {
@@ -537,7 +573,7 @@
             homepage = "https://github.com/arsfeld/gnome-reel";
             license = licenses.gpl3Plus;
             maintainers = [];
-            platforms = platforms.linux;
+            platforms = platforms.linux ++ platforms.darwin;
             mainProgram = "reel";
           };
         };
