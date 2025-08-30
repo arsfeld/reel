@@ -1,0 +1,192 @@
+name: Reel
+options:
+  bundleIdPrefix: dev.arsfeld
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+  xcodeVersion: "15.0"
+  useBaseInternationalization: true
+  
+settings:
+  base:
+    PRODUCT_NAME: Reel
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+    SWIFT_VERSION: 5.9
+    DEVELOPMENT_TEAM: ""  # Will be set automatically if available
+    CODE_SIGN_IDENTITY: "-"  # Ad-hoc signing for local builds
+    CODE_SIGN_STYLE: Manual
+    ENABLE_HARDENED_RUNTIME: NO  # Disabled for local development
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+    SKIP_INSTALL: NO
+    
+configs:
+  Debug:
+    SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    DEBUG_INFORMATION_FORMAT: "dwarf-with-dsym"
+    
+  Release:
+    SWIFT_OPTIMIZATION_LEVEL: "-O"
+    
+targets:
+  Reel:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Reel
+        excludes:
+          - "**/*.xcassets"
+      - path: Reel/Assets.xcassets
+        type: folder
+        buildPhase: resources
+      - path: Generated/SwiftBridgeCore.swift
+        optional: true
+      - path: Generated/SwiftBridgeCore.h
+        optional: true
+        buildPhase: headers
+        
+    settings:
+      base:
+        INFOPLIST_FILE: Reel/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        PRODUCT_BUNDLE_IDENTIFIER: dev.arsfeld.Reel
+        LIBRARY_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(PROJECT_DIR)"
+          - "$(PROJECT_DIR)/../target/release"
+          - "$(PROJECT_DIR)/../target/debug"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../Frameworks"
+        OTHER_LDFLAGS:
+          - "-lreel_ffi"
+        HEADER_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(PROJECT_DIR)/Generated"
+        SWIFT_OBJC_BRIDGING_HEADER: "Generated/SwiftBridgeCore.h"
+        
+    dependencies:
+      - framework: Foundation.framework
+      - framework: AppKit.framework
+      - framework: SwiftUI.framework
+      
+    preBuildScripts:
+      - name: "Build Rust Library and Generate Swift Bridge"
+        script: |
+          set -e
+          cd "$PROJECT_DIR/.."
+          
+          # Determine build profile
+          if [ "${CONFIGURATION}" = "Release" ]; then
+            PROFILE="release"
+            PROFILE_FLAG="--release"
+          else
+            PROFILE="debug"
+            PROFILE_FLAG=""
+          fi
+          
+          echo "Building Rust library for ${CONFIGURATION} configuration..."
+          
+          # Build the Rust library
+          if command -v nix &> /dev/null; then
+            echo "Building with Nix..."
+            nix develop -c cargo build --no-default-features --features macos ${PROFILE_FLAG}
+          else
+            echo "Building without Nix..."
+            cargo build --no-default-features --features macos ${PROFILE_FLAG}
+          fi
+          
+          # Find the build output directory for Swift bridge files
+          # Look for directories with SwiftBridgeCore.swift in the out folder
+          BUILD_DIR=""
+          for dir in target/${PROFILE}/build/reel-*/; do
+            if [ -f "${dir}out/SwiftBridgeCore.swift" ]; then
+              BUILD_DIR="$dir"
+              break
+            fi
+          done
+          
+          if [ -n "$BUILD_DIR" ] && [ -d "${BUILD_DIR}out" ]; then
+            echo "Found Swift bridge files at: ${BUILD_DIR}out"
+            
+            # Clean and recreate Generated directory
+            rm -rf "$PROJECT_DIR/Generated"
+            mkdir -p "$PROJECT_DIR/Generated"
+            
+            # Copy all generated files
+            cp -R "${BUILD_DIR}out/"* "$PROJECT_DIR/Generated/"
+            
+            echo "Swift bridge files copied successfully"
+            
+            # List what was copied for debugging
+            ls -la "$PROJECT_DIR/Generated/"
+          else
+            echo "ERROR: Could not find Swift bridge output directory"
+            echo "Expected path pattern: target/${PROFILE}/build/reel-*/out"
+            echo "Available directories:"
+            ls -d target/${PROFILE}/build/reel-*/ 2>/dev/null || echo "None found"
+            exit 1
+          fi
+          
+          # Copy the dylib to project directory for embedding
+          DYLIB_PATH="target/${PROFILE}/libreel_ffi.dylib"
+          if [ -f "$DYLIB_PATH" ]; then
+            cp "$DYLIB_PATH" "$PROJECT_DIR/libreel_ffi.dylib"
+            echo "Rust library copied: libreel_ffi.dylib"
+          else
+            echo "ERROR: Rust library not found at $DYLIB_PATH"
+            exit 1
+          fi
+        inputFiles:
+          - "$(PROJECT_DIR)/../src"
+          - "$(PROJECT_DIR)/../Cargo.toml"
+          - "$(PROJECT_DIR)/../src/platforms/macos/bridge.rs"
+        outputFiles:
+          - "$(PROJECT_DIR)/libreel_ffi.dylib"
+          - "$(PROJECT_DIR)/Generated/SwiftBridgeCore.swift"
+          - "$(PROJECT_DIR)/Generated/SwiftBridgeCore.h"
+          
+    postBuildScripts:
+      - name: "Embed Rust Library"
+        script: |
+          set -e
+          FRAMEWORKS_DIR="$BUILT_PRODUCTS_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$FRAMEWORKS_DIR"
+          
+          # Copy the dylib to Frameworks
+          if [ -f "$PROJECT_DIR/libreel_ffi.dylib" ]; then
+            cp "$PROJECT_DIR/libreel_ffi.dylib" "$FRAMEWORKS_DIR/"
+            
+            # Update the install name
+            install_name_tool -id "@rpath/libreel_ffi.dylib" "$FRAMEWORKS_DIR/libreel_ffi.dylib"
+            
+            # Code sign the library
+            if [ -n "$EXPANDED_CODE_SIGN_IDENTITY" ]; then
+              codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$FRAMEWORKS_DIR/libreel_ffi.dylib"
+            fi
+          else
+            echo "Warning: libreel_ffi.dylib not found"
+          fi
+
+schemes:
+  Reel:
+    build:
+      targets:
+        Reel: all
+    run:
+      config: Debug
+      environmentVariables:
+        RUST_LOG: debug
+        RUST_BACKTRACE: 1
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

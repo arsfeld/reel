@@ -1,0 +1,473 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		1AE25B43CCC1B09CA40CB644 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F577298EAB6E1DA793CB8B8C /* Foundation.framework */; };
+		3ACAEC877C6782976378C4AD /* AppKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 582FD553F0A89B2B0828F8BB /* AppKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		500FD6C0E5844E6856C99EE9 /* SwiftBridgeCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C80B90AF4BB4E7153855A1 /* SwiftBridgeCore.swift */; };
+		67043FA2FE183D7ADC295E75 /* SwiftUI.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 375E3AE04A43D0AE27B8527C /* SwiftUI.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		7799BB781813431DEA4F182B /* ReelApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79F565BAF7B28F9E3EC54A3F /* ReelApp.swift */; };
+		7A8B5CBBB32F6715D8363A30 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0AAF0D94AFB0965BD3E79B90 /* Assets.xcassets */; };
+		7FCAD52B1325230C5FF70E04 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 251471E7D12AA8C16E9F72BA /* AppModel.swift */; };
+		80B8965915EF28E774517674 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 375E3AE04A43D0AE27B8527C /* SwiftUI.framework */; };
+		959F1FBD35374818A94E4217 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1560D51E1D4229160C2B6F8 /* ContentView.swift */; };
+		C46289A06961530BBD4E332E /* Foundation.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = F577298EAB6E1DA793CB8B8C /* Foundation.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		FDCC814569B12A27A044E971 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 582FD553F0A89B2B0828F8BB /* AppKit.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		D13CDF51D8A7BF2570E593E9 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				C46289A06961530BBD4E332E /* Foundation.framework in Embed Frameworks */,
+				3ACAEC877C6782976378C4AD /* AppKit.framework in Embed Frameworks */,
+				67043FA2FE183D7ADC295E75 /* SwiftUI.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		09C80B90AF4BB4E7153855A1 /* SwiftBridgeCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftBridgeCore.swift; sourceTree = "<group>"; };
+		0AAF0D94AFB0965BD3E79B90 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Assets.xcassets; path = Reel/Assets.xcassets; sourceTree = SOURCE_ROOT; };
+		251471E7D12AA8C16E9F72BA /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		375E3AE04A43D0AE27B8527C /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = SwiftUI.framework; sourceTree = "<group>"; };
+		582FD553F0A89B2B0828F8BB /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = AppKit.framework; sourceTree = "<group>"; };
+		6D28B05F3E3322E261FDEEEB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		79F565BAF7B28F9E3EC54A3F /* ReelApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelApp.swift; sourceTree = "<group>"; };
+		AD676447B0DB18D125E76DA5 /* SwiftBridgeCore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SwiftBridgeCore.h; sourceTree = "<group>"; };
+		C7C4CAA7CFF687FF8B6724FD /* Reel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Reel.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F1560D51E1D4229160C2B6F8 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		F577298EAB6E1DA793CB8B8C /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = Foundation.framework; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1CB67857B557A58B86E6EC7F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1AE25B43CCC1B09CA40CB644 /* Foundation.framework in Frameworks */,
+				FDCC814569B12A27A044E971 /* AppKit.framework in Frameworks */,
+				80B8965915EF28E774517674 /* SwiftUI.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		39DAF6FF20670402F6BD9044 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				582FD553F0A89B2B0828F8BB /* AppKit.framework */,
+				F577298EAB6E1DA793CB8B8C /* Foundation.framework */,
+				375E3AE04A43D0AE27B8527C /* SwiftUI.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		597D16B9415AD7613251088A = {
+			isa = PBXGroup;
+			children = (
+				D6BF751EE8FECB48582308AC /* Generated */,
+				C775813B787F9C9E56BBC003 /* Reel */,
+				39DAF6FF20670402F6BD9044 /* Frameworks */,
+				9330200A569ED5477874D824 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9330200A569ED5477874D824 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C7C4CAA7CFF687FF8B6724FD /* Reel.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		C775813B787F9C9E56BBC003 /* Reel */ = {
+			isa = PBXGroup;
+			children = (
+				251471E7D12AA8C16E9F72BA /* AppModel.swift */,
+				0AAF0D94AFB0965BD3E79B90 /* Assets.xcassets */,
+				F1560D51E1D4229160C2B6F8 /* ContentView.swift */,
+				6D28B05F3E3322E261FDEEEB /* Info.plist */,
+				79F565BAF7B28F9E3EC54A3F /* ReelApp.swift */,
+			);
+			path = Reel;
+			sourceTree = "<group>";
+		};
+		D6BF751EE8FECB48582308AC /* Generated */ = {
+			isa = PBXGroup;
+			children = (
+				AD676447B0DB18D125E76DA5 /* SwiftBridgeCore.h */,
+				09C80B90AF4BB4E7153855A1 /* SwiftBridgeCore.swift */,
+			);
+			path = Generated;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AFB5673E269C151D7CEC1FE4 /* Reel */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 34EAC9EDAFD0C8000CD3C24D /* Build configuration list for PBXNativeTarget "Reel" */;
+			buildPhases = (
+				F6AABA7F80BC48A1E6E5C121 /* Build Rust Library and Generate Swift Bridge */,
+				AA56224B0DA68CFAC14168A4 /* Sources */,
+				8110BED88016EA24E1F868EA /* Resources */,
+				1CB67857B557A58B86E6EC7F /* Frameworks */,
+				D13CDF51D8A7BF2570E593E9 /* Embed Frameworks */,
+				FBA23C0C8091C804BDD01A55 /* Embed Rust Library */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Reel;
+			packageProductDependencies = (
+			);
+			productName = Reel;
+			productReference = C7C4CAA7CFF687FF8B6724FD /* Reel.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		84AF5AEA544872A41B60E0B2 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					AFB5673E269C151D7CEC1FE4 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Manual;
+					};
+				};
+			};
+			buildConfigurationList = EE787DA360354CF0E26195FE /* Build configuration list for PBXProject "Reel" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 597D16B9415AD7613251088A;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AFB5673E269C151D7CEC1FE4 /* Reel */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		8110BED88016EA24E1F868EA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7A8B5CBBB32F6715D8363A30 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		F6AABA7F80BC48A1E6E5C121 /* Build Rust Library and Generate Swift Bridge */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(PROJECT_DIR)/../src",
+				"$(PROJECT_DIR)/../Cargo.toml",
+				"$(PROJECT_DIR)/../src/platforms/macos/bridge.rs",
+			);
+			name = "Build Rust Library and Generate Swift Bridge";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(PROJECT_DIR)/libreel_ffi.dylib",
+				"$(PROJECT_DIR)/Generated/SwiftBridgeCore.swift",
+				"$(PROJECT_DIR)/Generated/SwiftBridgeCore.h",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\ncd \"$PROJECT_DIR/..\"\n\n# Determine build profile\nif [ \"${CONFIGURATION}\" = \"Release\" ]; then\n  PROFILE=\"release\"\n  PROFILE_FLAG=\"--release\"\nelse\n  PROFILE=\"debug\"\n  PROFILE_FLAG=\"\"\nfi\n\necho \"Building Rust library for ${CONFIGURATION} configuration...\"\n\n# Build the Rust library\nif command -v nix &> /dev/null; then\n  echo \"Building with Nix...\"\n  nix develop -c cargo build --no-default-features --features macos ${PROFILE_FLAG}\nelse\n  echo \"Building without Nix...\"\n  cargo build --no-default-features --features macos ${PROFILE_FLAG}\nfi\n\n# Find the build output directory for Swift bridge files\n# Look for directories with SwiftBridgeCore.swift in the out folder\nBUILD_DIR=\"\"\nfor dir in target/${PROFILE}/build/reel-*/; do\n  if [ -f \"${dir}out/SwiftBridgeCore.swift\" ]; then\n    BUILD_DIR=\"$dir\"\n    break\n  fi\ndone\n\nif [ -n \"$BUILD_DIR\" ] && [ -d \"${BUILD_DIR}out\" ]; then\n  echo \"Found Swift bridge files at: ${BUILD_DIR}out\"\n  \n  # Clean and recreate Generated directory\n  rm -rf \"$PROJECT_DIR/Generated\"\n  mkdir -p \"$PROJECT_DIR/Generated\"\n  \n  # Copy all generated files\n  cp -R \"${BUILD_DIR}out/\"* \"$PROJECT_DIR/Generated/\"\n  \n  echo \"Swift bridge files copied successfully\"\n  \n  # List what was copied for debugging\n  ls -la \"$PROJECT_DIR/Generated/\"\nelse\n  echo \"ERROR: Could not find Swift bridge output directory\"\n  echo \"Expected path pattern: target/${PROFILE}/build/reel-*/out\"\n  echo \"Available directories:\"\n  ls -d target/${PROFILE}/build/reel-*/ 2>/dev/null || echo \"None found\"\n  exit 1\nfi\n\n# Copy the dylib to project directory for embedding\nDYLIB_PATH=\"target/${PROFILE}/libreel_ffi.dylib\"\nif [ -f \"$DYLIB_PATH\" ]; then\n  cp \"$DYLIB_PATH\" \"$PROJECT_DIR/libreel_ffi.dylib\"\n  echo \"Rust library copied: libreel_ffi.dylib\"\nelse\n  echo \"ERROR: Rust library not found at $DYLIB_PATH\"\n  exit 1\nfi\n";
+		};
+		FBA23C0C8091C804BDD01A55 /* Embed Rust Library */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed Rust Library";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nFRAMEWORKS_DIR=\"$BUILT_PRODUCTS_DIR/$FRAMEWORKS_FOLDER_PATH\"\nmkdir -p \"$FRAMEWORKS_DIR\"\n\n# Copy the dylib to Frameworks\nif [ -f \"$PROJECT_DIR/libreel_ffi.dylib\" ]; then\n  cp \"$PROJECT_DIR/libreel_ffi.dylib\" \"$FRAMEWORKS_DIR/\"\n  \n  # Update the install name\n  install_name_tool -id \"@rpath/libreel_ffi.dylib\" \"$FRAMEWORKS_DIR/libreel_ffi.dylib\"\n  \n  # Code sign the library\n  if [ -n \"$EXPANDED_CODE_SIGN_IDENTITY\" ]; then\n    codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$FRAMEWORKS_DIR/libreel_ffi.dylib\"\n  fi\nelse\n  echo \"Warning: libreel_ffi.dylib not found\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA56224B0DA68CFAC14168A4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7FCAD52B1325230C5FF70E04 /* AppModel.swift in Sources */,
+				959F1FBD35374818A94E4217 /* ContentView.swift in Sources */,
+				7799BB781813431DEA4F182B /* ReelApp.swift in Sources */,
+				500FD6C0E5844E6856C99EE9 /* SwiftBridgeCore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		2F455ED56B9594285F793D65 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Generated",
+				);
+				INFOPLIST_FILE = Reel/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)",
+					"$(PROJECT_DIR)/../target/release",
+					"$(PROJECT_DIR)/../target/debug",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				OTHER_LDFLAGS = (
+					"-lreel_ffi",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.arsfeld.Reel;
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = Generated/SwiftBridgeCore.h;
+			};
+			name = Debug;
+		};
+		4E5D6C843E7E91805AE25340 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = Reel;
+				SDKROOT = macosx;
+				SKIP_INSTALL = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+		AEBFEE30C7DF06979B501D25 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = Reel;
+				SDKROOT = macosx;
+				SKIP_INSTALL = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		FF00F86CDEA932638C0F7911 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Generated",
+				);
+				INFOPLIST_FILE = Reel/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)",
+					"$(PROJECT_DIR)/../target/release",
+					"$(PROJECT_DIR)/../target/debug",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				OTHER_LDFLAGS = (
+					"-lreel_ffi",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.arsfeld.Reel;
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = Generated/SwiftBridgeCore.h;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		34EAC9EDAFD0C8000CD3C24D /* Build configuration list for PBXNativeTarget "Reel" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2F455ED56B9594285F793D65 /* Debug */,
+				FF00F86CDEA932638C0F7911 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EE787DA360354CF0E26195FE /* Build configuration list for PBXProject "Reel" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4E5D6C843E7E91805AE25340 /* Debug */,
+				AEBFEE30C7DF06979B501D25 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 84AF5AEA544872A41B60E0B2 /* Project object */;
+}
