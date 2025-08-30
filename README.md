@@ -23,7 +23,7 @@
 
 ## What is Reel?
 
-Reel is a native Linux media player that brings your Plex and Jellyfin libraries to the GNOME desktop. Written entirely in Rust, it leverages the language's performance and memory safety to deliver a fast, reliable media experience without the overhead of web technologies.
+Reel is a native, cross-platform media player that brings your Plex and Jellyfin libraries to the desktop with a premium, Netflix-like experience. Written entirely in Rust, it leverages the language's performance and memory safety to deliver a fast, reliable media experience without the overhead of web technologies. Currently focused on Linux/GNOME with GTK4, Reel is architected for multi-platform support with macOS development underway using both Swift-bridge and Cocoa (objc2) approaches.
 
 | Main Window | Show Details |
 |:---:|:---:|
@@ -37,12 +37,14 @@ Reel is a native Linux media player that brings your Plex and Jellyfin libraries
 
 | Feature | Description |
 |---------|-------------|
-| **🦀 Pure Rust** | Fast, memory-safe, and concurrent by design |
-| **🔌 Multi-Backend** | Supports Plex and Jellyfin, with local files planned |
-| **💾 Offline-First** | SQLite caching keeps your library browsable even offline |
-| **🎨 Native GTK4** | Seamlessly integrates with modern GNOME desktops |
-| **⚡ Async Everything** | Built on Tokio for responsive, non-blocking operations |
-| **🎥 Dual Players** | MPV (default) and GStreamer backends for maximum compatibility |
+| **🦀 Pure Rust** | Fast, memory-safe, and concurrent by design with modern architecture |
+| **🔌 Multi-Backend** | Simultaneous Plex and Jellyfin connections, local files in development |
+| **💾 Offline-First** | SeaORM/SQLite database with instant UI loading and background sync |
+| **🎨 Native GTK4** | Beautiful libadwaita interface following GNOME HIG |
+| **⚡ Reactive UI** | Event-driven ViewModels with observable properties for responsive updates |
+| **🎥 Dual Players** | MPV (default, recommended) and GStreamer backends for maximum compatibility |
+| **🔐 Secure Auth** | OAuth for Plex, secure credential storage in system keyring |
+| **📊 Smart Caching** | Three-tier caching strategy (Memory LRU → SQLite → Backend API) |
 
 ## 🚀 Getting Started
 
@@ -139,23 +141,36 @@ nix run github:arsfeld/gnome-reel
 <details>
 <summary><b>Click to see architecture diagram</b></summary>
 
-Reel follows Rust best practices with a clean separation of concerns:
+Reel implements a modern reactive architecture with clean separation of concerns:
 
 ```
-UI Layer (GTK4/Blueprint templates)
+UI Layer (GTK4/libadwaita with Blueprint templates)
     ↓
-Application State (Arc<RwLock> shared state)
+ViewModels (Reactive properties with change notifications)
     ↓
-Service Layer (Tokio async services)
+Event System (Tokio broadcast-based event bus)
+    ↓
+Service Layer (DataService, SyncManager, SourceCoordinator)
+    ↓
+Repository Pattern (Type-safe SeaORM repositories)
+    ↓
+Database Layer (SQLite with migrations and caching)
     ↓
 Backend Trait (Generic MediaBackend interface)
     ↓
-Implementations (Plex, Jellyfin, Local)
+Implementations (Plex, Jellyfin, Local Files)
 ```
+
+**Key Architectural Patterns:**
+- **Reactive ViewModels**: Observable properties that automatically update UI
+- **Event-Driven Updates**: System-wide event broadcasting for data changes
+- **Repository Pattern**: Clean data access layer with SeaORM
+- **Three-Tier Caching**: Memory (LRU) → Database (SQLite) → Backend API
+- **Platform Abstraction**: Frontend trait enables multi-platform support
 
 </details>
 
-The entire codebase leverages Rust's type system and ownership model to prevent common bugs at compile time, while async/await enables efficient handling of network requests and media operations.
+The entire codebase leverages Rust's type system and ownership model to prevent common bugs at compile time, while async/await with Tokio enables efficient handling of network requests and media operations. The application is currently 75% through a migration to a fully reactive architecture.
 
 ## 📊 Project Status
 
@@ -170,72 +185,87 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
   - Plex OAuth authentication with PIN-based flow
   - Jellyfin username/password authentication
   - Automatic server discovery and connection
-  - Multi-backend architecture supporting Plex and Jellyfin
-  - Persistent authentication and server preferences
-  - Multiple backends shown simultaneously (all libraries displayed together)
+  - Multi-backend architecture supporting Plex and Jellyfin simultaneously
+  - Secure credential storage in system keyring
+  - Sources page for backend management with exciting UI
+  - AuthProvider/Source separation for flexible authentication
 
 - **Media Browsing & Playback**
-  - Complete movie and TV show libraries with grid views
-  - Cinematic detail pages with backdrop images and metadata
-  - **MPV player backend (default)** - Superior performance with no subtitle issues
+  - Complete movie and TV show libraries with responsive grid views
+  - Cinematic detail pages with backdrop images and rich metadata
+  - **MPV player backend (default)** - Superior performance, no subtitle issues
   - GStreamer player backend (secondary) - Available but has subtitle color artifacts
-  - Immersive player with auto-hiding controls
-  - Audio/subtitle track selection
-  - Watch status tracking and progress indicators
-  - Playback position syncing (resume from last position)
-  - Continue watching and recently added sections
+  - Immersive player with auto-hiding controls and fullscreen support
+  - Audio/subtitle track selection with on-the-fly switching
+  - Watch status tracking with playback progress indicators
+  - Resume from last position across sessions
+  - Continue watching and recently added sections on homepage
 
 - **Performance & Architecture**
-  - Multi-level image caching (memory + disk) with request coalescing
+  - **Reactive ViewModels** - Observable properties with automatic UI updates
+  - **Event-driven architecture** - System-wide event bus for data changes
+  - **SeaORM database layer** - Type-safe queries with migrations
+  - **Three-tier caching** - Memory (LRU) → SQLite → Backend API
+  - Multi-level image caching with request coalescing
   - HTTP/2 connection pooling for faster API calls
   - Lazy loading with viewport-based rendering
-  - SQLite-based offline cache for instant startup
-  - Backend-agnostic UI architecture for extensibility
+  - Offline-first with instant UI from cache
   - Async/await throughout with Tokio runtime
 
 - **User Experience**
-  - Homepage with dynamic content sections
-  - Library filtering (watched/unwatched) and sorting
-  - Library visibility management
-  - Modern Blueprint-based UI with GNOME HIG compliance
-  - Smooth transitions and loading states
-  - **Fullscreen playback support** - F11, double-click, and cursor auto-hiding
-  - **Advanced player controls** - Keyboard shortcuts, window dragging, time display modes
+  - Homepage with dynamic content sections from all backends
+  - Library filtering (watched/unwatched/all) and sorting (title/year/rating/date)
+  - Library visibility management per backend
+  - Modern Blueprint-based UI following GNOME HIG
+  - Smooth transitions and consistent loading states
+  - Fullscreen playback - F11, double-click, cursor auto-hiding
+  - Advanced player controls - Keyboard shortcuts, draggable window, time display modes
+  - Backend switcher for seamless source selection
 
 ### 🔧 In Development
+- **Architecture Migration (75% Complete)**
+  - Migrating to fully reactive architecture with ViewModels
+  - Completing event system integration (12/27 event types done)
+  - Integrating remaining UI pages with ViewModels (4 of 6 pages remaining)
+  - Adding transaction support to sync operations
+
 - **Known Issues to Fix**
   - Homepage sections randomly replace each other when multiple backends are enabled
   - Horizontal scrolling on homepage doesn't load images
-  - GStreamer subtitle color artifacts
+  - GStreamer subtitle color artifacts (use MPV player instead)
+  - Main Window hybrid status system causing race conditions
 
 - **Search & Filtering**
-  - Search UI implementation (backend support varies)
+  - Search UI implementation (Jellyfin backend ready, Plex needs work)
   - Advanced filtering (genre, year, rating, resolution)
   - Collections and playlists support
 
 - **Media Information**
-  - Cast and crew information display UI
-  - Media badges (4K, HDR, etc.)
-  - Enhanced metadata display
+  - Cast and crew information display UI (data available from Jellyfin)
+  - Media badges (4K, HDR, Dolby Vision, etc.)
+  - Enhanced metadata display with ratings from multiple sources
 
 - **Additional Features**
-  - Local file library scanning
+  - Local file library scanning (10% implemented)
   - Music and photo library support
-  - Settings management with GSettings
-  - Offline download and playback
-  - Metadata provider integration
+  - Settings management migration to GSettings
+  - Offline download and playback functionality
+  - Metadata provider integration (TMDB, TVDB)
   - Skip intro/credits improvements
+  - macOS native UI (Swift-bridge and Cocoa implementations in progress)
 
 
 ## 🛠️ Tech Stack
 
-- **Language**: Rust 2021 edition
+- **Language**: Rust 2024 edition with async/await
 - **UI Framework**: GTK4 + libadwaita via [gtk-rs](https://gtk-rs.org/)
-- **Async Runtime**: [Tokio](https://tokio.rs/)
-- **Database**: SQLite with [SQLx](https://github.com/launchbadge/sqlx)
-- **HTTP Client**: [Reqwest](https://github.com/seanmonstar/reqwest)
+- **Async Runtime**: [Tokio](https://tokio.rs/) with broadcast channels for events
+- **Database**: SQLite with [SeaORM](https://www.sea-ql.org/SeaORM/) for type-safe queries
+- **HTTP Client**: [Reqwest](https://github.com/seanmonstar/reqwest) with connection pooling
 - **Video Playback**: MPV (default) via libmpv2, GStreamer (secondary) via [gstreamer-rs](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
-- **Serialization**: [Serde](https://serde.rs/)
+- **Caching**: LRU memory cache + SQLite persistent cache
+- **Serialization**: [Serde](https://serde.rs/) for JSON/TOML
+- **Security**: [Keyring](https://github.com/hwchen/keyring-rs) for credential storage
 
 ## 🤝 Contributing
 

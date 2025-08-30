@@ -9,12 +9,22 @@ repository = "https://github.com/arsfeld/reel"
 keywords = ["media", "player", "plex", "jellyfin", "gnome"]
 categories = ["multimedia", "gui"]
 
+[lib]
+name = "reel_ffi"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["gtk"]
+gtk = ["dep:gtk4", "dep:gdk4", "dep:gdk-pixbuf", "dep:libadwaita", "dep:glib-build-tools"]
+swift = ["dep:swift-bridge", "dep:swift-bridge-build", "dep:objc", "dep:core-foundation", "dep:dispatch"]
+cocoa = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit", "dep:objc2-web-kit", "dep:objc2-av-foundation", "dep:objc2-core-media", "dep:block2", "dep:dispatch"]
+
 [dependencies]
-# GTK and UI
-gtk4 = { version = "0.10", features = ["v4_14"] }
-gdk4 = { version = "0.10", features = ["v4_14"] }
-gdk-pixbuf = "0.21"
-libadwaita = { version = "0.8", features = ["v1_5"] }
+# GTK and UI (optional for GTK feature)
+gtk4 = { version = "0.10", features = ["v4_14"], optional = true }
+gdk4 = { version = "0.10", features = ["v4_14"], optional = true }
+gdk-pixbuf = { version = "0.21", optional = true }
+libadwaita = { version = "0.8", features = ["v1_5"], optional = true }
 
 # Media playback
 gstreamer = "0.24"
@@ -66,6 +76,40 @@ webp = "0.3"
 base64 = "0.22"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 lru = "0.12"
+lazy_static = "1.5"
+
+# macOS-specific dependencies (Swift-bridge approach)
+swift-bridge = { version = "0.1", optional = true }
+objc = { version = "0.2", optional = true }
+core-foundation = { version = "0.10", optional = true }
+dispatch = { version = "0.2", optional = true }
+
+# macOS-specific dependencies (objc2 approach)
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", features = [
+    "NSString", "NSArray", "NSDictionary", "NSThread", "NSObject", 
+    "NSValue", "NSNotification", "NSData", "NSURL", "NSURLRequest",
+    "NSError", "NSIndexPath", "NSIndexSet", "NSSet",
+    "NSGeometry"
+], optional = true }
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication", "NSWindow", "NSView", "NSViewController", 
+    "NSMenu", "NSMenuItem", "NSResponder", "NSEvent", "NSAlert",
+    "NSButton", "NSTextField", "NSSecureTextField", "NSTextView",
+    "NSImageView", "NSImage", "NSCollectionView",
+    "NSCollectionViewFlowLayout", "NSTableView", "NSTableColumn",
+    "NSOutlineView", "NSScrollView", "NSStackView", "NSSlider",
+    "NSProgressIndicator", "NSColor", "NSFont"
+], optional = true }
+objc2-web-kit = { version = "0.3", features = [
+    "WKWebView", "WKWebViewConfiguration", "WKNavigationDelegate", "WKNavigation"
+], optional = true }
+# Removed objc2-core-graphics - using objc2-foundation's geometry types instead
+objc2-av-foundation = { version = "0.3", features = [
+    "AVPlayer", "AVPlayerLayer", "AVPlayerItem", "AVAsset"
+], optional = true }
+objc2-core-media = { version = "0.3", features = ["CMTime"], optional = true }
+block2 = { version = "0.6", optional = true }
 
 # Localization
 gettext-rs = { version = "0.7", features = ["gettext-system"] }
@@ -76,7 +120,11 @@ tempfile = "3.21"
 criterion = "0.7"
 
 [build-dependencies]
-glib-build-tools = "0.21"
+glib-build-tools = { version = "0.21", optional = true }
+swift-bridge-build = { version = "0.1", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Removed old core-graphics and core-video, using objc2 crates instead
 
 
 [profile.release]

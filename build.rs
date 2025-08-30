@@ -1,10 +1,25 @@
 use std::path::Path;
 
 fn main() {
+    // Only compile GTK resources when GTK feature is enabled
+    #[cfg(feature = "gtk")]
+    {
+        compile_gtk_resources();
+    }
+
+    // Swift-bridge specific build steps when swift feature is enabled
+    #[cfg(feature = "swift")]
+    {
+        compile_swift_resources();
+    }
+}
+
+#[cfg(feature = "gtk")]
+fn compile_gtk_resources() {
     // Compile Blueprint files
-    println!("cargo:rerun-if-changed=src/ui/blueprints/");
-    println!("cargo:rerun-if-changed=src/ui/resources.gresource.xml");
-    println!("cargo:rerun-if-changed=src/ui/style.css");
+    println!("cargo:rerun-if-changed=src/platforms/gtk/ui/blueprints/");
+    println!("cargo:rerun-if-changed=src/platforms/gtk/ui/resources.gresource.xml");
+    println!("cargo:rerun-if-changed=src/platforms/gtk/ui/style.css");
 
     // Compile GResource with Blueprint files
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
@@ -31,7 +46,7 @@ fn main() {
 
     // Compile each Blueprint file to UI
     for file in &blueprint_files {
-        let input_path = format!("src/ui/blueprints/{}", file);
+        let input_path = format!("src/platforms/gtk/ui/blueprints/{}", file);
         let output_name = file.replace(".blp", ".ui");
         let output_path = ui_dir.join(&output_name);
 
@@ -57,7 +72,8 @@ fn main() {
     }
 
     // Copy style.css to build directory
-    std::fs::copy("src/ui/style.css", ui_dir.join("style.css")).expect("Failed to copy style.css");
+    std::fs::copy("src/platforms/gtk/ui/style.css", ui_dir.join("style.css"))
+        .expect("Failed to copy style.css");
 
     // Create a modified gresource file that points to compiled UI files
     let gresource_content = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -83,5 +99,63 @@ fn main() {
         &[ui_dir.to_str().unwrap()],
         gresource_path.to_str().unwrap(),
         "resources.gresource",
+    );
+}
+
+#[cfg(feature = "swift")]
+fn compile_swift_resources() {
+    // Swift-bridge code generation and other macOS-specific build steps
+    println!("cargo:rerun-if-changed=src/platforms/macos/bridge.rs");
+    println!("cargo:warning=Running macOS build with swift-bridge");
+
+    // Get OUT_DIR
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
+    println!("cargo:warning=OUT_DIR={}", out_dir);
+
+    // Generate Swift bridging code from #[swift_bridge::bridge] modules
+    // The generated Swift files are placed in OUT_DIR for consumption by Xcode/SwiftPM
+    let bridges = vec!["src/platforms/macos/bridge.rs"];
+    for path in &bridges {
+        println!("cargo:rerun-if-changed={}", path);
+    }
+
+    swift_bridge_build::parse_bridges(bridges).write_all_concatenated(&out_dir, "SwiftBridgeCore");
+
+    // Copy generated files to Xcode project for easier development
+    let xcode_generated_dir = "macos/ReelApp/Generated";
+    if std::path::Path::new("macos/ReelApp").exists() {
+        std::fs::create_dir_all(xcode_generated_dir).ok();
+
+        // Copy the generated Swift and header files
+        for entry in ["SwiftBridgeCore.swift", "SwiftBridgeCore.h"] {
+            let src = std::path::Path::new(&out_dir).join(entry);
+            let dst = std::path::Path::new(xcode_generated_dir).join(entry);
+            if src.exists() {
+                std::fs::copy(&src, &dst).ok();
+                println!("cargo:warning=Copied {} to {}", entry, dst.display());
+            }
+        }
+
+        // Also copy the SwiftBridgeCore directory if it exists
+        let src_dir = std::path::Path::new(&out_dir).join("SwiftBridgeCore");
+        if src_dir.exists() {
+            let dst_dir = std::path::Path::new(xcode_generated_dir).join("SwiftBridgeCore");
+            std::fs::create_dir_all(&dst_dir).ok();
+            for entry in std::fs::read_dir(&src_dir).unwrap() {
+                if let Ok(entry) = entry {
+                    let dst = dst_dir.join(entry.file_name());
+                    std::fs::copy(entry.path(), dst).ok();
+                }
+            }
+            println!(
+                "cargo:warning=Copied SwiftBridgeCore directory to {}",
+                xcode_generated_dir
+            );
+        }
+    }
+
+    println!(
+        "cargo:warning=Swift bridge generation complete - check {}",
+        out_dir
     );
 }

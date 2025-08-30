@@ -324,6 +324,85 @@
           find . -maxdepth 1 -name "*.AppImage" -type f 2>/dev/null | xargs -I {} echo "  - AppImage: {}"
         '';
 
+        buildCocoa = pkgs.writeShellScriptBin "build-cocoa" ''
+          echo "Building Cocoa (macOS native) frontend..."
+          echo "========================================="
+          echo ""
+          
+          # Check if we're on macOS
+          if [[ "$OSTYPE" != "darwin"* ]]; then
+            echo "⚠️  Warning: Cocoa frontend is designed for macOS."
+            echo "   Building on non-macOS systems may have limited functionality."
+            echo ""
+          fi
+          
+          # Build the Cocoa frontend
+          echo "Building with Cocoa feature..."
+          cargo build --no-default-features --features cocoa
+          
+          if [ $? -eq 0 ]; then
+            echo ""
+            echo "✓ Cocoa frontend built successfully!"
+            echo ""
+            echo "Binary location: target/debug/reel"
+            echo ""
+            echo "To run the Cocoa app:"
+            echo "  cargo run --no-default-features --features cocoa"
+            echo ""
+            echo "To build release version:"
+            echo "  cargo build --release --no-default-features --features cocoa"
+          else
+            echo ""
+            echo "✗ Failed to build Cocoa frontend"
+            exit 1
+          fi
+        '';
+
+        runCocoa = pkgs.writeShellScriptBin "run-cocoa" ''
+          echo "Running Cocoa (macOS native) frontend..."
+          echo "======================================="
+          echo ""
+          
+          # Check if we're on macOS
+          if [[ "$OSTYPE" != "darwin"* ]]; then
+            echo "⚠️  Warning: Cocoa frontend is designed for macOS."
+            echo "   Running on non-macOS systems may not work properly."
+            echo ""
+          fi
+          
+          # Set up environment for Cocoa app
+          export RUST_LOG=''${RUST_LOG:-info}
+          export RUST_BACKTRACE=''${RUST_BACKTRACE:-1}
+          
+          echo "Starting Reel with Cocoa frontend..."
+          echo "Log level: $RUST_LOG"
+          echo ""
+          echo "Press Ctrl+C to stop the application."
+          echo "----------------------------------------"
+          echo ""
+          
+          # Run the Cocoa frontend
+          cargo run --no-default-features --features cocoa
+          
+          EXIT_CODE=$?
+          
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo "----------------------------------------"
+            echo "✗ Cocoa frontend exited with error code: $EXIT_CODE"
+            
+            # Provide helpful debugging tips
+            echo ""
+            echo "Debugging tips:"
+            echo "  1. Check if the app was built: build-cocoa"
+            echo "  2. Enable debug logging: RUST_LOG=debug run-cocoa"
+            echo "  3. Check for missing dependencies"
+            echo "  4. Ensure you're running on macOS"
+            
+            exit $EXIT_CODE
+          fi
+        '';
+
         # Meson build commands
         mesonSetup = pkgs.writeShellScriptBin "meson-setup" ''
           echo "Setting up Meson build directory..."
@@ -434,6 +513,8 @@
             mesonTest
             mesonClean
             mesonDist
+            buildCocoa
+            runCocoa
           ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
             flatpakUpdateSources
             flatpakBuild
@@ -472,6 +553,10 @@
             echo "  clippy-fix     - Run clippy and auto-fix issues"
             echo "  cargo fmt      - Format code (standard)"
             echo "  cargo clippy   - Run linter (standard)"
+            echo ""
+            echo "Platform-specific builds:"
+            echo "  build-cocoa    - Build Cocoa (macOS native) frontend"
+            echo "  run-cocoa      - Run Cocoa (macOS native) frontend"
             echo ""
             ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
               echo "Package building commands:"

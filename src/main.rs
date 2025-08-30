@@ -1,33 +1,34 @@
 use anyhow::Result;
-use gtk4::prelude::*;
-use libadwaita as adw;
-use libadwaita::prelude::*;
-use tracing::info;
 
-mod app;
 mod backends;
 mod config;
 mod constants;
+mod core;
 mod db;
 mod events;
 mod models;
+mod platforms;
 mod player;
 mod services;
 mod state;
-mod ui;
 mod utils;
 
-use app::ReelApp;
-
-const APP_ID: &str = "dev.arsfeld.Reel";
-
+#[cfg(all(feature = "gtk", not(any(feature = "swift", feature = "cocoa"))))]
 fn main() -> Result<()> {
+    use gtk4::prelude::*;
+    use libadwaita as adw;
+    use libadwaita::prelude::*;
+    use platforms::gtk::ReelApp;
+    use tracing::info;
+
+    const APP_ID: &str = "dev.arsfeld.Reel";
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter("reel=debug")
         .init();
 
-    info!("Starting Reel");
+    info!("Starting Reel GTK frontend");
 
     // Initialize Tokio runtime for async operations
     let runtime = tokio::runtime::Runtime::new()?;
@@ -57,4 +58,51 @@ fn main() -> Result<()> {
     let exit_code = app.run();
 
     std::process::exit(exit_code.into());
+}
+
+#[cfg(all(feature = "swift", not(any(feature = "gtk", feature = "cocoa"))))]
+fn main() -> Result<()> {
+    use platforms::macos::main::macos_main;
+
+    // Run the macOS frontend
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(macos_main())
+}
+
+#[cfg(all(feature = "cocoa", not(any(feature = "gtk", feature = "swift"))))]
+fn main() -> Result<()> {
+    // Initialize Tokio runtime for async operations
+    let runtime = tokio::runtime::Runtime::new()?;
+    let _guard = runtime.enter();
+
+    // Spawn a thread to keep the runtime alive
+    std::thread::spawn(move || {
+        runtime.block_on(async {
+            // Keep runtime alive for the duration of the application
+            std::future::pending::<()>().await;
+        });
+    });
+
+    // Run the Cocoa frontend
+    platforms::cocoa::run().map_err(|e| anyhow::anyhow!("Cocoa error: {}", e))
+}
+
+#[cfg(any(
+    all(feature = "gtk", feature = "swift"),
+    all(feature = "gtk", feature = "cocoa"),
+    all(feature = "swift", feature = "cocoa")
+))]
+fn main() -> Result<()> {
+    eprintln!(
+        "Multiple frontend features are enabled. Please enable only one of: 'gtk', 'swift', or 'cocoa'."
+    );
+    std::process::exit(1);
+}
+
+#[cfg(not(any(feature = "gtk", feature = "swift", feature = "cocoa")))]
+fn main() -> Result<()> {
+    eprintln!(
+        "No frontend feature enabled. Please enable either 'gtk', 'swift', or 'cocoa' feature."
+    );
+    std::process::exit(1);
 }
