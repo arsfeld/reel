@@ -105,27 +105,33 @@ impl PreferencesWindow {
 
         // Set current selections based on shared config
         if let Some(config_arc) = self.imp().config.borrow().as_ref() {
-            let config_arc = config_arc.clone();
-            let player_backend_row_clone = player_backend_row.clone();
-            let theme_row_clone = theme_row.clone();
-            glib::spawn_future_local(async move {
-                let config = config_arc.read().await;
-
-                // Set theme selection
-                let theme_index = match config.general.theme.as_str() {
-                    "light" => 1,
-                    "dark" => 2,
-                    _ => 0, // Default to System/auto
-                };
-                theme_row_clone.set_selected(theme_index);
-
-                // Set player backend selection
-                let selected_index = match config.playback.player_backend.as_str() {
-                    "mpv" => 1,
-                    _ => 0, // Default to GStreamer
-                };
-                player_backend_row_clone.set_selected(selected_index);
+            // Read config synchronously using block_on to avoid timing issues
+            let config = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(config_arc.read())
             });
+
+            // Set theme selection
+            let theme_index = match config.general.theme.as_str() {
+                "light" => 1,
+                "dark" => 2,
+                _ => 0, // Default to System/auto
+            };
+            theme_row.set_selected(theme_index);
+
+            // Set player backend selection (case-insensitive comparison)
+            let backend = config.playback.player_backend.to_lowercase();
+            info!(
+                "Current player backend in config: '{}' (original: '{}')",
+                backend, config.playback.player_backend
+            );
+
+            let selected_index = if backend == "gstreamer" {
+                0
+            } else {
+                1 // Default to MPV for "mpv" or any other value (since MPV is the default)
+            };
+            info!("Setting player backend combo to index: {}", selected_index);
+            player_backend_row.set_selected(selected_index);
         }
 
         playback_group.add(&player_backend_row);

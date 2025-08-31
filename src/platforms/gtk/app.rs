@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tracing::info;
 
 const APP_ID: &str = "dev.arsfeld.Reel";
+use super::platform_utils;
 use super::ui::MainWindow;
 use crate::config::Config;
 use crate::state::AppState;
@@ -20,6 +21,12 @@ pub struct ReelApp {
 
 impl ReelApp {
     pub fn new() -> Result<Self> {
+        // Configure platform-specific video output settings
+        platform_utils::configure_video_output();
+
+        // Check hardware acceleration availability
+        platform_utils::check_hw_acceleration();
+
         // Load configuration once
         let config = Arc::new(RwLock::new(Config::load()?));
 
@@ -40,6 +47,19 @@ impl ReelApp {
 
         app.connect_activate(move |app| {
             info!("Application activated - Creating main window");
+
+            // Platform-specific initialization
+            #[cfg(target_os = "macos")]
+            {
+                info!("Initializing macOS-specific settings");
+                // On macOS, we may need to set specific environment variables for video playback
+                unsafe {
+                    std::env::set_var("GST_GL_WINDOW", "cocoa");
+                    std::env::set_var("GST_GL_PLATFORM", "cgl");
+                    // Use OpenGL instead of Metal for better compatibility
+                    std::env::set_var("GSK_RENDERER", "gl");
+                }
+            }
 
             // Load CSS
             let css_provider = gtk4::CssProvider::new();

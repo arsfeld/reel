@@ -5,7 +5,7 @@ pub mod sync_strategy;
 pub mod traits;
 
 // Re-export commonly used types
-pub use traits::{BackendType, MediaBackend};
+pub use traits::MediaBackend;
 
 use anyhow::Result;
 use std::collections::HashMap;
