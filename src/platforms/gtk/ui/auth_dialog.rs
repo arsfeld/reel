@@ -398,9 +398,34 @@ impl ReelAuthDialog {
         imp.auth_status.set_visible(false);
         imp.auth_error.set_visible(false);
 
+        // Update progress to show we're waiting for authorization
+        imp.auth_progress.set_visible(true);
+
         // Poll for the auth token in Tokio runtime
         let pin_id = pin.id.clone();
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+        // Clone for progress updates
+        let dialog_weak_progress = self.downgrade();
+
+        // Start a timer to show elapsed time
+        let start_time = std::time::Instant::now();
+        glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
+            if let Some(dialog) = dialog_weak_progress.upgrade() {
+                let imp = dialog.imp();
+                if imp.pin_status_page.is_visible() {
+                    let elapsed = start_time.elapsed().as_secs();
+                    if elapsed > 10 {
+                        // After 10 seconds, show a hint
+                        imp.auth_progress.set_text(Some(
+                            "Waiting for authorization... Make sure to visit plex.tv/link",
+                        ));
+                    }
+                    return glib::ControlFlow::Continue;
+                }
+            }
+            glib::ControlFlow::Break
+        });
 
         tokio::spawn(async move {
             match PlexAuth::poll_for_token(&pin_id).await {
@@ -440,7 +465,7 @@ impl ReelAuthDialog {
         imp.auth_status.set_icon_name(Some("emblem-ok-symbolic"));
         imp.auth_status.set_title("Authentication Successful!");
         imp.auth_status
-            .set_description(Some("Connecting to your Plex server..."));
+            .set_description(Some("Discovering your Plex servers..."));
 
         // Store token and start server discovery
         if let Some(state) = imp.state.borrow().as_ref() {
@@ -448,6 +473,9 @@ impl ReelAuthDialog {
             let token_clone = token.clone();
             let dialog_weak = self.downgrade();
             let current_pin = imp.current_pin.borrow().clone();
+
+            // Clone weak reference for status updates
+            let dialog_weak_status = self.downgrade();
 
             // Use Tokio for async operations
             let (tx, mut rx) = tokio::sync::mpsc::channel(1);
@@ -474,6 +502,13 @@ impl ReelAuthDialog {
 
             glib::spawn_future_local(async move {
                 if let Some(Some((token, server))) = rx.recv().await {
+                    // Update status to show we're adding the account
+                    if let Some(dialog) = dialog_weak_status.upgrade() {
+                        let imp = dialog.imp();
+                        imp.auth_status
+                            .set_description(Some("Adding Plex account and servers..."));
+                    }
+
                     // Backend IDs are managed by SourceCoordinator
 
                     // Use SourceCoordinator to add Plex account
@@ -485,7 +520,12 @@ impl ReelAuthDialog {
                                 sources.len()
                             );
 
-                            // No automatic backend switching - let the UI handle it
+                            // Update status to show we're getting user info
+                            if let Some(dialog) = dialog_weak_status.upgrade() {
+                                let imp = dialog.imp();
+                                imp.auth_status
+                                    .set_description(Some("Loading user information..."));
+                            }
 
                             // Get user info
                             if let Ok(plex_user) = PlexAuth::get_user(&token).await {
@@ -497,17 +537,79 @@ impl ReelAuthDialog {
                                 };
                                 state_clone.set_user(user.clone()).await;
                             }
+
+                            // Trigger a sync for all newly added sources
+                            if let Some(dialog) = dialog_weak_status.upgrade() {
+                                let imp = dialog.imp();
+                                imp.auth_status.set_description(Some(&format!(
+                                    "Syncing {} servers...",
+                                    sources.len()
+                                )));
+                            }
+
+                            info!("Triggering sync for newly added Plex sources");
+                            let source_coordinator = state_clone.get_source_coordinator();
+                            for source in &sources {
+                                info!("Syncing source: {}", source.name);
+                                if let Err(e) = source_coordinator.sync_source(&source.id).await {
+                                    error!("Failed to sync source {}: {}", source.name, e);
+                                }
+                            }
+
+                            // Show completion status briefly
+                            if let Some(dialog) = dialog_weak_status.upgrade() {
+                                let imp = dialog.imp();
+                                imp.auth_status.set_icon_name(Some("emblem-ok-symbolic"));
+                                imp.auth_status.set_title("Setup Complete!");
+                                imp.auth_status.set_description(Some(&format!(
+                                    "Connected to {} Plex server{}",
+                                    sources.len(),
+                                    if sources.len() > 1 { "s" } else { "" }
+                                )));
+                            }
+
+                            // Wait briefly to show completion message
+                            glib::timeout_future(std::time::Duration::from_millis(1500)).await;
                         }
                         Err(e) => {
                             error!(
                                 "Failed to add Plex account through SourceCoordinator: {}",
                                 e
                             );
+
+                            // Show error in dialog
+                            if let Some(dialog) = dialog_weak_status.upgrade() {
+                                let imp = dialog.imp();
+                                imp.auth_status.set_visible(false);
+                                imp.auth_error.set_visible(true);
+                                imp.auth_error.set_icon_name(Some("dialog-error-symbolic"));
+                                imp.auth_error.set_title("Connection Failed");
+                                imp.auth_error.set_description(Some(&e.to_string()));
+                                imp.retry_button.set_visible(true);
+                            }
+
+                            // Don't close on error - let user retry
+                            return;
                         }
                     }
                 } else {
                     // No token/server pair received
                     error!("Authentication failed: no token/server received");
+
+                    if let Some(dialog) = dialog_weak_status.upgrade() {
+                        let imp = dialog.imp();
+                        imp.auth_status.set_visible(false);
+                        imp.auth_error.set_visible(true);
+                        imp.auth_error.set_icon_name(Some("dialog-error-symbolic"));
+                        imp.auth_error.set_title("No Servers Found");
+                        imp.auth_error.set_description(Some(
+                            "Could not find any Plex servers associated with your account",
+                        ));
+                        imp.retry_button.set_visible(true);
+                    }
+
+                    // Don't close on error
+                    return;
                 }
 
                 // Close dialog
