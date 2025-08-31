@@ -1,33 +1,34 @@
 use anyhow::Result;
-use gtk4::prelude::*;
-use libadwaita as adw;
-use libadwaita::prelude::*;
-use tracing::info;
 
-mod app;
 mod backends;
 mod config;
 mod constants;
+mod core;
 mod db;
 mod events;
 mod models;
+mod platforms;
 mod player;
 mod services;
 mod state;
-mod ui;
 mod utils;
 
-use app::ReelApp;
-
-const APP_ID: &str = "dev.arsfeld.Reel";
-
+#[cfg(all(feature = "gtk"))]
 fn main() -> Result<()> {
+    use gtk4::prelude::*;
+    use libadwaita as adw;
+    use libadwaita::prelude::*;
+    use platforms::gtk::ReelApp;
+    use tracing::info;
+
+    const APP_ID: &str = "dev.arsfeld.Reel";
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter("reel=debug")
         .init();
 
-    info!("Starting Reel");
+    info!("Starting Reel GTK frontend");
 
     // Initialize Tokio runtime for async operations
     let runtime = tokio::runtime::Runtime::new()?;

@@ -1,8 +1,8 @@
 use super::{Property, PropertySubscriber, ViewModel};
+use crate::core::AppState;
 use crate::events::{DatabaseEvent, EventBus, EventFilter, EventPayload, EventType};
 use crate::models::{ChapterMarker, Episode, MediaItem, StreamInfo};
 use crate::services::DataService;
-use crate::state::AppState;
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -28,6 +28,7 @@ pub struct PlaybackInfo {
     pub is_muted: bool,
 }
 
+#[derive(Debug)]
 pub struct PlayerViewModel {
     data_service: Arc<DataService>,
     app_state: Arc<AppState>,
@@ -494,6 +495,46 @@ impl PlayerViewModel {
 
     pub fn markers(&self) -> &Property<(Option<ChapterMarker>, Option<ChapterMarker>)> {
         &self.markers
+    }
+
+    // Check if media is currently playing
+    pub async fn is_playing(&self) -> bool {
+        matches!(self.playback_state.get().await, PlaybackState::Playing)
+    }
+
+    // Toggle between play and pause states
+    pub async fn toggle_playback(&self) {
+        match self.playback_state.get().await {
+            PlaybackState::Playing => self.pause().await,
+            PlaybackState::Paused | PlaybackState::Stopped => self.play().await,
+            _ => {}
+        }
+    }
+
+    // Load media from a URL (for direct playback)
+    pub async fn load_url(&self, url: String) -> Result<()> {
+        use crate::models::Resolution;
+
+        self.is_loading.set(true).await;
+        self.error.set(None).await;
+
+        // Create a StreamInfo directly from the URL
+        let stream_info = StreamInfo {
+            url: url.clone(),
+            direct_play: true,
+            video_codec: "unknown".to_string(),
+            audio_codec: "unknown".to_string(),
+            container: "unknown".to_string(),
+            bitrate: 0,
+            resolution: Resolution::default(),
+            quality_options: Vec::new(),
+        };
+
+        self.stream_info.set(Some(stream_info)).await;
+        self.playback_state.set(PlaybackState::Stopped).await;
+        self.is_loading.set(false).await;
+
+        Ok(())
     }
 }
 

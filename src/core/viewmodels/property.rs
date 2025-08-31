@@ -54,6 +54,11 @@ impl<T: Clone + Send + Sync> Property<T> {
         self.value.read().await.clone()
     }
 
+    /// Try to get the value without blocking. Returns None if the lock is currently held.
+    pub fn try_get(&self) -> Option<T> {
+        self.value.try_read().ok().map(|guard| guard.clone())
+    }
+
     pub async fn set(&self, new_value: T) {
         {
             let mut value = self.value.write().await;

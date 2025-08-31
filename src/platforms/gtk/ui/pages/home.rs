@@ -9,9 +9,9 @@ use tracing::{error, info};
 use super::library::MediaCard;
 use crate::constants::*;
 use crate::models::{HomeSection, MediaItem};
+use crate::platforms::gtk::ui::navigation::NavigationRequest;
+use crate::platforms::gtk::ui::viewmodels::home_view_model::HomeViewModel;
 use crate::state::AppState;
-use crate::ui::navigation::NavigationRequest;
-use crate::ui::viewmodels::home_view_model::HomeViewModel;
 use crate::utils::{ImageLoader, ImageSize};
 
 mod imp {
@@ -116,7 +116,7 @@ impl HomePage {
             let vm = view_model.clone();
             let event_bus = state.event_bus.clone();
             async move {
-                use crate::ui::viewmodels::ViewModel;
+                use crate::platforms::gtk::ui::viewmodels::ViewModel;
                 vm.initialize(event_bus).await;
             }
         });

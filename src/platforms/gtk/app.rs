@@ -6,10 +6,10 @@ use libadwaita::prelude::*;
 use std::sync::Arc;
 use tracing::info;
 
-use crate::APP_ID;
+const APP_ID: &str = "dev.arsfeld.Reel";
+use super::ui::MainWindow;
 use crate::config::Config;
 use crate::state::AppState;
-use crate::ui::MainWindow;
 use tokio::sync::RwLock;
 
 pub struct ReelApp {

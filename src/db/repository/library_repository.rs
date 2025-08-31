@@ -28,6 +28,7 @@ pub trait LibraryRepository: Repository<LibraryModel> {
     async fn get_total_item_count(&self) -> Result<i64>;
 }
 
+#[derive(Debug)]
 pub struct LibraryRepositoryImpl {
     base: BaseRepository,
 }

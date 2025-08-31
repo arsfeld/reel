@@ -120,6 +120,7 @@ impl EventFilter {
 }
 
 /// Main event bus for broadcasting database events
+#[derive(Debug)]
 pub struct EventBus {
     sender: broadcast::Sender<DatabaseEvent>,
     stats: Arc<RwLock<EventBusStats>>,

@@ -7,8 +7,8 @@ use tracing::{debug, error, info};
 
 use crate::backends::traits::MediaBackend;
 use crate::models::{Episode, Show};
+use crate::platforms::gtk::ui::viewmodels::{DetailsViewModel, ViewModel};
 use crate::state::AppState;
-use crate::ui::viewmodels::{DetailsViewModel, ViewModel};
 use crate::utils::{ImageLoader, ImageSize};
 
 // Global image loader instance
@@ -193,7 +193,7 @@ impl ShowDetailsPage {
             let vm = viewmodel.clone();
             let event_bus = state.event_bus.clone();
             async move {
-                use crate::ui::viewmodels::ViewModel;
+                use crate::platforms::gtk::ui::viewmodels::ViewModel;
                 vm.initialize(event_bus).await;
             }
         });
@@ -429,7 +429,7 @@ impl ShowDetailsPage {
 
     async fn display_media_info(
         &self,
-        detailed_info: &crate::ui::viewmodels::details_view_model::DetailedMediaInfo,
+        detailed_info: &crate::platforms::gtk::ui::viewmodels::details_view_model::DetailedMediaInfo,
     ) {
         let media = &detailed_info.media;
         let metadata = &detailed_info.metadata;
