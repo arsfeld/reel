@@ -42,11 +42,32 @@ fn main() -> Result<()> {
         });
     });
 
+    // Platform-specific initialization
+    #[cfg(target_os = "macos")]
+    {
+        info!("Detected macOS platform - setting up environment");
+        // Force GTK to use OpenGL backend on macOS for better video playback
+        unsafe {
+            std::env::set_var("GDK_GL", "prefer-gl");
+            std::env::set_var("GSK_RENDERER", "gl");
+            // Ensure MPV uses the right video output on macOS
+            std::env::set_var("MPV_COCOA_FORCE_DEDICATED_GPU", "1");
+        }
+    }
+
     // Initialize GTK and Adwaita
     gtk4::init()?;
     adw::init()?;
 
-    // Initialize GStreamer
+    // Initialize GStreamer with platform-specific settings
+    #[cfg(target_os = "macos")]
+    {
+        // Set GStreamer to use native macOS video sinks
+        unsafe {
+            std::env::set_var("GST_PLUGIN_PATH", "/usr/local/lib/gstreamer-1.0");
+            std::env::set_var("GST_PLUGIN_SYSTEM_PATH", "/usr/local/lib/gstreamer-1.0");
+        }
+    }
     gstreamer::init()?;
 
     // Load compiled resources
