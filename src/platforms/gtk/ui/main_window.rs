@@ -1237,15 +1237,45 @@ impl ReelMainWindow {
         content_stack.set_transition_duration(300);
 
         // Create or reuse player page
-        let player_page = if let Some(page) = self.imp().player_page.borrow().as_ref() {
-            if content_stack.child_by_name("player").is_none() {
-                content_stack.add_named(page.widget(), Some("player"));
-            }
-            page.clone()
+        // Check if we need to recreate the player page due to backend change
+        let current_backend = {
+            let config = state.config.read().await;
+            config.playback.player_backend.clone()
+        };
+
+        let needs_recreation = if let Some(existing_page) = self.imp().player_page.borrow().as_ref()
+        {
+            // Check if the backend has changed
+            let page_backend = existing_page.get_backend_type().await;
+            page_backend != current_backend
         } else {
+            true // No existing page, need to create
+        };
+
+        let player_page = if needs_recreation {
+            info!("Creating new PlayerPage with backend: {}", current_backend);
+
+            // Cleanup old player page if it exists
+            if let Some(old_page) = self.imp().player_page.borrow().as_ref() {
+                old_page.cleanup().await;
+            }
+
+            // Remove old player page widget from stack
+            if let Some(old_widget) = content_stack.child_by_name("player") {
+                content_stack.remove(&old_widget);
+            }
+
+            // Create new player page with current backend
             let page = crate::platforms::gtk::ui::pages::PlayerPage::new(state.clone());
             self.imp().player_page.replace(Some(page.clone()));
             content_stack.add_named(page.widget(), Some("player"));
+            page
+        } else {
+            // Reuse existing page
+            let page = self.imp().player_page.borrow().as_ref().unwrap().clone();
+            if content_stack.child_by_name("player").is_none() {
+                content_stack.add_named(page.widget(), Some("player"));
+            }
             page
         };
 

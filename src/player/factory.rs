@@ -41,14 +41,54 @@ impl Player {
     pub fn new(config: &Config) -> Result<Self> {
         let backend = PlayerBackend::from(config.playback.player_backend.as_str());
 
-        match backend {
-            PlayerBackend::GStreamer => {
-                info!("Creating GStreamer player backend");
-                Ok(Player::GStreamer(GStreamerPlayer::new()?))
+        // Platform-specific backend selection and fallback
+        #[cfg(target_os = "macos")]
+        {
+            // On macOS, try MPV first as it has better compatibility
+            match backend {
+                PlayerBackend::Mpv => {
+                    info!("Creating MPV player backend for macOS");
+                    match MpvPlayer::new(config) {
+                        Ok(player) => return Ok(Player::Mpv(player)),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to create MPV player on macOS: {}, falling back to GStreamer",
+                                e
+                            );
+                            info!("Creating GStreamer player backend as fallback");
+                            return Ok(Player::GStreamer(GStreamerPlayer::new()?));
+                        }
+                    }
+                }
+                PlayerBackend::GStreamer => {
+                    info!("Creating GStreamer player backend for macOS");
+                    // On macOS, GStreamer might have issues, so we try it but have MPV as fallback
+                    match GStreamerPlayer::new() {
+                        Ok(player) => return Ok(Player::GStreamer(player)),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to create GStreamer player on macOS: {}, falling back to MPV",
+                                e
+                            );
+                            info!("Creating MPV player backend as fallback");
+                            return Ok(Player::Mpv(MpvPlayer::new(config)?));
+                        }
+                    }
+                }
             }
-            PlayerBackend::Mpv => {
-                info!("Creating MPV player backend");
-                Ok(Player::Mpv(MpvPlayer::new(config)?))
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            match backend {
+                PlayerBackend::GStreamer => {
+                    info!("Creating GStreamer player backend");
+                    Ok(Player::GStreamer(GStreamerPlayer::new()?))
+                }
+                PlayerBackend::Mpv => {
+                    info!("Creating MPV player backend");
+                    Ok(Player::Mpv(MpvPlayer::new(config)?))
+                }
             }
         }
     }

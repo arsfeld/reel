@@ -128,18 +128,30 @@ impl MpvPlayer {
         unsafe {
             // Static cache for proc lookups - they never change once resolved
             static mut PROC_CACHE: Option<HashMap<String, *mut c_void>> = None;
-            static mut EGL_GET_PROC: Option<*mut c_void> = None;
+            static mut GL_GET_PROC: Option<*mut c_void> = None;
 
             // Initialize cache on first use
             let cache_ptr = &raw mut PROC_CACHE;
             if (*cache_ptr).is_none() {
                 *cache_ptr = Some(HashMap::new());
-                // Cache the EGL proc address function itself
-                let egl_ptr = &raw mut EGL_GET_PROC;
-                *egl_ptr = Some(libc::dlsym(
-                    libc::RTLD_DEFAULT,
-                    b"eglGetProcAddress\0".as_ptr() as *const i8,
-                ));
+                // Cache the OpenGL proc address function itself
+                let gl_ptr = &raw mut GL_GET_PROC;
+
+                #[cfg(target_os = "macos")]
+                {
+                    // On macOS, we need to use the OpenGL framework directly
+                    // Try to get NSOpenGLGetProcAddress or use dlsym on the OpenGL framework
+                    *gl_ptr = None; // macOS doesn't have a global getProcAddress
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // On Linux, use EGL
+                    *gl_ptr = Some(libc::dlsym(
+                        libc::RTLD_DEFAULT,
+                        b"eglGetProcAddress\0".as_ptr() as *const i8,
+                    ));
+                }
             }
 
             let name_str = CStr::from_ptr(name).to_string_lossy().to_string();
@@ -160,19 +172,51 @@ impl MpvPlayer {
 
             let mut func = ptr::null_mut();
 
-            // Use cached EGL get proc function
-            let egl_ptr = &raw const EGL_GET_PROC;
-            if let Some(egl_get_proc) = *egl_ptr
-                && !egl_get_proc.is_null()
+            #[cfg(target_os = "macos")]
             {
-                type EglGetProcFn = unsafe extern "C" fn(*const i8) -> *mut c_void;
-                let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
-                func = get_proc(name);
+                // On macOS, first try to get the proc address through GTK's GL context
+                // GTK4 on macOS uses native OpenGL, so we need to use dlsym directly
+                let cname = CString::new(name_str.clone()).unwrap();
+
+                // Try different OpenGL libraries on macOS
+                let framework1 = b"/System/Library/Frameworks/OpenGL.framework/OpenGL\0";
+                let framework2 =
+                    b"/System/Library/Frameworks/OpenGL.framework/Libraries/libGL.dylib\0";
+
+                let handle = libc::dlopen(framework1.as_ptr() as *const i8, libc::RTLD_LAZY);
+                if !handle.is_null() {
+                    func = libc::dlsym(handle, cname.as_ptr());
+                }
+
+                if func.is_null() {
+                    let handle = libc::dlopen(framework2.as_ptr() as *const i8, libc::RTLD_LAZY);
+                    if !handle.is_null() {
+                        func = libc::dlsym(handle, cname.as_ptr());
+                    }
+                }
+
+                // Final fallback to RTLD_DEFAULT
+                if func.is_null() {
+                    func = libc::dlsym(libc::RTLD_DEFAULT, cname.as_ptr());
+                }
             }
 
-            // Fallback to dlsym if needed
-            if func.is_null() {
-                func = libc::dlsym(libc::RTLD_DEFAULT, name);
+            #[cfg(not(target_os = "macos"))]
+            {
+                // Use cached EGL get proc function on Linux
+                let gl_ptr = &raw const GL_GET_PROC;
+                if let Some(egl_get_proc) = *gl_ptr
+                    && !egl_get_proc.is_null()
+                {
+                    type EglGetProcFn = unsafe extern "C" fn(*const i8) -> *mut c_void;
+                    let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
+                    func = get_proc(name);
+                }
+
+                // Fallback to dlsym if needed
+                if func.is_null() {
+                    func = libc::dlsym(libc::RTLD_DEFAULT, name);
+                }
             }
 
             // Cache the result - use raw pointer
@@ -464,18 +508,34 @@ impl MpvPlayer {
 
                         let gl_integerv_ptr = &raw mut GL_GET_INTEGERV;
                         if (*gl_integerv_ptr).is_none() {
-                            let egl_get_proc = libc::dlsym(
-                                libc::RTLD_DEFAULT,
-                                b"eglGetProcAddress\0".as_ptr() as *const i8,
-                            );
-                            if !egl_get_proc.is_null() {
-                                type EglGetProcFn =
-                                    unsafe extern "C" fn(*const i8) -> *const c_void;
-                                let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
-                                let gl_get_integerv =
-                                    get_proc(b"glGetIntegerv\0".as_ptr() as *const i8);
+                            #[cfg(target_os = "macos")]
+                            {
+                                // On macOS, get glGetIntegerv directly
+                                let gl_get_integerv = libc::dlsym(
+                                    libc::RTLD_DEFAULT,
+                                    b"glGetIntegerv\0".as_ptr() as *const i8,
+                                );
                                 if !gl_get_integerv.is_null() {
                                     *gl_integerv_ptr = Some(std::mem::transmute(gl_get_integerv));
+                                }
+                            }
+
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                let egl_get_proc = libc::dlsym(
+                                    libc::RTLD_DEFAULT,
+                                    b"eglGetProcAddress\0".as_ptr() as *const i8,
+                                );
+                                if !egl_get_proc.is_null() {
+                                    type EglGetProcFn =
+                                        unsafe extern "C" fn(*const i8) -> *const c_void;
+                                    let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
+                                    let gl_get_integerv =
+                                        get_proc(b"glGetIntegerv\0".as_ptr() as *const i8);
+                                    if !gl_get_integerv.is_null() {
+                                        *gl_integerv_ptr =
+                                            Some(std::mem::transmute(gl_get_integerv));
+                                    }
                                 }
                             }
                         }

@@ -6,7 +6,6 @@ use crate::events::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use sea_orm::entity::prelude::Json;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, Set,

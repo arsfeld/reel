@@ -13,7 +13,6 @@ use crate::db::{
 use crate::events::{DatabaseEvent, EventBus, EventPayload, EventType};
 use crate::models::{Library, MediaItem};
 use sea_orm::TransactionTrait;
-use sea_orm::prelude::Json;
 
 /// Trait for converting domain models into database entities
 trait IntoEntity<T> {
@@ -171,7 +170,7 @@ impl IntoEntity<crate::db::entities::MediaItemModel> for MediaItem {
             genres,
             added_at: Some(chrono::Utc::now().naive_utc()),
             updated_at: chrono::Utc::now().naive_utc(),
-            metadata: Some((serde_json::to_value(&self)?)),
+            metadata: Some(serde_json::to_value(&self)?),
             parent_id,
             season_number,
             episode_number,

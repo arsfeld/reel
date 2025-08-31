@@ -62,6 +62,42 @@ impl std::fmt::Debug for PlayerPage {
 }
 
 impl PlayerPage {
+    pub async fn get_backend_type(&self) -> String {
+        let player = self.player.read().await;
+        match &*player {
+            Player::GStreamer(_) => "gstreamer".to_string(),
+            Player::Mpv(_) => "mpv".to_string(),
+        }
+    }
+
+    pub async fn cleanup(&self) {
+        // Stop playback and cleanup resources
+        info!("PlayerPage::cleanup() - Cleaning up player resources");
+
+        // Stop any ongoing playback
+        if let Ok(player) = self.player.try_read() {
+            let _ = player.stop().await;
+        }
+
+        // Cancel any timers
+        if let Some(timer) = self.position_sync_timer.write().await.take() {
+            timer.remove();
+        }
+
+        if let Some(timer) = self.auto_play_countdown.write().await.take() {
+            timer.remove();
+        }
+
+        if let Some(timer) = self.chapter_monitor_id.write().await.take() {
+            timer.remove();
+        }
+
+        // Uninhibit screensaver
+        self.uninhibit_suspend().await;
+
+        info!("PlayerPage::cleanup() - Cleanup complete");
+    }
+
     async fn seek_with_retries(&self, position: Duration) {
         use std::time::Duration as StdDuration;
         let max_attempts = 8;
@@ -814,7 +850,11 @@ impl PlayerPage {
             let tr_for_idle_init = self.top_right_osd.clone();
             let widget_for_idle_init = self.widget.clone();
             glib::timeout_add_local(std::time::Duration::from_millis(1000), move || {
-                overlay.add_controller(hover_controller.as_ref().clone());
+                // Check if the controller's widget is null before adding
+                // This prevents the "controller already has a widget" assertion error
+                if gtk4::prelude::EventControllerExt::widget(&*hover_controller).is_none() {
+                    overlay.add_controller(hover_controller.as_ref().clone());
+                }
                 // Schedule an initial auto-hide if user is idle after entering playback/fullscreen
                 let controls = controls_for_idle_init.clone();
                 let tl = tl_for_idle_init.clone();
@@ -857,11 +897,16 @@ impl PlayerPage {
             self.inhibit_suspend().await;
 
             // Populate track menus after playback starts (requires Playing state)
-            // Add a small delay to ensure the playbin has discovered all tracks
+            // Add a delay to ensure the playbin has discovered all tracks
+            // On macOS, GStreamer may need more time to initialize
             let controls = self.controls.clone();
+            let delay_ms = if cfg!(target_os = "macos") { 1500 } else { 500 };
             glib::spawn_future_local(async move {
-                debug!("PlayerPage::load_media() - Waiting before populating track menus");
-                glib::timeout_future(std::time::Duration::from_millis(500)).await;
+                debug!(
+                    "PlayerPage::load_media() - Waiting {}ms before populating track menus",
+                    delay_ms
+                );
+                glib::timeout_future(std::time::Duration::from_millis(delay_ms)).await;
                 debug!("PlayerPage::load_media() - Populating track menus after playback start");
                 controls.populate_track_menus().await;
                 info!("PlayerPage::load_media() - Track menus populated");

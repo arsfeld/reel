@@ -5,10 +5,9 @@ use lru::LruCache;
 use reqwest::Client;
 use std::io::Cursor;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::Instant;
 use tokio::fs;
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{info, trace};
@@ -19,8 +18,6 @@ use gdk4 as gdk;
 use gtk4::gdk_pixbuf::Pixbuf;
 #[cfg(feature = "gtk")]
 use gtk4::{gio, glib, prelude::*};
-
-use crate::constants::*;
 
 /// Image size variants for different UI contexts
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

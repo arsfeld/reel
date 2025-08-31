@@ -143,6 +143,18 @@ impl GStreamerPlayer {
         force_fallback: bool,
         use_gl_sink: bool,
     ) -> Option<gst::Element> {
+        // On macOS, prefer native video sinks for better compatibility
+        #[cfg(target_os = "macos")]
+        {
+            if !force_fallback {
+                // Try macOS-specific sink configuration
+                if let Some(sink) = self.create_macos_video_sink() {
+                    info!("Using macOS-optimized video sink");
+                    return Some(sink);
+                }
+            }
+        }
+
         if !force_fallback && !use_gl_sink {
             // Try glsinkbin + gtk4paintablesink first (best performance)
             if let Some(sink) = self.create_glsinkbin_gtk4_sink() {
@@ -170,6 +182,67 @@ impl GStreamerPlayer {
         }
 
         error!("Failed to create any video sink!");
+        None
+    }
+
+    #[cfg(target_os = "macos")]
+    fn create_macos_video_sink(&self) -> Option<gst::Element> {
+        info!("Creating macOS-specific video sink");
+
+        // For GTK integration, we should prefer gtk4paintablesink even on macOS
+        // but with macOS-specific pipeline setup
+
+        // Try gtk4paintablesink with proper conversion for macOS
+        if let Ok(gtk_sink) = gst::ElementFactory::make("gtk4paintablesink")
+            .name("gtk4paintablesink")
+            .build()
+        {
+            // Create a bin with conversion elements optimized for macOS
+            let bin = gst::Bin::new();
+
+            // Use videoconvert for format conversion
+            let convert = gst::ElementFactory::make("videoconvert")
+                .name("video_converter")
+                .build()
+                .ok()?;
+
+            // Add elements to bin
+            bin.add(&convert).ok()?;
+            bin.add(&gtk_sink).ok()?;
+
+            // Link elements
+            convert.link(&gtk_sink).ok()?;
+
+            // Create ghost pad
+            let sink_pad = convert.static_pad("sink")?;
+            let ghost_pad = gst::GhostPad::with_target(&sink_pad).ok()?;
+            ghost_pad.set_active(true).ok()?;
+            bin.add_pad(&ghost_pad).ok()?;
+
+            info!("Using gtk4paintablesink with videoconvert for macOS");
+            return Some(bin.upcast());
+        }
+
+        // Fallback to glimagesink (won't integrate with GTK Picture widget)
+        if let Ok(glsink) = gst::ElementFactory::make("glimagesink")
+            .name("glimagesink")
+            .build()
+        {
+            // Set properties for better macOS compatibility
+            glsink.set_property("force-aspect-ratio", true);
+            info!("Using glimagesink fallback for macOS");
+            return Some(glsink);
+        }
+
+        // Last resort: osxvideosink (native but opens separate window)
+        if let Ok(osxsink) = gst::ElementFactory::make("osxvideosink")
+            .name("osxvideosink")
+            .build()
+        {
+            warn!("Using osxvideosink - video will appear in separate window");
+            return Some(osxsink);
+        }
+
         None
     }
 
@@ -662,6 +735,28 @@ impl GStreamerPlayer {
                 Ok(gst::StateChangeSuccess::Success) => {
                     info!("GStreamerPlayer::play() - Successfully set playbin to playing state");
 
+                    // On macOS, ensure the state change is complete
+                    #[cfg(target_os = "macos")]
+                    {
+                        // Wait for state change to complete with a timeout
+                        let (state_change, current, _) =
+                            playbin.state(gst::ClockTime::from_seconds(2));
+                        match state_change {
+                            Ok(gst::StateChangeSuccess::Success) => {
+                                info!(
+                                    "GStreamerPlayer::play() - State change confirmed, now in {:?}",
+                                    current
+                                );
+                            }
+                            _ => {
+                                warn!(
+                                    "GStreamerPlayer::play() - State change not complete, current: {:?}",
+                                    current
+                                );
+                            }
+                        }
+                    }
+
                     // Ensure GST_DEBUG_DUMP_DOT_DIR is set
                     if std::env::var("GST_DEBUG_DUMP_DOT_DIR").is_err() {
                         unsafe {
@@ -686,6 +781,27 @@ impl GStreamerPlayer {
                 }
                 Ok(gst::StateChangeSuccess::Async) => {
                     info!("GStreamerPlayer::play() - Playbin state change is async, waiting...");
+
+                    // On macOS, wait for the async state change to complete
+                    #[cfg(target_os = "macos")]
+                    {
+                        let (state_change, current, _) =
+                            playbin.state(gst::ClockTime::from_seconds(3));
+                        match state_change {
+                            Ok(gst::StateChangeSuccess::Success) => {
+                                info!(
+                                    "GStreamerPlayer::play() - Async state change completed, now in {:?}",
+                                    current
+                                );
+                            }
+                            _ => {
+                                warn!(
+                                    "GStreamerPlayer::play() - Async state change still pending after 3s, current: {:?}",
+                                    current
+                                );
+                            }
+                        }
+                    }
 
                     // Wait a bit for the pipeline to negotiate, then dump it
                     glib::timeout_add_once(std::time::Duration::from_secs(2), {
@@ -935,7 +1051,13 @@ impl GStreamerPlayer {
 
         if let Some(playbin) = self.playbin.borrow().as_ref() {
             // Check playbin state - tracks might not be available until PLAYING
-            let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
+            // On macOS, we need to wait a bit for state to settle
+            let timeout = if cfg!(target_os = "macos") {
+                gst::ClockTime::from_mseconds(100)
+            } else {
+                gst::ClockTime::ZERO
+            };
+            let (_, current, _) = playbin.state(timeout);
             debug!("Getting audio tracks, playbin state: {:?}", current);
 
             // Check if this is playbin3 (doesn't have n-audio property)
@@ -1016,7 +1138,13 @@ impl GStreamerPlayer {
 
         if let Some(playbin) = self.playbin.borrow().as_ref() {
             // Check playbin state - tracks might not be available until PLAYING
-            let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
+            // On macOS, we need to wait a bit for state to settle
+            let timeout = if cfg!(target_os = "macos") {
+                gst::ClockTime::from_mseconds(100)
+            } else {
+                gst::ClockTime::ZERO
+            };
+            let (_, current, _) = playbin.state(timeout);
             debug!("Getting subtitle tracks, playbin state: {:?}", current);
 
             // Check if this is playbin3
