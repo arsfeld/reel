@@ -12,10 +12,10 @@ use crate::backends::traits::MediaBackend;
 use crate::config::Config;
 use crate::constants::PLAYER_CONTROLS_HIDE_DELAY_SECS;
 use crate::models::{Episode, MediaItem, Movie};
+use crate::platforms::gtk::ui::viewmodels::player_view_model::PlayerViewModel;
+use crate::platforms::gtk::ui::widgets::player_overlay::ReelPlayerOverlayHost;
 use crate::player::Player;
 use crate::state::AppState;
-use crate::ui::viewmodels::player_view_model::PlayerViewModel;
-use crate::ui::widgets::player_overlay::ReelPlayerOverlayHost;
 
 #[derive(Clone)]
 pub struct PlayerPage {
@@ -212,7 +212,7 @@ impl PlayerPage {
             let vm = view_model.clone();
             let event_bus = state.event_bus.clone();
             async move {
-                use crate::ui::viewmodels::ViewModel;
+                use crate::platforms::gtk::ui::viewmodels::ViewModel;
                 vm.initialize(event_bus).await;
             }
         });
@@ -505,7 +505,7 @@ impl PlayerPage {
 
         // is_loading -> show/hide loading overlay
         {
-            use crate::ui::viewmodels::ViewModel;
+            use crate::platforms::gtk::ui::viewmodels::ViewModel;
             let mut sub = view_model
                 .subscribe_to_property("is_loading")
                 .unwrap_or_else(|| view_model.is_loading().subscribe());
@@ -529,7 +529,7 @@ impl PlayerPage {
 
         // error -> show error overlay
         {
-            use crate::ui::viewmodels::ViewModel;
+            use crate::platforms::gtk::ui::viewmodels::ViewModel;
             let mut sub = view_model
                 .subscribe_to_property("error")
                 .unwrap_or_else(|| view_model.error().subscribe());

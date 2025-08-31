@@ -1,10 +1,19 @@
 use std::path::Path;
 
 fn main() {
+    // Only compile GTK resources when GTK feature is enabled
+    #[cfg(feature = "gtk")]
+    {
+        compile_gtk_resources();
+    }
+}
+
+#[cfg(feature = "gtk")]
+fn compile_gtk_resources() {
     // Compile Blueprint files
-    println!("cargo:rerun-if-changed=src/ui/blueprints/");
-    println!("cargo:rerun-if-changed=src/ui/resources.gresource.xml");
-    println!("cargo:rerun-if-changed=src/ui/style.css");
+    println!("cargo:rerun-if-changed=src/platforms/gtk/ui/blueprints/");
+    println!("cargo:rerun-if-changed=src/platforms/gtk/ui/resources.gresource.xml");
+    println!("cargo:rerun-if-changed=src/platforms/gtk/ui/style.css");
 
     // Compile GResource with Blueprint files
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
@@ -31,7 +40,7 @@ fn main() {
 
     // Compile each Blueprint file to UI
     for file in &blueprint_files {
-        let input_path = format!("src/ui/blueprints/{}", file);
+        let input_path = format!("src/platforms/gtk/ui/blueprints/{}", file);
         let output_name = file.replace(".blp", ".ui");
         let output_path = ui_dir.join(&output_name);
 
@@ -57,7 +66,8 @@ fn main() {
     }
 
     // Copy style.css to build directory
-    std::fs::copy("src/ui/style.css", ui_dir.join("style.css")).expect("Failed to copy style.css");
+    std::fs::copy("src/platforms/gtk/ui/style.css", ui_dir.join("style.css"))
+        .expect("Failed to copy style.css");
 
     // Create a modified gresource file that points to compiled UI files
     let gresource_content = r#"<?xml version="1.0" encoding="UTF-8"?>

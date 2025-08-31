@@ -51,6 +51,7 @@ impl Default for FilterOptions {
     }
 }
 
+#[derive(Debug)]
 pub struct LibraryViewModel {
     data_service: Arc<DataService>,
     current_library: Property<Option<Library>>,
@@ -67,6 +68,7 @@ pub struct LibraryViewModel {
     last_sync_time: Arc<Mutex<Option<chrono::NaiveDateTime>>>,
 }
 
+#[derive(Debug)]
 struct UpdateBatch {
     last_update: Option<Instant>,
     pending_refresh: bool,
@@ -347,8 +349,16 @@ impl LibraryViewModel {
                     .partial_cmp(&a_rating)
                     .unwrap_or(std::cmp::Ordering::Equal)
             }),
-            SortOrder::AddedAsc => filtered.sort_by(|a, b| std::cmp::Ordering::Equal), // TODO: Implement added_at tracking
-            SortOrder::AddedDesc => filtered.sort_by(|a, b| std::cmp::Ordering::Equal), // TODO: Implement added_at tracking
+            SortOrder::AddedAsc => {
+                // Sort by added_at timestamp when available in database
+                // For now, maintain original order
+                // filtered.sort_by(|a, b| a.added_at.cmp(&b.added_at))
+            }
+            SortOrder::AddedDesc => {
+                // Sort by added_at timestamp when available in database
+                // For now, maintain original order
+                // filtered.sort_by(|a, b| b.added_at.cmp(&a.added_at))
+            }
         }
 
         self.filtered_items.set(filtered).await;
@@ -572,6 +582,23 @@ impl LibraryViewModel {
 
     pub fn selected_items(&self) -> &Property<Vec<String>> {
         &self.selected_items
+    }
+
+    pub async fn refresh(&self) -> Result<()> {
+        // Reload items for the current library
+        if let Some(library) = self.current_library.get().await {
+            self.set_library(library.id.clone()).await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn select_item(&self, item_id: String) {
+        let mut selected = self.selected_items.get().await;
+        if !selected.contains(&item_id) {
+            selected.push(item_id);
+            self.selected_items.set(selected).await;
+        }
     }
 }
 

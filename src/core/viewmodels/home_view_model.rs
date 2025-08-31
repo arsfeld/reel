@@ -280,6 +280,11 @@ impl HomeViewModel {
     pub fn is_loading(&self) -> &Property<bool> {
         &self.is_loading
     }
+
+    pub async fn refresh(&self) -> Result<()> {
+        // Use the existing load_home_content method which properly loads all sections
+        self.load_home_content().await
+    }
 }
 
 #[async_trait::async_trait]
