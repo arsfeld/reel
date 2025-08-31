@@ -310,8 +310,20 @@ impl Config {
     }
 
     fn config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir().context("Failed to get config directory")?;
-        Ok(config_dir.join("reel").join("config.toml"))
+        #[cfg(target_os = "macos")]
+        {
+            // On macOS, use ~/Library/Application Support/Reel/
+            let config_dir = dirs::config_dir()
+                .or_else(|| dirs::home_dir().map(|h| h.join("Library/Application Support")))
+                .context("Failed to get config directory")?;
+            Ok(config_dir.join("Reel").join("config.toml"))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            // On Linux and other platforms, use ~/.config/reel/
+            let config_dir = dirs::config_dir().context("Failed to get config directory")?;
+            Ok(config_dir.join("reel").join("config.toml"))
+        }
     }
 }
 
