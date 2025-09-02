@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, trace};
 
 use super::library::MediaCard;
 use crate::constants::*;
@@ -366,30 +366,23 @@ impl HomePage {
             items_box.remove(&child);
         }
 
-        // Add new items
+        // Add new items with immediate visibility check
+        let mut new_cards = Vec::new();
         for item in &section.items[..section.items.len().min(20)] {
             let card = self.create_media_card(item);
             items_box.append(&card);
+            new_cards.push(card);
         }
 
-        // Trigger load on visible items
-        glib::timeout_add_local_once(std::time::Duration::from_millis(100), {
-            let items_box = items_box.clone();
-            move || {
-                let mut child = items_box.first_child();
-                let mut count = 0;
-                while let Some(widget) = child {
-                    if count >= HOME_INITIAL_IMAGES_PER_SECTION {
-                        break;
-                    }
-                    if let Some(media_card) = widget.downcast_ref::<super::library::MediaCard>() {
-                        media_card.trigger_load(ImageSize::Small);
-                    }
-                    child = widget.next_sibling();
-                    count += 1;
-                }
+        // Immediately load initial visible items (no delay)
+        for (i, card) in new_cards.iter().enumerate() {
+            if i >= HOME_INITIAL_IMAGES_PER_SECTION {
+                break;
             }
-        });
+            if let Some(media_card) = card.downcast_ref::<super::library::MediaCard>() {
+                media_card.trigger_load(ImageSize::Small);
+            }
+        }
     }
 
     fn create_section_widget(&self, section: &HomeSection) -> imp::SectionWidgets {
@@ -448,84 +441,86 @@ impl HomePage {
             cards.push(card);
         }
 
-        // Setup scroll handler for lazy loading
+        // Setup scroll handler for lazy loading with improved viewport detection
         let section_items = Rc::new(section.items.clone());
         let cards_rc = Rc::new(RefCell::new(cards.clone()));
         let self_weak = self.downgrade();
         let items_box_weak = items_box.downgrade();
-        let scroll_counter: Rc<RefCell<u32>> = Rc::new(RefCell::new(0));
+        let last_loaded_range: Rc<RefCell<(usize, usize)>> = Rc::new(RefCell::new((0, 0)));
 
+        // Improved scroll handler without debouncing for immediate response
         scrolled.hadjustment().connect_value_changed(move |h_adj| {
             let value = h_adj.value();
             let page_size = h_adj.page_size();
-            let counter = scroll_counter.clone();
-            let current_count = {
-                let mut c = counter.borrow_mut();
-                *c += 1;
-                *c
-            };
+            let upper = h_adj.upper();
 
-            let cards_for_load = cards_rc.clone();
-            let section_items_for_create = section_items.clone();
-            let self_weak_for_create = self_weak.clone();
-            let items_box_weak_for_create = items_box_weak.clone();
-            let counter_inner = counter.clone();
+            // Calculate visible range with pre-fetching
+            let card_width = 144.0; // 132px card + 12px spacing
+            let visible_start = (value / card_width).floor() as usize;
+            let visible_end = ((value + page_size) / card_width).ceil() as usize;
 
-            glib::timeout_add_local(
-                std::time::Duration::from_millis(SCROLL_DEBOUNCE_MS),
-                move || {
-                    if *counter_inner.borrow() != current_count {
-                        return glib::ControlFlow::Break;
-                    }
+            // Pre-fetch strategy: load 3 cards before and 5 cards after visible range
+            let prefetch_before = 3;
+            let prefetch_after = 5;
+            let load_start = visible_start.saturating_sub(prefetch_before);
+            let load_end = (visible_end + prefetch_after).min(20); // Cap at 20 items per section
 
-                    // Calculate which cards are visible
-                    let card_width = 144.0;
-                    let start_idx = (value / card_width).floor() as usize;
-                    let end_idx = ((value + page_size) / card_width).ceil() as usize + 3;
+            if let Some(page) = self_weak.upgrade()
+                && let Some(items_box) = items_box_weak.upgrade()
+            {
+                let mut cards = cards_rc.borrow_mut();
+                let section_items = section_items.clone();
 
-                    // Create cards if needed
-                    if let Some(page) = self_weak_for_create.upgrade()
-                        && let Some(items_box) = items_box_weak_for_create.upgrade()
-                    {
-                        let mut cards = cards_for_load.borrow_mut();
-                        for i in cards.len()..end_idx.min(section_items_for_create.len()).min(20) {
-                            if let Some(item) = section_items_for_create.get(i) {
-                                let card = page.create_media_card(item);
-                                items_box.append(&card);
-                                cards.push(card.clone());
-                            }
-                        }
+                // Check if we need to update (avoid redundant operations)
+                let (last_start, last_end) = *last_loaded_range.borrow();
+                let needs_update = load_start < last_start || load_end > last_end;
 
-                        // Trigger load on visible cards
-                        for i in start_idx..end_idx.min(cards.len()) {
-                            if let Some(card) = cards.get(i)
-                                && let Some(media_card) =
-                                    card.downcast_ref::<super::library::MediaCard>()
-                            {
-                                media_card.trigger_load(ImageSize::Small);
-                            }
+                if needs_update {
+                    // Create cards up to load_end if needed
+                    for i in cards.len()..load_end.min(section_items.len()).min(20) {
+                        if let Some(item) = section_items.get(i) {
+                            let card = page.create_media_card(item);
+                            items_box.append(&card);
+                            cards.push(card.clone());
                         }
                     }
 
-                    glib::ControlFlow::Break
-                },
-            );
-        });
+                    // Load images for all cards in the load range
+                    for i in load_start..load_end.min(cards.len()) {
+                        if let Some(card) = cards.get(i)
+                            && let Some(media_card) =
+                                card.downcast_ref::<super::library::MediaCard>()
+                        {
+                            media_card.trigger_load(ImageSize::Small);
+                        }
+                    }
 
-        // Trigger initial loads
-        glib::timeout_add_local_once(std::time::Duration::from_millis(100), {
-            let cards = cards.clone();
-            move || {
-                for (i, card) in cards.iter().enumerate() {
-                    if i >= HOME_INITIAL_IMAGES_PER_SECTION {
-                        break;
-                    }
-                    if let Some(media_card) = card.downcast_ref::<super::library::MediaCard>() {
-                        media_card.trigger_load(ImageSize::Small);
-                    }
+                    // Update last loaded range
+                    *last_loaded_range.borrow_mut() = (load_start, load_end);
                 }
+
+                // Log scroll position for debugging
+                let scroll_percentage = if upper > 0.0 {
+                    (value / upper * 100.0) as i32
+                } else {
+                    0
+                };
+                trace!(
+                    "Horizontal scroll at {}%, visible cards: {}-{}, loaded: {}-{}",
+                    scroll_percentage, visible_start, visible_end, load_start, load_end
+                );
             }
         });
+
+        // Immediately load initial visible cards
+        for (i, card) in cards.iter().enumerate() {
+            if i >= HOME_INITIAL_IMAGES_PER_SECTION {
+                break;
+            }
+            if let Some(media_card) = card.downcast_ref::<super::library::MediaCard>() {
+                media_card.trigger_load(ImageSize::Small);
+            }
+        }
 
         scrolled.set_child(Some(&items_box));
         section_box.append(&scrolled);

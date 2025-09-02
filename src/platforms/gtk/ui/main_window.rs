@@ -1103,6 +1103,7 @@ impl ReelMainWindow {
 
     pub async fn show_movie_details(&self, movie: crate::models::Movie, state: Arc<AppState>) {
         let imp = self.imp();
+        let start_time = std::time::Instant::now();
 
         // Prepare navigation and get stack
         self.prepare_navigation();
@@ -1146,18 +1147,34 @@ impl ReelMainWindow {
         // Update the content page title
         imp.content_page.set_title(&movie.title);
 
-        // Load the movie (non-blocking)
-        movie_details_page.load_movie(movie.clone());
-
-        // Setup back button
+        // Setup back button immediately for better UX
         self.setup_back_button("Back to Library");
 
-        // Show the movie details page
-        content_stack.set_visible_child_name("movie_details");
+        // Start loading the movie data
+        movie_details_page.load_movie(movie.clone());
+
+        // Defer the transition until data starts loading (immediate transition for perceived performance)
+        // This gives the best of both worlds: immediate response + smooth transition
+        glib::timeout_add_local_once(std::time::Duration::from_millis(10), {
+            let content_stack = content_stack.clone();
+            move || {
+                content_stack.set_visible_child_name("movie_details");
+            }
+        });
+
+        // Performance monitoring
+        let elapsed = start_time.elapsed();
+        if elapsed > std::time::Duration::from_millis(16) {
+            tracing::warn!(
+                "show_movie_details took {:?} (exceeds frame budget)",
+                elapsed
+            );
+        }
     }
 
     pub async fn show_show_details(&self, show: crate::models::Show, state: Arc<AppState>) {
         let imp = self.imp();
+        let start_time = std::time::Instant::now();
 
         // Prepare navigation and get stack
         self.prepare_navigation();
@@ -1201,17 +1218,33 @@ impl ReelMainWindow {
         // Update the content page title
         imp.content_page.set_title(&show.title);
 
-        // Load the show (non-blocking)
-        show_details_page.load_show(show.clone());
-
-        // Setup back button
+        // Setup back button immediately for better UX
         self.setup_back_button("Back to Library");
 
-        // Show the show details page
-        content_stack.set_visible_child_name("show_details");
+        // Start loading the show data
+        show_details_page.load_show(show.clone());
+
+        // Defer the transition until data starts loading (immediate transition for perceived performance)
+        // This gives the best of both worlds: immediate response + smooth transition
+        glib::timeout_add_local_once(std::time::Duration::from_millis(10), {
+            let content_stack = content_stack.clone();
+            move || {
+                content_stack.set_visible_child_name("show_details");
+            }
+        });
+
+        // Performance monitoring
+        let elapsed = start_time.elapsed();
+        if elapsed > std::time::Duration::from_millis(16) {
+            tracing::warn!(
+                "show_show_details took {:?} (exceeds frame budget)",
+                elapsed
+            );
+        }
     }
 
     pub async fn show_player(&self, media_item: &crate::models::MediaItem, state: Arc<AppState>) {
+        let start_time = std::time::Instant::now();
         info!(
             "MainWindow::show_player() - Called for media: {}",
             media_item.title()
@@ -1377,10 +1410,21 @@ impl ReelMainWindow {
             );
         }
 
-        // Show the player page
+        // Defer the transition for smoother performance
         info!("MainWindow::show_player() - Switching stack to 'player' page");
-        content_stack.set_visible_child_name("player");
-        info!("MainWindow::show_player() - Navigation to player complete");
+        glib::timeout_add_local_once(std::time::Duration::from_millis(10), {
+            let content_stack = content_stack.clone();
+            move || {
+                content_stack.set_visible_child_name("player");
+                info!("MainWindow::show_player() - Navigation to player complete");
+            }
+        });
+
+        // Performance monitoring
+        let elapsed = start_time.elapsed();
+        if elapsed > std::time::Duration::from_millis(16) {
+            tracing::warn!("show_player took {:?} (exceeds frame budget)", elapsed);
+        }
 
         // Navigate to the content pane and collapse the sidebar for immersive playback
         if let Some(content) = self.content()
@@ -1426,6 +1470,7 @@ impl ReelMainWindow {
 
     async fn show_library_view(&self, backend_id: String, library: crate::models::Library) {
         let imp = self.imp();
+        let start_time = std::time::Instant::now();
 
         // Prepare navigation and get stack
         self.prepare_navigation();
@@ -1505,11 +1550,26 @@ impl ReelMainWindow {
         imp.content_header.pack_end(&filter_controls);
         imp.filter_controls.replace(Some(filter_controls));
 
-        // Load the library
+        // Start loading the library data
         library_view.load_library(backend_id, library).await;
 
-        // Switch to library view in the content area
-        content_stack.set_visible_child_name("library");
+        // Defer the transition for smoother performance
+        // The await above ensures data starts loading before transition
+        glib::timeout_add_local_once(std::time::Duration::from_millis(10), {
+            let content_stack = content_stack.clone();
+            move || {
+                content_stack.set_visible_child_name("library");
+            }
+        });
+
+        // Performance monitoring
+        let elapsed = start_time.elapsed();
+        if elapsed > std::time::Duration::from_millis(16) {
+            tracing::warn!(
+                "show_library_view took {:?} (exceeds frame budget)",
+                elapsed
+            );
+        }
 
         // Get the split view from the window content and show content pane on mobile
         if let Some(content) = self.content()
