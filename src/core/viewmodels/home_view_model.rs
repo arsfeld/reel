@@ -180,27 +180,52 @@ impl HomeViewModel {
                 let items = self.load_continue_watching().await?;
                 self.continue_watching.set(items.clone()).await;
 
-                let mut sections = self.sections.get().await;
-                if let Some(section) = sections
-                    .iter_mut()
-                    .find(|s| s.section_type == SectionType::ContinueWatching)
-                {
-                    section.items = items;
-                }
-                self.sections.set(sections).await;
+                // Use update instead of get/set to avoid race conditions
+                self.sections
+                    .update(|sections| {
+                        if let Some(section) = sections
+                            .iter_mut()
+                            .find(|s| s.section_type == SectionType::ContinueWatching)
+                        {
+                            section.items = items.clone();
+                        } else if !items.is_empty() {
+                            // Add the section if it doesn't exist
+                            sections.insert(
+                                0,
+                                MediaSection {
+                                    title: "Continue Watching".to_string(),
+                                    items,
+                                    library_id: None,
+                                    section_type: SectionType::ContinueWatching,
+                                },
+                            );
+                        }
+                    })
+                    .await;
             }
             SectionType::RecentlyAdded => {
                 let items = self.load_recently_added().await?;
                 self.recently_added.set(items.clone()).await;
 
-                let mut sections = self.sections.get().await;
-                if let Some(section) = sections
-                    .iter_mut()
-                    .find(|s| s.section_type == SectionType::RecentlyAdded)
-                {
-                    section.items = items;
-                }
-                self.sections.set(sections).await;
+                // Use update instead of get/set to avoid race conditions
+                self.sections
+                    .update(|sections| {
+                        if let Some(section) = sections
+                            .iter_mut()
+                            .find(|s| s.section_type == SectionType::RecentlyAdded)
+                        {
+                            section.items = items.clone();
+                        } else if !items.is_empty() {
+                            // Add the section if it doesn't exist
+                            sections.push(MediaSection {
+                                title: "Recently Added".to_string(),
+                                items,
+                                library_id: None,
+                                section_type: SectionType::RecentlyAdded,
+                            });
+                        }
+                    })
+                    .await;
             }
             SectionType::Library(ref library_id) => {
                 let items = self.data_service.get_media_items(library_id).await?;
@@ -212,13 +237,17 @@ impl HomeViewModel {
                     .copied()
                     .unwrap_or(10);
 
-                let mut sections = self.sections.get().await;
-                if let Some(section) = sections.iter_mut().find(
-                    |s| matches!(&s.section_type, SectionType::Library(id) if id == library_id),
-                ) {
-                    section.items = items.into_iter().take(limit).collect();
-                }
-                self.sections.set(sections).await;
+                let library_id = library_id.clone();
+                let limited_items: Vec<MediaItem> = items.into_iter().take(limit).collect();
+
+                // Use update instead of get/set to avoid race conditions
+                self.sections.update(|sections| {
+                    if let Some(section) = sections.iter_mut().find(
+                        |s| matches!(&s.section_type, SectionType::Library(id) if id == &library_id),
+                    ) {
+                        section.items = limited_items;
+                    }
+                }).await;
             }
             _ => {}
         }
