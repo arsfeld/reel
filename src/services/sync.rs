@@ -371,7 +371,6 @@ impl SyncManager {
             // Check if this is a new item
             if !existing_ids.contains(&item.id().to_string()) {
                 new_items.push((item.clone(), cache_key.clone()));
-                debug!("Found new {} item: {}", item_type, item.id());
             }
 
             // Use silent storage to avoid individual events during sync

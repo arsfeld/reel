@@ -9,10 +9,6 @@ repository = "https://github.com/arsfeld/reel"
 keywords = ["media", "player", "plex", "jellyfin", "gnome"]
 categories = ["multimedia", "gui"]
 
-[lib]
-name = "reel_ffi"
-crate-type = ["cdylib", "rlib"]
-
 [features]
 default = ["gtk"]
 gtk = ["dep:gtk4", "dep:gdk4", "dep:gdk-pixbuf", "dep:libadwaita", "dep:glib-build-tools"]

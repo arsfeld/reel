@@ -8,7 +8,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tracing::{debug, error};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone)]
 pub enum SortOrder {
@@ -97,6 +97,8 @@ impl LibraryViewModel {
     }
 
     pub async fn set_library(&self, library_id: String) -> Result<()> {
+        let start = Instant::now();
+        info!("[PERF] set_library: Starting for library {}", library_id);
         self.is_loading.set(true).await;
         self.error.set(None).await;
         // When switching libraries, reset incremental sync state
@@ -112,11 +114,26 @@ impl LibraryViewModel {
             Ok(Some(library)) => {
                 self.current_library.set(Some(library.clone())).await;
 
+                let items_start = Instant::now();
                 match self.data_service.get_media_items(&library_id).await {
                     Ok(items) => {
+                        let items_elapsed = items_start.elapsed();
+                        info!(
+                            "[PERF] get_media_items completed in {:?} ({} items)",
+                            items_elapsed,
+                            items.len()
+                        );
+
+                        let set_start = Instant::now();
                         self.items.set(items.clone()).await;
+                        let set_elapsed = set_start.elapsed();
+                        info!("[PERF] Setting items completed in {:?}", set_elapsed);
+
                         self.apply_filters_and_sort().await;
                         self.is_loading.set(false).await;
+
+                        let total_elapsed = start.elapsed();
+                        warn!("[PERF] set_library total: {:?}", total_elapsed);
                         Ok(())
                     }
                     Err(e) => {
@@ -233,10 +250,17 @@ impl LibraryViewModel {
     }
 
     async fn apply_filters_and_sort(&self) {
+        let start = Instant::now();
         let items = self.items.get().await;
         let filter = self.filter_options.get().await;
         let sort_order = self.sort_order.get().await;
 
+        info!(
+            "[PERF] apply_filters_and_sort: Starting with {} items",
+            items.len()
+        );
+
+        let filter_start = Instant::now();
         let mut filtered: Vec<MediaItem> = items
             .into_iter()
             .filter(|item| {
@@ -322,6 +346,14 @@ impl LibraryViewModel {
             })
             .collect();
 
+        let filter_elapsed = filter_start.elapsed();
+        info!(
+            "[PERF] Filtering completed in {:?} ({} items passed filter)",
+            filter_elapsed,
+            filtered.len()
+        );
+
+        let sort_start = Instant::now();
         match sort_order {
             SortOrder::TitleAsc => filtered.sort_by(|a, b| a.title().cmp(b.title())),
             SortOrder::TitleDesc => filtered.sort_by(|a, b| b.title().cmp(a.title())),
@@ -361,7 +393,22 @@ impl LibraryViewModel {
             }
         }
 
+        let sort_elapsed = sort_start.elapsed();
+        info!("[PERF] Sorting completed in {:?}", sort_elapsed);
+
+        let set_start = Instant::now();
         self.filtered_items.set(filtered).await;
+        let set_elapsed = set_start.elapsed();
+        info!(
+            "[PERF] Setting filtered_items completed in {:?}",
+            set_elapsed
+        );
+
+        let total_elapsed = start.elapsed();
+        warn!(
+            "[PERF] apply_filters_and_sort total: {:?} (filter: {:?}, sort: {:?}, set: {:?})",
+            total_elapsed, filter_elapsed, sort_elapsed, set_elapsed
+        );
     }
 
     fn extract_year(item: &MediaItem) -> Option<u32> {

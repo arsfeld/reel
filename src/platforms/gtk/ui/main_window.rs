@@ -11,6 +11,96 @@ use crate::config::Config;
 use crate::state::AppState;
 use tokio::sync::RwLock;
 
+// Wrapper enum to handle both library view types
+#[derive(Clone, Debug)]
+enum LibraryViewWrapper {
+    Standard(crate::platforms::gtk::ui::pages::LibraryView),
+    Virtual(crate::platforms::gtk::ui::pages::LibraryVirtualView),
+}
+
+impl LibraryViewWrapper {
+    fn set_on_media_selected<F>(&self, callback: F)
+    where
+        F: Fn(&crate::models::MediaItem) + 'static,
+    {
+        match self {
+            LibraryViewWrapper::Standard(view) => view.set_on_media_selected(callback),
+            LibraryViewWrapper::Virtual(view) => view.set_on_media_selected(callback),
+        }
+    }
+
+    async fn load_library(&self, backend_id: String, library: crate::models::Library) {
+        match self {
+            LibraryViewWrapper::Standard(view) => view.load_library(backend_id, library).await,
+            LibraryViewWrapper::Virtual(view) => view.load_library(backend_id, library).await,
+        }
+    }
+
+    fn update_watch_status_filter(&self, status: WatchStatus) {
+        match self {
+            LibraryViewWrapper::Standard(view) => view.update_watch_status_filter(status),
+            LibraryViewWrapper::Virtual(view) => view.update_watch_status_filter(status),
+        }
+    }
+
+    fn update_sort_order(&self, order: SortOrder) {
+        match self {
+            LibraryViewWrapper::Standard(view) => view.update_sort_order(order),
+            LibraryViewWrapper::Virtual(view) => view.update_sort_order(order),
+        }
+    }
+
+    fn search(&self, query: String) {
+        match self {
+            LibraryViewWrapper::Standard(view) => view.search(query),
+            LibraryViewWrapper::Virtual(view) => view.search(query),
+        }
+    }
+
+    fn refresh(&self) {
+        match self {
+            LibraryViewWrapper::Standard(view) => view.refresh(),
+            LibraryViewWrapper::Virtual(view) => view.refresh(),
+        }
+    }
+
+    fn upcast(&self) -> gtk4::Widget {
+        match self {
+            LibraryViewWrapper::Standard(view) => view.clone().upcast(),
+            LibraryViewWrapper::Virtual(view) => view.clone().upcast(),
+        }
+    }
+
+    fn downgrade(&self) -> LibraryViewWrapperWeak {
+        match self {
+            LibraryViewWrapper::Standard(view) => {
+                LibraryViewWrapperWeak::Standard(view.downgrade())
+            }
+            LibraryViewWrapper::Virtual(view) => LibraryViewWrapperWeak::Virtual(view.downgrade()),
+        }
+    }
+}
+
+// Weak reference version of the wrapper
+#[derive(Clone, Debug)]
+enum LibraryViewWrapperWeak {
+    Standard(gtk4::glib::WeakRef<crate::platforms::gtk::ui::pages::LibraryView>),
+    Virtual(gtk4::glib::WeakRef<crate::platforms::gtk::ui::pages::LibraryVirtualView>),
+}
+
+impl LibraryViewWrapperWeak {
+    fn upgrade(&self) -> Option<LibraryViewWrapper> {
+        match self {
+            LibraryViewWrapperWeak::Standard(weak) => {
+                weak.upgrade().map(LibraryViewWrapper::Standard)
+            }
+            LibraryViewWrapperWeak::Virtual(weak) => {
+                weak.upgrade().map(LibraryViewWrapper::Virtual)
+            }
+        }
+    }
+}
+
 mod imp {
     use super::*;
 
@@ -53,7 +143,7 @@ mod imp {
         pub content_stack: RefCell<Option<gtk4::Stack>>,
         pub home_page: RefCell<Option<crate::platforms::gtk::ui::pages::HomePage>>,
         pub sources_page: RefCell<Option<crate::platforms::gtk::ui::pages::SourcesPage>>,
-        pub library_view: RefCell<Option<crate::platforms::gtk::ui::pages::LibraryView>>,
+        pub library_view: RefCell<Option<LibraryViewWrapper>>,
         pub player_page: RefCell<Option<crate::platforms::gtk::ui::pages::PlayerPage>>,
         pub show_details_page: RefCell<Option<crate::platforms::gtk::ui::pages::ShowDetailsPage>>,
         pub movie_details_page: RefCell<Option<crate::platforms::gtk::ui::pages::MovieDetailsPage>>,
@@ -1488,9 +1578,19 @@ impl ReelMainWindow {
             if let Some(view) = existing_view {
                 view
             } else {
-                // Create new library view
+                // Create new library view - use virtual scrolling for production
                 let state = imp.state.borrow().as_ref().unwrap().clone();
-                let view = crate::platforms::gtk::ui::pages::LibraryView::new(state.clone());
+
+                // Always use virtual scrolling for production-ready performance
+                let view = if crate::constants::USE_VIRTUAL_SCROLLING {
+                    LibraryViewWrapper::Virtual(
+                        crate::platforms::gtk::ui::pages::LibraryVirtualView::new(state.clone()),
+                    )
+                } else {
+                    LibraryViewWrapper::Standard(
+                        crate::platforms::gtk::ui::pages::LibraryView::new(state.clone()),
+                    )
+                };
 
                 // Set the media selected callback to handle different media types
                 let window_weak = self.downgrade();
@@ -1521,7 +1621,7 @@ impl ReelMainWindow {
 
                 // Store the view and add to stack
                 imp.library_view.replace(Some(view.clone()));
-                content_stack.add_named(&view, Some("library"));
+                content_stack.add_named(&view.upcast(), Some("library"));
                 view
             }
         };
@@ -1612,10 +1712,7 @@ impl ReelMainWindow {
         }
     }
 
-    fn create_filter_controls(
-        &self,
-        library_view: &crate::platforms::gtk::ui::pages::LibraryView,
-    ) -> gtk4::Box {
+    fn create_filter_controls(&self, library_view: &LibraryViewWrapper) -> gtk4::Box {
         let controls_box = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Horizontal)
             .spacing(8)

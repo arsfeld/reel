@@ -31,3 +31,8 @@ pub const MEMORY_CACHE_MAX_MB: u64 = 500; // Max memory cache size in MB
 // === API Performance ===
 // Caching durations to reduce API calls
 pub const HOME_SECTIONS_CACHE_SECS: u64 = 300; // Cache homepage sections for 5 minutes
+
+// === Virtual Scrolling ===
+// Enable virtual scrolling for large libraries (experimental)
+pub const USE_VIRTUAL_SCROLLING: bool = false; // Use ListView-based virtual scrolling for libraries (disabled by default for stability)
+pub const VIRTUAL_SCROLL_THRESHOLD: usize = 500; // Number of items before switching to virtual scrolling

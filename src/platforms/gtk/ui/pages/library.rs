@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 use tracing::{error, info, trace, warn};
 
@@ -314,7 +314,10 @@ impl LibraryView {
 
     fn update_items_from_viewmodel(&self, items: Vec<crate::models::MediaItem>) {
         let start = Instant::now();
-        trace!("Received {} items from ViewModel", items.len());
+        info!(
+            "[PERF] update_items_from_viewmodel: Received {} items from ViewModel",
+            items.len()
+        );
 
         // Store pending items and schedule batched update
         self.imp().pending_items.replace(Some(items));
@@ -322,22 +325,34 @@ impl LibraryView {
         // Schedule UI update if not already scheduled
         if !self.imp().update_scheduled.get() {
             self.imp().update_scheduled.set(true);
+            info!("[PERF] Scheduling UI update via idle_add_local_once");
 
             let weak_self = self.downgrade();
             glib::idle_add_local_once(move || {
+                let idle_start = Instant::now();
                 if let Some(view) = weak_self.upgrade() {
                     // Process pending items
                     if let Some(items) = view.imp().pending_items.take() {
+                        info!(
+                            "[PERF] Processing {} pending items in idle callback",
+                            items.len()
+                        );
                         view.display_media_items(items);
                     }
                     view.imp().update_scheduled.set(false);
                 }
+                let idle_elapsed = idle_start.elapsed();
+                if idle_elapsed.as_millis() > 16 {
+                    warn!("[PERF] Slow idle callback execution: {:?}", idle_elapsed);
+                }
             });
+        } else {
+            info!("[PERF] UI update already scheduled, skipping");
         }
 
         let elapsed = start.elapsed();
         if elapsed.as_millis() > 2 {
-            warn!("Slow update scheduling: {:?}", elapsed);
+            warn!("[PERF] Slow update scheduling: {:?}", elapsed);
         }
     }
 
@@ -643,10 +658,19 @@ impl LibraryView {
 
     fn display_media_items(&self, items: Vec<MediaItem>) {
         let start = Instant::now();
+        info!(
+            "[PERF] display_media_items: Starting with {} items",
+            items.len()
+        );
         let imp = self.imp();
 
         // Store new filtered items
         let old_items = imp.filtered_items.borrow().clone();
+        info!(
+            "[PERF] Old items count: {}, New items count: {}",
+            old_items.len(),
+            items.len()
+        );
         imp.filtered_items.replace(items.clone());
 
         let flow_box = imp.flow_box.borrow().clone();
@@ -656,6 +680,7 @@ impl LibraryView {
 
         if let Some(flow_box) = flow_box {
             if items.is_empty() {
+                info!("[PERF] Items empty, clearing flow_box and showing empty state");
                 // Clear and show empty state
                 while let Some(child) = flow_box.first_child() {
                     flow_box.remove(&child);
@@ -671,9 +696,19 @@ impl LibraryView {
                 // Perform differential update only if we have existing items
                 if !old_items.is_empty() && self.should_use_differential_update(&old_items, &items)
                 {
+                    info!(
+                        "[PERF] Using differential update for {} -> {} items",
+                        old_items.len(),
+                        items.len()
+                    );
                     self.differential_update_items(&flow_box, &old_items, &items, current_size);
                 } else {
                     // Full refresh for initial load or major changes
+                    info!(
+                        "[PERF] Using full refresh for {} items (old: {})",
+                        items.len(),
+                        old_items.len()
+                    );
                     self.full_refresh_items(
                         &flow_box,
                         items.clone(),
@@ -683,16 +718,17 @@ impl LibraryView {
                     );
                 }
             }
+        } else {
+            warn!("[PERF] No flow_box available!");
         }
 
         let elapsed = start.elapsed();
-        if elapsed.as_millis() > 16 {
-            warn!(
-                "Slow UI update in display_media_items: {:?} for {} items",
-                elapsed,
-                items.len()
-            );
-        }
+        warn!(
+            "[PERF] display_media_items completed in {:?} for {} items (>16ms: {})",
+            elapsed,
+            items.len(),
+            elapsed.as_millis() > 16
+        );
     }
 
     /// Check if we should use differential update (for minor changes) or full refresh
@@ -729,6 +765,11 @@ impl LibraryView {
         current_size: ImageSize,
     ) {
         let start = Instant::now();
+        info!(
+            "[PERF] differential_update_items: old={}, new={}",
+            old_items.len(),
+            new_items.len()
+        );
         let imp = self.imp();
         let mut cards_by_index = imp.cards_by_index.borrow_mut();
         let mut cards_by_id = imp.cards_by_id.borrow_mut();
@@ -741,12 +782,15 @@ impl LibraryView {
 
         // Find items to remove
         let to_remove: Vec<String> = old_ids.difference(&new_ids).cloned().collect();
+        info!("[PERF] Items to remove: {}", to_remove.len());
 
         // Find items to add
         let to_add: Vec<String> = new_ids.difference(&old_ids).cloned().collect();
+        info!("[PERF] Items to add: {}", to_add.len());
 
         // Update existing cards' content for items present in both sets (e.g., progress changes)
         let common_ids: Vec<String> = old_ids.intersection(&new_ids).cloned().collect();
+        info!("[PERF] Common items to update: {}", common_ids.len());
         let new_by_id: HashMap<String, &MediaItem> = new_items
             .iter()
             .map(|it| (it.id().to_string(), it))
@@ -761,6 +805,8 @@ impl LibraryView {
 
         // Remove cards for items that are no longer in the list
         if !to_remove.is_empty() {
+            let remove_start = Instant::now();
+            let mut removed_count = 0;
             let mut child = flow_box.first_child();
             while let Some(flow_child) = child {
                 let next = flow_child.next_sibling();
@@ -771,6 +817,7 @@ impl LibraryView {
                     let card_id = card.media_item().id().to_string();
                     if to_remove.contains(&card_id) {
                         flow_box.remove(&flow_child);
+                        removed_count += 1;
                         // Remove from maps
                         cards_by_index.retain(|_, c| c.media_item().id() != card_id);
                         cards_by_id.remove(&card_id);
@@ -779,12 +826,20 @@ impl LibraryView {
 
                 child = next;
             }
+            let remove_elapsed = remove_start.elapsed();
+            info!(
+                "[PERF] Removed {} cards in {:?}",
+                removed_count, remove_elapsed
+            );
         }
 
         // Add new cards for items that weren't in the old list
+        let add_start = Instant::now();
+        let mut added_count = 0;
         for (idx, item) in new_items.iter().enumerate() {
             let item_id = item.id().to_string();
             if to_add.contains(&item_id) {
+                added_count += 1;
                 let card = MediaCard::new(item.clone(), current_size);
 
                 // Connect click handler
@@ -816,6 +871,10 @@ impl LibraryView {
                 card.trigger_load(current_size);
             }
         }
+        if added_count > 0 {
+            let add_elapsed = add_start.elapsed();
+            info!("[PERF] Added {} cards in {:?}", added_count, add_elapsed);
+        }
 
         // Reorder if needed (only if items are the same but order changed)
         if to_add.is_empty() && to_remove.is_empty() && old_items.len() == new_items.len() {
@@ -845,15 +904,14 @@ impl LibraryView {
         }
 
         let elapsed = start.elapsed();
-        if elapsed.as_millis() > 16 {
-            warn!(
-                "Slow differential update: {:?} (add: {}, remove: {}, update: {})",
-                elapsed,
-                to_add.len(),
-                to_remove.len(),
-                common_ids.len()
-            );
-        }
+        warn!(
+            "[PERF] differential_update_items completed in {:?} (add: {}, remove: {}, update: {}) >16ms: {}",
+            elapsed,
+            to_add.len(),
+            to_remove.len(),
+            common_ids.len(),
+            elapsed.as_millis() > 16
+        );
     }
 
     /// Perform full refresh - clear and recreate all items
@@ -866,14 +924,24 @@ impl LibraryView {
         stack: Option<gtk4::Stack>,
     ) {
         let start = Instant::now();
+        info!(
+            "[PERF] full_refresh_items: Starting with {} items",
+            items.len()
+        );
         let imp = self.imp();
         imp.cards_by_index.borrow_mut().clear();
         imp.cards_by_id.borrow_mut().clear();
 
         // Clear existing items
+        let mut removed_count = 0;
         while let Some(child) = flow_box.first_child() {
             flow_box.remove(&child);
+            removed_count += 1;
         }
+        info!(
+            "[PERF] Removed {} existing children from flow_box",
+            removed_count
+        );
 
         if !items.is_empty() {
             // Store items for lazy creation
@@ -931,7 +999,13 @@ impl LibraryView {
             let create_initial = create_cards_batch.clone();
             let weak_self = self.downgrade();
             glib::idle_add_local_once(move || {
+                info!("[PERF] Creating initial {} cards", INITIAL_CARDS_TO_CREATE);
+                let create_start = Instant::now();
                 create_initial(0, INITIAL_CARDS_TO_CREATE);
+                let create_elapsed = create_start.elapsed();
+                if create_elapsed.as_millis() > 16 {
+                    warn!("[PERF] Initial card creation took {:?}", create_elapsed);
+                }
 
                 // Simplified: trigger load directly on created cards
                 if let Some(view) = weak_self.upgrade() {
@@ -939,11 +1013,18 @@ impl LibraryView {
                         std::time::Duration::from_millis(100),
                         move || {
                             // Trigger load on initial visible cards
+                            let load_start = Instant::now();
                             let cards_idx = view.imp().cards_by_index.borrow();
-                            for i in 0..INITIAL_IMAGES_TO_LOAD.min(cards_idx.len()) {
+                            let load_count = INITIAL_IMAGES_TO_LOAD.min(cards_idx.len());
+                            info!("[PERF] Triggering initial load for {} cards", load_count);
+                            for i in 0..load_count {
                                 if let Some(card) = cards_idx.get(&i) {
                                     card.trigger_load(ImageSize::Medium);
                                 }
+                            }
+                            let load_elapsed = load_start.elapsed();
+                            if load_elapsed.as_millis() > 16 {
+                                warn!("[PERF] Initial image triggers took {:?}", load_elapsed);
                             }
                         },
                     );
@@ -970,9 +1051,11 @@ impl LibraryView {
         }
 
         let elapsed = start.elapsed();
-        if elapsed.as_millis() > 32 {
-            warn!("Slow full refresh: {:?}", elapsed);
-        }
+        warn!(
+            "[PERF] full_refresh_items completed in {:?} (>32ms: {})",
+            elapsed,
+            elapsed.as_millis() > 32
+        );
     }
 
     fn rebuild_cards_index_map(&self, flow_box: &gtk4::FlowBox) {
@@ -998,10 +1081,20 @@ impl LibraryView {
     ) {
         let adjustment = scrolled_window.vadjustment();
         let update_counter: Rc<RefCell<u32>> = Rc::new(RefCell::new(0));
+        let scroll_end_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
 
         adjustment.connect_value_changed(move |adj| {
+            // Set scrolling state immediately
+            IMAGE_LOADER.set_scrolling(true);
+            trace!(
+                "[PERF] Scroll event: scrolling set to true, viewport: {:.0}-{:.0}",
+                adj.value(),
+                adj.value() + adj.page_size()
+            );
+
             let flow_box = flow_box.clone();
             let counter = update_counter.clone();
+            let timer_ref = scroll_end_timer.clone();
 
             let viewport_top = adj.value();
             let viewport_height = adj.page_size();
@@ -1012,26 +1105,37 @@ impl LibraryView {
                 *c
             };
 
-            // Very short delay since images load fast
-            let counter_inner = counter.clone();
-            glib::timeout_add_local(std::time::Duration::from_millis(15), move || {
-                if *counter_inner.borrow() != current_count {
-                    return glib::ControlFlow::Break;
-                }
+            // Cancel previous timer
+            if let Some(timer_id) = timer_ref.borrow_mut().take() {
+                timer_id.remove();
+            }
 
-                let viewport_bottom = viewport_top + viewport_height;
+            // Set new timer to detect when scrolling stops
+            let timer_id =
+                glib::timeout_add_local(std::time::Duration::from_millis(150), move || {
+                    // Scrolling has stopped for 150ms
+                    info!("[PERF] Scroll stopped after 150ms, loading images in viewport");
+                    IMAGE_LOADER.set_scrolling(false);
 
-                // Load everything in a large buffer since images are small
-                let load_margin = viewport_height * 3.0; // Load 3 screens in each direction
+                    let viewport_bottom = viewport_top + viewport_height;
 
-                let load_top = (viewport_top - load_margin).max(0.0);
-                let load_bottom = viewport_bottom + load_margin;
+                    // Load everything in a large buffer since images are small
+                    let load_margin = viewport_height * 3.0; // Load 3 screens in each direction
 
-                // Single pass loading - all at same quality
-                Self::load_cards_in_range(&flow_box, load_top, load_bottom, ImageSize::Medium);
+                    let load_top = (viewport_top - load_margin).max(0.0);
+                    let load_bottom = viewport_bottom + load_margin;
 
-                glib::ControlFlow::Break
-            });
+                    // Single pass loading - all at same quality
+                    info!(
+                        "[PERF] Loading cards in range: {:.0}-{:.0} (viewport: {:.0}-{:.0})",
+                        load_top, load_bottom, viewport_top, viewport_bottom
+                    );
+                    Self::load_cards_in_range(&flow_box, load_top, load_bottom, ImageSize::Medium);
+
+                    glib::ControlFlow::Break
+                });
+
+            *timer_ref.borrow_mut() = Some(timer_id);
         });
     }
 
@@ -1061,11 +1165,14 @@ impl LibraryView {
         visible_bottom: f64,
         size: ImageSize,
     ) {
+        let start = Instant::now();
         let mut child = flow_box.first_child();
         let mut cards_to_load = Vec::new();
+        let mut total_cards = 0;
 
         while let Some(flow_child) = child {
             if let Some(fc) = flow_child.downcast_ref::<gtk4::FlowBoxChild>() {
+                total_cards += 1;
                 // Use natural size for visibility calculations
                 let (_, natural) = fc.preferred_size();
                 let child_height = natural.height() as f64;
@@ -1087,9 +1194,26 @@ impl LibraryView {
             child = flow_child.next_sibling();
         }
 
+        info!(
+            "[PERF] load_cards_in_range: Loading {} of {} cards in range {:.0}-{:.0}",
+            cards_to_load.len(),
+            total_cards,
+            visible_top,
+            visible_bottom
+        );
+
         // Batch load for efficiency
-        for (card, size) in cards_to_load {
-            card.trigger_load(size);
+        for (card, size) in &cards_to_load {
+            card.trigger_load(*size);
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 16 {
+            warn!(
+                "[PERF] load_cards_in_range took {:?} to trigger {} loads",
+                elapsed,
+                cards_to_load.len()
+            );
         }
     }
 
@@ -1618,16 +1742,19 @@ impl MediaCard {
 
         // Check if already loaded at this size or loading
         if *imp.image_loaded.borrow() && current_size == size {
+            trace!("[PERF] Card already loaded, skipping");
             return;
         }
 
         if *imp.image_loading.borrow() {
+            trace!("[PERF] Card already loading, skipping");
             return;
         }
 
         *imp.image_loading.borrow_mut() = true;
 
         if let Some(media_item) = imp.media_item.borrow().as_ref() {
+            trace!("[PERF] Triggering image load for: {}", media_item.title());
             self.load_poster_image(media_item, size);
         }
     }
@@ -1649,51 +1776,60 @@ impl MediaCard {
         if let Some(url) = poster_url {
             let imp = self.imp();
 
-            if let Some(spinner) = imp.loading_spinner.borrow().as_ref() {
-                spinner.set_spinning(true);
-                spinner.set_visible(true);
-            }
-
+            // Don't show spinner immediately to avoid flicker for cached images
             let image_ref = imp.image.borrow().as_ref().unwrap().clone();
             let spinner_ref = imp.loading_spinner.borrow().as_ref().unwrap().clone();
             let weak_self = self.downgrade();
 
-            // Load with specified size for optimization
+            // Load image in background thread pool to avoid blocking main thread
+            let url_clone = url.clone();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+
+            // Spawn the download task on tokio runtime
+            tokio::spawn(async move {
+                let result = IMAGE_LOADER.load_image(&url_clone, size).await;
+                let _ = tx.send(result);
+            });
+
+            // Handle the result on the main thread
             glib::spawn_future_local(async move {
-                match IMAGE_LOADER.load_image(&url, size).await {
-                    Ok(texture) => {
-                        let image_ref = image_ref.clone();
-                        let spinner_ref = spinner_ref.clone();
-                        let weak_self = weak_self.clone();
-
-                        glib::idle_add_local_once(move || {
-                            if let Some(card) = weak_self.upgrade() {
-                                image_ref.set_paintable(Some(&texture));
-                                spinner_ref.set_spinning(false);
-                                spinner_ref.set_visible(false);
-
-                                let imp = card.imp();
-                                *imp.image_loaded.borrow_mut() = true;
-                                *imp.image_loading.borrow_mut() = false;
+                let load_start = Instant::now();
+                if let Ok(result) = rx.await {
+                    match result {
+                        Ok(texture) => {
+                            let load_elapsed = load_start.elapsed();
+                            if load_elapsed.as_millis() > 100 {
+                                trace!("[PERF] Slow image load: {:?} for {}", load_elapsed, url);
                             }
-                        });
-                    }
-                    Err(e) => {
-                        let image_ref = image_ref.clone();
-                        let spinner_ref = spinner_ref.clone();
-                        let weak_self = weak_self.clone();
 
-                        glib::idle_add_local_once(move || {
-                            error!("Failed to load poster: {}", e);
-                            spinner_ref.set_spinning(false);
-                            spinner_ref.set_visible(false);
+                            // Update UI with low priority to not block scrolling
+                            let image_ref = image_ref.clone();
+                            let spinner_ref = spinner_ref.clone();
+                            let weak_self = weak_self.clone();
 
-                            if let Some(card) = weak_self.upgrade() {
-                                card.set_placeholder_image(&image_ref);
-                                let imp = card.imp();
-                                *imp.image_loading.borrow_mut() = false;
-                            }
-                        });
+                            glib::idle_add_local_full(glib::Priority::LOW, move || {
+                                if let Some(card) = weak_self.upgrade() {
+                                    image_ref.set_paintable(Some(&texture));
+                                    spinner_ref.set_spinning(false);
+                                    spinner_ref.set_visible(false);
+
+                                    let imp = card.imp();
+                                    *imp.image_loaded.borrow_mut() = true;
+                                    *imp.image_loading.borrow_mut() = false;
+                                }
+                                glib::ControlFlow::Break
+                            });
+                        }
+                        Err(e) => {
+                            trace!("[PERF] Image load failed: {}", e);
+                            let weak_self = weak_self.clone();
+                            glib::idle_add_local_once(move || {
+                                if let Some(card) = weak_self.upgrade() {
+                                    let imp = card.imp();
+                                    *imp.image_loading.borrow_mut() = false;
+                                }
+                            });
+                        }
                     }
                 }
             });
