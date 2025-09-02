@@ -739,7 +739,22 @@ impl DataService {
 
     /// Get media items for a library as domain models
     pub async fn get_media_items(&self, library_id: &str) -> Result<Vec<MediaItem>> {
+        let start = std::time::Instant::now();
+        info!(
+            "[PERF] get_media_items: Starting for library {}",
+            library_id
+        );
+
+        let db_start = std::time::Instant::now();
         let models = self.media_repo.find_by_library(library_id).await?;
+        let db_elapsed = db_start.elapsed();
+        info!(
+            "[PERF] Database query completed in {:?} ({} items)",
+            db_elapsed,
+            models.len()
+        );
+
+        let convert_start = std::time::Instant::now();
         let mut items = Vec::new();
 
         for model in models {
@@ -751,6 +766,18 @@ impl DataService {
                 }
             }
         }
+
+        let convert_elapsed = convert_start.elapsed();
+        info!("[PERF] Model conversion completed in {:?}", convert_elapsed);
+
+        let total_elapsed = start.elapsed();
+        warn!(
+            "[PERF] get_media_items total: {:?} (db: {:?}, convert: {:?}) for {} items",
+            total_elapsed,
+            db_elapsed,
+            convert_elapsed,
+            items.len()
+        );
 
         Ok(items)
     }

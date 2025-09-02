@@ -3,14 +3,15 @@ use futures::future::join_all;
 use image::{ImageFormat, ImageReader};
 use lru::LruCache;
 use reqwest::Client;
+use std::collections::VecDeque;
 use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use tokio::fs;
-use tokio::sync::{RwLock, Semaphore};
-use tracing::{info, trace};
+use tokio::sync::{Mutex, RwLock, Semaphore};
+use tracing::{debug, info, trace};
 
 #[cfg(feature = "gtk")]
 use gdk4 as gdk;
@@ -88,8 +89,36 @@ pub struct ImageLoader {
     client: Client,
     cache_dir: PathBuf,
     memory_cache: Arc<RwLock<LruCache<(String, ImageSize), ImageData>>>,
+    #[cfg(feature = "gtk")]
+    texture_cache: Arc<RwLock<LruCache<(String, ImageSize), gdk::Texture>>>,
     download_semaphore: Arc<Semaphore>,
+    download_queue: Arc<
+        Mutex<
+            VecDeque<(
+                String,
+                ImageSize,
+                tokio::sync::oneshot::Sender<Result<ImageData>>,
+            )>,
+        >,
+    >,
+    is_scrolling: Arc<AtomicBool>,
     stats: Arc<ImageLoaderStats>,
+}
+
+impl Clone for ImageLoader {
+    fn clone(&self) -> Self {
+        Self {
+            client: self.client.clone(),
+            cache_dir: self.cache_dir.clone(),
+            memory_cache: self.memory_cache.clone(),
+            #[cfg(feature = "gtk")]
+            texture_cache: self.texture_cache.clone(),
+            download_semaphore: self.download_semaphore.clone(),
+            download_queue: self.download_queue.clone(),
+            is_scrolling: self.is_scrolling.clone(),
+            stats: self.stats.clone(),
+        }
+    }
 }
 
 struct ImageLoaderStats {
@@ -113,34 +142,165 @@ impl ImageLoader {
             std::fs::create_dir_all(&dir)?;
         }
 
-        Ok(Self {
+        let loader = Self {
             client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(5)) // Reduce timeout for faster failures
+                .pool_max_idle_per_host(20) // Increase connection pool for Plex
                 .build()?,
             cache_dir,
-            memory_cache: Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(500).unwrap()))),
-            download_semaphore: Arc::new(Semaphore::new(10)), // Max 10 concurrent downloads
+            memory_cache: Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(2000).unwrap()))), // Increase memory cache size
+            #[cfg(feature = "gtk")]
+            texture_cache: Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(1000).unwrap()))), // Increase texture cache size
+            download_semaphore: Arc::new(Semaphore::new(10)), // Increase to 10 concurrent downloads for better throughput
+            download_queue: Arc::new(Mutex::new(VecDeque::new())),
+            is_scrolling: Arc::new(AtomicBool::new(false)),
             stats: Arc::new(ImageLoaderStats {
                 memory_hits: AtomicU64::new(0),
                 disk_hits: AtomicU64::new(0),
                 downloads: AtomicU64::new(0),
                 memory_cache_size: AtomicUsize::new(0),
             }),
-        })
+        };
+
+        // Start background download processor
+        loader.start_download_processor();
+
+        Ok(loader)
+    }
+
+    /// Set scrolling state - when true, only cached images are returned
+    pub fn set_scrolling(&self, scrolling: bool) {
+        self.is_scrolling.store(scrolling, Ordering::Relaxed);
+        if !scrolling {
+            // Process queue when scrolling stops
+            let queue = self.download_queue.clone();
+            let loader = self.clone();
+            tokio::spawn(async move {
+                loader.process_download_queue().await;
+            });
+        }
     }
 
     /// Load an image from URL with specified size
     #[cfg(feature = "gtk")]
     pub async fn load_image(&self, url: &str, size: ImageSize) -> Result<gdk::Texture> {
+        let cache_key = (url.to_string(), size);
+
+        // Check texture cache first
+        {
+            let mut cache = self.texture_cache.write().await;
+            if let Some(texture) = cache.get(&cache_key) {
+                self.stats.memory_hits.fetch_add(1, Ordering::Relaxed);
+                return Ok(texture.clone());
+            }
+        }
+
+        // If scrolling, only return cached data
+        if self.is_scrolling.load(Ordering::Relaxed) {
+            // Try to get from memory/disk cache without downloading
+            if let Ok(image_data) = self.load_cached_only(url, size).await {
+                let texture = tokio::task::spawn_blocking(move || -> Result<gdk::Texture> {
+                    let bytes = glib::Bytes::from(&image_data.data);
+                    let stream = gio::MemoryInputStream::from_bytes(&bytes);
+                    let pixbuf = Pixbuf::from_stream(&stream, gio::Cancellable::NONE)?;
+                    Ok(gdk::Texture::for_pixbuf(&pixbuf))
+                })
+                .await??;
+
+                // Cache the texture
+                let mut cache = self.texture_cache.write().await;
+                cache.put(cache_key, texture.clone());
+
+                return Ok(texture);
+            } else {
+                // Return a placeholder or error when scrolling and not cached
+                return Err(anyhow!("Image not cached and scrolling active"));
+            }
+        }
+
+        // Normal loading path when not scrolling
         let image_data = self.load_image_data(url, size).await?;
 
-        // Convert to Texture for GTK
-        let bytes = glib::Bytes::from(&image_data.data);
-        let stream = gio::MemoryInputStream::from_bytes(&bytes);
-        let pixbuf = Pixbuf::from_stream(&stream, gio::Cancellable::NONE)?;
-        let texture = gdk::Texture::for_pixbuf(&pixbuf);
+        // Convert to Texture for GTK - do this in a blocking task to avoid UI freezes
+        let texture = tokio::task::spawn_blocking(move || -> Result<gdk::Texture> {
+            let bytes = glib::Bytes::from(&image_data.data);
+            let stream = gio::MemoryInputStream::from_bytes(&bytes);
+            let pixbuf = Pixbuf::from_stream(&stream, gio::Cancellable::NONE)?;
+            let texture = gdk::Texture::for_pixbuf(&pixbuf);
+            Ok(texture)
+        })
+        .await??;
+
+        // Cache the texture
+        let mut cache = self.texture_cache.write().await;
+        cache.put(cache_key, texture.clone());
 
         Ok(texture)
+    }
+
+    /// Load image from cache only (no downloads)
+    async fn load_cached_only(&self, url: &str, size: ImageSize) -> Result<ImageData> {
+        let cache_key = (url.to_string(), size);
+
+        // Check memory cache
+        {
+            let mut cache = self.memory_cache.write().await;
+            if let Some(data) = cache.get(&cache_key) {
+                return Ok(data.clone());
+            }
+        }
+
+        // Check disk cache
+        let cache_path = self.get_cache_path(url, size);
+        if cache_path.exists() {
+            if let Ok(data) = fs::read(&cache_path).await {
+                let (width, height, format) =
+                    parse_image_meta(&data).unwrap_or((0, 0, "unknown".to_string()));
+                let image_data = ImageData {
+                    data,
+                    width,
+                    height,
+                    format,
+                };
+
+                // Store in memory cache
+                let mut cache = self.memory_cache.write().await;
+                cache.put(cache_key, image_data.clone());
+
+                return Ok(image_data);
+            }
+        }
+
+        Err(anyhow!("Image not in cache"))
+    }
+
+    /// Process download queue in background
+    async fn process_download_queue(&self) {
+        while let Some((url, size, sender)) = {
+            let mut queue = self.download_queue.lock().await;
+            queue.pop_front()
+        } {
+            // Skip if scrolling started again
+            if self.is_scrolling.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let result = self.load_image_data(&url, size).await;
+            let _ = sender.send(result);
+        }
+    }
+
+    /// Start background download processor
+    fn start_download_processor(&self) {
+        let loader = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                if !loader.is_scrolling.load(Ordering::Relaxed) {
+                    loader.process_download_queue().await;
+                }
+            }
+        });
     }
 
     /// Load image data (platform-agnostic)
@@ -324,18 +484,6 @@ fn format_to_string(fmt: ImageFormat) -> String {
         _ => "unknown",
     }
     .to_string()
-}
-
-impl Clone for ImageLoader {
-    fn clone(&self) -> Self {
-        Self {
-            client: self.client.clone(),
-            cache_dir: self.cache_dir.clone(),
-            memory_cache: self.memory_cache.clone(),
-            download_semaphore: self.download_semaphore.clone(),
-            stats: self.stats.clone(),
-        }
-    }
 }
 
 #[cfg(test)]

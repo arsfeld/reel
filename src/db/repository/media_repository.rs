@@ -235,11 +235,26 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
 #[async_trait]
 impl MediaRepository for MediaRepositoryImpl {
     async fn find_by_library(&self, library_id: &str) -> Result<Vec<MediaItemModel>> {
-        Ok(MediaItem::find()
+        let start = std::time::Instant::now();
+        tracing::info!(
+            "[PERF] MediaRepository::find_by_library: Starting query for library {}",
+            library_id
+        );
+
+        let result = MediaItem::find()
             .filter(media_items::Column::LibraryId.eq(library_id))
             .order_by(media_items::Column::SortTitle, Order::Asc)
             .all(self.base.db.as_ref())
-            .await?)
+            .await?;
+
+        let elapsed = start.elapsed();
+        tracing::warn!(
+            "[PERF] MediaRepository::find_by_library: Query completed in {:?} ({} items)",
+            elapsed,
+            result.len()
+        );
+
+        Ok(result)
     }
 
     async fn find_by_source(&self, source_id: &str) -> Result<Vec<MediaItemModel>> {
