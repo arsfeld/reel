@@ -118,8 +118,8 @@ impl ImageLoader {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?,
             cache_dir,
-            memory_cache: Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(100).unwrap()))),
-            download_semaphore: Arc::new(Semaphore::new(3)), // Max 3 concurrent downloads
+            memory_cache: Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(500).unwrap()))),
+            download_semaphore: Arc::new(Semaphore::new(10)), // Max 10 concurrent downloads
             stats: Arc::new(ImageLoaderStats {
                 memory_hits: AtomicU64::new(0),
                 disk_hits: AtomicU64::new(0),

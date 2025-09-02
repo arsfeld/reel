@@ -382,7 +382,7 @@ impl ReelMainWindow {
                     if let Some(window) = window_weak.upgrade()
                         && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
                     {
-                        let text = vm.status_text().get().await;
+                        let text = vm.status_text().get_sync();
                         window.imp().status_label.set_text(&text);
                     }
                 }
@@ -397,7 +397,7 @@ impl ReelMainWindow {
                     if let Some(window) = window_weak.upgrade()
                         && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
                     {
-                        let icon = vm.status_icon().get().await;
+                        let icon = vm.status_icon().get_sync();
                         window.imp().status_icon.set_icon_name(Some(&icon));
                     }
                 }
@@ -412,7 +412,7 @@ impl ReelMainWindow {
                     if let Some(window) = window_weak.upgrade()
                         && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
                     {
-                        let show = vm.show_spinner().get().await;
+                        let show = vm.show_spinner().get_sync();
                         window.imp().sync_spinner.set_visible(show);
                         window.imp().sync_spinner.set_spinning(show);
                     }
@@ -428,7 +428,7 @@ impl ReelMainWindow {
                     if let Some(window) = window_weak.upgrade()
                         && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
                     {
-                        let connected = vm.is_connected().get().await;
+                        let connected = vm.is_connected().get_sync();
                         let imp = window.imp();
 
                         if connected {
@@ -438,7 +438,7 @@ impl ReelMainWindow {
                             imp.status_container.set_visible(true);
                         } else {
                             // Only show welcome if we truly have no data
-                            let sources = vm.sources().get().await;
+                            let sources = vm.sources().get_sync();
                             if sources.is_empty() {
                                 imp.welcome_page.set_visible(true);
                                 imp.home_group.set_visible(false);
@@ -453,46 +453,40 @@ impl ReelMainWindow {
 
     fn update_sidebar_from_viewmodel(&self) {
         if let Some(sidebar_vm) = self.imp().sidebar_viewmodel.borrow().as_ref() {
-            let sidebar_vm = sidebar_vm.clone();
-            let window_weak = self.downgrade();
+            // Get sources synchronously - no need for async since it's already in memory
+            let sources = sidebar_vm.sources().get_sync();
 
-            glib::spawn_future_local(async move {
-                let sources = sidebar_vm.sources().get().await;
+            // Convert ViewModel data to the format expected by update_all_backends_libraries
+            let mut backends_libraries = Vec::new();
 
-                if let Some(window) = window_weak.upgrade() {
-                    // Convert ViewModel data to the format expected by update_all_backends_libraries
-                    let mut backends_libraries = Vec::new();
+            for source in sources {
+                let libraries: Vec<(crate::models::Library, usize)> = source
+                    .libraries
+                    .iter()
+                    .map(|lib| {
+                        let library = crate::models::Library {
+                            id: lib.id.clone(),
+                            title: lib.title.clone(),
+                            library_type: match lib.library_type.as_str() {
+                                "movies" => crate::models::LibraryType::Movies,
+                                "shows" => crate::models::LibraryType::Shows,
+                                "music" => crate::models::LibraryType::Music,
+                                "photos" => crate::models::LibraryType::Photos,
+                                _ => crate::models::LibraryType::Mixed,
+                            },
+                            icon: lib.icon.clone(),
+                        };
+                        (library, lib.item_count as usize)
+                    })
+                    .collect();
 
-                    for source in sources {
-                        let libraries: Vec<(crate::models::Library, usize)> = source
-                            .libraries
-                            .iter()
-                            .map(|lib| {
-                                let library = crate::models::Library {
-                                    id: lib.id.clone(),
-                                    title: lib.title.clone(),
-                                    library_type: match lib.library_type.as_str() {
-                                        "movies" => crate::models::LibraryType::Movies,
-                                        "shows" => crate::models::LibraryType::Shows,
-                                        "music" => crate::models::LibraryType::Music,
-                                        "photos" => crate::models::LibraryType::Photos,
-                                        _ => crate::models::LibraryType::Mixed,
-                                    },
-                                    icon: lib.icon.clone(),
-                                };
-                                (library, lib.item_count as usize)
-                            })
-                            .collect();
-
-                        if !libraries.is_empty() {
-                            backends_libraries.push((source.id.clone(), libraries));
-                        }
-                    }
-
-                    // Update the UI
-                    window.update_all_backends_libraries(backends_libraries);
+                if !libraries.is_empty() {
+                    backends_libraries.push((source.id.clone(), libraries));
                 }
-            });
+            }
+
+            // Update the UI directly - no async needed
+            self.update_all_backends_libraries(backends_libraries);
         }
     }
 

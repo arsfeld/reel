@@ -59,6 +59,12 @@ impl<T: Clone + Send + Sync> Property<T> {
         self.value.try_read().ok().map(|guard| guard.clone())
     }
 
+    /// Get the value synchronously using blocking_read. This is safe to use from the UI thread
+    /// since the value is already in memory and the lock should be available immediately.
+    pub fn get_sync(&self) -> T {
+        self.value.blocking_read().clone()
+    }
+
     pub async fn set(&self, new_value: T) {
         {
             let mut value = self.value.write().await;
@@ -154,6 +160,14 @@ impl<T: Clone + Send + Sync> ComputedProperty<T> {
 
     pub async fn get(&self) -> T {
         self.property.get().await
+    }
+
+    pub fn try_get(&self) -> Option<T> {
+        self.property.try_get()
+    }
+
+    pub fn get_sync(&self) -> T {
+        self.property.get_sync()
     }
 
     pub fn subscribe(&self) -> PropertySubscriber {

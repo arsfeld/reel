@@ -158,11 +158,13 @@ impl PlayerPage {
 
         // Create player based on config from AppState
         info!("PlayerPage::new() - Creating player");
+
+        // Store the config reference from AppState
         let config_arc = state.config.clone();
-        let config = tokio::task::block_in_place(|| {
-            let config_guard = tokio::runtime::Handle::current().block_on(config_arc.read());
-            config_guard.clone()
-        });
+
+        // Try to read config with a simple blocking read - it's already in memory
+        // This should take microseconds at most
+        let config = config_arc.blocking_read();
         info!(
             "PlayerPage::new() - Using player backend: {}",
             config.playback.player_backend
@@ -170,6 +172,8 @@ impl PlayerPage {
         let player = Arc::new(RwLock::new(
             Player::new(&config).expect("Failed to create player"),
         ));
+        let config_clone = config.clone();
+        drop(config); // Release the read lock
         info!("PlayerPage::new() - Player created successfully");
 
         // Create inhibit cookie that will be shared with controls
@@ -615,7 +619,7 @@ impl PlayerPage {
             next_episode_info: Arc::new(RwLock::new(None)),
             auto_play_countdown: Arc::new(RwLock::new(None)),
             chapter_monitor_id: Arc::new(RwLock::new(None)),
-            config,
+            config: config_clone,
             position_sync_timer: Arc::new(RwLock::new(None)),
             last_synced_position: Arc::new(RwLock::new(None)),
             loading_overlay,

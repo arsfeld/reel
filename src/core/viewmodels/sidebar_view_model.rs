@@ -97,6 +97,8 @@ impl SidebarViewModel {
 
     /// Load all sources and their libraries from the database
     pub async fn load_sources(&self) {
+        use futures::future::join_all;
+
         self.is_loading.set(true).await;
         self.show_spinner.set(true).await;
         self.status_text.set("Loading sources...".to_string()).await;
@@ -109,21 +111,37 @@ impl SidebarViewModel {
 
         match sources_result {
             Ok(sources) => {
-                let mut source_infos = Vec::new();
-
-                for source in sources {
-                    // Get libraries for this source
-                    let libraries = match self.data_service.get_libraries(&source.id).await {
-                        Ok(libs) => libs,
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to get libraries for source {}: {}",
-                                source.id,
-                                e
-                            );
-                            Vec::new()
+                // Load all libraries in parallel
+                let library_futures = sources.iter().map(|source| {
+                    let source_id = source.id.clone();
+                    let data_service = self.data_service.clone();
+                    async move {
+                        match data_service.get_libraries(&source_id).await {
+                            Ok(libs) => (source_id.clone(), libs),
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to get libraries for source {}: {}",
+                                    source_id,
+                                    e
+                                );
+                                (source_id, Vec::new())
+                            }
                         }
-                    };
+                    }
+                });
+
+                let library_results = join_all(library_futures).await;
+
+                // Create a map for quick lookup
+                let mut libraries_map = std::collections::HashMap::new();
+                for (source_id, libraries) in library_results {
+                    libraries_map.insert(source_id, libraries);
+                }
+
+                // Build source infos
+                let mut source_infos = Vec::new();
+                for source in sources {
+                    let libraries = libraries_map.remove(&source.id).unwrap_or_default();
 
                     // Convert to LibraryInfo
                     let library_infos: Vec<LibraryInfo> = libraries

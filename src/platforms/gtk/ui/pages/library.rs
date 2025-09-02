@@ -1,11 +1,13 @@
 use gtk4::{gdk, glib, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use once_cell::sync::Lazy;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use tracing::{error, info, trace};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+use tracing::{error, info, trace, warn};
 
 use crate::constants::*;
 use crate::models::{Episode, Library, MediaItem, Movie, Show};
@@ -42,6 +44,8 @@ mod imp {
         pub cards_by_index: RefCell<HashMap<usize, MediaCard>>,
         pub cards_by_id: RefCell<HashMap<String, MediaCard>>,
         pub view_model: RefCell<Option<Arc<LibraryViewModel>>>,
+        pub update_scheduled: Cell<bool>,
+        pub pending_items: RefCell<Option<Vec<MediaItem>>>,
     }
 
     impl std::fmt::Debug for LibraryView {
@@ -80,6 +84,8 @@ mod imp {
                 cards_by_index: RefCell::new(HashMap::new()),
                 cards_by_id: RefCell::new(HashMap::new()),
                 view_model: RefCell::new(None),
+                update_scheduled: Cell::new(false),
+                pending_items: RefCell::new(None),
             }
         }
     }
@@ -258,7 +264,7 @@ impl LibraryView {
                 if let Some(view) = weak_self.upgrade()
                     && let Some(vm) = &*view.imp().view_model.borrow()
                 {
-                    let items = vm.filtered_items().get().await;
+                    let items = vm.filtered_items().get_sync();
                     view.update_items_from_viewmodel(items);
                 }
             }
@@ -272,13 +278,13 @@ impl LibraryView {
                 if let Some(view) = weak_self_loading.upgrade()
                     && let Some(vm) = &*view.imp().view_model.borrow()
                 {
-                    let is_loading = vm.is_loading().get().await;
+                    let is_loading = vm.is_loading().get_sync();
                     if let Some(stack) = view.imp().stack.borrow().as_ref() {
                         if is_loading {
                             stack.set_visible_child_name("loading");
                         } else {
-                            // Check ViewModel's filtered_items instead of local copy
-                            let vm_items = vm.filtered_items().get().await;
+                            // Check ViewModel's filtered_items using sync access
+                            let vm_items = vm.filtered_items().get_sync();
                             if vm_items.is_empty() {
                                 stack.set_visible_child_name("empty");
                             } else {
@@ -297,7 +303,7 @@ impl LibraryView {
             while error_subscriber.wait_for_change().await {
                 if let Some(view) = weak_self_error.upgrade()
                     && let Some(vm) = &*view.imp().view_model.borrow()
-                    && let Some(err_msg) = vm.error().get().await
+                    && let Some(err_msg) = vm.error().get_sync()
                 {
                     tracing::error!("Library error: {}", err_msg);
                     // Could show error in UI here
@@ -307,9 +313,32 @@ impl LibraryView {
     }
 
     fn update_items_from_viewmodel(&self, items: Vec<crate::models::MediaItem>) {
+        let start = Instant::now();
         trace!("Received {} items from ViewModel", items.len());
-        // Items are already MediaItem, no conversion needed
-        self.display_media_items(items);
+
+        // Store pending items and schedule batched update
+        self.imp().pending_items.replace(Some(items));
+
+        // Schedule UI update if not already scheduled
+        if !self.imp().update_scheduled.get() {
+            self.imp().update_scheduled.set(true);
+
+            let weak_self = self.downgrade();
+            glib::idle_add_local_once(move || {
+                if let Some(view) = weak_self.upgrade() {
+                    // Process pending items
+                    if let Some(items) = view.imp().pending_items.take() {
+                        view.display_media_items(items);
+                    }
+                    view.imp().update_scheduled.set(false);
+                }
+            });
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 2 {
+            warn!("Slow update scheduling: {:?}", elapsed);
+        }
     }
 
     fn convert_db_item_to_ui_model(
@@ -561,6 +590,7 @@ impl LibraryView {
     }
 
     pub async fn load_library(&self, backend_id: String, library: Library) {
+        let start = Instant::now();
         info!("Loading library: {} ({})", library.title, library.id);
 
         let imp = self.imp();
@@ -595,6 +625,14 @@ impl LibraryView {
                 stack.set_visible_child_name("empty");
             }
         }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 100 {
+            warn!(
+                "Slow library load: {:?} for library {}",
+                elapsed, library.title
+            );
+        }
     }
 
     async fn preload_initial_images(&self, items: &[MediaItem]) {
@@ -604,6 +642,7 @@ impl LibraryView {
     }
 
     fn display_media_items(&self, items: Vec<MediaItem>) {
+        let start = Instant::now();
         let imp = self.imp();
 
         // Store new filtered items
@@ -635,9 +674,24 @@ impl LibraryView {
                     self.differential_update_items(&flow_box, &old_items, &items, current_size);
                 } else {
                     // Full refresh for initial load or major changes
-                    self.full_refresh_items(&flow_box, items, current_size, scrolled_window, stack);
+                    self.full_refresh_items(
+                        &flow_box,
+                        items.clone(),
+                        current_size,
+                        scrolled_window,
+                        stack,
+                    );
                 }
             }
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 16 {
+            warn!(
+                "Slow UI update in display_media_items: {:?} for {} items",
+                elapsed,
+                items.len()
+            );
         }
     }
 
@@ -674,6 +728,7 @@ impl LibraryView {
         new_items: &[MediaItem],
         current_size: ImageSize,
     ) {
+        let start = Instant::now();
         let imp = self.imp();
         let mut cards_by_index = imp.cards_by_index.borrow_mut();
         let mut cards_by_id = imp.cards_by_id.borrow_mut();
@@ -696,9 +751,9 @@ impl LibraryView {
             .iter()
             .map(|it| (it.id().to_string(), it))
             .collect();
-        for id in common_ids {
-            if let Some(card) = cards_by_id.get(&id)
-                && let Some(new_item) = new_by_id.get(&id)
+        for id in &common_ids {
+            if let Some(card) = cards_by_id.get(id)
+                && let Some(new_item) = new_by_id.get(id)
             {
                 card.update_content((*new_item).clone());
             }
@@ -788,6 +843,17 @@ impl LibraryView {
         if let Some(stack) = imp.stack.borrow().as_ref() {
             stack.set_visible_child_name("content");
         }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 16 {
+            warn!(
+                "Slow differential update: {:?} (add: {}, remove: {}, update: {})",
+                elapsed,
+                to_add.len(),
+                to_remove.len(),
+                common_ids.len()
+            );
+        }
     }
 
     /// Perform full refresh - clear and recreate all items
@@ -799,6 +865,7 @@ impl LibraryView {
         scrolled_window: Option<gtk4::ScrolledWindow>,
         stack: Option<gtk4::Stack>,
     ) {
+        let start = Instant::now();
         let imp = self.imp();
         imp.cards_by_index.borrow_mut().clear();
         imp.cards_by_id.borrow_mut().clear();
@@ -900,6 +967,11 @@ impl LibraryView {
             }
             // Ensure index map consistency after creation
             self.rebuild_cards_index_map(flow_box);
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 32 {
+            warn!("Slow full refresh: {:?}", elapsed);
         }
     }
 
