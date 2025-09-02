@@ -1066,4 +1066,21 @@ impl DataService {
         self.media_repo.insert(episode_entity).await?;
         Ok(())
     }
+
+    /// Count media items in a library
+    pub async fn count_media_in_library(&self, library_id: &str) -> Result<i64> {
+        self.media_repo.count_by_library(library_id).await
+    }
+
+    /// Get media items in a library with pagination
+    pub async fn get_media_in_library_paginated(
+        &self,
+        library_id: &str,
+        offset: i64,
+        limit: usize,
+    ) -> Result<Vec<crate::db::entities::MediaItemModel>> {
+        self.media_repo
+            .find_by_library_paginated(library_id, offset as u64, limit as u64)
+            .await
+    }
 }

@@ -382,3 +382,31 @@ impl MediaRepository for MediaRepositoryImpl {
             .await?)
     }
 }
+
+impl MediaRepositoryImpl {
+    pub async fn count_by_library(&self, library_id: &str) -> Result<i64> {
+        use sea_orm::PaginatorTrait;
+
+        let count = MediaItem::find()
+            .filter(media_items::Column::LibraryId.eq(library_id))
+            .count(self.base.db.as_ref())
+            .await?;
+        Ok(count as i64)
+    }
+
+    pub async fn find_by_library_paginated(
+        &self,
+        library_id: &str,
+        offset: u64,
+        limit: u64,
+    ) -> Result<Vec<MediaItemModel>> {
+        use sea_orm::PaginatorTrait;
+
+        Ok(MediaItem::find()
+            .filter(media_items::Column::LibraryId.eq(library_id))
+            .order_by(media_items::Column::SortTitle, Order::Asc)
+            .paginate(self.base.db.as_ref(), limit)
+            .fetch_page(offset / limit)
+            .await?)
+    }
+}
