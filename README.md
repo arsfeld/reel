@@ -15,7 +15,7 @@
   
   [![Plex](https://img.shields.io/badge/Plex-✅_Supported-e5a00d.svg?style=for-the-badge&logo=plex&logoColor=white)](https://www.plex.tv/)
   [![Jellyfin](https://img.shields.io/badge/Jellyfin-✅_Supported-00A4DC.svg?style=for-the-badge&logo=jellyfin&logoColor=white)](https://jellyfin.org/)
-  [![Local Files](https://img.shields.io/badge/Local_Files-🚧_Coming_Soon-grey.svg?style=for-the-badge)](https://github.com/arsfeld/gnome-reel)
+  [![Local Files](https://img.shields.io/badge/Local_Files-🚧_Coming_Soon-grey.svg?style=for-the-badge)](https://github.com/arsfeld/reel)
 </div>
 
 > [!WARNING]
@@ -57,8 +57,8 @@ This project uses Nix flakes to manage the development environment, ensuring all
 
 ```bash
 # Clone the repository
-git clone https://github.com/arsfeld/gnome-reel.git
-cd gnome-reel
+git clone https://github.com/arsfeld/reel.git
+cd reel
 
 # Enter the Nix development shell
 nix develop
@@ -92,7 +92,7 @@ cargo build --release
 
 ### 📥 Download Pre-built Packages
 
-Download the latest release from the [Releases page](https://github.com/arsfeld/gnome-reel/releases/latest).
+Download the latest release from the [Releases page](https://github.com/arsfeld/reel/releases/latest).
 
 > [!WARNING]
 > **Pre-built packages are experimental**: These packages are automatically generated and may not be thoroughly tested. If you encounter issues, consider building from source using the Nix development environment.
@@ -100,7 +100,7 @@ Download the latest release from the [Releases page](https://github.com/arsfeld/
 #### AppImage (Universal - Recommended)
 ```bash
 # Download the AppImage
-wget https://github.com/arsfeld/gnome-reel/releases/latest/download/reel-v0.4.0-x86_64.AppImage
+wget https://github.com/arsfeld/reel/releases/latest/download/reel-v0.4.0-x86_64.AppImage
 chmod +x reel-*.AppImage
 ./reel-*.AppImage
 ```
@@ -108,7 +108,7 @@ chmod +x reel-*.AppImage
 #### Debian/Ubuntu (.deb)
 ```bash
 # Download and install the .deb package
-wget https://github.com/arsfeld/gnome-reel/releases/latest/download/reel-v0.4.0-amd64.deb
+wget https://github.com/arsfeld/reel/releases/latest/download/reel-v0.4.0-amd64.deb
 sudo dpkg -i reel-*.deb
 sudo apt-get install -f  # Install dependencies if needed
 ```
@@ -116,7 +116,7 @@ sudo apt-get install -f  # Install dependencies if needed
 #### Fedora/RHEL/openSUSE (.rpm)
 ```bash
 # Download and install the .rpm package
-wget https://github.com/arsfeld/gnome-reel/releases/latest/download/reel-v0.4.0-x86_64.rpm
+wget https://github.com/arsfeld/reel/releases/latest/download/reel-v0.4.0-x86_64.rpm
 sudo dnf install ./reel-*.rpm
 # or for older systems:
 sudo rpm -i reel-*.rpm
@@ -126,7 +126,7 @@ sudo rpm -i reel-*.rpm
 
 ```bash
 # Run directly with Nix flakes
-nix run github:arsfeld/gnome-reel
+nix run github:arsfeld/reel
 ```
 
 ### 📦 Flatpak
