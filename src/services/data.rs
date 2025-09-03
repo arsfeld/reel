@@ -805,6 +805,33 @@ impl DataService {
         }
     }
 
+    /// Get media item by source and backend ID
+    /// This is used when we only have the original backend ID (e.g., from homepage items)
+    pub async fn get_media_item_by_backend_id(
+        &self,
+        source_id: &str,
+        backend_item_id: &str,
+    ) -> Result<Option<MediaItem>> {
+        if let Some(model) = self
+            .media_repo
+            .find_by_source_and_backend_id(source_id, backend_item_id)
+            .await?
+        {
+            match MediaItem::try_from(model) {
+                Ok(item) => Ok(Some(item)),
+                Err(e) => {
+                    warn!(
+                        "Failed to convert media item from source {} with backend ID {}: {}",
+                        source_id, backend_item_id, e
+                    );
+                    Ok(None)
+                }
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Get media items by IDs for differential updates
     pub async fn get_media_items_by_ids(&self, ids: &[String]) -> Result<Vec<MediaItem>> {
         let mut items = Vec::new();

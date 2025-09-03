@@ -48,6 +48,14 @@ pub trait MediaRepository: Repository<MediaItemModel> {
         show_id: &str,
         season_number: i32,
     ) -> Result<Vec<MediaItemModel>>;
+
+    /// Find media item by source and original backend item ID
+    /// This searches for items where the ID ends with the backend item ID
+    async fn find_by_source_and_backend_id(
+        &self,
+        source_id: &str,
+        backend_item_id: &str,
+    ) -> Result<Option<MediaItemModel>>;
 }
 
 #[derive(Debug)]
@@ -394,6 +402,22 @@ impl MediaRepository for MediaRepositoryImpl {
             .filter(media_items::Column::SeasonNumber.eq(season_number))
             .order_by(media_items::Column::EpisodeNumber, Order::Asc)
             .all(self.base.db.as_ref())
+            .await?)
+    }
+
+    async fn find_by_source_and_backend_id(
+        &self,
+        source_id: &str,
+        backend_item_id: &str,
+    ) -> Result<Option<MediaItemModel>> {
+        // The ID in the database is formatted as: source_id:library_id:type:backend_item_id
+        // We need to find items that match the pattern: source_id:*:*:backend_item_id
+        let pattern = format!("{}:%:%:{}", source_id, backend_item_id);
+
+        Ok(MediaItem::find()
+            .filter(media_items::Column::SourceId.eq(source_id))
+            .filter(media_items::Column::Id.like(&pattern))
+            .one(self.base.db.as_ref())
             .await?)
     }
 }
