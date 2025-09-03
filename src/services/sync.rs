@@ -323,7 +323,7 @@ impl SyncManager {
         library_type: &crate::models::LibraryType,
         backend: Arc<dyn MediaBackend>,
     ) -> Result<()> {
-        info!(
+        trace!(
             "Syncing {:?} items from library {}",
             library_type, library_id
         );
@@ -347,7 +347,7 @@ impl SyncManager {
             .await
             .context("Failed to fetch library items")?;
 
-        info!("Found {} items to sync", items.len());
+        trace!("Found {} items to sync", items.len());
 
         // Collect IDs for batch event and detect new items
         let mut media_ids = Vec::new();
@@ -382,7 +382,7 @@ impl SyncManager {
 
         // Queue poster downloads for new items only
         if !new_items.is_empty() {
-            info!(
+            trace!(
                 "Queueing poster downloads for {} new items",
                 new_items.len()
             );
@@ -432,16 +432,37 @@ impl SyncManager {
                 // Show lists no longer need separate caching - individual items are stored in the database
 
                 // Sync episodes for each show
+                let mut episode_sync_errors = 0;
                 for show in &shows {
                     if let Err(e) = self
                         .sync_show_episodes(backend_id, library_id, &show.id, backend.clone())
                         .await
                     {
-                        error!("Failed to sync episodes for show {}: {}", show.id, e);
+                        trace!("Failed to sync episodes for show {}: {}", show.id, e);
+                        episode_sync_errors += 1;
                     }
+                }
+                if episode_sync_errors > 0 {
+                    debug!("Failed to sync episodes for {} shows", episode_sync_errors);
                 }
             }
             _ => {}
+        }
+
+        // Log sync summary for this library
+        if !new_items.is_empty() {
+            info!(
+                "Library sync: {} ({} items, {} new)",
+                library_id,
+                items.len(),
+                new_items.len()
+            );
+        } else if items.len() > 0 {
+            debug!(
+                "Library sync: {} ({} items, no changes)",
+                library_id,
+                items.len()
+            );
         }
 
         // Update library item count in database and emit event
@@ -576,21 +597,44 @@ impl SyncManager {
         show_id: &str,
         backend: Arc<dyn MediaBackend>,
     ) -> Result<()> {
-        info!("Syncing episodes for show {}", show_id);
+        trace!("Syncing episodes for show {}", show_id);
 
-        // Get the show details first to know how many seasons it has
-        // For now, we'll try to sync the first 10 seasons (most shows don't have more)
-        // In a production system, we'd want to get season info from the backend
-        const MAX_SEASONS: u32 = 10;
+        // Get the cached show data which includes season information
+        let show_key = format!("{}:{}:show:{}", backend_id, library_id, show_id);
+        let show: Option<MediaItem> = self.data_service.get_media(&show_key).await?;
 
-        for season_number in 1..=MAX_SEASONS {
-            match backend.get_episodes(show_id, season_number).await {
+        let seasons = match show {
+            Some(MediaItem::Show(s)) => {
+                if s.seasons.is_empty() {
+                    debug!(
+                        "Show {} has no seasons listed, skipping episode sync",
+                        show_id
+                    );
+                    return Ok(());
+                }
+                s.seasons
+            }
+            _ => {
+                error!(
+                    "Failed to get show data for {} - cannot sync episodes without season information",
+                    show_id
+                );
+                return Ok(()); // Return Ok to allow sync to continue with other shows
+            }
+        };
+
+        // Now sync episodes for each known season
+        let mut total_episodes = 0;
+        let mut failed_episodes = 0;
+
+        for season in seasons {
+            match backend.get_episodes(show_id, season.season_number).await {
                 Ok(episodes) if !episodes.is_empty() => {
-                    info!(
+                    let episode_count = episodes.len();
+                    total_episodes += episode_count;
+                    trace!(
                         "Found {} episodes for show {} season {}",
-                        episodes.len(),
-                        show_id,
-                        season_number
+                        episode_count, show_id, season.season_number
                     );
 
                     // Convert episodes to MediaItem::Episode and store
@@ -607,10 +651,11 @@ impl SyncManager {
                             .store_media_item_silent(&cache_key, &episode_item)
                             .await
                         {
-                            error!(
+                            trace!(
                                 "Failed to cache episode {} s{}e{}: {}",
-                                episode.id, season_number, episode.episode_number, e
+                                episode.id, season.season_number, episode.episode_number, e
                             );
+                            failed_episodes += 1;
                             // Continue with other episodes instead of aborting the whole show
                             continue;
                         }
@@ -620,27 +665,29 @@ impl SyncManager {
                     }
                 }
                 Ok(_) => {
-                    // Empty season, stop trying higher seasons
+                    // Empty season
                     debug!(
-                        "No episodes found for show {} season {}, stopping",
-                        show_id, season_number
+                        "No episodes found for show {} season {}",
+                        show_id, season.season_number
                     );
-                    break;
                 }
                 Err(e) => {
                     // Log error but continue with other seasons
                     debug!(
                         "Failed to get episodes for show {} season {}: {}",
-                        show_id, season_number, e
+                        show_id, season.season_number, e
                     );
-                    // Some backends might return error for non-existent seasons
-                    // Continue trying a few more seasons before giving up
-                    if season_number > 1 {
-                        // If we got an error after season 1, assume no more seasons
-                        break;
-                    }
                 }
             }
+        }
+
+        if total_episodes > 0 {
+            debug!(
+                "Show {}: synced {} episodes ({} failed)",
+                show_id,
+                total_episodes - failed_episodes,
+                failed_episodes
+            );
         }
 
         Ok(())
@@ -833,7 +880,7 @@ impl SyncManager {
                 tokio::select! {
                     _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {},
                     _ = cancel_token.cancelled() => {
-                        info!("Poster download processor cancelled between batches");
+                        debug!("Poster download processor cancelled between batches");
                         break;
                     }
                 }
