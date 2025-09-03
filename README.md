@@ -100,7 +100,7 @@ Download the latest release from the [Releases page](https://github.com/arsfeld/
 #### AppImage (Universal - Recommended)
 ```bash
 # Download the AppImage
-wget https://github.com/arsfeld/gnome-reel/releases/latest/download/reel-v0.3.0-x86_64.AppImage
+wget https://github.com/arsfeld/gnome-reel/releases/latest/download/reel-v0.4.0-x86_64.AppImage
 chmod +x reel-*.AppImage
 ./reel-*.AppImage
 ```
@@ -108,7 +108,7 @@ chmod +x reel-*.AppImage
 #### Debian/Ubuntu (.deb)
 ```bash
 # Download and install the .deb package
-wget https://github.com/arsfeld/gnome-reel/releases/latest/download/reel-v0.3.0-amd64.deb
+wget https://github.com/arsfeld/gnome-reel/releases/latest/download/reel-v0.4.0-amd64.deb
 sudo dpkg -i reel-*.deb
 sudo apt-get install -f  # Install dependencies if needed
 ```
@@ -116,7 +116,7 @@ sudo apt-get install -f  # Install dependencies if needed
 #### Fedora/RHEL/openSUSE (.rpm)
 ```bash
 # Download and install the .rpm package
-wget https://github.com/arsfeld/gnome-reel/releases/latest/download/reel-v0.3.0-x86_64.rpm
+wget https://github.com/arsfeld/gnome-reel/releases/latest/download/reel-v0.4.0-x86_64.rpm
 sudo dnf install ./reel-*.rpm
 # or for older systems:
 sudo rpm -i reel-*.rpm
@@ -161,81 +161,47 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 
 <p align="center">
   <a href="TASKS.md">
-    <img src="https://img.shields.io/badge/📋_View_Full_Roadmap-TASKS.md-blue?style=for-the-badge" alt="View Roadmap"/>
+    <img src="https://img.shields.io/badge/📋_Detailed_Roadmap-TASKS.md-blue?style=for-the-badge" alt="View Full Roadmap"/>
   </a>
 </p>
 
-### ✅ Completed Features
-- **Authentication & Server Management**
-  - Plex OAuth authentication with PIN-based flow
-  - Jellyfin username/password authentication
-  - Automatic server discovery and connection
-  - Multi-backend architecture supporting Plex and Jellyfin
-  - Persistent authentication and server preferences
-  - Multiple backends shown simultaneously (all libraries displayed together)
+### ✅ What's Working
 
-- **Media Browsing & Playback**
-  - Complete movie and TV show libraries with grid views
-  - Cinematic detail pages with backdrop images and metadata
-  - **MPV player backend (default)** - Superior performance with no subtitle issues
-  - GStreamer player backend (secondary) - Available but has subtitle color artifacts
-  - Immersive player with auto-hiding controls
-  - Audio/subtitle track selection
-  - Watch status tracking and progress indicators
-  - Playback position syncing (resume from last position)
-  - Continue watching and recently added sections
+- **Multi-Backend Support** - Connect to Plex and Jellyfin simultaneously
+- **Media Playback** - MPV (recommended) and GStreamer player backends
+- **Library Browsing** - Movies and TV shows with filtering and sorting
+- **Offline-First** - SQLite cache for instant startup and offline browsing
+- **Modern Architecture** - Reactive ViewModels with SeaORM database layer
+- **GNOME Integration** - Native GTK4/libadwaita UI following HIG
 
-- **Performance & Architecture**
-  - Multi-level image caching (memory + disk) with request coalescing
-  - HTTP/2 connection pooling for faster API calls
-  - Lazy loading with viewport-based rendering
-  - SQLite-based offline cache for instant startup
-  - Backend-agnostic UI architecture for extensibility
-  - Async/await throughout with Tokio runtime
+### 🚧 Major Roadmap Items
 
-- **User Experience**
-  - Homepage with dynamic content sections
-  - Library filtering (watched/unwatched) and sorting
-  - Library visibility management
-  - Modern Blueprint-based UI with GNOME HIG compliance
-  - Smooth transitions and loading states
-  - **Fullscreen playback support** - F11, double-click, and cursor auto-hiding
-  - **Advanced player controls** - Keyboard shortcuts, window dragging, time display modes
+- **Search** - Backend implementations exist, UI needed
+- **Cast & Crew** - Display UI for existing backend data
+- **Local Files** - Scan and play local media libraries
+- **Advanced Filters** - Genre, year, rating, resolution
+- **Settings** - Migrate to GSettings for GNOME compliance
+- **Offline Playback** - Download and sync for offline viewing
 
-### 🔧 In Development
-- **Known Issues to Fix**
-  - Homepage sections randomly replace each other when multiple backends are enabled
-  - Horizontal scrolling on homepage doesn't load images
-  - GStreamer subtitle color artifacts
+### ⚠️ Known Limitations
 
-- **Search & Filtering**
-  - Search UI implementation (backend support varies)
-  - Advanced filtering (genre, year, rating, resolution)
-  - Collections and playlists support
-
-- **Media Information**
-  - Cast and crew information display UI
-  - Media badges (4K, HDR, etc.)
-  - Enhanced metadata display
-
-- **Additional Features**
-  - Local file library scanning
-  - Music and photo library support
-  - Settings management with GSettings
-  - Offline download and playback
-  - Metadata provider integration
-  - Skip intro/credits improvements
+- GStreamer has subtitle rendering issues (use MPV)
+- Search not yet available in UI
+- Local files backend is mostly unimplemented
+- Some features require server-side support (e.g., Jellyfin chapter markers)
 
 
 ## 🛠️ Tech Stack
 
 - **Language**: Rust 2021 edition
 - **UI Framework**: GTK4 + libadwaita via [gtk-rs](https://gtk-rs.org/)
-- **Async Runtime**: [Tokio](https://tokio.rs/)
-- **Database**: SQLite with [SQLx](https://github.com/launchbadge/sqlx)
-- **HTTP Client**: [Reqwest](https://github.com/seanmonstar/reqwest)
-- **Video Playback**: MPV (default) via libmpv2, GStreamer (secondary) via [gstreamer-rs](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
+- **Database**: SQLite with [SeaORM](https://www.sea-ql.org/SeaORM/) (reactive architecture)
+- **Async Runtime**: [Tokio](https://tokio.rs/) with channels for event broadcasting
+- **HTTP Client**: [Reqwest](https://github.com/seanmonstar/reqwest) with HTTP/2
+- **Video Playback**: MPV (default) via libmpv2, GStreamer (fallback) via [gstreamer-rs](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
+- **Caching**: Three-tier (Memory LRU → SQLite → Backend API)
 - **Serialization**: [Serde](https://serde.rs/)
+- **Security**: System keyring via [keyring-rs](https://github.com/hwchen/keyring-rs)
 
 ## 🤝 Contributing
 
