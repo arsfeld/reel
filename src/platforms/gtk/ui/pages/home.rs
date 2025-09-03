@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use super::library::MediaCard;
 use crate::constants::*;
@@ -231,6 +231,9 @@ impl HomePage {
             let backend_count = all_backends.len();
             let mut all_sections = Vec::new();
 
+            // Get DataService for database lookups
+            let data_service = state.data_service.clone();
+
             // Collect sections from all backends
             for (backend_id, backend) in all_backends {
                 match backend.get_home_sections().await {
@@ -240,9 +243,47 @@ impl HomePage {
                             sections.len(),
                             backend_id
                         );
-                        // Prefix section IDs with backend_id to ensure uniqueness
-                        // and optionally enhance titles if there are multiple backends
+
+                        // Resolve items from database using their backend IDs
                         for section in &mut sections {
+                            let mut resolved_items = Vec::new();
+
+                            for item in &section.items {
+                                // Get the backend item ID from the item
+                                let backend_item_id = item.id();
+
+                                // Look up the item in the database using the backend ID
+                                match data_service
+                                    .get_media_item_by_backend_id(&backend_id, backend_item_id)
+                                    .await
+                                {
+                                    Ok(Some(db_item)) => {
+                                        resolved_items.push(db_item);
+                                    }
+                                    Ok(None) => {
+                                        // Item not found in database, might not be synced yet
+                                        // Keep the original item for now
+                                        debug!(
+                                            "Item {} from backend {} not found in database, using API data",
+                                            backend_item_id, backend_id
+                                        );
+                                        resolved_items.push(item.clone());
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to look up item {} from backend {}: {}",
+                                            backend_item_id, backend_id, e
+                                        );
+                                        // Keep the original item on error
+                                        resolved_items.push(item.clone());
+                                    }
+                                }
+                            }
+
+                            // Replace items with resolved ones from database
+                            section.items = resolved_items;
+
+                            // Prefix section IDs with backend_id to ensure uniqueness
                             section.id = format!("{}_{}", backend_id, section.id);
                             // Only add backend prefix to title if we have multiple backends
                             if backend_count > 1 {
