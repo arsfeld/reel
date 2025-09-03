@@ -352,8 +352,6 @@ impl PlexBackend {
 
     /// Get the API client, ensuring it's initialized
     async fn get_api(&self) -> Result<PlexApi> {
-        tracing::debug!("get_api() called for backend {}", self.backend_id);
-
         let api_guard = self.api.read().await;
         if let Some(api) = api_guard.as_ref() {
             // Return the existing API instance
