@@ -34,6 +34,8 @@ mod imp {
         #[template_child]
         pub auth_status: TemplateChild<adw::StatusPage>,
         #[template_child]
+        pub success_checkmark: TemplateChild<gtk4::Image>,
+        #[template_child]
         pub auth_error: TemplateChild<adw::StatusPage>,
         #[template_child]
         pub retry_button: TemplateChild<gtk4::Button>,
@@ -55,6 +57,10 @@ mod imp {
         pub jellyfin_password_entry: TemplateChild<adw::PasswordEntryRow>,
         #[template_child]
         pub jellyfin_progress: TemplateChild<gtk4::ProgressBar>,
+        #[template_child]
+        pub jellyfin_success: TemplateChild<adw::StatusPage>,
+        #[template_child]
+        pub jellyfin_success_checkmark: TemplateChild<gtk4::Image>,
         #[template_child]
         pub jellyfin_error: TemplateChild<adw::StatusPage>,
         #[template_child]
@@ -183,6 +189,8 @@ mod imp {
                 move |_| {
                     let imp = obj.imp();
                     imp.jellyfin_error.set_visible(false);
+                    imp.jellyfin_success.set_visible(false);
+                    imp.jellyfin_success_checkmark.set_visible(false);
                     // Show the input fields again
                     imp.jellyfin_url_entry.set_visible(true);
                     imp.jellyfin_username_entry.set_visible(true);
@@ -396,6 +404,7 @@ impl ReelAuthDialog {
         imp.current_pin.replace(Some(pin.clone()));
         imp.pin_status_page.set_visible(true);
         imp.auth_status.set_visible(false);
+        imp.success_checkmark.set_visible(false);
         imp.auth_error.set_visible(false);
 
         // Update progress to show we're waiting for authorization
@@ -538,38 +547,39 @@ impl ReelAuthDialog {
                                 state_clone.set_user(user.clone()).await;
                             }
 
-                            // Trigger a sync for all newly added sources
-                            if let Some(dialog) = dialog_weak_status.upgrade() {
-                                let imp = dialog.imp();
-                                imp.auth_status.set_description(Some(&format!(
-                                    "Syncing {} servers...",
-                                    sources.len()
-                                )));
-                            }
-
-                            info!("Triggering sync for newly added Plex sources");
-                            let source_coordinator = state_clone.get_source_coordinator();
-                            for source in &sources {
-                                info!("Syncing source: {}", source.name);
-                                if let Err(e) = source_coordinator.sync_source(&source.id).await {
-                                    error!("Failed to sync source {}: {}", source.name, e);
-                                }
-                            }
-
-                            // Show completion status briefly
+                            // Show completion status briefly with success checkmark
                             if let Some(dialog) = dialog_weak_status.upgrade() {
                                 let imp = dialog.imp();
                                 imp.auth_status.set_icon_name(Some("emblem-ok-symbolic"));
                                 imp.auth_status.set_title("Setup Complete!");
                                 imp.auth_status.set_description(Some(&format!(
-                                    "Connected to {} Plex server{}",
+                                    "Connected to {} Plex server{}. Syncing libraries in background...",
                                     sources.len(),
                                     if sources.len() > 1 { "s" } else { "" }
                                 )));
+                                // Show the success checkmark
+                                imp.success_checkmark.set_visible(true);
+                                // Add a green success color class
+                                imp.success_checkmark.add_css_class("success");
                             }
 
                             // Wait briefly to show completion message
                             glib::timeout_future(std::time::Duration::from_millis(1500)).await;
+
+                            // Trigger sync in background after dialog closes
+                            info!("Triggering background sync for newly added Plex sources");
+                            let state_for_sync = state_clone.clone();
+                            let sources_clone = sources.clone();
+                            tokio::spawn(async move {
+                                let source_coordinator = state_for_sync.get_source_coordinator();
+                                for source in &sources_clone {
+                                    info!("Syncing source: {}", source.name);
+                                    if let Err(e) = source_coordinator.sync_source(&source.id).await
+                                    {
+                                        error!("Failed to sync source {}: {}", source.name, e);
+                                    }
+                                }
+                            });
                         }
                         Err(e) => {
                             error!(
@@ -755,8 +765,29 @@ impl ReelAuthDialog {
                                 Ok(source) => {
                                     info!("Successfully added Jellyfin source: {}", source.name);
 
-                                    // Close dialog first to avoid blocking
+                                    // Show success status with checkmark
                                     if let Some(dialog) = dialog_weak.upgrade() {
+                                        let imp = dialog.imp();
+                                        imp.jellyfin_progress.set_visible(false);
+                                        imp.jellyfin_url_entry.set_visible(false);
+                                        imp.jellyfin_username_entry.set_visible(false);
+                                        imp.jellyfin_password_entry.set_visible(false);
+                                        imp.jellyfin_success.set_visible(true);
+                                        imp.jellyfin_success.set_title("Connected Successfully!");
+                                        imp.jellyfin_success.set_description(Some(&format!(
+                                            "Connected to {}",
+                                            source.name
+                                        )));
+                                        // Show the success checkmark
+                                        imp.jellyfin_success_checkmark.set_visible(true);
+                                        imp.jellyfin_success_checkmark.add_css_class("success");
+
+                                        // Wait briefly to show success message
+                                        glib::timeout_future(std::time::Duration::from_millis(
+                                            1500,
+                                        ))
+                                        .await;
+
                                         info!("Closing auth dialog");
                                         dialog.close();
                                     }
