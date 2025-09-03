@@ -279,11 +279,8 @@ impl PlexApi {
                 // They would need to be fetched separately after episodes are loaded
                 let intro_marker = None;
                 let credits_marker = None;
-                debug!(
-                    "Episode {} - markers will need separate fetch (can't await in map)",
-                    meta.rating_key
-                );
 
+                // TODO: markers will need separate fetch (can't await in map)
                 Episode {
                     id: meta.rating_key,
                     backend_id: self.backend_id.clone(),
