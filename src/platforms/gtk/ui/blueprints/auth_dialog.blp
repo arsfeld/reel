@@ -99,6 +99,19 @@ template ReelAuthDialog : Adw.Dialog {
               icon-name: "emblem-ok-symbolic";
               title: _("Authentication Successful!");
                 description: _("Connecting to your Plex server...");
+                
+                Gtk.Box {
+                  orientation: vertical;
+                  spacing: 12;
+                  margin-top: 24;
+                  
+                  Gtk.Image success_checkmark {
+                    visible: false;
+                    icon-name: "object-select-symbolic";
+                    pixel-size: 64;
+                    styles ["success"]
+                  }
+                }
               }
               
               Adw.StatusPage auth_error {
@@ -215,6 +228,26 @@ template ReelAuthDialog : Adw.Dialog {
                 margin-top: 24;
                 width-request: 200;
                 halign: center;
+              }
+              
+              Adw.StatusPage jellyfin_success {
+              visible: false;
+              icon-name: "emblem-ok-symbolic";
+              title: _("Connected Successfully!");
+                description: _("Connected to your Jellyfin server");
+                
+                Gtk.Box {
+                  orientation: vertical;
+                  spacing: 12;
+                  margin-top: 24;
+                  
+                  Gtk.Image jellyfin_success_checkmark {
+                    visible: false;
+                    icon-name: "object-select-symbolic";
+                    pixel-size: 64;
+                    styles ["success"]
+                  }
+                }
               }
               
               Adw.StatusPage jellyfin_error {
