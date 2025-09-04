@@ -6,10 +6,8 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::config::Config;
-use crate::events::{
-    event_bus::EventBus,
-    types::{DatabaseEvent, EventPayload, EventType},
-};
+use crate::core::viewmodels::{PreferencesViewModel, ViewModel};
+use crate::events::EventBus;
 use tokio::sync::RwLock;
 
 mod imp {
@@ -17,15 +15,13 @@ mod imp {
 
     #[derive(Default)]
     pub struct PreferencesWindow {
-        pub config: RefCell<Option<Arc<RwLock<Config>>>>,
-        pub event_bus: RefCell<Option<Arc<EventBus>>>,
+        pub view_model: RefCell<Option<Arc<PreferencesViewModel>>>,
     }
 
     impl std::fmt::Debug for PreferencesWindow {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("PreferencesWindow")
-                .field("config", &"Arc<RwLock<Config>>")
-                .field("event_bus", &"Arc<EventBus>")
+                .field("view_model", &"Option<Arc<PreferencesViewModel>>")
                 .finish()
         }
     }
@@ -70,13 +66,23 @@ impl PreferencesWindow {
             .property("default-height", 500)
             .build();
 
-        window.imp().config.replace(Some(config));
-        window.imp().event_bus.replace(Some(event_bus));
+        let view_model = Arc::new(PreferencesViewModel::new(config));
+
+        // Initialize the ViewModel
+        let vm_clone = view_model.clone();
+        glib::spawn_future_local(async move {
+            vm_clone.initialize(event_bus).await;
+        });
+
+        window.imp().view_model.replace(Some(view_model));
         window
     }
 
     fn setup_ui(&self) {
-        let imp = self.imp();
+        let Some(view_model) = self.imp().view_model.borrow().as_ref().map(|vm| vm.clone()) else {
+            error!("PreferencesWindow: ViewModel not initialized");
+            return;
+        };
 
         // Create General page
         let general_page = adw::PreferencesPage::builder()
@@ -103,190 +109,233 @@ impl PreferencesWindow {
             .model(&gtk4::StringList::new(&["GStreamer", "MPV"]))
             .build();
 
-        // Set current selections based on shared config
-        if let Some(config_arc) = self.imp().config.borrow().as_ref() {
-            // Load config asynchronously without blocking the main thread
-            let config_arc = config_arc.clone();
-            let theme_row_clone = theme_row.clone();
-            let player_backend_row_clone = player_backend_row.clone();
-
-            glib::spawn_future_local(async move {
-                let config = config_arc.read().await;
-
-                // Set theme selection
-                let theme_index = match config.general.theme.as_str() {
-                    "light" => 1,
-                    "dark" => 2,
-                    _ => 0, // Default to System/auto
-                };
-                theme_row_clone.set_selected(theme_index);
-
-                // Set player backend selection (case-insensitive comparison)
-                let backend = config.playback.player_backend.to_lowercase();
-                info!(
-                    "Current player backend in config: '{}' (original: '{}')",
-                    backend, config.playback.player_backend
-                );
-
-                let selected_index = if backend == "gstreamer" {
-                    0
-                } else {
-                    1 // Default to MPV for "mpv" or any other value (since MPV is the default)
-                };
-                info!("Setting player backend combo to index: {}", selected_index);
-                player_backend_row_clone.set_selected(selected_index);
-            });
-        }
+        let video_output_row = adw::ComboRow::builder()
+            .title("Video Output")
+            .subtitle("Embedded rendering (libmpv) or external HDR window (gpu-next)")
+            .model(&gtk4::StringList::new(&["Embedded", "External HDR"]))
+            .build();
 
         playback_group.add(&player_backend_row);
+        playback_group.add(&video_output_row);
         general_page.add(&playback_group);
 
         // Add page to window
         self.add(&general_page);
 
-        // Theme row handler
+        // Set up reactive binding for theme
+        self.bind_theme_property(view_model.clone(), theme_row.clone());
+
+        // Set up reactive binding for player backend
+        self.bind_player_backend_property(view_model.clone(), player_backend_row.clone());
+
+        // Set up reactive binding for video output
+        self.bind_video_output_property(view_model.clone(), video_output_row.clone());
+
+        // Set up event handlers
         theme_row.connect_selected_notify(clone!(
-            #[weak(rename_to = window)]
-            self,
+            #[weak]
+            view_model,
             move |row| {
                 let selected = row.selected();
-                let theme = match selected {
-                    0 => "auto",
-                    1 => "light",
-                    2 => "dark",
-                    _ => "auto",
-                };
-                window.apply_theme(theme);
+                let theme =
+                    crate::core::viewmodels::preferences_view_model::Theme::from_index(selected);
+
+                let vm = view_model.clone();
+                glib::spawn_future_local(async move {
+                    if let Err(e) = vm.set_theme(theme).await {
+                        error!("Failed to set theme: {}", e);
+                    }
+                });
             }
         ));
 
-        // Player backend row handler
         player_backend_row.connect_selected_notify(clone!(
-            #[weak(rename_to = window)]
-            self,
+            #[weak]
+            view_model,
             move |row| {
                 let selected = row.selected();
-                let backend = match selected {
-                    1 => "mpv",
-                    _ => "gstreamer",
-                };
-                window.apply_player_backend(backend);
-            }
-        ));
-    }
-
-    fn apply_theme(&self, theme: &str) {
-        info!("Applying theme: {}", theme);
-
-        let style_manager = adw::StyleManager::default();
-        match theme {
-            "light" => style_manager.set_color_scheme(adw::ColorScheme::ForceLight),
-            "dark" => style_manager.set_color_scheme(adw::ColorScheme::ForceDark),
-            _ => style_manager.set_color_scheme(adw::ColorScheme::PreferDark),
-        }
-
-        // Save theme preference
-        if let Some(config_arc) = self.imp().config.borrow().as_ref() {
-            let config_arc = config_arc.clone();
-            let event_bus = self.imp().event_bus.borrow().as_ref().cloned();
-            let theme = theme.to_string();
-            glib::spawn_future_local(async move {
-                let mut config = config_arc.write().await;
-                let old_theme = config.general.theme.clone();
-                config.general.theme = theme.clone();
-                if let Err(e) = config.save() {
-                    error!("Failed to save theme preference: {}", e);
-                } else if old_theme != theme {
-                    // Emit UserPreferencesChanged event
-                    if let Some(bus) = event_bus {
-                        let event = DatabaseEvent::new(
-                            EventType::UserPreferencesChanged,
-                            EventPayload::User {
-                                user_id: "local_user".to_string(),
-                                action: format!("theme_changed_to_{}", theme),
-                            },
-                        );
-
-                        if let Err(e) = bus.publish(event).await {
-                            tracing::warn!("Failed to publish UserPreferencesChanged event: {}", e);
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    fn apply_player_backend(&self, backend: &str) {
-        info!("Applying player backend: {}", backend);
-
-        // Save player backend preference
-        if let Some(config_arc) = self.imp().config.borrow().as_ref() {
-            let config_arc = config_arc.clone();
-            let event_bus = self.imp().event_bus.borrow().as_ref().cloned();
-            let backend_str = backend.to_string();
-            let window_weak = self.downgrade();
-
-            glib::spawn_future_local(async move {
-                let mut config = config_arc.write().await;
-                let old_backend = config.playback.player_backend.clone();
-                config.playback.player_backend = backend_str.clone();
-
-                if let Err(e) = config.save() {
-                    error!("Failed to save player backend preference: {}", e);
-                    return;
-                }
-
-                // Only notify if the backend actually changed
-                if old_backend != backend_str {
-                    // Emit UserPreferencesChanged event
-                    if let Some(bus) = event_bus {
-                        let event = DatabaseEvent::new(
-                            EventType::UserPreferencesChanged,
-                            EventPayload::User {
-                                user_id: "local_user".to_string(),
-                                action: format!("player_backend_changed_to_{}", backend_str),
-                            },
-                        );
-
-                        if let Err(e) = bus.publish(event).await {
-                            tracing::warn!("Failed to publish UserPreferencesChanged event: {}", e);
-                        }
-                    }
-                    info!(
-                        "Player backend changed from '{}' to '{}'",
-                        old_backend, backend_str
+                let backend =
+                    crate::core::viewmodels::preferences_view_model::PlayerBackend::from_index(
+                        selected,
                     );
 
-                    // Show a toast notification
-                    if let Some(window) = window_weak.upgrade()
-                        && let Some(parent) = window
-                            .transient_for()
-                            .and_then(|w| w.downcast::<adw::ApplicationWindow>().ok())
-                    {
-                        let toast = adw::Toast::builder()
-                            .title(format!(
-                                "Player backend changed to {}",
-                                if backend_str == "mpv" {
-                                    "MPV"
-                                } else {
-                                    "GStreamer"
-                                }
-                            ))
-                            .timeout(3)
-                            .build();
+                let vm = view_model.clone();
+                glib::spawn_future_local(async move {
+                    if let Err(e) = vm.set_player_backend(backend).await {
+                        error!("Failed to set player backend: {}", e);
+                    }
+                });
+            }
+        ));
 
-                        // Find the toast overlay in the main window
-                        if let Some(content) = parent
-                            .content()
-                            .and_then(|w| w.downcast::<adw::ToastOverlay>().ok())
-                        {
-                            content.add_toast(toast);
-                        } else {
-                            info!("Player backend will be used for next playback");
-                        }
+        video_output_row.connect_selected_notify(clone!(
+            #[weak]
+            view_model,
+            move |row| {
+                let selected = row.selected();
+                let video_output =
+                    crate::core::viewmodels::preferences_view_model::VideoOutput::from_index(
+                        selected,
+                    );
+
+                let vm = view_model.clone();
+                glib::spawn_future_local(async move {
+                    if let Err(e) = vm.set_video_output(video_output).await {
+                        error!("Failed to set video output: {}", e);
+                    }
+                });
+            }
+        ));
+
+        // Show toast notifications for changes
+        self.setup_toast_notifications(view_model);
+    }
+
+    fn bind_theme_property(&self, view_model: Arc<PreferencesViewModel>, theme_row: adw::ComboRow) {
+        // Set initial value
+        let vm_clone = view_model.clone();
+        let theme_row_clone = theme_row.clone();
+        glib::spawn_future_local(async move {
+            let theme = vm_clone.get_theme().await;
+            theme_row_clone.set_selected(theme.to_index());
+        });
+
+        // Subscribe to changes
+        let mut theme_subscriber = view_model.subscribe_theme();
+        glib::spawn_future_local(async move {
+            while theme_subscriber.wait_for_change().await {
+                let theme = view_model.get_theme().await;
+                theme_row.set_selected(theme.to_index());
+            }
+        });
+    }
+
+    fn bind_player_backend_property(
+        &self,
+        view_model: Arc<PreferencesViewModel>,
+        backend_row: adw::ComboRow,
+    ) {
+        // Set initial value
+        let vm_clone = view_model.clone();
+        let backend_row_clone = backend_row.clone();
+        glib::spawn_future_local(async move {
+            let backend = vm_clone.get_player_backend().await;
+            backend_row_clone.set_selected(backend.to_index());
+        });
+
+        // Subscribe to changes
+        let mut backend_subscriber = view_model.subscribe_player_backend();
+        glib::spawn_future_local(async move {
+            while backend_subscriber.wait_for_change().await {
+                let backend = view_model.get_player_backend().await;
+                backend_row.set_selected(backend.to_index());
+            }
+        });
+    }
+
+    fn bind_video_output_property(
+        &self,
+        view_model: Arc<PreferencesViewModel>,
+        output_row: adw::ComboRow,
+    ) {
+        // Set initial value
+        let vm_clone = view_model.clone();
+        let output_row_clone = output_row.clone();
+        glib::spawn_future_local(async move {
+            let output = vm_clone.get_video_output().await;
+            output_row_clone.set_selected(output.to_index());
+        });
+
+        // Subscribe to changes
+        let mut output_subscriber = view_model.subscribe_video_output();
+        glib::spawn_future_local(async move {
+            while output_subscriber.wait_for_change().await {
+                let output = view_model.get_video_output().await;
+                output_row.set_selected(output.to_index());
+            }
+        });
+    }
+
+    fn setup_toast_notifications(&self, view_model: Arc<PreferencesViewModel>) {
+        let window_weak = self.downgrade();
+
+        // Subscribe to theme changes
+        let view_model_theme = view_model.clone();
+        let window_weak_theme = window_weak.clone();
+        let mut theme_subscriber = view_model.subscribe_theme();
+        glib::spawn_future_local(async move {
+            while theme_subscriber.wait_for_change().await {
+                let theme = view_model_theme.get_theme().await;
+
+                // Apply theme to style manager
+                let style_manager = adw::StyleManager::default();
+                match theme {
+                    crate::core::viewmodels::preferences_view_model::Theme::Light => {
+                        style_manager.set_color_scheme(adw::ColorScheme::ForceLight);
+                    }
+                    crate::core::viewmodels::preferences_view_model::Theme::Dark => {
+                        style_manager.set_color_scheme(adw::ColorScheme::ForceDark);
+                    }
+                    crate::core::viewmodels::preferences_view_model::Theme::System => {
+                        style_manager.set_color_scheme(adw::ColorScheme::PreferDark);
                     }
                 }
-            });
+
+                if let Some(window) = window_weak_theme.upgrade() {
+                    window.show_toast(&format!("Theme changed to {}", theme.display_name()));
+                }
+            }
+        });
+
+        // Subscribe to player backend changes
+        let view_model_backend = view_model.clone();
+        let window_weak_backend = window_weak.clone();
+        let mut backend_subscriber = view_model.subscribe_player_backend();
+        glib::spawn_future_local(async move {
+            while backend_subscriber.wait_for_change().await {
+                let backend = view_model_backend.get_player_backend().await;
+                if let Some(window) = window_weak_backend.upgrade() {
+                    window.show_toast(&format!(
+                        "Player backend changed to {}",
+                        backend.display_name()
+                    ));
+                }
+            }
+        });
+
+        // Subscribe to video output changes
+        let view_model_output = view_model.clone();
+        let window_weak_output = window_weak.clone();
+        let mut output_subscriber = view_model.subscribe_video_output();
+        glib::spawn_future_local(async move {
+            while output_subscriber.wait_for_change().await {
+                let output = view_model_output.get_video_output().await;
+                if let Some(window) = window_weak_output.upgrade() {
+                    window.show_toast(&format!(
+                        "Video output changed to {}",
+                        output.display_name()
+                    ));
+                }
+            }
+        });
+    }
+
+    fn show_toast(&self, message: &str) {
+        if let Some(parent) = self
+            .transient_for()
+            .and_then(|w| w.downcast::<adw::ApplicationWindow>().ok())
+        {
+            let toast = adw::Toast::builder().title(message).timeout(3).build();
+
+            // Find the toast overlay in the main window
+            if let Some(content) = parent
+                .content()
+                .and_then(|w| w.downcast::<adw::ToastOverlay>().ok())
+            {
+                content.add_toast(toast);
+            } else {
+                info!("{}", message);
+            }
         }
     }
 }

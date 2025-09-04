@@ -77,6 +77,7 @@ struct MpvPlayerInner {
     seek_timer: RefCell<Option<glib::SourceId>>,
     last_seek_target: Arc<Mutex<Option<f64>>>,
     upscaling_mode: Arc<Mutex<UpscalingMode>>,
+    video_output: String,
 }
 
 #[derive(Clone)]
@@ -93,10 +94,11 @@ impl MpvPlayer {
         let cache_size_mb = config.playback.mpv_cache_size_mb;
         let cache_backbuffer_mb = config.playback.mpv_cache_backbuffer_mb;
         let cache_secs = config.playback.mpv_cache_secs;
+        let video_output = config.playback.mpv_video_output.clone();
 
         info!(
-            "Initializing MPV player (verbose_logging: {}, cache: {}MB/{}s)",
-            verbose_logging, cache_size_mb, cache_secs
+            "Initializing MPV player (verbose_logging: {}, cache: {}MB/{}s, video_output: {})",
+            verbose_logging, cache_size_mb, cache_secs, video_output
         );
 
         Ok(Self {
@@ -120,6 +122,7 @@ impl MpvPlayer {
                 seek_timer: RefCell::new(None),
                 last_seek_target: Arc::new(Mutex::new(None)),
                 upscaling_mode: Arc::new(Mutex::new(UpscalingMode::None)),
+                video_output,
             }),
         })
     }
@@ -401,7 +404,37 @@ impl MpvPlayer {
     }
 
     pub fn create_video_widget(&self) -> gtk4::Widget {
-        debug!("Creating GLArea for MPV rendering");
+        debug!(
+            "Creating video widget for video output: {}",
+            self.inner.video_output
+        );
+
+        // For gpu-next, return a placeholder widget since MPV creates its own window
+        if self.inner.video_output == "gpu-next" {
+            let placeholder = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+            placeholder.set_vexpand(true);
+            placeholder.set_hexpand(true);
+            placeholder.add_css_class("view");
+            placeholder.add_css_class("content");
+
+            let icon = gtk4::Image::from_icon_name("video-display-symbolic");
+            icon.set_pixel_size(64);
+            icon.add_css_class("dim-label");
+
+            let label = gtk4::Label::new(Some("Video will appear in external HDR window"));
+            label.set_wrap(true);
+            label.set_justify(gtk4::Justification::Center);
+            label.add_css_class("dim-label");
+
+            placeholder.append(&icon);
+            placeholder.append(&label);
+
+            info!("Created placeholder widget for gpu-next video output");
+            return placeholder.upcast::<gtk4::Widget>();
+        }
+
+        // For libmpv, create GLArea for embedded rendering
+        debug!("Creating GLArea for embedded MPV rendering");
 
         let gl_area = GLArea::new();
         gl_area.set_vexpand(true);
@@ -444,15 +477,22 @@ impl MpvPlayer {
                 }
             }
 
-            // Initialize render context
-            if let Err(e) = player_self.init_gl_render_context(gl_area) {
-                error!("Failed to initialize GL render context: {}", e);
+            // Initialize render context only for libmpv
+            if inner_realize.video_output == "libmpv" {
+                if let Err(e) = player_self.init_gl_render_context(gl_area) {
+                    error!("Failed to initialize GL render context: {}", e);
+                }
             }
         });
 
         // Handle render signal - draw video frame
         let inner_render = inner.clone();
         gl_area.connect_render(move |gl_area, _gl_context| {
+            // Only render for libmpv - gpu-next doesn't use embedded rendering
+            if inner_render.video_output != "libmpv" {
+                return glib::Propagation::Stop;
+            }
+
             // Reset frame pending flag
             inner_render.frame_pending.store(false, Ordering::Release);
 
@@ -626,8 +666,8 @@ impl MpvPlayer {
         let gl_area_timer = gl_area.clone();
         let inner_timer = inner.clone();
         let timer_id = glib::timeout_add_local(Duration::from_millis(16), move || {
-            // Only render if we have a context and video is playing
-            if inner_timer.mpv_gl.borrow().is_some() {
+            // Only render if we have a context and video is playing, and only for libmpv
+            if inner_timer.video_output == "libmpv" && inner_timer.mpv_gl.borrow().is_some() {
                 // Check if we're actually playing and not seeking
                 if let Some(ref mpv) = *inner_timer.mpv.borrow() {
                     // Check if we're seeking - if so, skip automatic render
@@ -1169,9 +1209,9 @@ impl MpvPlayerInner {
             debug!("MPV configuration: {}", config);
         }
 
-        // Configure MPV for render API with performance optimizations
-        mpv.set_property("vo", "libmpv")
-            .map_err(|e| anyhow::anyhow!("Failed to set vo=libmpv: {:?}", e))?;
+        // Configure MPV video output based on user preference
+        mpv.set_property("vo", self.video_output.as_str())
+            .map_err(|e| anyhow::anyhow!("Failed to set vo={}: {:?}", self.video_output, e))?;
 
         // Only enable GPU debug options if verbose logging is enabled
         if self.verbose_logging {

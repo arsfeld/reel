@@ -89,6 +89,12 @@ pub struct PlaybackConfig {
         skip_serializing_if = "is_default_cache_secs"
     )]
     pub mpv_cache_secs: u32,
+
+    #[serde(
+        default = "default_mpv_video_output",
+        skip_serializing_if = "is_default_mpv_video_output"
+    )]
+    pub mpv_video_output: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -351,6 +357,7 @@ impl Default for PlaybackConfig {
             mpv_cache_size_mb: default_cache_size_mb(),
             mpv_cache_backbuffer_mb: default_cache_backbuffer_mb(),
             mpv_cache_secs: default_cache_secs(),
+            mpv_video_output: default_mpv_video_output(),
         }
     }
 }
@@ -415,6 +422,10 @@ fn default_cache_secs() -> u32 {
     1800 // 30 minutes default
 }
 
+fn default_mpv_video_output() -> String {
+    "libmpv".to_string() // Default: embedded rendering
+}
+
 // Skip serializing helper functions
 fn is_default_theme(value: &str) -> bool {
     value == default_theme()
@@ -474,6 +485,10 @@ fn is_default_cache_backbuffer_mb(value: &u32) -> bool {
 
 fn is_default_cache_secs(value: &u32) -> bool {
     *value == default_cache_secs()
+}
+
+fn is_default_mpv_video_output(value: &str) -> bool {
+    value == default_mpv_video_output()
 }
 
 // is_default implementations for structs
