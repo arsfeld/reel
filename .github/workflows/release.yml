@@ -7,9 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g., v0.1.0)'
+        description: 'Release tag (e.g., v0.1.0, v0.1.0-beta1, v0.1.0-alpha1)'
         required: true
         type: string
+      prerelease:
+        description: 'Mark as prerelease'
+        required: false
+        default: false
+        type: boolean
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get_version.outputs.version }}
+      is_prerelease: ${{ steps.check_prerelease.outputs.is_prerelease }}
     permissions:
       contents: write
     steps:
@@ -33,6 +39,22 @@ jobs:
             VERSION=${GITHUB_REF#refs/tags/}
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Check if prerelease
+        id: check_prerelease
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          # Auto-detect prerelease based on tag pattern or manual input
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.prerelease }}" = "true" ]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "Manual prerelease flag set"
+          elif [[ "$VERSION" =~ -(alpha|beta|rc|dev|pre) ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "Auto-detected prerelease from version: $VERSION"
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "Stable release: $VERSION"
+          fi
       
       - name: Check if release exists
         id: check_release
@@ -80,8 +102,10 @@ jobs:
         if: steps.check_release.outputs.exists == 'false'
         run: |
           cat > release_body.md << 'RELEASE_BODY'
-          # Reel ${{ steps.get_version.outputs.version }}
-          
+          # Reel ${{ steps.get_version.outputs.version }}${{ steps.check_prerelease.outputs.is_prerelease == 'true' && ' (Prerelease)' || '' }}
+          ${{ steps.check_prerelease.outputs.is_prerelease == 'true' && '
+          > ⚠️ **This is a prerelease version** - It may contain bugs and is intended for testing purposes. Use stable releases for production.
+          ' || '' }}
           ## What's New
           ${{ steps.generate_notes.outputs.notes || '- ' }}
           
@@ -144,9 +168,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.version }}
-          name: Reel ${{ steps.get_version.outputs.version }}
+          name: Reel ${{ steps.get_version.outputs.version }}${{ steps.check_prerelease.outputs.is_prerelease == 'true' && ' (Prerelease)' || '' }}
           draft: true
-          prerelease: false
+          prerelease: ${{ steps.check_prerelease.outputs.is_prerelease == 'true' }}
           body_path: ${{ steps.check_release.outputs.exists == 'false' && 'release_body.md' || '' }}
 
   build-linux:
