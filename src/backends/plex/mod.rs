@@ -210,38 +210,6 @@ impl PlexBackend {
         Ok(())
     }
 
-    /// Authenticate with PIN and select a server
-    pub async fn authenticate_with_pin(&self, pin: &PlexPin, server: &PlexServer) -> Result<()> {
-        // Poll for the auth token
-        let token = PlexAuth::poll_for_token(&pin.id).await?;
-
-        // Store the auth token in memory
-        *self.auth_token.write().await = Some(token.clone());
-
-        // Save token to keyring
-        if let Err(e) = self.save_token(&token).await {
-            tracing::error!("Failed to save token to keyring: {}", e);
-            // Continue anyway - the token is in memory
-        }
-
-        // Find the best connection for the server
-        let connection = server
-            .connections
-            .iter()
-            .find(|c| !c.relay) // Prefer direct connections
-            .or_else(|| server.connections.first())
-            .ok_or_else(|| anyhow::anyhow!("No valid connection found for server"))?;
-
-        // Store the base URL
-        *self.base_url.write().await = Some(connection.uri.clone());
-
-        // Create the API client
-        let api = PlexApi::with_backend_id(connection.uri.clone(), token, self.backend_id.clone());
-        *self.api.write().await = Some(api);
-
-        Ok(())
-    }
-
     /// Test all connections in parallel and return the fastest responding one
     async fn find_best_connection(
         &self,

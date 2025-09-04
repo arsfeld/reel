@@ -1846,8 +1846,7 @@ impl ReelMainWindow {
     }
 
     pub async fn update_backend_selector(&self) {
-        // Backend selector is now deprecated - we show all backends at once
-        // Sources button is always visible at the bottom
+        // Sources button is always visible at the bottom - no selector needed
     }
 
     // Generic navigation handler

@@ -7,6 +7,7 @@ use tracing::{error, info};
 
 use crate::backends::plex::{PlexAuth, PlexPin};
 use crate::state::AppState;
+use tokio::sync::oneshot;
 
 // Re-export BackendType for external use
 pub use imp::BackendType;
@@ -70,6 +71,7 @@ mod imp {
         pub auth_handle: RefCell<Option<glib::JoinHandle<()>>>,
         pub current_pin: RefCell<Option<PlexPin>>,
         pub backend_type: RefCell<BackendType>,
+        pub cancel_tx: RefCell<Option<oneshot::Sender<()>>>,
     }
 
     #[derive(Debug, Clone, Copy, Default)]
@@ -275,6 +277,10 @@ mod imp {
             if let Some(handle) = self.auth_handle.take() {
                 handle.abort();
             }
+            // Send cancellation signal to polling task
+            if let Some(cancel_tx) = self.cancel_tx.take() {
+                let _ = cancel_tx.send(());
+            }
         }
     }
 
@@ -349,6 +355,9 @@ impl ReelAuthDialog {
         if let Some(handle) = imp.auth_handle.take() {
             handle.abort();
         }
+        if let Some(cancel_tx) = imp.cancel_tx.take() {
+            let _ = cancel_tx.send(());
+        }
 
         // Show progress
         imp.auth_progress.set_visible(true);
@@ -414,6 +423,10 @@ impl ReelAuthDialog {
         let pin_id = pin.id.clone();
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
+        // Create cancellation channel
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        imp.cancel_tx.replace(Some(cancel_tx));
+
         // Clone for progress updates
         let dialog_weak_progress = self.downgrade();
 
@@ -437,7 +450,7 @@ impl ReelAuthDialog {
         });
 
         tokio::spawn(async move {
-            match PlexAuth::poll_for_token(&pin_id).await {
+            match PlexAuth::poll_for_token(&pin_id, Some(cancel_rx)).await {
                 Ok(token) => {
                     let _ = tx.send(Ok(token)).await;
                 }
@@ -643,23 +656,9 @@ impl ReelAuthDialog {
         imp.retry_button.set_visible(true);
     }
 
-    fn connect_manual(&self, url: String, _token: String) {
-        info!("Connecting manually to {}", url);
-
-        let state = self.imp().state.borrow().as_ref().map(|s| s.clone());
-
-        if let Some(state) = state {
-            let dialog_weak = self.downgrade();
-
-            glib::spawn_future_local(async move {
-                // TODO: Manual server connection should be handled through SourceCoordinator
-                // This code needs to be refactored to use proper authentication flow
-                error!("Manual server connection not yet implemented with new architecture");
-
-                // DEPRECATED CODE - this was removed due to architecture changes
-            });
-        }
-
+    fn connect_manual(&self, url: String, token: String) {
+        info!("Manual connection to Plex server not yet implemented");
+        // TODO: Implement manual server connection through SourceCoordinator
         self.close();
     }
 
@@ -692,18 +691,6 @@ impl ReelAuthDialog {
                 }
             }
         }
-    }
-
-    async fn save_manual_config(&self, _url: String, _token: String) {
-        // This method is deprecated - manual config should use SourceCoordinator
-        error!("save_manual_config is deprecated - use SourceCoordinator instead");
-        self.close();
-    }
-
-    async fn save_jellyfin_config(&self, _url: String, _username: String, _password: String) {
-        // This method is deprecated - Jellyfin config should use SourceCoordinator
-        error!("save_jellyfin_config is deprecated - use SourceCoordinator instead");
-        self.close();
     }
 
     fn connect_jellyfin(&self, url: String, username: String, password: String) {
