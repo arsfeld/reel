@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>reel</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIdentifier</key>
+    <string>dev.arsfeld.Reel</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Reel</string>
+    <key>CFBundleDisplayName</key>
+    <string>Reel</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+
+    <!-- URL Schemes -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>reel</string>
+                <string>plex</string>
+                <string>jellyfin</string>
+            </array>
+            <key>CFBundleURLName</key>
+            <string>dev.arsfeld.Reel</string>
+        </dict>
+    </array>
+
+    <!-- Document Types -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Movie</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.movie</string>
+                <string>public.mpeg-4</string>
+                <string>public.avi</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Audio</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.audio</string>
+                <string>public.mp3</string>
+                <string>public.aiff-audio</string>
+                <string>com.apple.m4a-audio</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- Required for GTK on macOS -->
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSApplicationCategoryType</key>
+    <string>public.app-category.entertainment</string>
+
+    <!-- App Transport Security for media servers -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+
+    <!-- Enable Metal/OpenGL for video playback -->
+    <key>NSRequiresAquaSystemAppearance</key>
+    <false/>
+    <key>CAMetalLayerWantsExtendedDynamicRangeContent</key>
+    <true/>
+</dict>
+</plist>

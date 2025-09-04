@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Basic entitlements for a media player app -->
+    
+    <!-- Allow DYLD environment variables for GTK/GStreamer -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    
+    <!-- Allow unsigned executable memory for JIT (GStreamer/MPV might need this) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    
+    <!-- Network client for streaming from Plex/Jellyfin servers -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    
+    <!-- Network server for potential future features -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+    
+    <!-- File access for local media -->
+    <key>com.apple.security.files.user-selected.read-only</key>
+    <true/>
+    
+    <!-- Downloads folder access for offline content -->
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+    
+    <!-- Audio/Video playback -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    
+    <!-- Camera access for future features -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    
+    <!-- Print capability (for future features) -->
+    <key>com.apple.security.print</key>
+    <true/>
+    
+    <!-- Bluetooth for potential remote control features -->
+    <key>com.apple.security.device.bluetooth</key>
+    <true/>
+    
+    <!-- USB for potential external drive access -->
+    <key>com.apple.security.device.usb</key>
+    <true/>
+    
+    <!-- Hardened runtime -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    
+    <!-- Allow JIT for performance -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    
+    <!-- Personal information access for future integration -->
+    <key>com.apple.security.personal-information.photos-library</key>
+    <true/>
+    
+    <!-- Application groups for sharing data between app extensions -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.dev.arsfeld.Reel</string>
+    </array>
+    
+    <!-- Keychain access for storing server credentials -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)dev.arsfeld.Reel</string>
+    </array>
+</dict>
+</plist>

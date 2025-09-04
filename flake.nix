@@ -324,6 +324,57 @@
           find . -maxdepth 1 -name "*.AppImage" -type f 2>/dev/null | xargs -I {} echo "  - AppImage: {}"
         '';
 
+        # macOS-specific build commands
+        buildMacOSBundle = pkgs.writeShellScriptBin "build-macos-bundle" ''
+          echo "Building macOS app bundle..."
+          
+          # Ensure we have a release build
+          cargo build --release
+          
+          # Run the bundle creation script
+          cd macos
+          chmod +x create-app-bundle.sh
+          ./create-app-bundle.sh
+          cd ..
+          
+          if [ -f "macos/Reel.app/Contents/MacOS/Reel" ]; then
+            echo "✓ macOS app bundle created: macos/Reel.app"
+            echo ""
+            echo "To install:"
+            echo "  cp -r macos/Reel.app /Applications/"
+            echo ""
+            echo "To run:"
+            echo "  open macos/Reel.app"
+          else
+            echo "✗ Failed to create macOS app bundle"
+            exit 1
+          fi
+        '';
+
+        buildMacOSDMG = pkgs.writeShellScriptBin "build-macos-dmg" ''
+          echo "Building macOS DMG installer..."
+          
+          # First ensure we have the app bundle
+          if [ ! -d "macos/Reel.app" ]; then
+            echo "App bundle not found, building it first..."
+            build-macos-bundle
+          fi
+          
+          # Run the DMG creation script
+          cd macos
+          chmod +x create-dmg-installer.sh
+          ./create-dmg-installer.sh
+          cd ..
+          
+          DMG_FILE=$(find macos -name "*.dmg" -type f | head -n1)
+          if [ -n "$DMG_FILE" ]; then
+            echo "✓ macOS DMG created: $DMG_FILE"
+          else
+            echo "✗ Failed to create macOS DMG"
+            exit 1
+          fi
+        '';
+
         # Meson build commands
         mesonSetup = pkgs.writeShellScriptBin "meson-setup" ''
           echo "Setting up Meson build directory..."
@@ -444,6 +495,9 @@
             buildRpm
             buildAppImage
             buildAllPackages
+          ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+            buildMacOSBundle
+            buildMacOSDMG
           ];
 
           shellHook = ''
@@ -486,6 +540,12 @@
               echo "  flatpak-build-install - Build and install the flatpak"
               echo "  flatpak-run           - Run the installed flatpak"
               echo "  flatpak-lint          - Lint the flatpak manifest"
+              echo ""
+            ''}
+            ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+              echo "macOS build commands:"
+              echo "  build-macos-bundle - Build macOS .app bundle"
+              echo "  build-macos-dmg    - Build macOS DMG installer"
               echo ""
             ''}
             
