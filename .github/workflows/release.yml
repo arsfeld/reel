@@ -221,81 +221,24 @@ jobs:
         run: |
           cargo generate-rpm
           mv target/generate-rpm/*.rpm reel-${{ needs.create-release.outputs.version }}-x86_64.rpm || true
-
-      - name: Setup AppImage tools
-        run: |
-          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x linuxdeploy-x86_64.AppImage
-          wget -q https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
-          chmod +x linuxdeploy-plugin-gtk.sh
-
+      
       - name: Install additional AppImage dependencies
         run: |
           # Install additional dependencies that LinuxDeploy might need
           sudo apt-get install -y \
             libfuse2 \
             desktop-file-utils \
-            zsync
-
+            zsync \
+            patchelf
+      
       - name: Build AppImage
         run: |
-          mkdir -p AppDir/usr/bin
-          mkdir -p AppDir/usr/share/applications
-          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
-
-          # Copy our files
-          cp target/release/reel AppDir/usr/bin/
-          chmod +x AppDir/usr/bin/reel
-          cp data/dev.arsfeld.Reel.desktop AppDir/usr/share/applications/
-          cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg AppDir/usr/share/icons/hicolor/scalable/apps/
-
-          # Set environment variables for better dependency detection
+          # Set version environment variable for the build script
           export VERSION=${{ needs.create-release.outputs.version }}
-          export DEPLOY_GTK_VERSION=4
-          export LINUXDEPLOY_OUTPUT_VERSION=$VERSION
-
-          # Add library paths for better detection
-          export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
-
-          echo "=== Running LinuxDeploy with GTK4 plugin ==="
-          ./linuxdeploy-x86_64.AppImage \
-            --appdir AppDir \
-            --executable AppDir/usr/bin/reel \
-            --desktop-file AppDir/usr/share/applications/dev.arsfeld.Reel.desktop \
-            --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg \
-            --plugin gtk \
-            --output appimage
-
-          # Rename the output to our convention
-          if ls Reel-*.AppImage 1> /dev/null 2>&1; then
-            mv Reel-*.AppImage reel-${{ needs.create-release.outputs.version }}-x86_64.AppImage
-            echo "✓ Renamed AppImage to reel-${{ needs.create-release.outputs.version }}-x86_64.AppImage"
-          elif ls *.AppImage 1> /dev/null 2>&1; then
-            # Fallback: find any AppImage that's not the tools
-            for img in *.AppImage; do
-              if [[ "$img" != linuxdeploy-*.AppImage ]]; then
-                mv "$img" reel-${{ needs.create-release.outputs.version }}-x86_64.AppImage
-                echo "✓ Renamed $img to reel-${{ needs.create-release.outputs.version }}-x86_64.AppImage"
-                break
-              fi
-            done
-          else
-            echo "✗ No AppImage found after build"
-            ls -la
-            exit 1
-          fi
-
-          # Verify the AppImage was created successfully
-          if [ -f "reel-${{ needs.create-release.outputs.version }}-x86_64.AppImage" ]; then
-            echo "✓ AppImage created successfully"
-            file "reel-${{ needs.create-release.outputs.version }}-x86_64.AppImage"
-            ls -lh "reel-${{ needs.create-release.outputs.version }}-x86_64.AppImage"
-          else
-            echo "✗ Expected AppImage file not found"
-            ls -la *.AppImage 2>/dev/null || echo "No AppImage files found"
-            exit 1
-          fi
-
+          
+          # Use our standalone AppImage build script
+          ./build-appimage.sh
+      
       - name: Upload Linux Release Assets
         uses: softprops/action-gh-release@v2
         with:
