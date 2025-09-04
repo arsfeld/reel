@@ -103,7 +103,7 @@ Reel is a modern, offline-first media player for the GNOME desktop that provides
 a premium media consumption experience with support for multiple backends including \
 Plex, Jellyfin, and local files. Features include hardware-accelerated playback, \
 seamless background synchronization, and a beautiful GTK4/libadwaita interface."""
-depends = "$auto, libgtk-4-1, libadwaita-1-0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav, libmpv2"
+depends = "$auto, libgtk-4-1 (>= 4.6), libadwaita-1-0 (>= 1.0), gstreamer1.0-plugins-base (>= 1.0), gstreamer1.0-plugins-good (>= 1.0), gstreamer1.0-plugins-bad (>= 1.0), gstreamer1.0-plugins-ugly (>= 1.0), gstreamer1.0-libav (>= 1.0), libmpv1 | libmpv2"
 section = "video"
 priority = "optional"
 assets = [
