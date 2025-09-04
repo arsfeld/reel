@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::time::Duration;
+use tokio::sync::oneshot;
 use tracing::{debug, info};
 
 const PLEX_TV_URL: &str = "https://plex.tv";
@@ -54,13 +55,24 @@ impl PlexAuth {
         })
     }
 
-    /// Poll for the auth token after user has entered the PIN
-    pub async fn poll_for_token(pin_id: &str) -> Result<String> {
+    /// Poll for the auth token after user has entered the PIN with cancellation support
+    pub async fn poll_for_token(
+        pin_id: &str,
+        mut cancel_rx: Option<oneshot::Receiver<()>>,
+    ) -> Result<String> {
         let client = reqwest::Client::new();
         let mut attempts = 0;
         const MAX_ATTEMPTS: u32 = 120; // 4 minutes with 2 second intervals
 
         loop {
+            // Check for cancellation
+            if let Some(ref mut cancel) = cancel_rx {
+                if cancel.try_recv().is_ok() {
+                    debug!("Polling cancelled by user");
+                    return Err(anyhow!("Authentication cancelled"));
+                }
+            }
+
             if attempts >= MAX_ATTEMPTS {
                 return Err(anyhow!("Authentication timeout"));
             }
@@ -124,7 +136,19 @@ impl PlexAuth {
                 MAX_ATTEMPTS
             );
 
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            // Use select to make the sleep cancellable
+            if let Some(ref mut cancel) = cancel_rx {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(2)) => {},
+                    _ = cancel => {
+                        debug!("Polling cancelled during sleep");
+                        return Err(anyhow!("Authentication cancelled"));
+                    }
+                }
+            } else {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+
             attempts += 1;
         }
     }
