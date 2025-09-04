@@ -429,7 +429,10 @@ impl MpvPlayer {
             placeholder.append(&icon);
             placeholder.append(&label);
 
-            info!("Created placeholder widget for gpu-next video output");
+            info!(
+                "Created placeholder widget for {} video output",
+                self.inner.video_output
+            );
             return placeholder.upcast::<gtk4::Widget>();
         }
 
@@ -702,10 +705,10 @@ impl MpvPlayer {
             *state = PlayerState::Loading;
         }
 
-        // Check if render context is initialized
-        if self.inner.mpv_gl.borrow().is_none() {
+        // Check if render context is initialized (only needed for libmpv video output)
+        if self.inner.video_output == "libmpv" && self.inner.mpv_gl.borrow().is_none() {
             warn!(
-                "MpvPlayer::load_media() - Render context not initialized yet, deferring media load"
+                "MpvPlayer::load_media() - Render context not initialized yet (libmpv mode), deferring media load"
             );
             // Store the URL to load later when render context is ready
             self.inner.pending_media_url.replace(Some(url.to_string()));
@@ -714,8 +717,15 @@ impl MpvPlayer {
 
         // Initialize MPV if not already done
         if self.inner.mpv.borrow().is_none() {
+            info!(
+                "MPV not initialized, initializing now for video_output: {}",
+                self.inner.video_output
+            );
             let mpv = MpvPlayerInner::init_mpv(&self.inner)?;
             self.inner.mpv.replace(Some(mpv));
+            info!("MPV initialization complete");
+        } else {
+            info!("MPV already initialized");
         }
 
         // Load the media file
@@ -1210,8 +1220,10 @@ impl MpvPlayerInner {
         }
 
         // Configure MPV video output based on user preference
+        info!("Setting MPV video output to: {}", self.video_output);
         mpv.set_property("vo", self.video_output.as_str())
             .map_err(|e| anyhow::anyhow!("Failed to set vo={}: {:?}", self.video_output, e))?;
+        info!("Successfully set vo={}", self.video_output);
 
         // Only enable GPU debug options if verbose logging is enabled
         if self.verbose_logging {

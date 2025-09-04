@@ -16,6 +16,7 @@ mod imp {
     #[derive(Default)]
     pub struct PreferencesWindow {
         pub view_model: RefCell<Option<Arc<PreferencesViewModel>>>,
+        pub updating_ui: RefCell<bool>,
     }
 
     impl std::fmt::Debug for PreferencesWindow {
@@ -36,7 +37,7 @@ mod imp {
     impl ObjectImpl for PreferencesWindow {
         fn constructed(&self) {
             self.parent_constructed();
-            self.obj().setup_ui();
+            // Don't call setup_ui here - it will be called after the viewmodel is set
         }
     }
 
@@ -68,13 +69,22 @@ impl PreferencesWindow {
 
         let view_model = Arc::new(PreferencesViewModel::new(config));
 
-        // Initialize the ViewModel
+        // Store the view model
+        window.imp().view_model.replace(Some(view_model.clone()));
+
+        // Initialize the ViewModel BEFORE setting up UI to avoid triggering events
         let vm_clone = view_model.clone();
+        let event_bus_clone = event_bus.clone();
+        let window_weak = window.downgrade();
         glib::spawn_future_local(async move {
-            vm_clone.initialize(event_bus).await;
+            vm_clone.initialize(event_bus_clone).await;
+
+            // Setup UI after initialization is complete
+            if let Some(window) = window_weak.upgrade() {
+                window.setup_ui();
+            }
         });
 
-        window.imp().view_model.replace(Some(view_model));
         window
     }
 
@@ -115,6 +125,9 @@ impl PreferencesWindow {
             .model(&gtk4::StringList::new(&["Embedded", "External HDR"]))
             .build();
 
+        // Only show video output option for MPV
+        video_output_row.set_visible(false); // Start hidden, will be shown if MPV is selected
+
         playback_group.add(&player_backend_row);
         playback_group.add(&video_output_row);
         general_page.add(&playback_group);
@@ -128,14 +141,23 @@ impl PreferencesWindow {
         // Set up reactive binding for player backend
         self.bind_player_backend_property(view_model.clone(), player_backend_row.clone());
 
+        // Update video output row visibility based on player backend
+        self.bind_video_output_visibility(view_model.clone(), video_output_row.clone());
+
         // Set up reactive binding for video output
         self.bind_video_output_property(view_model.clone(), video_output_row.clone());
 
         // Set up event handlers
+        let updating_ui_theme = self.imp().updating_ui.clone();
         theme_row.connect_selected_notify(clone!(
             #[weak]
             view_model,
             move |row| {
+                // Skip if we're updating the UI programmatically
+                if *updating_ui_theme.borrow() {
+                    return;
+                }
+
                 let selected = row.selected();
                 let theme =
                     crate::core::viewmodels::preferences_view_model::Theme::from_index(selected);
@@ -149,15 +171,29 @@ impl PreferencesWindow {
             }
         ));
 
+        let updating_ui_backend = self.imp().updating_ui.clone();
+        let video_output_row_clone = video_output_row.clone();
         player_backend_row.connect_selected_notify(clone!(
             #[weak]
             view_model,
             move |row| {
+                // Skip if we're updating the UI programmatically
+                if *updating_ui_backend.borrow() {
+                    return;
+                }
+
                 let selected = row.selected();
                 let backend =
                     crate::core::viewmodels::preferences_view_model::PlayerBackend::from_index(
                         selected,
                     );
+
+                // Immediately update video output row visibility
+                let is_mpv = matches!(
+                    backend,
+                    crate::core::viewmodels::preferences_view_model::PlayerBackend::Mpv
+                );
+                video_output_row_clone.set_visible(is_mpv);
 
                 let vm = view_model.clone();
                 glib::spawn_future_local(async move {
@@ -168,10 +204,16 @@ impl PreferencesWindow {
             }
         ));
 
+        let updating_ui_output = self.imp().updating_ui.clone();
         video_output_row.connect_selected_notify(clone!(
             #[weak]
             view_model,
             move |row| {
+                // Skip if we're updating the UI programmatically
+                if *updating_ui_output.borrow() {
+                    return;
+                }
+
                 let selected = row.selected();
                 let video_output =
                     crate::core::viewmodels::preferences_view_model::VideoOutput::from_index(
@@ -195,17 +237,23 @@ impl PreferencesWindow {
         // Set initial value
         let vm_clone = view_model.clone();
         let theme_row_clone = theme_row.clone();
+        let updating_ui = self.imp().updating_ui.clone();
         glib::spawn_future_local(async move {
             let theme = vm_clone.get_theme().await;
+            *updating_ui.borrow_mut() = true;
             theme_row_clone.set_selected(theme.to_index());
+            *updating_ui.borrow_mut() = false;
         });
 
         // Subscribe to changes
         let mut theme_subscriber = view_model.subscribe_theme();
+        let updating_ui = self.imp().updating_ui.clone();
         glib::spawn_future_local(async move {
             while theme_subscriber.wait_for_change().await {
                 let theme = view_model.get_theme().await;
+                *updating_ui.borrow_mut() = true;
                 theme_row.set_selected(theme.to_index());
+                *updating_ui.borrow_mut() = false;
             }
         });
     }
@@ -218,17 +266,54 @@ impl PreferencesWindow {
         // Set initial value
         let vm_clone = view_model.clone();
         let backend_row_clone = backend_row.clone();
+        let updating_ui = self.imp().updating_ui.clone();
         glib::spawn_future_local(async move {
             let backend = vm_clone.get_player_backend().await;
+            *updating_ui.borrow_mut() = true;
             backend_row_clone.set_selected(backend.to_index());
+            *updating_ui.borrow_mut() = false;
         });
 
         // Subscribe to changes
         let mut backend_subscriber = view_model.subscribe_player_backend();
+        let updating_ui = self.imp().updating_ui.clone();
         glib::spawn_future_local(async move {
             while backend_subscriber.wait_for_change().await {
                 let backend = view_model.get_player_backend().await;
+                *updating_ui.borrow_mut() = true;
                 backend_row.set_selected(backend.to_index());
+                *updating_ui.borrow_mut() = false;
+            }
+        });
+    }
+
+    fn bind_video_output_visibility(
+        &self,
+        view_model: Arc<PreferencesViewModel>,
+        output_row: adw::ComboRow,
+    ) {
+        // Set initial visibility based on current backend
+        let vm_clone = view_model.clone();
+        let output_row_clone = output_row.clone();
+        glib::spawn_future_local(async move {
+            let backend = vm_clone.get_player_backend().await;
+            let is_mpv = matches!(
+                backend,
+                crate::core::viewmodels::preferences_view_model::PlayerBackend::Mpv
+            );
+            output_row_clone.set_visible(is_mpv);
+        });
+
+        // Subscribe to backend changes to update visibility
+        let mut backend_subscriber = view_model.subscribe_player_backend();
+        glib::spawn_future_local(async move {
+            while backend_subscriber.wait_for_change().await {
+                let backend = view_model.get_player_backend().await;
+                let is_mpv = matches!(
+                    backend,
+                    crate::core::viewmodels::preferences_view_model::PlayerBackend::Mpv
+                );
+                output_row.set_visible(is_mpv);
             }
         });
     }
@@ -241,17 +326,23 @@ impl PreferencesWindow {
         // Set initial value
         let vm_clone = view_model.clone();
         let output_row_clone = output_row.clone();
+        let updating_ui = self.imp().updating_ui.clone();
         glib::spawn_future_local(async move {
             let output = vm_clone.get_video_output().await;
+            *updating_ui.borrow_mut() = true;
             output_row_clone.set_selected(output.to_index());
+            *updating_ui.borrow_mut() = false;
         });
 
         // Subscribe to changes
         let mut output_subscriber = view_model.subscribe_video_output();
+        let updating_ui = self.imp().updating_ui.clone();
         glib::spawn_future_local(async move {
             while output_subscriber.wait_for_change().await {
                 let output = view_model.get_video_output().await;
+                *updating_ui.borrow_mut() = true;
                 output_row.set_selected(output.to_index());
+                *updating_ui.borrow_mut() = false;
             }
         });
     }
