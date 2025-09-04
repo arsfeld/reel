@@ -211,80 +211,93 @@
         '';
 
         buildAppImage = pkgs.writeShellScriptBin "build-appimage" ''
-          echo "Building AppImage..."
+          echo "Building AppImage with LinuxDeploy..."
           
           # Ensure we have a release build
           cargo build --release
           
           VERSION=$(grep '^version' Cargo.toml | cut -d'"' -f2)
+          export VERSION
           
           # Clean up previous builds
           rm -rf AppDir
           rm -f *.AppImage
+          rm -f linuxdeploy-*.AppImage
+          rm -f linuxdeploy-plugin-*.sh
           
-          # Create AppDir structure
+          # Download LinuxDeploy and GTK plugin if not available
+          if [ ! -f linuxdeploy-x86_64.AppImage ]; then
+            echo "Downloading LinuxDeploy..."
+            wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+            chmod +x linuxdeploy-x86_64.AppImage
+          fi
+          
+          if [ ! -f linuxdeploy-plugin-gtk.sh ]; then
+            echo "Downloading LinuxDeploy GTK plugin..."
+            wget -q https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+            chmod +x linuxdeploy-plugin-gtk.sh
+          fi
+          
+          # Create basic AppDir structure
           mkdir -p AppDir/usr/bin
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
-          mkdir -p AppDir/usr/share/metainfo
           
           # Copy binary
           cp target/release/reel AppDir/usr/bin/
           chmod +x AppDir/usr/bin/reel
           
-          # Copy desktop file
+          # Copy desktop file and icon
           cp data/dev.arsfeld.Reel.desktop AppDir/usr/share/applications/
-          
-          # Copy icon
           cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg AppDir/usr/share/icons/hicolor/scalable/apps/
           
-          # Create AppRun script
-          cat > AppDir/AppRun << 'EOF'
-          #!/bin/bash
-          SELF=$(readlink -f "$0")
-          HERE=''${SELF%/*}
-          export PATH="''${HERE}/usr/bin:''${PATH}"
-          export LD_LIBRARY_PATH="''${HERE}/usr/lib:''${LD_LIBRARY_PATH}"
-          export XDG_DATA_DIRS="''${HERE}/usr/share:''${XDG_DATA_DIRS}"
-          export GSETTINGS_SCHEMA_DIR="''${HERE}/usr/share/glib-2.0/schemas:''${GSETTINGS_SCHEMA_DIR}"
-          exec "''${HERE}/usr/bin/reel" "$@"
-          EOF
-          chmod +x AppDir/AppRun
+          echo "Running LinuxDeploy with GTK plugin..."
           
-          # Download appimagetool if not available
-          if ! command -v appimagetool &> /dev/null; then
-            if [ ! -f appimagetool-x86_64.AppImage ]; then
-              echo "Downloading appimagetool..."
-              wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-              chmod +x appimagetool-x86_64.AppImage
-            fi
-            APPIMAGETOOL="./appimagetool-x86_64.AppImage"
-          else
-            APPIMAGETOOL="appimagetool"
+          # Set environment variables for better dependency detection
+          export DEPLOY_GTK_VERSION=4
+          export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath buildInputs}:$LD_LIBRARY_PATH"
+          export GST_PLUGIN_SYSTEM_PATH_1_0="${pkgs.gst_all_1.gstreamer.out}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-ugly}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-libav}/lib/gstreamer-1.0"
+          
+          # Run LinuxDeploy with plugins
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable AppDir/usr/bin/reel \
+            --desktop-file AppDir/usr/share/applications/dev.arsfeld.Reel.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg \
+            --plugin gtk \
+            --output appimage
+          
+          # Rename the output AppImage to our convention
+          if ls Reel-*.AppImage 1> /dev/null 2>&1; then
+            mv Reel-*.AppImage reel-$VERSION-x86_64.AppImage
+          elif ls *.AppImage 1> /dev/null 2>&1; then
+            # Fallback: rename any AppImage found
+            for img in *.AppImage; do
+              if [[ "$img" != linuxdeploy-*.AppImage ]]; then
+                mv "$img" reel-$VERSION-x86_64.AppImage
+                break
+              fi
+            done
           fi
           
-          # Create the AppImage (handle FUSE requirement)
-          if ! ARCH=x86_64 "$APPIMAGETOOL" --no-appstream AppDir "Reel-$VERSION-x86_64.AppImage" 2>/dev/null; then
-            echo "Trying with appimage-extract method..."
-            "$APPIMAGETOOL" --appimage-extract >/dev/null 2>&1
-            if [ -d squashfs-root ]; then
-              ARCH=x86_64 ./squashfs-root/AppRun --no-appstream AppDir "Reel-$VERSION-x86_64.AppImage"
-              rm -rf squashfs-root
-            else
-              echo "Note: AppImage creation requires FUSE. Install fuse or fuse3 package."
-              echo "Alternatively, you can use the GitHub Actions workflow to build AppImages."
-              exit 1
-            fi
-          fi
-          
-          if [ -f "Reel-$VERSION-x86_64.AppImage" ]; then
-            echo "✓ AppImage built: Reel-$VERSION-x86_64.AppImage"
+          APPIMAGE_FILE=$(find . -maxdepth 1 -name "reel-*.AppImage" -type f | head -n1)
+          if [ -n "$APPIMAGE_FILE" ]; then
+            echo "✓ AppImage built: $APPIMAGE_FILE"
             echo ""
             echo "AppImage info:"
-            file "Reel-$VERSION-x86_64.AppImage"
-            ls -lh "Reel-$VERSION-x86_64.AppImage"
+            file "$APPIMAGE_FILE"
+            ls -lh "$APPIMAGE_FILE"
+            echo ""
+            echo "Testing AppImage startup..."
+            if timeout 10 "$APPIMAGE_FILE" --version 2>/dev/null | head -5; then
+              echo "✓ AppImage starts successfully"
+            else
+              echo "⚠ AppImage may have startup issues (or --version not implemented)"
+            fi
           else
             echo "✗ Failed to build AppImage"
+            echo "Available files:"
+            ls -la *.AppImage 2>/dev/null || echo "No AppImage files found"
             exit 1
           fi
         '';
@@ -404,6 +417,10 @@
           # Common package testing tools
           file
           wget
+          
+          # AppImage building tools
+          python3
+          python3Packages.pip
         ] ++ lib.optionals pkgs.stdenv.isLinux [
           # Linux-specific tools
           appimage-run
