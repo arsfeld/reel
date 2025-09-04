@@ -211,93 +211,67 @@
         '';
 
         buildAppImage = pkgs.writeShellScriptBin "build-appimage" ''
-          echo "Building AppImage with LinuxDeploy..."
+          echo "Building AppImage using Docker (Ubuntu environment)..."
           
-          # Ensure we have a release build
-          cargo build --release
+          # Build the Docker image that matches the GitHub Actions environment
+          ${pkgs.docker}/bin/docker build -t reel-appimage-builder -f- . <<'DOCKERFILE'
+          FROM ubuntu:latest
           
-          VERSION=$(grep '^version' Cargo.toml | cut -d'"' -f2)
-          export VERSION
+          # Install system dependencies (matching .github/workflows/release.yml)
+          RUN apt-get update && apt-get install -y \
+              libgtk-4-dev \
+              libadwaita-1-dev \
+              libgstreamer1.0-dev \
+              libgstreamer-plugins-base1.0-dev \
+              libgstreamer-plugins-bad1.0-dev \
+              gstreamer1.0-plugins-base \
+              gstreamer1.0-plugins-good \
+              gstreamer1.0-plugins-bad \
+              gstreamer1.0-plugins-ugly \
+              gstreamer1.0-libav \
+              libmpv-dev \
+              libsqlite3-dev \
+              pkg-config \
+              libssl-dev \
+              libdbus-1-dev \
+              blueprint-compiler \
+              rpm \
+              file \
+              curl \
+              build-essential \
+              libfuse2 \
+              desktop-file-utils \
+              zsync \
+              wget \
+              ca-certificates \
+              patchelf
           
-          # Clean up previous builds
-          rm -rf AppDir
-          rm -f *.AppImage
-          rm -f linuxdeploy-*.AppImage
-          rm -f linuxdeploy-plugin-*.sh
+          # Install Rust
+          RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          ENV PATH="/root/.cargo/bin:''${PATH}"
           
-          # Download LinuxDeploy and GTK plugin if not available
-          if [ ! -f linuxdeploy-x86_64.AppImage ]; then
-            echo "Downloading LinuxDeploy..."
-            wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-            chmod +x linuxdeploy-x86_64.AppImage
-          fi
+          WORKDIR /workspace
+          DOCKERFILE
           
-          if [ ! -f linuxdeploy-plugin-gtk.sh ]; then
-            echo "Downloading LinuxDeploy GTK plugin..."
-            wget -q https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
-            chmod +x linuxdeploy-plugin-gtk.sh
-          fi
-          
-          # Create basic AppDir structure
-          mkdir -p AppDir/usr/bin
-          mkdir -p AppDir/usr/share/applications
-          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
-          
-          # Copy binary
-          cp target/release/reel AppDir/usr/bin/
-          chmod +x AppDir/usr/bin/reel
-          
-          # Copy desktop file and icon
-          cp data/dev.arsfeld.Reel.desktop AppDir/usr/share/applications/
-          cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg AppDir/usr/share/icons/hicolor/scalable/apps/
-          
-          echo "Running LinuxDeploy with GTK plugin..."
-          
-          # Set environment variables for better dependency detection
-          export DEPLOY_GTK_VERSION=4
-          export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath buildInputs}:$LD_LIBRARY_PATH"
-          export GST_PLUGIN_SYSTEM_PATH_1_0="${pkgs.gst_all_1.gstreamer.out}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-ugly}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-libav}/lib/gstreamer-1.0"
-          
-          # Run LinuxDeploy with plugins
-          ./linuxdeploy-x86_64.AppImage \
-            --appdir AppDir \
-            --executable AppDir/usr/bin/reel \
-            --desktop-file AppDir/usr/share/applications/dev.arsfeld.Reel.desktop \
-            --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg \
-            --plugin gtk \
-            --output appimage
-          
-          # Rename the output AppImage to our convention
-          if ls Reel-*.AppImage 1> /dev/null 2>&1; then
-            mv Reel-*.AppImage reel-$VERSION-x86_64.AppImage
-          elif ls *.AppImage 1> /dev/null 2>&1; then
-            # Fallback: rename any AppImage found
-            for img in *.AppImage; do
-              if [[ "$img" != linuxdeploy-*.AppImage ]]; then
-                mv "$img" reel-$VERSION-x86_64.AppImage
-                break
-              fi
-            done
-          fi
+          # Run the build inside the Docker container (builds release binary + AppImage)
+          ${pkgs.docker}/bin/docker run --rm -v "$(pwd):/workspace" reel-appimage-builder bash -c '
+            echo "=== Building release binary with Ubuntu dependencies ==="
+            cargo build --release
+            strip target/release/reel
+            echo "✓ Release binary built successfully"
+            echo ""
+            
+            # Now build the AppImage
+            ./build-appimage.sh
+          '
           
           APPIMAGE_FILE=$(find . -maxdepth 1 -name "reel-*.AppImage" -type f | head -n1)
           if [ -n "$APPIMAGE_FILE" ]; then
-            echo "✓ AppImage built: $APPIMAGE_FILE"
-            echo ""
-            echo "AppImage info:"
-            file "$APPIMAGE_FILE"
-            ls -lh "$APPIMAGE_FILE"
-            echo ""
-            echo "Testing AppImage startup..."
-            if timeout 10 "$APPIMAGE_FILE" --version 2>/dev/null | head -5; then
-              echo "✓ AppImage starts successfully"
-            else
-              echo "⚠ AppImage may have startup issues (or --version not implemented)"
-            fi
+            echo "✓ AppImage built successfully: $APPIMAGE_FILE"
+            echo "  Size: $(du -h "$APPIMAGE_FILE" | cut -f1)"
+            echo "  File type: $(file "$APPIMAGE_FILE")"
           else
-            echo "✗ Failed to build AppImage"
-            echo "Available files:"
-            ls -la *.AppImage 2>/dev/null || echo "No AppImage files found"
+            echo "✗ No AppImage found in current directory"
             exit 1
           fi
         '';
@@ -431,6 +405,7 @@
           dpkg
           rpm
           fuse
+          docker
         ] ++ lib.optionals pkgs.stdenv.isDarwin [
           # macOS-specific debugging tools
           lldb
