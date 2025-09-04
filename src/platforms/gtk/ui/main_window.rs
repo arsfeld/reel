@@ -698,7 +698,7 @@ impl ReelMainWindow {
             .application_name("Reel")
             .application_icon("dev.arsfeld.Reel")
             .developer_name("Alexandre Rosenfeld")
-            .version("0.1.0")
+            .version(env!("CARGO_PKG_VERSION"))
             .license_type(gtk4::License::Gpl30)
             .website("https://github.com/arsfeld/reel")
             .issue_url("https://github.com/arsfeld/reel/issues")
