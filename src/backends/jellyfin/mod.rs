@@ -288,6 +288,22 @@ impl JellyfinBackend {
         let user_id = self.user_id.read().await.clone()?;
         Some((api_key, user_id))
     }
+
+    /// Extract the actual Jellyfin item ID from a composite media ID
+    /// Format: "backend_id:library_id:type:item_id" or variations
+    fn extract_jellyfin_item_id(&self, media_id: &str) -> String {
+        if media_id.contains(':') {
+            // Split and get the last part which should be the item ID
+            media_id
+                .split(':')
+                .next_back()
+                .unwrap_or(media_id)
+                .to_string()
+        } else {
+            // If no separator, assume it's already just the item ID
+            media_id.to_string()
+        }
+    }
 }
 
 #[async_trait]
@@ -493,10 +509,20 @@ impl MediaBackend for JellyfinBackend {
 
     async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo> {
         let api = self.ensure_api_initialized().await?;
+        let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
 
-        api.report_playback_start(media_id).await.ok();
+        tracing::info!(
+            "Extracted Jellyfin item ID: {} from media_id: {}",
+            jellyfin_item_id,
+            media_id
+        );
 
-        api.get_stream_url(media_id).await
+        let stream_info = api.get_stream_url(&jellyfin_item_id).await?;
+
+        // Report playback start after successfully getting stream info
+        api.report_playback_start(&jellyfin_item_id).await.ok();
+
+        Ok(stream_info)
     }
 
     async fn update_progress(
@@ -506,11 +532,14 @@ impl MediaBackend for JellyfinBackend {
         duration: Duration,
     ) -> Result<()> {
         let api = self.ensure_api_initialized().await?;
+        let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
 
         if position >= duration * 9 / 10 {
-            api.report_playback_stopped(media_id, position).await?;
+            api.report_playback_stopped(&jellyfin_item_id, position)
+                .await?;
         } else {
-            api.update_playback_progress(media_id, position).await?;
+            api.update_playback_progress(&jellyfin_item_id, position)
+                .await?;
         }
 
         Ok(())
@@ -518,18 +547,21 @@ impl MediaBackend for JellyfinBackend {
 
     async fn mark_watched(&self, media_id: &str) -> Result<()> {
         let api = self.ensure_api_initialized().await?;
-        api.mark_as_watched(media_id).await
+        let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
+        api.mark_as_watched(&jellyfin_item_id).await
     }
 
     async fn mark_unwatched(&self, media_id: &str) -> Result<()> {
         let api = self.ensure_api_initialized().await?;
-        api.mark_as_unwatched(media_id).await
+        let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
+        api.mark_as_unwatched(&jellyfin_item_id).await
     }
 
     async fn get_watch_status(&self, media_id: &str) -> Result<WatchStatus> {
         let api = self.ensure_api_initialized().await?;
+        let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
 
-        api.get_watch_status(media_id).await
+        api.get_watch_status(&jellyfin_item_id).await
     }
 
     async fn search(&self, query: &str) -> Result<SearchResults> {
@@ -589,7 +621,8 @@ impl MediaBackend for JellyfinBackend {
     )> {
         let api = self.ensure_api_initialized().await?;
 
-        if let Ok(segments) = api.get_media_segments(media_id).await {
+        let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
+        if let Ok(segments) = api.get_media_segments(&jellyfin_item_id).await {
             let mut intro = None;
             let mut credits = None;
 
