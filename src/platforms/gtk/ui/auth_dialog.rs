@@ -1,22 +1,24 @@
-use gtk4::{gio, glib, glib::clone, prelude::*, subclass::prelude::*};
+use gtk4::{glib, glib::clone, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::backends::plex::{PlexAuth, PlexPin};
+use crate::core::viewmodels::authentication_view_model::{
+    AuthenticationError, AuthenticationState, BackendAuthProgress, JellyfinAuthProgress,
+    PlexAuthProgress,
+};
+use crate::core::viewmodels::{AuthenticationViewModel, ViewModel};
 use crate::state::AppState;
-use tokio::sync::oneshot;
 
-// Re-export BackendType for external use
 pub use imp::BackendType;
 
 mod imp {
     use super::*;
     use gtk4::CompositeTemplate;
 
-    #[derive(Debug, Default, CompositeTemplate)]
+    #[derive(Default, CompositeTemplate)]
     #[template(resource = "/dev/arsfeld/Reel/auth_dialog.ui")]
     pub struct ReelAuthDialog {
         #[template_child]
@@ -25,7 +27,8 @@ mod imp {
         pub save_button: TemplateChild<gtk4::Button>,
         #[template_child]
         pub view_stack: TemplateChild<adw::ViewStack>,
-        // Plex automatic auth elements
+
+        // Plex elements
         #[template_child]
         pub pin_status_page: TemplateChild<gtk4::Box>,
         #[template_child]
@@ -42,14 +45,16 @@ mod imp {
         pub retry_button: TemplateChild<gtk4::Button>,
         #[template_child]
         pub open_link_button: TemplateChild<gtk4::Button>,
-        // Plex manual auth elements
+
+        // Plex manual elements
         #[template_child]
         pub server_url_entry: TemplateChild<adw::EntryRow>,
         #[template_child]
         pub token_entry: TemplateChild<adw::PasswordEntryRow>,
         #[template_child]
         pub manual_connect_button: TemplateChild<gtk4::Button>,
-        // Jellyfin UI elements
+
+        // Jellyfin elements
         #[template_child]
         pub jellyfin_url_entry: TemplateChild<adw::EntryRow>,
         #[template_child]
@@ -67,11 +72,10 @@ mod imp {
         #[template_child]
         pub jellyfin_retry_button: TemplateChild<gtk4::Button>,
 
+        // Reactive state
         pub state: RefCell<Option<Arc<AppState>>>,
-        pub auth_handle: RefCell<Option<glib::JoinHandle<()>>>,
-        pub current_pin: RefCell<Option<PlexPin>>,
+        pub auth_view_model: RefCell<Option<Arc<AuthenticationViewModel>>>,
         pub backend_type: RefCell<BackendType>,
-        pub cancel_tx: RefCell<Option<oneshot::Sender<()>>>,
     }
 
     #[derive(Debug, Clone, Copy, Default)]
@@ -99,10 +103,27 @@ mod imp {
     impl ObjectImpl for ReelAuthDialog {
         fn constructed(&self) {
             self.parent_constructed();
-
             let obj = self.obj();
 
-            // Connect button signals manually instead of using template callbacks
+            // Setup button connections
+            self.setup_button_handlers(&obj);
+            self.setup_entry_handlers(&obj);
+        }
+
+        fn dispose(&self) {
+            // Cancel any ongoing authentication when dialog is disposed
+            if let Some(vm) = self.auth_view_model.borrow().as_ref() {
+                let vm_clone = vm.clone();
+                glib::spawn_future_local(async move {
+                    let _ = vm_clone.cancel_authentication().await;
+                });
+            }
+        }
+    }
+
+    impl ReelAuthDialog {
+        fn setup_button_handlers(&self, obj: &super::ReelAuthDialog) {
+            // Cancel button
             self.cancel_button.connect_clicked(clone!(
                 #[weak]
                 obj,
@@ -112,129 +133,66 @@ mod imp {
                 }
             ));
 
+            // Open Plex link button
             self.open_link_button.connect_clicked(|_| {
                 info!("Opening plex.tv/link");
-                if let Err(e) = gio::AppInfo::launch_default_for_uri(
+                if let Err(e) = gtk4::gio::AppInfo::launch_default_for_uri(
                     "https://plex.tv/link",
-                    None::<&gio::AppLaunchContext>,
+                    None::<&gtk4::gio::AppLaunchContext>,
                 ) {
                     error!("Failed to open browser: {}", e);
                 }
             });
 
+            // Retry buttons
             self.retry_button.connect_clicked(clone!(
                 #[weak]
                 obj,
                 move |_| {
-                    info!("Retrying authentication");
-                    let imp = obj.imp();
-                    imp.auth_error.set_visible(false);
-                    imp.pin_status_page.set_visible(true);
-                    obj.start_auth();
+                    obj.retry_authentication();
                 }
             ));
-
-            self.save_button.connect_clicked(clone!(
-                #[weak]
-                obj,
-                move |_| {
-                    let imp = obj.imp();
-                    let backend_type = *imp.backend_type.borrow();
-                    match backend_type {
-                        BackendType::Plex => {
-                            let url = imp.server_url_entry.text();
-                            let token = imp.token_entry.text();
-
-                            if !url.is_empty() && !token.is_empty() {
-                                info!("Connecting to Plex server");
-                                obj.connect_manual(url.to_string(), token.to_string());
-                            }
-                        }
-                        BackendType::Jellyfin => {
-                            let url = imp.jellyfin_url_entry.text();
-                            let username = imp.jellyfin_username_entry.text();
-                            let password = imp.jellyfin_password_entry.text();
-
-                            if !url.is_empty() && !username.is_empty() && !password.is_empty() {
-                                info!("Connecting to Jellyfin server");
-                                obj.connect_jellyfin(
-                                    url.to_string(),
-                                    username.to_string(),
-                                    password.to_string(),
-                                );
-                            }
-                        }
-                    }
-                }
-            ));
-
-            self.manual_connect_button.connect_clicked(clone!(
-                #[weak]
-                obj,
-                move |_| {
-                    let imp = obj.imp();
-                    let url = imp.server_url_entry.text();
-                    let token = imp.token_entry.text();
-
-                    if !url.is_empty() && !token.is_empty() {
-                        info!("Manual connection to: {}", url);
-                        obj.connect_manual(url.to_string(), token.to_string());
-                    }
-                }
-            ));
-
-            // jellyfin_connect_button is hidden - using Save/Connect button in header instead
 
             self.jellyfin_retry_button.connect_clicked(clone!(
                 #[weak]
                 obj,
                 move |_| {
-                    let imp = obj.imp();
-                    imp.jellyfin_error.set_visible(false);
-                    imp.jellyfin_success.set_visible(false);
-                    imp.jellyfin_success_checkmark.set_visible(false);
-                    // Show the input fields again
-                    imp.jellyfin_url_entry.set_visible(true);
-                    imp.jellyfin_username_entry.set_visible(true);
-                    imp.jellyfin_password_entry.set_visible(true);
-                    // Re-enable them
-                    imp.jellyfin_url_entry.set_sensitive(true);
-                    imp.jellyfin_username_entry.set_sensitive(true);
-                    imp.jellyfin_password_entry.set_sensitive(true);
+                    obj.retry_authentication();
                 }
             ));
 
-            // Update save button and connect buttons based on current backend
+            // Save/Connect button
+            self.save_button.connect_clicked(clone!(
+                #[weak]
+                obj,
+                move |_| {
+                    obj.start_authentication();
+                }
+            ));
+
+            // Manual connect button
+            self.manual_connect_button.connect_clicked(clone!(
+                #[weak]
+                obj,
+                move |_| {
+                    obj.start_manual_connection();
+                }
+            ));
+        }
+
+        fn setup_entry_handlers(&self, obj: &super::ReelAuthDialog) {
             let update_buttons = clone!(
                 #[weak]
                 obj,
                 move || {
-                    let imp = obj.imp();
-                    let backend_type = *imp.backend_type.borrow();
-
-                    let save_enabled = match backend_type {
-                        BackendType::Plex => {
-                            let has_url = !imp.server_url_entry.text().is_empty();
-                            let has_token = !imp.token_entry.text().is_empty();
-                            imp.manual_connect_button
-                                .set_sensitive(has_url && has_token);
-                            has_url && has_token
-                        }
-                        BackendType::Jellyfin => {
-                            let has_url = !imp.jellyfin_url_entry.text().is_empty();
-                            let has_username = !imp.jellyfin_username_entry.text().is_empty();
-                            let has_password = !imp.jellyfin_password_entry.text().is_empty();
-                            has_url && has_username && has_password
-                        }
-                    };
-
-                    imp.save_button.set_sensitive(save_enabled);
+                    obj.update_button_states();
                 }
             );
 
-            // Set placeholder text for server URL
+            // Set placeholder text
             self.server_url_entry.set_text("http://192.168.1.100:32400");
 
+            // Connect entry change handlers
             self.server_url_entry.connect_changed(clone!(
                 #[strong]
                 update_buttons,
@@ -271,17 +229,6 @@ mod imp {
                 update_buttons();
             });
         }
-
-        fn dispose(&self) {
-            // Cancel any ongoing authentication
-            if let Some(handle) = self.auth_handle.take() {
-                handle.abort();
-            }
-            // Send cancellation signal to polling task
-            if let Some(cancel_tx) = self.cancel_tx.take() {
-                let _ = cancel_tx.send(());
-            }
-        }
     }
 
     impl WidgetImpl for ReelAuthDialog {}
@@ -297,7 +244,29 @@ glib::wrapper! {
 impl ReelAuthDialog {
     pub fn new(state: Arc<AppState>) -> Self {
         let dialog: Self = glib::Object::builder().build();
-        dialog.imp().state.replace(Some(state));
+
+        // Create AuthenticationViewModel
+        let auth_manager = state.get_source_coordinator().get_auth_manager().clone();
+        let auth_vm = Arc::new(AuthenticationViewModel::new(
+            auth_manager,
+            state.data_service.clone(),
+        ));
+
+        dialog.imp().state.replace(Some(state.clone()));
+        dialog.imp().auth_view_model.replace(Some(auth_vm.clone()));
+
+        // Initialize ViewModel with EventBus
+        glib::spawn_future_local({
+            let vm = auth_vm.clone();
+            let event_bus = state.event_bus.clone();
+            async move {
+                vm.initialize(event_bus).await;
+            }
+        });
+
+        // Setup reactive bindings
+        dialog.setup_reactive_bindings(auth_vm);
+
         dialog
     }
 
@@ -309,7 +278,6 @@ impl ReelAuthDialog {
         match backend_type {
             BackendType::Plex => {
                 self.set_title("Connect to Plex");
-                // Show Plex tabs, hide Jellyfin
                 let stack = &*imp.view_stack;
                 if let Some(child) = stack.child_by_name("automatic") {
                     let page = stack.page(&child);
@@ -327,7 +295,6 @@ impl ReelAuthDialog {
             }
             BackendType::Jellyfin => {
                 self.set_title("Connect to Jellyfin");
-                // Hide Plex tabs, show Jellyfin
                 let stack = &*imp.view_stack;
                 if let Some(child) = stack.child_by_name("automatic") {
                     let page = stack.page(&child);
@@ -344,511 +311,420 @@ impl ReelAuthDialog {
                 stack.set_visible_child_name("jellyfin");
             }
         }
+
+        self.update_button_states();
     }
 
-    pub fn start_auth(&self) {
-        info!("Starting Plex authentication");
+    fn setup_reactive_bindings(&self, auth_vm: Arc<AuthenticationViewModel>) {
+        let weak_self = self.downgrade();
 
-        let imp = self.imp();
+        // Subscribe to authentication state changes
+        {
+            let weak_self = weak_self.clone();
+            let mut state_subscriber = auth_vm.authentication_state().subscribe();
 
-        // Cancel any existing auth
-        if let Some(handle) = imp.auth_handle.take() {
-            handle.abort();
-        }
-        if let Some(cancel_tx) = imp.cancel_tx.take() {
-            let _ = cancel_tx.send(());
-        }
-
-        // Show progress
-        imp.auth_progress.set_visible(true);
-        imp.auth_progress.pulse();
-
-        // Start pulsing animation
-        let progress = imp.auth_progress.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-            progress.pulse();
-            glib::ControlFlow::Continue
-        });
-
-        // Start authentication flow
-        let dialog_weak = self.downgrade();
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-
-        // Spawn Tokio task for async operations
-        tokio::spawn(async move {
-            // Get a PIN from Plex
-            match PlexAuth::get_pin().await {
-                Ok(pin) => {
-                    let _ = tx.send(Ok(pin)).await;
-                }
-                Err(e) => {
-                    let _ = tx.send(Err(e.to_string())).await;
-                }
-            }
-        });
-
-        let dialog_weak2 = self.downgrade();
-        let handle = glib::spawn_future_local(async move {
-            if let Some(result) = rx.recv().await
-                && let Some(dialog) = dialog_weak2.upgrade()
-            {
-                match result {
-                    Ok(pin) => {
-                        dialog.start_auth_with_pin(pin).await;
-                    }
-                    Err(e) => {
-                        dialog.on_auth_error(e);
-                    }
-                }
-            }
-        });
-
-        imp.auth_handle.replace(Some(handle));
-    }
-
-    async fn start_auth_with_pin(&self, pin: PlexPin) {
-        // Display the PIN to the user
-        let imp = self.imp();
-        imp.pin_label.set_text(&pin.code);
-        imp.current_pin.replace(Some(pin.clone()));
-        imp.pin_status_page.set_visible(true);
-        imp.auth_status.set_visible(false);
-        imp.success_checkmark.set_visible(false);
-        imp.auth_error.set_visible(false);
-
-        // Update progress to show we're waiting for authorization
-        imp.auth_progress.set_visible(true);
-
-        // Poll for the auth token in Tokio runtime
-        let pin_id = pin.id.clone();
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-
-        // Create cancellation channel
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        imp.cancel_tx.replace(Some(cancel_tx));
-
-        // Clone for progress updates
-        let dialog_weak_progress = self.downgrade();
-
-        // Start a timer to show elapsed time
-        let start_time = std::time::Instant::now();
-        glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
-            if let Some(dialog) = dialog_weak_progress.upgrade() {
-                let imp = dialog.imp();
-                if imp.pin_status_page.is_visible() {
-                    let elapsed = start_time.elapsed().as_secs();
-                    if elapsed > 10 {
-                        // After 10 seconds, show a hint
-                        imp.auth_progress.set_text(Some(
-                            "Waiting for authorization... Make sure to visit plex.tv/link",
-                        ));
-                    }
-                    return glib::ControlFlow::Continue;
-                }
-            }
-            glib::ControlFlow::Break
-        });
-
-        tokio::spawn(async move {
-            match PlexAuth::poll_for_token(&pin_id, Some(cancel_rx)).await {
-                Ok(token) => {
-                    let _ = tx.send(Ok(token)).await;
-                }
-                Err(e) => {
-                    let _ = tx.send(Err(e.to_string())).await;
-                }
-            }
-        });
-
-        let dialog_weak = self.downgrade();
-        glib::spawn_future_local(async move {
-            if let Some(result) = rx.recv().await
-                && let Some(dialog) = dialog_weak.upgrade()
-            {
-                match result {
-                    Ok(token) => {
-                        dialog.on_auth_success(token);
-                    }
-                    Err(e) => {
-                        dialog.on_auth_error(e);
-                    }
-                }
-            }
-        });
-    }
-
-    fn on_auth_success(&self, token: String) {
-        info!("Authentication successful with token: {}...", &token[..8]);
-
-        let imp = self.imp();
-        imp.auth_progress.set_visible(false);
-        imp.pin_status_page.set_visible(false);
-        imp.auth_status.set_visible(true);
-        imp.auth_status.set_icon_name(Some("emblem-ok-symbolic"));
-        imp.auth_status.set_title("Authentication Successful!");
-        imp.auth_status
-            .set_description(Some("Discovering your Plex servers..."));
-
-        // Store token and start server discovery
-        if let Some(state) = imp.state.borrow().as_ref() {
-            let state_clone = state.clone();
-            let token_clone = token.clone();
-            let dialog_weak = self.downgrade();
-            let current_pin = imp.current_pin.borrow().clone();
-
-            // Clone weak reference for status updates
-            let dialog_weak_status = self.downgrade();
-
-            // Use Tokio for async operations
-            let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-            let token_for_task = token_clone.clone();
-
-            tokio::spawn(async move {
-                // Discover servers and authenticate
-                match PlexAuth::discover_servers(&token_for_task).await {
-                    Ok(servers) => {
-                        if !servers.is_empty() {
-                            let server = servers.into_iter().next().unwrap();
-                            let _ = tx.send(Some((token_for_task, server))).await;
-                        } else {
-                            error!("No Plex servers found");
-                            let _ = tx.send(None).await;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to discover servers: {}", e);
-                        let _ = tx.send(None).await;
+            glib::spawn_future_local(async move {
+                while state_subscriber.wait_for_change().await {
+                    if let Some(dialog) = weak_self.upgrade()
+                        && let Some(vm) = &*dialog.imp().auth_view_model.borrow()
+                    {
+                        let state = vm.authentication_state().get().await;
+                        dialog.handle_authentication_state_change(state).await;
                     }
                 }
             });
+        }
+
+        // Subscribe to progress changes
+        {
+            let weak_self = weak_self.clone();
+            let mut progress_subscriber = auth_vm.progress().subscribe();
 
             glib::spawn_future_local(async move {
-                if let Some(Some((token, server))) = rx.recv().await {
-                    // Update status to show we're adding the account
-                    if let Some(dialog) = dialog_weak_status.upgrade() {
-                        let imp = dialog.imp();
-                        imp.auth_status
-                            .set_description(Some("Adding Plex account and servers..."));
+                while progress_subscriber.wait_for_change().await {
+                    if let Some(dialog) = weak_self.upgrade()
+                        && let Some(vm) = &*dialog.imp().auth_view_model.borrow()
+                    {
+                        let progress = vm.progress().get().await;
+                        dialog.handle_progress_change(progress).await;
                     }
+                }
+            });
+        }
 
-                    // Backend IDs are managed by SourceCoordinator
+        // Subscribe to error changes
+        {
+            let weak_self = weak_self.clone();
+            let mut error_subscriber = auth_vm.error().subscribe();
 
-                    // Use SourceCoordinator to add Plex account
-                    let source_coordinator = state_clone.get_source_coordinator();
-                    match source_coordinator.add_plex_account(&token).await {
-                        Ok(sources) => {
-                            info!(
-                                "Successfully added Plex account with {} sources",
-                                sources.len()
-                            );
-
-                            // Update status to show we're getting user info
-                            if let Some(dialog) = dialog_weak_status.upgrade() {
-                                let imp = dialog.imp();
-                                imp.auth_status
-                                    .set_description(Some("Loading user information..."));
-                            }
-
-                            // Get user info
-                            if let Ok(plex_user) = PlexAuth::get_user(&token).await {
-                                let user = crate::models::User {
-                                    id: plex_user.id.to_string(),
-                                    username: plex_user.username,
-                                    email: Some(plex_user.email),
-                                    avatar_url: plex_user.thumb,
-                                };
-                                state_clone.set_user(user.clone()).await;
-                            }
-
-                            // Show completion status briefly with success checkmark
-                            if let Some(dialog) = dialog_weak_status.upgrade() {
-                                let imp = dialog.imp();
-                                imp.auth_status.set_icon_name(Some("emblem-ok-symbolic"));
-                                imp.auth_status.set_title("Setup Complete!");
-                                imp.auth_status.set_description(Some(&format!(
-                                    "Connected to {} Plex server{}. Syncing libraries in background...",
-                                    sources.len(),
-                                    if sources.len() > 1 { "s" } else { "" }
-                                )));
-                                // Show the success checkmark
-                                imp.success_checkmark.set_visible(true);
-                                // Add a green success color class
-                                imp.success_checkmark.add_css_class("success");
-                            }
-
-                            // Wait briefly to show completion message
-                            glib::timeout_future(std::time::Duration::from_millis(1500)).await;
-
-                            // Trigger sync in background after dialog closes
-                            info!("Triggering background sync for newly added Plex sources");
-                            let state_for_sync = state_clone.clone();
-                            let sources_clone = sources.clone();
-                            tokio::spawn(async move {
-                                let source_coordinator = state_for_sync.get_source_coordinator();
-                                for source in &sources_clone {
-                                    info!("Syncing source: {}", source.name);
-                                    if let Err(e) = source_coordinator.sync_source(&source.id).await
-                                    {
-                                        error!("Failed to sync source {}: {}", source.name, e);
-                                    }
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to add Plex account through SourceCoordinator: {}",
-                                e
-                            );
-
-                            // Show error in dialog
-                            if let Some(dialog) = dialog_weak_status.upgrade() {
-                                let imp = dialog.imp();
-                                imp.auth_status.set_visible(false);
-                                imp.auth_error.set_visible(true);
-                                imp.auth_error.set_icon_name(Some("dialog-error-symbolic"));
-                                imp.auth_error.set_title("Connection Failed");
-                                imp.auth_error.set_description(Some(&e.to_string()));
-                                imp.retry_button.set_visible(true);
-                            }
-
-                            // Don't close on error - let user retry
-                            return;
-                        }
+            glib::spawn_future_local(async move {
+                while error_subscriber.wait_for_change().await {
+                    if let Some(dialog) = weak_self.upgrade()
+                        && let Some(vm) = &*dialog.imp().auth_view_model.borrow()
+                    {
+                        let error = vm.error().get().await;
+                        dialog.handle_error_change(error).await;
                     }
-                } else {
-                    // No token/server pair received
-                    error!("Authentication failed: no token/server received");
+                }
+            });
+        }
 
-                    if let Some(dialog) = dialog_weak_status.upgrade() {
-                        let imp = dialog.imp();
-                        imp.auth_status.set_visible(false);
+        // Subscribe to PIN changes
+        {
+            let weak_self = weak_self.clone();
+            let mut pin_subscriber = auth_vm.current_pin().subscribe();
+
+            glib::spawn_future_local(async move {
+                while pin_subscriber.wait_for_change().await {
+                    if let Some(dialog) = weak_self.upgrade()
+                        && let Some(vm) = &*dialog.imp().auth_view_model.borrow()
+                    {
+                        let pin = vm.current_pin().get().await;
+                        dialog.handle_pin_change(pin).await;
+                    }
+                }
+            });
+        }
+
+        // Subscribe to cancellable state
+        {
+            let weak_self = weak_self.clone();
+            let mut cancellable_subscriber = auth_vm.is_cancellable().subscribe();
+
+            glib::spawn_future_local(async move {
+                while cancellable_subscriber.wait_for_change().await {
+                    if let Some(dialog) = weak_self.upgrade()
+                        && let Some(vm) = &*dialog.imp().auth_view_model.borrow()
+                    {
+                        let is_cancellable = vm.is_cancellable().get().await;
+                        dialog.handle_cancellable_change(is_cancellable).await;
+                    }
+                }
+            });
+        }
+    }
+
+    async fn handle_authentication_state_change(&self, state: AuthenticationState) {
+        let imp = self.imp();
+        info!("Authentication state changed to: {:?}", state);
+
+        match state {
+            AuthenticationState::Idle => {
+                // Reset UI to initial state
+                imp.auth_progress.set_visible(false);
+                imp.pin_status_page.set_visible(false);
+                imp.auth_status.set_visible(false);
+                imp.auth_error.set_visible(false);
+                imp.jellyfin_progress.set_visible(false);
+                imp.jellyfin_success.set_visible(false);
+                imp.jellyfin_error.set_visible(false);
+            }
+
+            AuthenticationState::RequestingPin => {
+                imp.auth_progress.set_visible(true);
+                imp.auth_progress.pulse();
+                imp.auth_status.set_visible(false);
+                imp.auth_error.set_visible(false);
+            }
+
+            AuthenticationState::WaitingForUser {
+                pin,
+                elapsed_seconds,
+            } => {
+                imp.pin_label.set_text(&pin);
+                imp.pin_status_page.set_visible(true);
+                imp.auth_progress.set_visible(true);
+
+                if elapsed_seconds > 10 {
+                    imp.auth_progress.set_text(Some(
+                        "Waiting for authorization... Make sure to visit plex.tv/link",
+                    ));
+                }
+            }
+
+            AuthenticationState::ValidatingToken => {
+                // Keep the PIN visible during validation, just show progress
+                imp.auth_progress.set_visible(true);
+                imp.auth_progress.pulse();
+                imp.auth_progress.set_text(Some("Validating token..."));
+                // Don't hide the pin_status_page - user should still see the PIN
+            }
+
+            AuthenticationState::DiscoveringServers { found } => {
+                imp.auth_status.set_title("Discovering Servers");
+                imp.auth_status
+                    .set_description(Some(&format!("Found {} servers", found)));
+            }
+
+            AuthenticationState::TestingConnections { current, total } => {
+                imp.auth_status.set_title("Testing Connections");
+                imp.auth_status.set_description(Some(&format!(
+                    "Testing connection {} of {}",
+                    current + 1,
+                    total
+                )));
+            }
+
+            AuthenticationState::CreatingAccount => {
+                imp.auth_status.set_title("Creating Account");
+                imp.auth_status
+                    .set_description(Some("Setting up your account and servers..."));
+            }
+
+            AuthenticationState::LoadingUserInfo => {
+                imp.auth_status.set_title("Loading User Information");
+                imp.auth_status
+                    .set_description(Some("Getting your profile details..."));
+            }
+
+            AuthenticationState::StartingSyncForSources { sources } => {
+                imp.auth_status.set_title("Starting Sync");
+                imp.auth_status.set_description(Some(&format!(
+                    "Starting background sync for {} source{}",
+                    sources.len(),
+                    if sources.len() != 1 { "s" } else { "" }
+                )));
+            }
+
+            AuthenticationState::Complete { sources, .. } => {
+                imp.auth_progress.set_visible(false);
+                imp.pin_status_page.set_visible(false);
+                imp.auth_status.set_visible(true);
+                imp.auth_status.set_icon_name(Some("emblem-ok-symbolic"));
+                imp.auth_status.set_title("Setup Complete!");
+                imp.auth_status.set_description(Some(&format!(
+                    "Connected to {} server{}. Syncing libraries in background...",
+                    sources.len(),
+                    if sources.len() > 1 { "s" } else { "" }
+                )));
+                imp.success_checkmark.set_visible(true);
+                imp.success_checkmark.add_css_class("success");
+
+                // Close dialog after brief delay
+                glib::timeout_future(std::time::Duration::from_millis(1500)).await;
+                self.close();
+            }
+
+            AuthenticationState::Error { error, can_retry } => {
+                imp.auth_progress.set_visible(false);
+                imp.pin_status_page.set_visible(false);
+                imp.auth_status.set_visible(false);
+
+                // Show appropriate error page
+                let backend_type = *imp.backend_type.borrow();
+                match backend_type {
+                    BackendType::Plex => {
                         imp.auth_error.set_visible(true);
-                        imp.auth_error.set_icon_name(Some("dialog-error-symbolic"));
-                        imp.auth_error.set_title("No Servers Found");
-                        imp.auth_error.set_description(Some(
-                            "Could not find any Plex servers associated with your account",
-                        ));
-                        imp.retry_button.set_visible(true);
+                        imp.auth_error.set_title("Authentication Failed");
+                        imp.auth_error.set_description(Some(&error));
+                        imp.retry_button.set_visible(can_retry);
                     }
-
-                    // Don't close on error
-                    return;
-                }
-
-                // Close dialog
-                if let Some(dialog) = dialog_weak.upgrade() {
-                    dialog.close();
-                }
-            });
-        }
-    }
-
-    fn on_auth_error(&self, error: String) {
-        error!("Authentication failed: {}", error);
-
-        let imp = self.imp();
-        imp.auth_progress.set_visible(false);
-        imp.pin_status_page.set_visible(false);
-        imp.auth_error.set_visible(true);
-        imp.auth_error.set_icon_name(Some("dialog-error-symbolic"));
-        imp.auth_error.set_title("Authentication Failed");
-        imp.auth_error.set_description(Some(&error));
-        imp.retry_button.set_visible(true);
-    }
-
-    fn connect_manual(&self, url: String, token: String) {
-        info!("Manual connection to Plex server not yet implemented");
-        // TODO: Implement manual server connection through SourceCoordinator
-        self.close();
-    }
-
-    async fn start_sync(&self) {
-        if let Some(state) = self.imp().state.borrow().as_ref() {
-            info!("Starting library sync");
-            let state_clone = state.clone();
-
-            // Run sync in Tokio runtime
-            let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-            tokio::spawn(async move {
-                let result = state_clone.sync_all_backends().await;
-                let _ = tx.send(result).await;
-            });
-
-            // Handle result in GTK context
-            if let Some(result) = rx.recv().await {
-                match result {
-                    Ok(results) => {
-                        info!("Sync completed for {} backends", results.len());
-                        for result in results {
-                            if result.success {
-                                info!("Backend synced successfully: {} items", result.items_synced);
-                            } else {
-                                error!("Backend sync failed: {:?}", result.errors);
-                            }
-                        }
+                    BackendType::Jellyfin => {
+                        imp.jellyfin_error.set_visible(true);
+                        imp.jellyfin_error.set_title("Authentication Failed");
+                        imp.jellyfin_error.set_description(Some(&error));
+                        imp.jellyfin_retry_button.set_visible(can_retry);
                     }
-                    Err(e) => error!("Failed to sync: {}", e),
                 }
             }
         }
     }
 
-    fn connect_jellyfin(&self, url: String, username: String, password: String) {
-        info!("Connecting to Jellyfin server: {}", url);
+    async fn handle_progress_change(&self, progress: Option<BackendAuthProgress>) {
+        if let Some(progress) = progress {
+            info!("Progress changed to: {:?}", progress);
 
+            match progress {
+                BackendAuthProgress::Plex(plex_progress) => {
+                    self.handle_plex_progress(plex_progress).await;
+                }
+                BackendAuthProgress::Jellyfin(jellyfin_progress) => {
+                    self.handle_jellyfin_progress(jellyfin_progress).await;
+                }
+            }
+        }
+    }
+
+    async fn handle_plex_progress(&self, progress: PlexAuthProgress) {
         let imp = self.imp();
 
-        // Show progress
-        imp.jellyfin_progress.set_visible(true);
-        imp.jellyfin_progress.pulse();
+        match progress {
+            PlexAuthProgress::RequestingPin => {
+                imp.auth_progress.pulse();
+            }
+            PlexAuthProgress::WaitingForUser {
+                elapsed_seconds, ..
+            } => {
+                if elapsed_seconds > 10 {
+                    imp.auth_progress.set_text(Some(
+                        "Waiting for authorization... Make sure to visit plex.tv/link",
+                    ));
+                }
+            }
+            PlexAuthProgress::DiscoveringServers { found } => {
+                imp.auth_status
+                    .set_description(Some(&format!("Found {} servers", found)));
+            }
+            PlexAuthProgress::TestingConnections { current, total } => {
+                imp.auth_status.set_description(Some(&format!(
+                    "Testing connection {} of {}",
+                    current + 1,
+                    total
+                )));
+            }
+            _ => {}
+        }
+    }
 
-        // Start pulsing animation
-        let progress = imp.jellyfin_progress.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-            progress.pulse();
-            glib::ControlFlow::Continue
-        });
+    async fn handle_jellyfin_progress(&self, progress: JellyfinAuthProgress) {
+        let imp = self.imp();
 
-        let state = imp.state.borrow().as_ref().map(|s| s.clone());
+        match progress {
+            JellyfinAuthProgress::ValidatingCredentials => {
+                imp.jellyfin_progress.set_visible(true);
+                imp.jellyfin_progress.pulse();
+            }
+            JellyfinAuthProgress::TestingConnection => {
+                // Progress already visible from ValidatingCredentials
+            }
+            JellyfinAuthProgress::CreatingAccount => {
+                // Progress continues
+            }
+            JellyfinAuthProgress::Complete { .. } => {
+                imp.jellyfin_progress.set_visible(false);
+                imp.jellyfin_success.set_visible(true);
+                imp.jellyfin_success.set_title("Setup Complete!");
+                imp.jellyfin_success_checkmark.set_visible(true);
+                imp.jellyfin_success_checkmark.add_css_class("success");
 
-        if let Some(state) = state {
-            let dialog_weak = self.downgrade();
+                // Hide input fields
+                imp.jellyfin_url_entry.set_visible(false);
+                imp.jellyfin_username_entry.set_visible(false);
+                imp.jellyfin_password_entry.set_visible(false);
+            }
+        }
+    }
+
+    async fn handle_error_change(&self, error: Option<AuthenticationError>) {
+        if let Some(error) = error {
+            info!("Authentication error: {:?}", error);
+            // Error handling is done in handle_authentication_state_change
+        }
+    }
+
+    async fn handle_pin_change(&self, pin: Option<String>) {
+        if let Some(pin) = pin {
+            self.imp().pin_label.set_text(&pin);
+        }
+    }
+
+    async fn handle_cancellable_change(&self, is_cancellable: bool) {
+        // Could enable/disable cancel button based on state
+        info!("Cancellable state: {}", is_cancellable);
+    }
+
+    pub fn start_authentication(&self) {
+        let backend_type = *self.imp().backend_type.borrow();
+
+        if let Some(vm) = &*self.imp().auth_view_model.borrow() {
+            let vm_clone = vm.clone();
+
+            match backend_type {
+                BackendType::Plex => {
+                    glib::spawn_future_local(async move {
+                        if let Err(e) = vm_clone.start_plex_authentication().await {
+                            error!("Failed to start Plex authentication: {}", e);
+                        }
+                    });
+                }
+                BackendType::Jellyfin => {
+                    // Get credentials from the form
+                    let imp = self.imp();
+                    let url = imp.jellyfin_url_entry.text().to_string();
+                    let username = imp.jellyfin_username_entry.text().to_string();
+                    let password = imp.jellyfin_password_entry.text().to_string();
+
+                    glib::spawn_future_local(async move {
+                        if !url.is_empty() && !username.is_empty() && !password.is_empty() {
+                            if let Err(e) = vm_clone
+                                .start_jellyfin_authentication(url, username, password)
+                                .await
+                            {
+                                error!("Failed to start Jellyfin authentication: {}", e);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    pub fn start_jellyfin_authentication_with_credentials(
+        &self,
+        url: String,
+        username: String,
+        password: String,
+    ) {
+        if let Some(vm) = &*self.imp().auth_view_model.borrow() {
+            let vm_clone = vm.clone();
 
             glib::spawn_future_local(async move {
-                // First create a temporary Jellyfin backend to authenticate and get credentials
-                let temp_backend = crate::backends::jellyfin::JellyfinBackend::new();
-
-                match temp_backend
-                    .authenticate_with_credentials(&url, &username, &password)
+                if let Err(e) = vm_clone
+                    .start_jellyfin_authentication(url, username, password)
                     .await
                 {
-                    Ok(()) => {
-                        info!("Successfully authenticated with Jellyfin, getting credentials");
-
-                        // Get the stored credentials from the backend
-                        let (access_token, user_id) = temp_backend
-                            .get_credentials()
-                            .await
-                            .unwrap_or_else(|| (String::new(), String::new()));
-
-                        if !access_token.is_empty() && !user_id.is_empty() {
-                            info!("Got credentials, adding through SourceCoordinator");
-
-                            // Use SourceCoordinator to add the Jellyfin source
-                            let source_coordinator = state.get_source_coordinator();
-                            info!("Calling add_jellyfin_source...");
-                            let result = source_coordinator
-                                .add_jellyfin_source(
-                                    &url,
-                                    &username,
-                                    &password,
-                                    &access_token,
-                                    &user_id,
-                                )
-                                .await;
-                            info!("add_jellyfin_source returned: {:?}", result.is_ok());
-
-                            match result {
-                                Ok(source) => {
-                                    info!("Successfully added Jellyfin source: {}", source.name);
-
-                                    // Show success status with checkmark
-                                    if let Some(dialog) = dialog_weak.upgrade() {
-                                        let imp = dialog.imp();
-                                        imp.jellyfin_progress.set_visible(false);
-                                        imp.jellyfin_url_entry.set_visible(false);
-                                        imp.jellyfin_username_entry.set_visible(false);
-                                        imp.jellyfin_password_entry.set_visible(false);
-                                        imp.jellyfin_success.set_visible(true);
-                                        imp.jellyfin_success.set_title("Connected Successfully!");
-                                        imp.jellyfin_success.set_description(Some(&format!(
-                                            "Connected to {}",
-                                            source.name
-                                        )));
-                                        // Show the success checkmark
-                                        imp.jellyfin_success_checkmark.set_visible(true);
-                                        imp.jellyfin_success_checkmark.add_css_class("success");
-
-                                        // Wait briefly to show success message
-                                        glib::timeout_future(std::time::Duration::from_millis(
-                                            1500,
-                                        ))
-                                        .await;
-
-                                        info!("Closing auth dialog");
-                                        dialog.close();
-                                    }
-
-                                    // No automatic backend switching or "active" backend setting
-                                    info!("Jellyfin source added: {}", source.id);
-
-                                    // Set the user
-                                    info!("Setting user");
-                                    let user = crate::models::User {
-                                        id: user_id,
-                                        username: username.clone(),
-                                        email: None,
-                                        avatar_url: None,
-                                    };
-                                    state.set_user(user).await;
-                                    info!("Jellyfin setup complete");
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "Failed to add Jellyfin source through SourceCoordinator: {}",
-                                        e
-                                    );
-
-                                    if let Some(dialog) = dialog_weak.upgrade() {
-                                        let imp = dialog.imp();
-                                        imp.jellyfin_progress.set_visible(false);
-                                        imp.jellyfin_error.set_visible(true);
-                                        imp.jellyfin_error.set_title("Connection Failed");
-                                        imp.jellyfin_error.set_description(Some(&format!("{}", e)));
-                                        imp.jellyfin_retry_button.set_visible(true);
-                                        // Hide the input fields and connect button when showing error
-                                        imp.jellyfin_url_entry.set_visible(false);
-                                        imp.jellyfin_username_entry.set_visible(false);
-                                        imp.jellyfin_password_entry.set_visible(false);
-                                    }
-                                }
-                            }
-                        } else {
-                            error!("Failed to get credentials from Jellyfin backend");
-
-                            if let Some(dialog) = dialog_weak.upgrade() {
-                                let imp = dialog.imp();
-                                imp.jellyfin_progress.set_visible(false);
-                                imp.jellyfin_error.set_visible(true);
-                                imp.jellyfin_error.set_title("Authentication Failed");
-                                imp.jellyfin_error
-                                    .set_description(Some("Could not retrieve access token"));
-                                imp.jellyfin_retry_button.set_visible(true);
-                                // Hide the input fields and connect button when showing error
-                                imp.jellyfin_url_entry.set_visible(false);
-                                imp.jellyfin_username_entry.set_visible(false);
-                                imp.jellyfin_password_entry.set_visible(false);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to authenticate with Jellyfin: {}", e);
-
-                        if let Some(dialog) = dialog_weak.upgrade() {
-                            let imp = dialog.imp();
-                            imp.jellyfin_progress.set_visible(false);
-                            imp.jellyfin_error.set_visible(true);
-                            imp.jellyfin_error.set_title("Authentication Failed");
-                            imp.jellyfin_error.set_description(Some(&format!("{}", e)));
-                            imp.jellyfin_retry_button.set_visible(true);
-                            // Hide the input fields and connect button when showing error
-                            imp.jellyfin_url_entry.set_visible(false);
-                            imp.jellyfin_username_entry.set_visible(false);
-                            imp.jellyfin_password_entry.set_visible(false);
-                        }
-                    }
+                    error!("Failed to start Jellyfin authentication: {}", e);
                 }
             });
+        }
+    }
+
+    pub fn start_manual_connection(&self) {
+        let imp = self.imp();
+        let url = imp.server_url_entry.text().to_string();
+        let token = imp.token_entry.text().to_string();
+
+        if !url.is_empty() && !token.is_empty() {
+            info!("Manual connection not yet implemented for reactive dialog");
+            // TODO: Implement manual connection through ViewModel
+            self.close();
+        }
+    }
+
+    pub fn retry_authentication(&self) {
+        if let Some(vm) = &*self.imp().auth_view_model.borrow() {
+            let vm_clone = vm.clone();
+
+            glib::spawn_future_local(async move {
+                if let Err(e) = vm_clone.retry_authentication().await {
+                    error!("Failed to retry authentication: {}", e);
+                }
+            });
+        }
+    }
+
+    fn update_button_states(&self) {
+        let imp = self.imp();
+        let backend_type = *imp.backend_type.borrow();
+
+        let save_enabled = match backend_type {
+            BackendType::Plex => true, // Always enabled for automatic auth
+            BackendType::Jellyfin => {
+                let has_url = !imp.jellyfin_url_entry.text().is_empty();
+                let has_username = !imp.jellyfin_username_entry.text().is_empty();
+                let has_password = !imp.jellyfin_password_entry.text().is_empty();
+                has_url && has_username && has_password
+            }
+        };
+
+        imp.save_button.set_sensitive(save_enabled);
+
+        // Update manual connect button for Plex
+        if matches!(backend_type, BackendType::Plex) {
+            let has_url = !imp.server_url_entry.text().is_empty();
+            let has_token = !imp.token_entry.text().is_empty();
+            imp.manual_connect_button
+                .set_sensitive(has_url && has_token);
         }
     }
 }

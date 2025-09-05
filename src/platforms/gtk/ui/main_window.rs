@@ -571,40 +571,13 @@ impl ReelMainWindow {
                     .collect();
 
                 if !libraries.is_empty() {
-                    backends_libraries.push((source.id.clone(), libraries));
+                    backends_libraries.push((source.id.clone(), source.name.clone(), libraries));
                 }
             }
 
             // Update the UI directly - no async needed
-            self.update_all_backends_libraries(backends_libraries);
+            self.update_all_backends_libraries_with_names(backends_libraries);
         }
-    }
-
-    pub async fn update_connection_status(&self, connected: bool) {
-        // Visibility is now managed by SidebarViewModel subscriptions
-        // This method can be removed once all callers are updated
-        tracing::info!(
-            "update_connection_status called with {} - this should be handled by SidebarViewModel",
-            connected
-        );
-    }
-
-    pub async fn update_user_display_with_backend(
-        &self,
-        user: Option<crate::models::User>,
-        backend: Arc<dyn crate::backends::traits::MediaBackend>,
-    ) {
-        // Status is now managed by SidebarViewModel - no manual updates needed
-        // This method can be removed once all callers are updated
-        tracing::info!(
-            "update_user_display_with_backend called - this should be handled by SidebarViewModel"
-        );
-    }
-
-    pub async fn update_user_display(&self, user: Option<crate::models::User>) {
-        // Status is now managed by SidebarViewModel - no manual updates needed
-        // This method can be removed once all callers are updated
-        tracing::info!("update_user_display called - this should be handled by SidebarViewModel");
     }
 
     pub fn show_auth_dialog(&self) {
@@ -618,7 +591,7 @@ impl ReelMainWindow {
         dialog.present(Some(self));
 
         // Start authentication automatically
-        dialog.start_auth();
+        dialog.start_authentication();
 
         // Set up a callback for when the dialog closes
         let window_weak = self.downgrade();
@@ -708,9 +681,9 @@ impl ReelMainWindow {
         about.present();
     }
 
-    pub fn update_all_backends_libraries(
+    pub fn update_all_backends_libraries_with_names(
         &self,
-        backends_libraries: Vec<(String, Vec<(crate::models::Library, usize)>)>,
+        backends_libraries: Vec<(String, String, Vec<(crate::models::Library, usize)>)>,
     ) {
         let imp = self.imp();
 
@@ -745,15 +718,13 @@ impl ReelMainWindow {
         let mut all_libraries = Vec::new();
 
         // Create a separate PreferencesGroup for each backend
-        for (backend_id, libraries) in backends_libraries.iter() {
+        for (backend_id, source_name, libraries) in backends_libraries.iter() {
             if libraries.is_empty() {
                 continue;
             }
 
             // Create a preferences group for this source
-            let source_group = adw::PreferencesGroup::builder()
-                .title(self.get_backend_display_name(backend_id))
-                .build();
+            let source_group = adw::PreferencesGroup::builder().title(source_name).build();
 
             // Add edit/refresh buttons in the header suffix
             let header_buttons = gtk4::Box::builder()
@@ -854,38 +825,6 @@ impl ReelMainWindow {
         // Show sources container if we have any backends
         imp.sources_container
             .set_visible(!backends_libraries.is_empty());
-    }
-
-    fn get_backend_display_name(&self, backend_id: &str) -> String {
-        // Get display name from cache or backend info
-        if let Some(state) = self.imp().state.borrow().as_ref() {
-            let state = state.clone();
-            let backend_id = backend_id.to_string();
-            let cache_key = format!("{}:server_name", backend_id);
-
-            // Try to get cached server name synchronously (this should be refactored to async)
-            // For now, just use the backend ID
-            if backend_id.starts_with("plex") {
-                "Plex Server".to_string()
-            } else if backend_id.starts_with("jellyfin") {
-                "Jellyfin Server".to_string()
-            } else if backend_id.starts_with("local") {
-                "Local Files".to_string()
-            } else {
-                backend_id.to_string()
-            }
-        } else {
-            backend_id.to_string()
-        }
-    }
-
-    pub fn show_sync_progress(&self, syncing: bool) {
-        // Sync progress is now managed by SidebarViewModel subscriptions
-        // This method can be removed once all callers are updated
-        tracing::info!(
-            "show_sync_progress called with {} - this should be handled by SidebarViewModel",
-            syncing
-        );
     }
 
     fn show_sources_page(&self) {
