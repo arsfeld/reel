@@ -61,6 +61,41 @@ impl HomeViewModel {
         }
     }
 
+    /// Create a friendly display name for a library title
+    fn create_friendly_library_name(library_title: &str, source_id: &str) -> String {
+        // Remove common prefixes that include source IDs
+        if library_title.starts_with(&format!("{}_", source_id)) {
+            // Remove "source_jellyfin_xxxxx_" or similar prefixes
+            if let Some(clean_title) = library_title.strip_prefix(&format!("{}_", source_id)) {
+                return clean_title.to_string();
+            }
+        }
+
+        // Handle cases where the library title contains the source ID pattern
+        if library_title.contains("source_jellyfin_") || library_title.contains("source_plex_") {
+            // Try to extract just the library name after the last underscore
+            if let Some(last_underscore) = library_title.rfind('_') {
+                let potential_name = &library_title[last_underscore + 1..];
+                // Only use this if it looks like a real library name (not just numbers/hex)
+                if !potential_name.is_empty()
+                    && !potential_name.chars().all(|c| c.is_ascii_hexdigit())
+                {
+                    return potential_name.to_string();
+                }
+            }
+        }
+
+        // For Jellyfin libraries that might have been prefixed, clean them up
+        if library_title.starts_with("jellyfin_") {
+            if let Some(clean_title) = library_title.strip_prefix("jellyfin_") {
+                return clean_title.to_string();
+            }
+        }
+
+        // Return the original title if no cleanup patterns match
+        library_title.to_string()
+    }
+
     pub async fn load_home_content(&self) -> Result<()> {
         self.is_loading.set(true).await;
         self.error.set(None).await;
@@ -118,8 +153,13 @@ impl HomeViewModel {
                         let limited_items: Vec<MediaItem> = items.into_iter().take(limit).collect();
 
                         if !limited_items.is_empty() {
+                            let friendly_title = Self::create_friendly_library_name(
+                                &library.title,
+                                &library.source_id,
+                            );
+
                             sections.push(MediaSection {
-                                title: library.title.clone(),
+                                title: friendly_title,
                                 items: limited_items,
                                 library_id: Some(library.id.clone()),
                                 section_type: SectionType::Library(library.id.clone()),
@@ -240,14 +280,30 @@ impl HomeViewModel {
                 let library_id = library_id.clone();
                 let limited_items: Vec<MediaItem> = items.into_iter().take(limit).collect();
 
-                // Use update instead of get/set to avoid race conditions
-                self.sections.update(|sections| {
-                    if let Some(section) = sections.iter_mut().find(
-                        |s| matches!(&s.section_type, SectionType::Library(id) if id == &library_id),
-                    ) {
-                        section.items = limited_items;
-                    }
-                }).await;
+                // Get the library info to update the title as well
+                if let Ok(Some(library)) = self.data_service.get_library(&library_id).await {
+                    let friendly_title =
+                        Self::create_friendly_library_name(&library.title, &library.source_id);
+
+                    // Use update instead of get/set to avoid race conditions
+                    self.sections.update(|sections| {
+                        if let Some(section) = sections.iter_mut().find(
+                            |s| matches!(&s.section_type, SectionType::Library(id) if id == &library_id),
+                        ) {
+                            section.items = limited_items;
+                            section.title = friendly_title; // Update title with friendly name
+                        }
+                    }).await;
+                } else {
+                    // Fallback if library lookup fails
+                    self.sections.update(|sections| {
+                        if let Some(section) = sections.iter_mut().find(
+                            |s| matches!(&s.section_type, SectionType::Library(id) if id == &library_id),
+                        ) {
+                            section.items = limited_items;
+                        }
+                    }).await;
+                }
             }
             _ => {}
         }

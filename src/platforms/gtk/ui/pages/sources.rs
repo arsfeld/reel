@@ -2,13 +2,10 @@ use gtk4::{glib, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::models::{AuthProvider, Source};
 use crate::platforms::gtk::ui::viewmodels::sources_view_model::SourcesViewModel;
-use crate::services::AuthManager;
 use crate::state::AppState;
 
 mod imp {
@@ -20,16 +17,7 @@ mod imp {
         pub main_box: gtk4::Box,
         pub content_box: gtk4::Box,
         pub state: RefCell<Option<Arc<AppState>>>,
-        pub auth_manager: RefCell<Option<Arc<AuthManager>>>,
-        pub provider_sections: RefCell<HashMap<String, ProviderSection>>,
         pub view_model: RefCell<Option<Arc<SourcesViewModel>>>,
-    }
-
-    pub struct ProviderSection {
-        pub container: adw::PreferencesGroup,
-        pub sources_list: gtk4::ListBox,
-        pub provider: AuthProvider,
-        pub sources: Vec<Source>,
     }
 
     #[glib::object_subclass]
@@ -89,11 +77,7 @@ impl SourcesPage {
     {
         let page: Self = glib::Object::builder().build();
 
-        // Create auth manager with config
-        let auth_manager = Arc::new(AuthManager::new(
-            state.config.clone(),
-            state.event_bus.clone(),
-        ));
+        // No longer need AuthManager in UI layer - sources managed by ViewModel
 
         // Initialize SourcesViewModel
         let data_service = state.data_service.clone();
@@ -111,32 +95,136 @@ impl SourcesPage {
         });
 
         // Setup ViewModel bindings
-        page.setup_viewmodel_bindings(view_model);
+        page.setup_viewmodel_bindings(view_model.clone());
 
         page.imp().state.replace(Some(state.clone()));
-        page.imp().auth_manager.replace(Some(auth_manager.clone()));
 
-        // Setup header with title and add button
-        let title_label = gtk4::Label::new(Some("Sources & Accounts"));
-        let add_button = gtk4::Button::builder()
+        // Setup header with title and add dropdown button
+        let title_label = gtk4::Label::new(Some("Servers & Accounts"));
+
+        // Create button that shows dropdown on click
+        let add_button_widget = gtk4::Button::builder()
             .icon_name("list-add-symbolic")
-            .tooltip_text("Add Source")
+            .tooltip_text("Add Account")
             .css_classes(vec!["suggested-action"])
             .build();
 
-        // Connect add button to show dialog
+        // Create the popover and attach it to the button
+        add_button_widget.set_has_frame(true);
+
+        // Connect click to show popover
         let page_weak = page.downgrade();
-        add_button.connect_clicked(move |_| {
+        add_button_widget.connect_clicked(move |button| {
+            // Create and show popover on click
+            let popover = gtk4::Popover::new();
+            let menu_box = gtk4::Box::builder()
+                .orientation(gtk4::Orientation::Vertical)
+                .spacing(6)
+                .margin_top(6)
+                .margin_bottom(6)
+                .margin_start(6)
+                .margin_end(6)
+                .build();
+
+            // Create Plex button with proper layout
+            let plex_button = gtk4::Button::builder()
+                .css_classes(vec!["flat"])
+                .hexpand(true)
+                .build();
+
+            let plex_box = gtk4::Box::builder()
+                .orientation(gtk4::Orientation::Horizontal)
+                .spacing(8)
+                .margin_top(6)
+                .margin_bottom(6)
+                .margin_start(12)
+                .margin_end(12)
+                .build();
+
+            let plex_icon = gtk4::Image::from_icon_name("network-server-symbolic");
+            let plex_label = gtk4::Label::new(Some("Add Plex Account"));
+            plex_label.set_halign(gtk4::Align::Start);
+
+            plex_box.append(&plex_icon);
+            plex_box.append(&plex_label);
+            plex_button.set_child(Some(&plex_box));
+
+            // Create Jellyfin button with proper layout
+            let jellyfin_button = gtk4::Button::builder()
+                .css_classes(vec!["flat"])
+                .hexpand(true)
+                .build();
+
+            let jellyfin_box = gtk4::Box::builder()
+                .orientation(gtk4::Orientation::Horizontal)
+                .spacing(8)
+                .margin_top(6)
+                .margin_bottom(6)
+                .margin_start(12)
+                .margin_end(12)
+                .build();
+
+            let jellyfin_icon = gtk4::Image::from_icon_name("network-workgroup-symbolic");
+            let jellyfin_label = gtk4::Label::new(Some("Add Jellyfin Server"));
+            jellyfin_label.set_halign(gtk4::Align::Start);
+
+            jellyfin_box.append(&jellyfin_icon);
+            jellyfin_box.append(&jellyfin_label);
+            jellyfin_button.set_child(Some(&jellyfin_box));
+
+            // Connect handlers
             if let Some(page) = page_weak.upgrade() {
-                page.show_add_source_dialog();
+                let page_clone = page.clone();
+                let popover_weak = popover.downgrade();
+                plex_button.connect_clicked(move |_| {
+                    if let Some(popover) = popover_weak.upgrade() {
+                        popover.popdown();
+                    }
+                    page_clone.add_plex_account();
+                });
+
+                let page_clone = page.clone();
+                let popover_weak = popover.downgrade();
+                jellyfin_button.connect_clicked(move |_| {
+                    if let Some(popover) = popover_weak.upgrade() {
+                        popover.popdown();
+                    }
+                    page_clone.add_jellyfin_server();
+                });
             }
+
+            menu_box.append(&plex_button);
+            menu_box.append(&jellyfin_button);
+            popover.set_child(Some(&menu_box));
+            popover.set_parent(button);
+            popover.popup();
         });
 
         // Call the header setup callback
-        setup_header(&title_label, &add_button);
+        setup_header(&title_label, &add_button_widget);
 
-        // Load existing providers
-        page.load_providers();
+        // Load sources through ViewModel (reactive)
+        glib::spawn_future_local({
+            let vm = view_model.clone();
+            let state_clone = state.clone();
+            async move {
+                if let Err(e) = vm.load_sources().await {
+                    error!("Failed to load sources: {}", e);
+                }
+
+                // Fix any sources missing auth_provider_id by refreshing from auth providers
+                // This ensures old sources get their auth_provider_id set properly
+                info!("Refreshing sources from auth providers to fix missing auth_provider_id");
+                if let Err(e) = state_clone.source_coordinator.refresh_all_backends().await {
+                    error!("Failed to refresh sources from auth providers: {}", e);
+                } else {
+                    // Reload sources after refresh to pick up the fixed auth_provider_id values
+                    if let Err(e) = vm.load_sources().await {
+                        error!("Failed to reload sources after refresh: {}", e);
+                    }
+                }
+            }
+        });
 
         page
     }
@@ -144,163 +232,106 @@ impl SourcesPage {
     fn setup_viewmodel_bindings(&self, view_model: Arc<SourcesViewModel>) {
         let weak_self = self.downgrade();
 
-        // Subscribe to sources changes
+        // Subscribe to sources changes - this drives the entire UI
         let mut sources_subscriber = view_model.sources().subscribe();
         glib::spawn_future_local(async move {
             while sources_subscriber.wait_for_change().await {
-                if let Some(page) = weak_self.upgrade() {
-                    // Refresh the sources display when ViewModel updates
-                    page.load_providers();
-                }
-            }
-        });
-
-        // Subscribe to sync status
-        let weak_self_sync = self.downgrade();
-        let mut sync_subscriber = view_model.sources().subscribe();
-        glib::spawn_future_local(async move {
-            while sync_subscriber.wait_for_change().await {
-                if let Some(page) = weak_self_sync.upgrade()
+                if let Some(page) = weak_self.upgrade()
                     && let Some(vm) = &*page.imp().view_model.borrow()
                 {
-                    // Could update UI to show sync progress
+                    // Rebuild UI based on reactive ViewModel state
                     let sources = vm.sources().get().await;
-                    info!("Sources: {:?}", sources);
+                    page.rebuild_sources_ui(sources).await;
                 }
             }
         });
-    }
 
-    fn load_providers(&self) {
-        let auth_manager = self.imp().auth_manager.borrow().as_ref().unwrap().clone();
-        let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        let page_weak = self.downgrade();
-
-        // First, load cached providers synchronously for instant display
+        // Subscribe to loading state
+        let weak_self_loading = self.downgrade();
+        let mut loading_subscriber = view_model.is_loading().subscribe();
         glib::spawn_future_local(async move {
-            if let Some(page) = page_weak.upgrade() {
-                // Load persisted providers from config (this is fast, from disk)
-                if let Err(e) = auth_manager.load_providers().await {
-                    error!("Failed to load auth providers: {}", e);
+            while loading_subscriber.wait_for_change().await {
+                if let Some(page) = weak_self_loading.upgrade()
+                    && let Some(vm) = &*page.imp().view_model.borrow()
+                {
+                    let is_loading = vm.is_loading().get().await;
+                    info!("Sources loading state: {}", is_loading);
+                    // UI could show loading spinner if needed
                 }
-
-                // Get all providers (from memory, instant)
-                let providers = auth_manager.get_all_providers().await;
-
-                // Clear existing content first
-                let imp = page.imp();
-                while let Some(child) = imp.content_box.first_child() {
-                    imp.content_box.remove(&child);
-                }
-
-                if providers.is_empty() {
-                    page.show_empty_state();
-                } else {
-                    // Load cached UI immediately
-                    for provider in &providers {
-                        page.add_provider_section_cached(provider.clone()).await;
-                    }
-
-                    // Then refresh in background
-                    page.refresh_providers_background(providers).await;
-                }
-
-                // Migrate any legacy backends in background if needed
-                let auth_manager_clone = auth_manager.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = auth_manager_clone.migrate_legacy_backends().await {
-                        error!("Failed to migrate legacy backends: {}", e);
-                    }
-                });
             }
         });
     }
 
-    async fn refresh_providers_background(&self, providers: Vec<AuthProvider>) {
-        let auth_manager = self.imp().auth_manager.borrow().as_ref().unwrap().clone();
-        let page_weak = self.downgrade();
+    /// Rebuild the entire sources UI based on reactive ViewModel state
+    async fn rebuild_sources_ui(
+        &self,
+        source_infos: Vec<crate::core::viewmodels::sources_view_model::SourceInfo>,
+    ) {
+        let imp = self.imp();
 
-        // Refresh each provider's sources in background
-        for provider in providers {
-            if let AuthProvider::PlexAccount { id, .. } = &provider {
-                let auth_manager_clone = auth_manager.clone();
-                let provider_id = id.clone();
-                let page_weak_clone = page_weak.clone();
+        // Clear existing content
+        while let Some(child) = imp.content_box.first_child() {
+            imp.content_box.remove(&child);
+        }
 
-                glib::spawn_future_local(async move {
-                    // This will fetch fresh data and update cache
-                    match auth_manager_clone.discover_plex_sources(&provider_id).await {
-                        Ok(sources) => {
-                            info!(
-                                "Refreshed {} sources for provider {}",
-                                sources.len(),
-                                provider_id
-                            );
+        if source_infos.is_empty() {
+            self.show_empty_state();
+            return;
+        }
 
-                            // Update UI if needed
-                            if let Some(page) = page_weak_clone.upgrade() {
-                                page.update_provider_sources(&provider_id, sources).await;
-                            }
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to refresh sources for provider {}: {}",
-                                provider_id, e
-                            );
-                        }
-                    }
-                });
+        // Group sources by provider type for organized display
+        let mut plex_sources = Vec::new();
+        let mut jellyfin_sources = Vec::new();
+        let mut local_sources = Vec::new();
+
+        for source_info in source_infos {
+            match source_info.source.source_type.as_str() {
+                "plex" => plex_sources.push(source_info),
+                "jellyfin" => jellyfin_sources.push(source_info),
+                "local" => local_sources.push(source_info),
+                "network" => local_sources.push(source_info),
+                "unknown" => {
+                    // Skip unknown sources - they indicate data corruption or incomplete setup
+                    info!(
+                        "Skipping unknown source type for source '{}'",
+                        source_info.source.name
+                    );
+                }
+                _ => {
+                    info!(
+                        "Unexpected source type '{}' for source '{}', skipping",
+                        source_info.source.source_type, source_info.source.name
+                    );
+                }
             }
+        }
+
+        // Create sections for each provider type that has sources
+        if !plex_sources.is_empty() {
+            self.create_provider_section("Plex Servers", plex_sources)
+                .await;
+        }
+        if !jellyfin_sources.is_empty() {
+            self.create_provider_section("Jellyfin Servers", jellyfin_sources)
+                .await;
+        }
+        if !local_sources.is_empty() {
+            self.create_provider_section("Local Files", local_sources)
+                .await;
         }
     }
 
-    async fn add_provider_section_cached(&self, provider: AuthProvider) {
+    /// Create a provider section with grouped sources
+    async fn create_provider_section(
+        &self,
+        title: &str,
+        source_infos: Vec<crate::core::viewmodels::sources_view_model::SourceInfo>,
+    ) {
         let imp = self.imp();
 
-        // Create preferences group for this provider
+        // Create preferences group for this provider type
         let group = adw::PreferencesGroup::new();
-
-        // Set title based on provider type
-        let title = match &provider {
-            AuthProvider::PlexAccount { username, .. } => {
-                format!("Plex · {}", username)
-            }
-            AuthProvider::JellyfinAuth {
-                server_url,
-                username,
-                ..
-            } => {
-                format!("Jellyfin · {} @ {}", username, server_url)
-            }
-            AuthProvider::NetworkCredentials { display_name, .. } => {
-                format!("Network · {}", display_name)
-            }
-            AuthProvider::LocalFiles { .. } => "Local Files".to_string(),
-        };
-
-        group.set_title(&title);
-
-        // Add header suffix buttons
-        let header_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
-            .spacing(6)
-            .build();
-
-        let settings_button = gtk4::Button::builder()
-            .icon_name("emblem-system-symbolic")
-            .tooltip_text("Settings")
-            .build();
-        settings_button.add_css_class("flat");
-
-        let remove_button = gtk4::Button::builder()
-            .icon_name("user-trash-symbolic")
-            .tooltip_text("Remove")
-            .build();
-        remove_button.add_css_class("flat");
-
-        header_box.append(&settings_button);
-        header_box.append(&remove_button);
-        group.set_header_suffix(Some(&header_box));
+        group.set_title(title);
 
         // Create list for sources
         let sources_list = gtk4::ListBox::builder()
@@ -308,90 +339,18 @@ impl SourcesPage {
             .build();
         sources_list.add_css_class("boxed-list");
 
-        // Load cached sources for this provider
-        if let AuthProvider::PlexAccount { id, .. } = &provider {
-            let auth_manager = self.imp().auth_manager.borrow().as_ref().unwrap().clone();
-
-            // Try to get cached sources first (instant)
-            if let Some(sources) = auth_manager.get_cached_sources(id).await {
-                info!(
-                    "Loading {} cached sources for provider {}",
-                    sources.len(),
-                    id
-                );
-                for source in &sources {
-                    let row = self.create_source_row(source);
-                    sources_list.append(&row);
-                }
-
-                // Store the section
-                let section = imp::ProviderSection {
-                    container: group.clone(),
-                    sources_list: sources_list.clone(),
-                    provider: provider.clone(),
-                    sources: sources.clone(),
-                };
-                imp.provider_sections
-                    .borrow_mut()
-                    .insert(provider.id().to_string(), section);
-            } else {
-                // No cached sources, show loading indicator
-                let loading_row = adw::ActionRow::builder()
-                    .title("Loading servers...")
-                    .build();
-                sources_list.append(&loading_row);
-            }
+        // Add each source as a row
+        for source_info in source_infos {
+            let row = self.create_source_row(&source_info);
+            sources_list.append(&row);
         }
 
         group.add(&sources_list);
         imp.content_box.append(&group);
-
-        // Connect handlers
-        let provider_id = provider.id().to_string();
-        let page_weak = self.downgrade();
-
-        settings_button.connect_clicked(glib::clone!(
-            #[strong]
-            provider_id,
-            move |_| {
-                if let Some(page) = page_weak.upgrade() {
-                    page.show_provider_settings(&provider_id);
-                }
-            }
-        ));
-
-        let page_weak = self.downgrade();
-        remove_button.connect_clicked(glib::clone!(
-            #[strong]
-            provider_id,
-            move |_| {
-                if let Some(page) = page_weak.upgrade() {
-                    page.confirm_remove_provider(&provider_id);
-                }
-            }
-        ));
     }
 
-    async fn update_provider_sources(&self, provider_id: &str, sources: Vec<Source>) {
-        let imp = self.imp();
-
-        // Update the provider section if it exists
-        if let Some(section) = imp.provider_sections.borrow_mut().get_mut(provider_id) {
-            // Clear existing rows
-            while let Some(child) = section.sources_list.first_child() {
-                section.sources_list.remove(&child);
-            }
-
-            // Add updated sources
-            for source in &sources {
-                let row = self.create_source_row(source);
-                section.sources_list.append(&row);
-            }
-
-            // Update stored sources
-            section.sources = sources;
-        }
-    }
+    // Legacy method - sources are now updated reactively through ViewModel
+    // This method is kept for compatibility but should not be used
 
     fn show_empty_state(&self) {
         let imp = self.imp();
@@ -521,225 +480,230 @@ impl SourcesPage {
         imp.content_box.append(&empty_state);
     }
 
-    async fn add_provider_section(&self, provider: AuthProvider) {
-        let imp = self.imp();
+    fn create_source_row(
+        &self,
+        source_info: &crate::core::viewmodels::sources_view_model::SourceInfo,
+    ) -> adw::ActionRow {
+        use crate::core::viewmodels::sources_view_model::{ConnectionStatus, SyncStage};
 
-        // Create preferences group for this provider
-        let group = adw::PreferencesGroup::new();
-
-        // Set title based on provider type
-        let title = match &provider {
-            AuthProvider::PlexAccount { username, .. } => {
-                format!("Plex · {}", username)
-            }
-            AuthProvider::JellyfinAuth {
-                server_url,
-                username,
-                ..
-            } => {
-                format!("Jellyfin · {} @ {}", username, server_url)
-            }
-            AuthProvider::NetworkCredentials { display_name, .. } => {
-                format!("Network · {}", display_name)
-            }
-            AuthProvider::LocalFiles { .. } => "Local Files".to_string(),
-        };
-
-        group.set_title(&title);
-
-        // Add header suffix buttons
-        let header_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
-            .spacing(6)
-            .build();
-
-        let settings_button = gtk4::Button::builder()
-            .icon_name("emblem-system-symbolic")
-            .tooltip_text("Settings")
-            .build();
-        settings_button.add_css_class("flat");
-
-        let remove_button = gtk4::Button::builder()
-            .icon_name("user-trash-symbolic")
-            .tooltip_text("Remove")
-            .build();
-        remove_button.add_css_class("flat");
-
-        header_box.append(&settings_button);
-        header_box.append(&remove_button);
-        group.set_header_suffix(Some(&header_box));
-
-        // Create list for sources
-        let sources_list = gtk4::ListBox::builder()
-            .selection_mode(gtk4::SelectionMode::None)
-            .build();
-        sources_list.add_css_class("boxed-list");
-
-        // Load sources for this provider
-        if let AuthProvider::PlexAccount { .. } = &provider {
-            let auth_manager = self.imp().auth_manager.borrow().as_ref().unwrap().clone();
-            match auth_manager.discover_plex_sources(provider.id()).await {
-                Ok(sources) => {
-                    for source in &sources {
-                        let row = self.create_source_row(source);
-                        sources_list.append(&row);
-                    }
-
-                    // Store the section
-                    let section = imp::ProviderSection {
-                        container: group.clone(),
-                        sources_list: sources_list.clone(),
-                        provider: provider.clone(),
-                        sources: sources.clone(),
-                    };
-                    imp.provider_sections
-                        .borrow_mut()
-                        .insert(provider.id().to_string(), section);
-                }
-                Err(e) => {
-                    error!("Failed to discover Plex sources: {}", e);
-                    let error_row = adw::ActionRow::builder()
-                        .title("Failed to load servers")
-                        .subtitle(e.to_string())
-                        .build();
-                    sources_list.append(&error_row);
-                }
-            }
-        }
-
-        group.add(&sources_list);
-        imp.content_box.append(&group);
-
-        // Connect handlers
-        let provider_id = provider.id().to_string();
-        let page_weak = self.downgrade();
-
-        settings_button.connect_clicked(glib::clone!(
-            #[strong]
-            provider_id,
-            move |_| {
-                if let Some(page) = page_weak.upgrade() {
-                    page.show_provider_settings(&provider_id);
-                }
-            }
-        ));
-
-        let page_weak = self.downgrade();
-        remove_button.connect_clicked(glib::clone!(
-            #[strong]
-            provider_id,
-            move |_| {
-                if let Some(page) = page_weak.upgrade() {
-                    page.confirm_remove_provider(&provider_id);
-                }
-            }
-        ));
-    }
-
-    fn create_source_row(&self, source: &Source) -> adw::ActionRow {
+        let source = &source_info.source;
+        let friendly_name = source_info.friendly_name();
         let row = adw::ActionRow::builder()
-            .title(&source.name)
+            .title(&friendly_name)
             .activatable(false)
             .build();
 
-        // Add icon
-        let icon = gtk4::Image::from_icon_name(source.source_icon());
-        row.add_prefix(&icon);
-
-        // Add status indicator
-        let status_icon = if source.is_online() {
-            gtk4::Image::from_icon_name("emblem-ok-symbolic")
-        } else {
-            gtk4::Image::from_icon_name("network-offline-symbolic")
+        // Add source icon based on source type
+        let icon_name = match source.source_type.as_str() {
+            "plex" => "network-server-symbolic",
+            "jellyfin" => "network-workgroup-symbolic",
+            "local" => "folder-symbolic",
+            "network" => "folder-remote-symbolic",
+            _ => "folder-symbolic", // fallback
         };
+        let source_icon = gtk4::Image::from_icon_name(icon_name);
+        row.add_prefix(&source_icon);
 
-        // Add subtitle based on source type and library counts
-        let subtitle = match &source.source_type {
-            crate::models::SourceType::PlexServer { owned, .. } => {
-                let ownership = if *owned { "Owned" } else { "Shared" };
-                if source.is_online() {
-                    format!("{} server • {} libraries", ownership, source.library_count)
-                } else {
-                    format!("{} server • Offline", ownership)
+        // Create subtitle with connection and sync status
+        let subtitle = if source_info.sync_progress.is_syncing {
+            // Show sync progress details
+            let stage_text = match &source_info.sync_progress.current_stage {
+                SyncStage::Idle => "Idle".to_string(),
+                SyncStage::ConnectingToServer => "Connecting to server...".to_string(),
+                SyncStage::DiscoveringLibraries => "Discovering libraries...".to_string(),
+                SyncStage::LoadingMovies { library_name } => {
+                    format!("Loading movies from {}", library_name)
                 }
-            }
-            crate::models::SourceType::JellyfinServer => {
-                if source.is_online() {
-                    format!("Jellyfin • {} libraries", source.library_count)
-                } else {
-                    "Jellyfin • Offline".to_string()
+                SyncStage::LoadingTVShows { library_name } => {
+                    format!("Loading TV shows from {}", library_name)
                 }
-            }
-            _ => {
-                if source.is_online() {
-                    "Online".to_string()
-                } else {
-                    "Offline".to_string()
+                SyncStage::LoadingEpisodes {
+                    show_name,
+                    season,
+                    current,
+                    total,
+                } => {
+                    format!(
+                        "Loading episodes from {} S{:02} ({}/{})",
+                        show_name, season, current, total
+                    )
+                }
+                SyncStage::LoadingMusic { library_name } => {
+                    format!("Loading music from {}", library_name)
+                }
+                SyncStage::ProcessingMetadata => "Processing metadata...".to_string(),
+                SyncStage::Complete => "Sync complete".to_string(),
+                SyncStage::Failed { error } => format!("Sync failed: {}", error),
+            };
+
+            let progress_percent =
+                (source_info.sync_progress.overall_progress.clamp(0.0, 1.0) * 100.0) as u32;
+            format!("{} ({}%)", stage_text, progress_percent)
+        } else {
+            // Show normal status
+            let connection_text = match &source_info.connection_status {
+                ConnectionStatus::Connected => "Connected",
+                ConnectionStatus::Connecting => "Connecting...",
+                ConnectionStatus::Disconnected => "Offline",
+                ConnectionStatus::Error(err) => &format!("Error: {}", err),
+            };
+
+            let library_count = source_info.libraries.len();
+            match source.source_type.as_str() {
+                "plex" => {
+                    format!(
+                        "Plex server • {} • {} libraries",
+                        connection_text, library_count
+                    )
+                }
+                "jellyfin" => {
+                    format!(
+                        "Jellyfin • {} • {} libraries",
+                        connection_text, library_count
+                    )
+                }
+                "local" => {
+                    format!("Local folder • {} libraries", library_count)
+                }
+                "network" => {
+                    format!("Network share • {} libraries", library_count)
+                }
+                _ => {
+                    format!("{} • {} libraries", connection_text, library_count)
                 }
             }
         };
         row.set_subtitle(&subtitle);
 
-        // Add action buttons
-        let action_box = gtk4::Box::builder()
+        // Create suffix box with status indicators and actions
+        let suffix_box = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Horizontal)
-            .spacing(6)
+            .spacing(8)
             .build();
 
-        let sync_button = gtk4::Button::builder()
-            .icon_name("view-refresh-symbolic")
-            .tooltip_text("Sync")
+        // Connection status indicator
+        let status_icon = match &source_info.connection_status {
+            ConnectionStatus::Connected => {
+                let icon = gtk4::Image::from_icon_name("emblem-ok-symbolic");
+                icon.set_tooltip_text(Some("Connected"));
+                icon.add_css_class("success");
+                icon
+            }
+            ConnectionStatus::Connecting => {
+                // Use a syncing icon instead of spinner for now
+                let icon = gtk4::Image::from_icon_name("emblem-synchronizing-symbolic");
+                icon.set_tooltip_text(Some("Connecting..."));
+                icon.add_css_class("accent");
+                icon
+            }
+            ConnectionStatus::Disconnected => {
+                let icon = gtk4::Image::from_icon_name("network-offline-symbolic");
+                icon.set_tooltip_text(Some("Disconnected"));
+                icon.add_css_class("warning");
+                icon
+            }
+            ConnectionStatus::Error(err) => {
+                let icon = gtk4::Image::from_icon_name("dialog-error-symbolic");
+                icon.set_tooltip_text(Some(&format!("Error: {}", err)));
+                icon.add_css_class("error");
+                icon
+            }
+        };
+
+        // Add progress bar if syncing
+        if source_info.sync_progress.is_syncing {
+            let progress_bar = gtk4::ProgressBar::new();
+            let progress_fraction =
+                source_info.sync_progress.overall_progress.clamp(0.0, 1.0) as f64;
+            progress_bar.set_fraction(progress_fraction);
+            progress_bar.set_show_text(false);
+            progress_bar.set_width_request(100);
+            progress_bar.set_valign(gtk4::Align::Center);
+            progress_bar.set_halign(gtk4::Align::Fill);
+
+            // Add CSS classes based on sync stage
+            match source_info.sync_progress.current_stage {
+                SyncStage::Failed { .. } => progress_bar.add_css_class("error"),
+                SyncStage::Complete => progress_bar.add_css_class("success"),
+                _ => progress_bar.add_css_class("accent"),
+            }
+
+            suffix_box.append(&progress_bar);
+        }
+
+        // Sync button (changes to stop when syncing)
+        let sync_button = if source_info.sync_progress.is_syncing {
+            let button = gtk4::Button::builder()
+                .icon_name("process-stop-symbolic")
+                .tooltip_text("Stop sync")
+                .build();
+            button.add_css_class("flat");
+            button.add_css_class("destructive-action");
+            button
+        } else {
+            let button = gtk4::Button::builder()
+                .icon_name("view-refresh-symbolic")
+                .tooltip_text("Sync now")
+                .build();
+            button.add_css_class("flat");
+            button
+        };
+
+        // Remove button
+        let remove_button = gtk4::Button::builder()
+            .icon_name("user-trash-symbolic")
+            .tooltip_text("Remove source")
             .build();
-        sync_button.add_css_class("flat");
+        remove_button.add_css_class("flat");
+        remove_button.add_css_class("destructive-action");
 
-        let settings_button = gtk4::Button::builder()
-            .icon_name("emblem-system-symbolic")
-            .tooltip_text("Settings")
-            .build();
-        settings_button.add_css_class("flat");
-
-        action_box.append(&status_icon);
-        action_box.append(&sync_button);
-        action_box.append(&settings_button);
-
-        row.add_suffix(&action_box);
-
-        row
-    }
-
-    pub fn show_add_source_dialog(&self) {
-        info!("Showing add source dialog");
-
-        // Create a dialog to select source type
-        let dialog = adw::MessageDialog::builder()
-            .title("Add Source")
-            .body("Choose the type of media source to add")
-            .modal(true)
-            .transient_for(&self.root().and_downcast::<gtk4::Window>().unwrap())
-            .build();
-
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("plex", "Plex Account");
-        dialog.add_response("jellyfin", "Jellyfin Server");
-        dialog.add_response("network", "Network Share");
-        dialog.add_response("local", "Local Files");
-
-        dialog.set_response_appearance("plex", adw::ResponseAppearance::Suggested);
-
+        // Connect sync button
+        let source_id = source.id.clone();
         let page_weak = self.downgrade();
-        dialog.connect_response(None, move |_, response| {
+        sync_button.connect_clicked(move |_| {
             if let Some(page) = page_weak.upgrade() {
-                match response {
-                    "plex" => page.add_plex_account(),
-                    "jellyfin" => page.add_jellyfin_server(),
-                    "network" => page.add_network_share(),
-                    "local" => page.add_local_files(),
-                    _ => {}
+                if let Some(vm) = &*page.imp().view_model.borrow() {
+                    let source_id_clone = source_id.clone();
+                    let vm_clone = vm.clone();
+                    glib::spawn_future_local(async move {
+                        // TODO: Add stop sync functionality
+                        if let Err(e) = vm_clone.sync_source(source_id_clone).await {
+                            error!("Failed to sync source: {}", e);
+                        }
+                    });
                 }
             }
         });
 
-        dialog.present();
+        // Connect remove button - remove auth provider, not just source
+        let auth_provider_id = source.auth_provider_id.clone();
+        let source_name = source.name.clone();
+        let source_id = source.id.clone();
+        let page_weak = self.downgrade();
+
+        // Only enable remove button if we have an auth provider ID
+        if auth_provider_id.is_none() {
+            remove_button.set_sensitive(false);
+            remove_button.set_tooltip_text(Some("Cannot remove: no auth provider associated"));
+        }
+
+        remove_button.connect_clicked(move |_| {
+            if let Some(page) = page_weak.upgrade() {
+                if let Some(provider_id) = &auth_provider_id {
+                    page.confirm_remove_provider(provider_id, &source_name);
+                } else {
+                    error!("Cannot remove source {}: no auth provider ID", source_id);
+                }
+            }
+        });
+
+        suffix_box.append(&status_icon);
+        suffix_box.append(&sync_button);
+        suffix_box.append(&remove_button);
+
+        row.add_suffix(&suffix_box);
+
+        row
     }
 
     pub fn add_plex_account(&self) {
@@ -747,16 +711,27 @@ impl SourcesPage {
 
         // Use the existing auth dialog
         if let Some(state) = self.imp().state.borrow().as_ref() {
-            let auth_dialog = crate::platforms::gtk::ui::AuthDialog::new(state.clone());
+            let auth_dialog =
+                crate::platforms::gtk::ui::auth_dialog::ReelAuthDialog::new(state.clone());
             if let Some(window) = self.root().and_downcast::<gtk4::Window>() {
                 auth_dialog.present(Some(&window));
-                auth_dialog.start_auth();
+                auth_dialog.start_authentication();
 
                 // Refresh when dialog closes
                 let page_weak = self.downgrade();
                 auth_dialog.connect_closed(move |_| {
-                    if let Some(page) = page_weak.upgrade() {
-                        page.load_providers();
+                    if let Some(page) = page_weak.upgrade()
+                        && let Some(vm) = &*page.imp().view_model.borrow()
+                    {
+                        // Refresh sources through ViewModel after auth dialog closes
+                        glib::spawn_future_local({
+                            let vm = vm.clone();
+                            async move {
+                                if let Err(e) = vm.load_sources().await {
+                                    error!("Failed to refresh sources after auth: {}", e);
+                                }
+                            }
+                        });
                     }
                 });
             }
@@ -767,58 +742,38 @@ impl SourcesPage {
         info!("Adding Jellyfin server");
 
         if let Some(state) = self.imp().state.borrow().as_ref() {
-            let auth_dialog = crate::platforms::gtk::ui::AuthDialog::new(state.clone());
-            auth_dialog.set_backend_type(crate::platforms::gtk::ui::BackendType::Jellyfin);
+            let auth_dialog =
+                crate::platforms::gtk::ui::auth_dialog::ReelAuthDialog::new(state.clone());
+            auth_dialog
+                .set_backend_type(crate::platforms::gtk::ui::auth_dialog::BackendType::Jellyfin);
 
             if let Some(window) = self.root().and_downcast::<gtk4::Window>() {
                 auth_dialog.present(Some(&window));
 
                 let page_weak = self.downgrade();
                 auth_dialog.connect_closed(move |_| {
-                    if let Some(page) = page_weak.upgrade() {
-                        page.load_providers();
+                    if let Some(page) = page_weak.upgrade()
+                        && let Some(vm) = &*page.imp().view_model.borrow()
+                    {
+                        // Refresh sources through ViewModel after auth dialog closes
+                        glib::spawn_future_local({
+                            let vm = vm.clone();
+                            async move {
+                                if let Err(e) = vm.load_sources().await {
+                                    error!("Failed to refresh sources after auth: {}", e);
+                                }
+                            }
+                        });
                     }
                 });
             }
         }
     }
 
-    fn add_network_share(&self) {
-        info!("Adding network share");
-        // TODO: Implement network share dialog
-    }
-
-    fn add_local_files(&self) {
-        info!("Adding local files");
-
-        let dialog = gtk4::FileDialog::builder()
-            .title("Choose Media Directory")
-            .modal(true)
-            .build();
-
-        let page_weak = self.downgrade();
-        if let Some(window) = self.root().and_downcast::<gtk4::Window>() {
-            dialog.select_folder(Some(&window), gtk4::gio::Cancellable::NONE, move |result| {
-                if let Ok(folder) = result
-                    && let Some(page) = page_weak.upgrade()
-                {
-                    info!("Selected folder: {:?}", folder.path());
-                    // TODO: Add local folder as source
-                    page.load_providers();
-                }
-            });
-        }
-    }
-
-    fn show_provider_settings(&self, provider_id: &str) {
-        info!("Showing settings for provider: {}", provider_id);
-        // TODO: Implement provider settings dialog
-    }
-
-    fn confirm_remove_provider(&self, provider_id: &str) {
+    fn confirm_remove_provider(&self, provider_id: &str, source_name: &str) {
         let dialog = adw::MessageDialog::builder()
-            .title("Remove Source")
-            .body("Are you sure you want to remove this source? This will remove all associated servers and cached data.")
+            .title("Remove Account")
+            .body(&format!("Are you sure you want to remove the account for '{}'? This will remove the account, all associated servers, and cached data.", source_name))
             .modal(true)
             .transient_for(&self.root().and_downcast::<gtk4::Window>().unwrap())
             .build();
@@ -841,49 +796,52 @@ impl SourcesPage {
     }
 
     fn remove_provider(&self, provider_id: &str) {
-        info!("Removing provider: {}", provider_id);
+        info!("Removing auth provider: {}", provider_id);
 
-        let auth_manager = self.imp().auth_manager.borrow().as_ref().unwrap().clone();
         let state = self.imp().state.borrow().as_ref().unwrap().clone();
         let provider_id = provider_id.to_string();
         let page_weak = self.downgrade();
 
         glib::spawn_future_local(async move {
-            // First, remove all sources associated with this provider
-            let source_coordinator = state.get_source_coordinator();
-            // Get all sources for this provider
-            if let Some(sources) = auth_manager.get_cached_sources(&provider_id).await {
-                for source in sources {
-                    // Remove each source and its backend
-                    if let Err(e) = source_coordinator.remove_source(&source.id).await {
-                        error!("Failed to remove source {}: {}", source.id, e);
-                    }
-                }
-            }
+            // Remove the auth provider through the auth manager
+            match state
+                .source_coordinator
+                .get_auth_manager()
+                .remove_provider(&provider_id)
+                .await
+            {
+                Ok(_) => {
+                    info!("Auth provider {} removed successfully", provider_id);
 
-            // Then remove the provider itself
-            match auth_manager.remove_provider(&provider_id).await {
-                Ok(()) => {
-                    info!("Provider removed successfully");
-                    if let Some(page) = page_weak.upgrade() {
-                        // Clear the provider section immediately from UI
-                        page.imp()
-                            .provider_sections
-                            .borrow_mut()
-                            .remove(&provider_id);
-                        // Then reload to refresh the UI
-                        page.load_providers();
+                    // The ViewModel will automatically refresh UI through reactive bindings
+                    // when it receives the UserLoggedOut event
+                    if let Some(page) = page_weak.upgrade()
+                        && let Some(vm) = &*page.imp().view_model.borrow()
+                    {
+                        // Trigger a refresh to update the UI immediately
+                        info!(
+                            "Triggering source refresh after provider {} removal",
+                            provider_id
+                        );
+                        if let Err(e) = vm.load_sources().await {
+                            error!("Failed to refresh sources after provider removal: {}", e);
+                        } else {
+                            info!("Source refresh completed after provider removal");
+                        }
+                    } else {
+                        error!(
+                            "Could not access page or ViewModel for UI refresh after provider removal"
+                        );
                     }
                 }
                 Err(e) => {
-                    error!("Failed to remove provider: {}", e);
-                    // Show error dialog
+                    error!("Failed to remove auth provider {}: {}", provider_id, e);
                     if let Some(page) = page_weak.upgrade()
                         && let Some(window) = page.root().and_downcast::<gtk4::Window>()
                     {
                         let dialog = adw::AlertDialog::new(
-                            Some("Failed to Remove Source"),
-                            Some(&format!("Error: {}", e)),
+                            Some("Failed to Remove Account"),
+                            Some(&format!("Could not remove the account: {}", e)),
                         );
                         dialog.add_response("ok", "OK");
                         dialog.set_default_response(Some("ok"));

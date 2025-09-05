@@ -4,10 +4,11 @@ use tracing::{debug, error, info, warn};
 
 use crate::db::{
     connection::DatabaseConnection,
-    entities::{LibraryModel, SourceModel},
+    entities::{LibraryModel, Source, SourceModel},
     repository::{
         LibraryRepository, LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl,
         PlaybackRepository, PlaybackRepositoryImpl, Repository, SourceRepositoryImpl,
+        source_repository::SourceRepository,
     },
 };
 use crate::events::{DatabaseEvent, EventBus, EventPayload, EventType};
@@ -508,54 +509,8 @@ impl DataService {
         self.source_repo.find_all().await
     }
 
-    pub async fn ensure_source_exists(&self, backend_id: &str) -> Result<()> {
-        // Check if source already exists
-        if self.source_repo.find_by_id(backend_id).await?.is_some() {
-            debug!("Source {} already exists in database", backend_id);
-            return Ok(());
-        }
-
-        // Determine source type from backend_id
-        let source_type = if backend_id.starts_with("plex") {
-            "plex"
-        } else if backend_id.starts_with("jellyfin") {
-            "jellyfin"
-        } else if backend_id.starts_with("local") {
-            "local"
-        } else {
-            "unknown"
-        };
-
-        // Create source record
-        let source_model = SourceModel {
-            id: backend_id.to_string(),
-            name: format!("{} Source", backend_id),
-            source_type: source_type.to_string(),
-            auth_provider_id: None,
-            connection_url: None,
-            is_online: true,
-            last_sync: None,
-            created_at: chrono::Utc::now().naive_utc(),
-            updated_at: chrono::Utc::now().naive_utc(),
-        };
-
-        self.source_repo.insert(source_model).await?;
-        info!("Created source record for {}", backend_id);
-
-        // Emit source added event
-        self.event_bus
-            .publish(DatabaseEvent::new(
-                EventType::SourceAdded,
-                EventPayload::Source {
-                    id: backend_id.to_string(),
-                    source_type: source_type.to_string(),
-                    is_online: Some(true),
-                },
-            ))
-            .await?;
-
-        Ok(())
-    }
+    // REMOVED: ensure_source_exists() method was a flawed design pattern
+    // Sources should be created during authentication via SourceCoordinator, not on-demand during sync
 
     /// Sync multiple libraries and their items in a single transaction
     /// This ensures atomicity - either all operations succeed or all are rolled back
@@ -572,10 +527,13 @@ impl DataService {
             .await
             .context("Failed to begin transaction for library sync")?;
 
-        // Ensure source exists within transaction
-        // NOTE: In a full implementation, we'd pass the transaction to all operations
-        // For now, we'll ensure source exists before the transaction
-        self.ensure_source_exists(backend_id).await?;
+        // Verify source exists before sync - sources must be created during authentication
+        if self.source_repo.find_by_id(backend_id).await?.is_none() {
+            return Err(anyhow::anyhow!(
+                "Source {} does not exist - sources must be created during authentication, not sync",
+                backend_id
+            ));
+        }
 
         // Process each library
         for library in libraries {
@@ -884,6 +842,11 @@ impl DataService {
         self.source_repo.find_by_id(id).await
     }
 
+    /// Get source repository (for internal use by other services)
+    pub fn source_repo(&self) -> &Arc<SourceRepositoryImpl> {
+        &self.source_repo
+    }
+
     /// Add a new source
     pub async fn add_source(&self, source: crate::db::entities::SourceModel) -> Result<()> {
         self.source_repo.insert(source.clone()).await?;
@@ -922,6 +885,125 @@ impl DataService {
         }
 
         Ok(())
+    }
+
+    /// Upsert a source (insert if not exists, update if exists)
+    pub async fn upsert_source(&self, source: crate::db::entities::SourceModel) -> Result<()> {
+        self.source_repo.upsert(source).await?;
+        Ok(())
+    }
+
+    /// Sync sources to database for a given provider (handles fluid Plex sources)
+    /// This is the authoritative way to ensure database matches current configuration
+    pub async fn sync_sources_to_database(
+        &self,
+        provider_id: &str,
+        discovered_sources: &[crate::models::Source],
+    ) -> Result<()> {
+        let mut keep_source_ids = Vec::new();
+
+        for source in discovered_sources {
+            let source_type_str = match &source.source_type {
+                crate::models::SourceType::PlexServer { .. } => "plex",
+                crate::models::SourceType::JellyfinServer => "jellyfin",
+                crate::models::SourceType::NetworkShare { .. } => "local",
+                crate::models::SourceType::LocalFolder { .. } => "local",
+            };
+
+            // Apply friendly naming during sync to ensure consistent cached names
+            let friendly_name =
+                crate::models::source_utils::create_friendly_name(&source.name, source_type_str);
+
+            let source_model = crate::db::entities::SourceModel {
+                id: source.id.clone(),
+                name: friendly_name, // Store friendly name in cache for consistent display
+                source_type: source_type_str.to_string(),
+                auth_provider_id: Some(
+                    source
+                        .auth_provider_id
+                        .clone()
+                        .unwrap_or_else(|| provider_id.to_string()),
+                ),
+                connection_url: source.connection_info.primary_url.clone(),
+                is_online: true,
+                last_sync: None,
+                created_at: chrono::Utc::now().naive_utc(),
+                updated_at: chrono::Utc::now().naive_utc(),
+            };
+
+            self.upsert_source(source_model).await?;
+            keep_source_ids.push(source.id.clone());
+        }
+
+        // Clean up sources that no longer exist for this provider
+        self.source_repo
+            .cleanup_sources_for_provider(provider_id, &keep_source_ids)
+            .await?;
+
+        // Clean up any corrupted sources with unknown type
+        let unknown_sources = self.source_repo.cleanup_unknown_sources().await?;
+        if !unknown_sources.is_empty() {
+            info!(
+                "Removed {} corrupted sources during sync",
+                unknown_sources.len()
+            );
+        }
+
+        info!(
+            "Synced {} sources to database for provider {} with friendly names",
+            discovered_sources.len(),
+            provider_id
+        );
+        Ok(())
+    }
+
+    /// Clean up database to match config file (authoritative cleanup)
+    /// This enforces the config file as the single source of truth for what sources should exist
+    pub async fn cleanup_sources_from_config(
+        &self,
+        valid_source_ids: &[String],
+    ) -> Result<Vec<crate::db::entities::SourceModel>> {
+        info!(
+            "Performing authoritative source cleanup - config has {} valid sources",
+            valid_source_ids.len()
+        );
+
+        // Archive (mark offline) any sources that don't exist in the config
+        let archived_sources = self
+            .source_repo
+            .archive_invalid_sources(valid_source_ids)
+            .await?;
+
+        if !archived_sources.is_empty() {
+            warn!(
+                "Archived {} invalid sources that don't match config:",
+                archived_sources.len()
+            );
+            for source in &archived_sources {
+                warn!(
+                    "  - {} ({}): {}",
+                    source.name, source.id, source.source_type
+                );
+            }
+        }
+
+        // Emit cleanup event
+        self.event_bus
+            .publish(crate::events::DatabaseEvent::new(
+                crate::events::EventType::SourcesCleanedUp,
+                crate::events::EventPayload::Source {
+                    id: "cleanup".to_string(),
+                    source_type: "all".to_string(),
+                    is_online: Some(false),
+                },
+            ))
+            .await?;
+
+        info!(
+            "Source cleanup complete - {} sources archived",
+            archived_sources.len()
+        );
+        Ok(archived_sources)
     }
 
     /// Get latest sync status

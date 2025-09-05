@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -140,10 +141,34 @@ impl AuthManager {
     ) -> Result<(String, Source)> {
         info!("Adding Jellyfin auth for {}", server_url);
 
-        let provider_id = format!(
-            "jellyfin_{}",
-            Uuid::new_v4().to_string().split('-').next().unwrap()
-        );
+        // Generate stable provider ID based on server_url + username
+        let provider_id = self.generate_stable_jellyfin_id(server_url, username);
+
+        // Check if this provider already exists
+        {
+            let providers = self.providers.read().await;
+            if providers.contains_key(&provider_id) {
+                info!(
+                    "Jellyfin provider {} already exists, updating credentials",
+                    provider_id
+                );
+                // Provider exists, just update the credentials
+                drop(providers);
+
+                // Update stored credentials in keyring
+                self.store_credentials(&provider_id, "password", password)?;
+                self.store_credentials(&provider_id, "token", access_token)?;
+
+                let source = Source::new(
+                    format!("source_{}", provider_id),
+                    format!("Jellyfin - {}", server_url),
+                    SourceType::JellyfinServer,
+                    Some(provider_id.clone()),
+                );
+
+                return Ok((provider_id, source));
+            }
+        }
         let provider = AuthProvider::JellyfinAuth {
             id: provider_id.clone(),
             server_url: server_url.to_string(),
@@ -181,12 +206,9 @@ impl AuthManager {
             tracing::warn!("Failed to publish UserAuthenticated event: {}", e);
         }
 
-        // Create the source
+        // Create the source with stable ID based on provider ID
         let source = Source::new(
-            format!(
-                "source_{}",
-                Uuid::new_v4().to_string().split('-').next().unwrap()
-            ),
+            format!("source_{}", provider_id),
             format!("Jellyfin - {}", server_url),
             SourceType::JellyfinServer,
             Some(provider_id.clone()),
@@ -764,6 +786,21 @@ impl AuthManager {
         }
 
         Ok(())
+    }
+
+    /// Generate a stable, deterministic ID for Jellyfin providers
+    /// Based on server_url and username to ensure the same combination always gets the same ID
+    fn generate_stable_jellyfin_id(&self, server_url: &str, username: &str) -> String {
+        let input = format!("{}:{}", server_url.trim_end_matches('/'), username);
+        let mut hasher = Sha256::new();
+        hasher.update(input.as_bytes());
+        let result = hasher.finalize();
+        // Convert first 8 bytes to hex string manually
+        let hash = result[..8]
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        format!("jellyfin_{}", hash)
     }
 }
 

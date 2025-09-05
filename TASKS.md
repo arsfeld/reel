@@ -6,7 +6,7 @@
 - [ ] **GStreamer subtitle colorspace** - Fix color artifacts or disable subtitles
 - [ ] **Navigation history** - Only tracks player page, needs full implementation
 
-### Incomplete Features  
+### Incomplete Features
 - [ ] **Search**
   - [ ] Plex backend returns `todo!()`
   - [ ] Local files returns empty
@@ -56,7 +56,7 @@
 
 ### Advanced Filters
 - [ ] Genre filter
-- [ ] Year range filter  
+- [ ] Year range filter
 - [ ] Rating filter
 - [ ] Resolution filter
 - [ ] Advanced filter popover
@@ -92,7 +92,7 @@
 - Basic filtering and sorting
 - Homepage with Continue Watching
 - Backend switcher UI
-- Sources & Accounts page
+- Servers & Accounts page
 
 ### 🚧 In Progress
 - Architecture migration (25% remaining)

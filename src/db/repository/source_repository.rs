@@ -26,6 +26,31 @@ pub trait SourceRepository: Repository<SourceModel> {
 
     /// Update last sync time
     async fn update_last_sync(&self, id: &str) -> Result<()>;
+
+    /// Upsert a source (insert if not exists, update if exists)
+    async fn upsert(&self, entity: SourceModel) -> Result<SourceModel>;
+
+    /// Find sources by auth provider ID
+    async fn find_by_auth_provider(&self, provider_id: &str) -> Result<Vec<SourceModel>>;
+
+    /// Remove sources not in the given list for a provider (for cleanup)
+    async fn cleanup_sources_for_provider(
+        &self,
+        provider_id: &str,
+        keep_source_ids: &[String],
+    ) -> Result<()>;
+
+    /// Archive invalid sources that don't match config (instead of deleting)
+    async fn archive_invalid_sources(
+        &self,
+        valid_source_ids: &[String],
+    ) -> Result<Vec<SourceModel>>;
+
+    /// Get all archived sources
+    async fn find_archived(&self) -> Result<Vec<SourceModel>>;
+
+    /// Clean up sources with unknown source_type (corrupted data)
+    async fn cleanup_unknown_sources(&self) -> Result<Vec<SourceModel>>;
 }
 
 #[derive(Debug)]
@@ -186,5 +211,133 @@ impl SourceRepository for SourceRepositoryImpl {
             active_model.update(self.base.db.as_ref()).await?;
         }
         Ok(())
+    }
+
+    async fn upsert(&self, entity: SourceModel) -> Result<SourceModel> {
+        // Check if source exists
+        if let Some(existing) = self.find_by_id(&entity.id).await? {
+            // Update existing source
+            let mut updated = entity.clone();
+            updated.created_at = existing.created_at; // Keep original creation time
+            self.update(updated).await
+        } else {
+            // Insert new source
+            self.insert(entity).await
+        }
+    }
+
+    async fn find_by_auth_provider(&self, provider_id: &str) -> Result<Vec<SourceModel>> {
+        Ok(Source::find()
+            .filter(sources::Column::AuthProviderId.eq(provider_id))
+            .all(self.base.db.as_ref())
+            .await?)
+    }
+
+    async fn cleanup_sources_for_provider(
+        &self,
+        provider_id: &str,
+        keep_source_ids: &[String],
+    ) -> Result<()> {
+        // Find all sources for this provider
+        let existing_sources = self.find_by_auth_provider(provider_id).await?;
+
+        // Delete sources that are not in the keep list
+        for source in existing_sources {
+            if !keep_source_ids.contains(&source.id) {
+                tracing::info!(
+                    "Cleaning up removed source: {} ({})",
+                    source.name,
+                    source.id
+                );
+                self.delete(&source.id).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn archive_invalid_sources(
+        &self,
+        valid_source_ids: &[String],
+    ) -> Result<Vec<SourceModel>> {
+        let all_sources = self.find_all().await?;
+        let mut archived_sources = Vec::new();
+
+        for source in all_sources {
+            if !valid_source_ids.contains(&source.id) {
+                // Don't archive sources that are just using old IDs but are still valid
+                // Check if this source has a valid auth_provider_id and known source_type
+                let should_archive = match (&source.auth_provider_id, &source.source_type) {
+                    (Some(_provider_id), source_type)
+                        if matches!(source_type.as_str(), "plex" | "jellyfin" | "local") =>
+                    {
+                        // This is a valid source type with an auth provider - don't archive it
+                        // It might just be using an old ID format
+                        tracing::info!(
+                            "Keeping source with old ID but valid provider: {} ({}) - type: {}",
+                            source.name,
+                            source.id,
+                            source.source_type
+                        );
+                        false
+                    }
+                    _ => {
+                        // No auth provider or unknown source type - safe to archive
+                        true
+                    }
+                };
+
+                if should_archive {
+                    tracing::warn!(
+                        "Marking invalid source as offline: {} ({})",
+                        source.name,
+                        source.id
+                    );
+                    // Just mark as offline - keeps the data but removes it from active display
+                    let mut archived_source = source.clone();
+                    archived_source.is_online = false;
+                    let updated = self.update(archived_source).await?;
+                    archived_sources.push(updated);
+                }
+            }
+        }
+
+        Ok(archived_sources)
+    }
+
+    async fn find_archived(&self) -> Result<Vec<SourceModel>> {
+        // Return offline sources (archived sources are just offline ones not in config)
+        Ok(Source::find()
+            .filter(sources::Column::IsOnline.eq(false))
+            .all(self.base.db.as_ref())
+            .await?)
+    }
+
+    async fn cleanup_unknown_sources(&self) -> Result<Vec<SourceModel>> {
+        // Find sources with unknown type - these are corrupted and should be removed
+        let unknown_sources = Source::find()
+            .filter(sources::Column::SourceType.eq("unknown"))
+            .all(self.base.db.as_ref())
+            .await?;
+
+        let mut removed_sources = Vec::new();
+        for source in unknown_sources {
+            tracing::info!(
+                "Removing corrupted source with unknown type: {} ({})",
+                source.name,
+                source.id
+            );
+            self.delete(&source.id).await?;
+            removed_sources.push(source);
+        }
+
+        if !removed_sources.is_empty() {
+            tracing::info!(
+                "Cleaned up {} corrupted sources with unknown type",
+                removed_sources.len()
+            );
+        }
+
+        Ok(removed_sources)
     }
 }

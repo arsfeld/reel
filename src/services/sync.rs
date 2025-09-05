@@ -131,11 +131,14 @@ impl SyncManager {
             ))
             .await;
 
-        // Ensure source record exists in database before syncing libraries
-        // This prevents foreign key constraint violations
-        if let Err(e) = self.data_service.ensure_source_exists(backend_id).await {
-            error!("Failed to ensure source exists for {}: {}", backend_id, e);
-            errors.push(format!("Failed to ensure source exists: {}", e));
+        // Validate that source exists before syncing - sources should be created during authentication
+        if self.data_service.get_source(backend_id).await?.is_none() {
+            let error_msg = format!(
+                "Source {} does not exist in database - sources must be created during authentication, not during sync",
+                backend_id
+            );
+            error!("{}", error_msg);
+            errors.push(error_msg.clone());
 
             // Emit error event
             let _ = self
@@ -143,17 +146,16 @@ impl SyncManager {
                 .publish(DatabaseEvent::new(
                     EventType::ErrorOccurred,
                     EventPayload::System {
-                        message: format!(
-                            "Failed to ensure source exists for {}: {}",
-                            backend_id, e
-                        ),
+                        message: error_msg.clone(),
                         details: Some(serde_json::json!({
                             "backend_id": backend_id,
-                            "error": e.to_string()
+                            "error": "Source not found during sync operation"
                         })),
                     },
                 ))
                 .await;
+
+            return Err(anyhow::anyhow!("{}", error_msg));
         }
 
         // Fetch libraries
@@ -183,8 +185,9 @@ impl SyncManager {
                 }
 
                 // Sync content from each library
+                // Reserve 80% for library sync, 20% for episode sync
                 for (idx, library) in libraries.iter().enumerate() {
-                    let progress = (idx as f32 / libraries.len() as f32) * 100.0;
+                    let progress = (idx as f32 / libraries.len() as f32) * 80.0;
 
                     // Update sync status
                     {
@@ -233,6 +236,52 @@ impl SyncManager {
             Err(e) => {
                 error!("Failed to fetch libraries: {}", e);
                 errors.push(format!("Failed to fetch libraries: {}", e));
+            }
+        }
+
+        // Phase 2: Episode sync progress tracking for TV show libraries
+        // Count total shows across all TV libraries for progress calculation
+        match backend.get_libraries().await {
+            Ok(libraries) => {
+                let tv_libraries: Vec<_> = libraries
+                    .iter()
+                    .filter(|lib| matches!(lib.library_type, crate::models::LibraryType::Shows))
+                    .collect();
+
+                if !tv_libraries.is_empty() {
+                    // Emit episode sync progress update
+                    let episode_progress = 80.0 + 20.0; // Library sync (80%) + episode sync (20%) = 100%
+
+                    // Update sync status for episode phase
+                    {
+                        let mut status = self.sync_status.write().await;
+                        status.insert(
+                            backend_id.to_string(),
+                            SyncStatus::Syncing {
+                                progress: episode_progress,
+                                current_item: "Syncing TV show episodes...".to_string(),
+                            },
+                        );
+                    }
+
+                    // Emit episode sync progress event
+                    let _ = self
+                        .event_bus
+                        .publish(DatabaseEvent::new(
+                            EventType::SyncProgress,
+                            EventPayload::Sync {
+                                source_id: backend_id.to_string(),
+                                sync_type: "episodes".to_string(),
+                                progress: Some(episode_progress),
+                                items_synced: Some(items_synced),
+                                error: None,
+                            },
+                        ))
+                        .await;
+                }
+            }
+            Err(_) => {
+                // If we can't get libraries, skip episode progress tracking
             }
         }
 

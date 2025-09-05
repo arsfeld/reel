@@ -18,6 +18,7 @@ pub struct LibraryInfo {
 pub struct SourceInfo {
     pub id: String,
     pub name: String,
+    pub source_type: String,
     pub libraries: Vec<LibraryInfo>,
     pub is_online: bool,
 }
@@ -156,9 +157,22 @@ impl SidebarViewModel {
                         })
                         .collect();
 
+                    tracing::info!(
+                        "load_sources: processing source - id: '{}', name: '{}', type: '{}'",
+                        source.id,
+                        source.name,
+                        source.source_type
+                    );
+
+                    let friendly_name = crate::models::source_utils::create_friendly_name(
+                        &source.name,
+                        &source.source_type,
+                    );
+
                     source_infos.push(SourceInfo {
-                        id: source.id,
-                        name: source.name,
+                        id: source.id.clone(),
+                        name: friendly_name,
+                        source_type: source.source_type.clone(),
                         libraries: library_infos,
                         is_online: source.is_online,
                     });
@@ -305,9 +319,22 @@ impl SidebarViewModel {
                         })
                         .collect();
 
+                    tracing::info!(
+                        "reload_sources: processing source - id: '{}', name: '{}', type: '{}'",
+                        source.id,
+                        source.name,
+                        source.source_type
+                    );
+
+                    let friendly_name = crate::models::source_utils::create_friendly_name(
+                        &source.name,
+                        &source.source_type,
+                    );
+
                     source_infos.push(SourceInfo {
-                        id: source.id,
-                        name: source.name,
+                        id: source.id.clone(),
+                        name: friendly_name,
+                        source_type: source.source_type.clone(),
                         libraries: library_infos,
                         is_online: source.is_online,
                     });
@@ -484,6 +511,34 @@ impl ViewModel for SidebarViewModel {
                     EventType::SourceAdded => {
                         tracing::info!(
                             "SidebarViewModel received SourceAdded event - reloading sources"
+                        );
+                        Self::reload_sources(
+                            data_service.clone(),
+                            sources.clone(),
+                            is_connected.clone(),
+                            status_text.clone(),
+                            status_icon.clone(),
+                            is_loading.clone(),
+                        )
+                        .await;
+                    }
+                    EventType::SourceUpdated => {
+                        tracing::info!(
+                            "SidebarViewModel received SourceUpdated event - reloading sources"
+                        );
+                        Self::reload_sources(
+                            data_service.clone(),
+                            sources.clone(),
+                            is_connected.clone(),
+                            status_text.clone(),
+                            status_icon.clone(),
+                            is_loading.clone(),
+                        )
+                        .await;
+                    }
+                    EventType::SourceRemoved => {
+                        tracing::info!(
+                            "SidebarViewModel received SourceRemoved event - reloading sources"
                         );
                         Self::reload_sources(
                             data_service.clone(),
