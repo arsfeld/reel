@@ -6,7 +6,7 @@ template ReelMainWindow : Adw.ApplicationWindow {
   icon-name: "dev.arsfeld.Reel";
   default-width: 1200;
   default-height: 800;
-  
+
   content: Adw.NavigationSplitView {
     sidebar: Adw.NavigationPage {
       title: _("Reel");
@@ -19,16 +19,16 @@ template ReelMainWindow : Adw.ApplicationWindow {
             menu-model: primary_menu;
           }
         }
-        
+
         content: Gtk.Box {
           orientation: vertical;
-          
+
           // Scrollable content area
           Gtk.ScrolledWindow {
             hscrollbar-policy: never;
             vscrollbar-policy: automatic;
             vexpand: true;
-            
+
             Gtk.Box {
               orientation: vertical;
               margin-top: 12;
@@ -36,17 +36,17 @@ template ReelMainWindow : Adw.ApplicationWindow {
               margin-start: 12;
               margin-end: 12;
               spacing: 12;
-              
+
               Adw.StatusPage welcome_page {
                 icon-name: "applications-multimedia-symbolic";
                 title: _("Welcome to Reel");
                 description: _("Connect to your media server to get started");
-                
+
                 Gtk.Box {
                   orientation: vertical;
                   spacing: 12;
                   halign: center;
-                  
+
                   Gtk.Button connect_button {
                     label: _("Connect to Server");
                     halign: center;
@@ -54,41 +54,41 @@ template ReelMainWindow : Adw.ApplicationWindow {
                   }
                 }
               }
-              
+
               // Global Home for all sources
               Adw.PreferencesGroup home_group {
                 visible: false;
-                
+
                 Gtk.ListBox home_list {
                   selection-mode: none;
                   styles ["boxed-list"]
                 }
               }
-              
+
               // Container for all source groups
               Gtk.Box sources_container {
                 orientation: vertical;
                 spacing: 18;
                 visible: false;
               }
-              
+
               // Subtle status indicator at the bottom
               Gtk.Box status_container {
                 orientation: horizontal;
                 spacing: 6;
                 margin-top: 6;
                 visible: false;
-                
+
                 Gtk.Image status_icon {
                   icon-name: "network-transmit-receive-symbolic";
                   opacity: 0.5;
                 }
-                
+
                 Gtk.Label status_label {
                   label: _("Connected");
                   styles ["dim-label", "caption"]
                 }
-                
+
                 Gtk.Spinner sync_spinner {
                   visible: false;
                   margin-start: 6;
@@ -96,33 +96,33 @@ template ReelMainWindow : Adw.ApplicationWindow {
               }
             }
           }
-          
+
           // Sticky Sources button at the bottom
           Gtk.Box {
             orientation: vertical;
-            
+
             Gtk.Separator {
               orientation: horizontal;
             }
-            
+
             Gtk.Button sources_button {
               margin-top: 12;
               margin-bottom: 12;
               margin-start: 12;
               margin-end: 12;
               styles ["pill"]
-              
+
               Gtk.Box {
                 orientation: horizontal;
                 spacing: 6;
                 halign: center;
-                
+
                 Gtk.Image {
                   icon-name: "network-server-symbolic";
                 }
-                
+
                 Gtk.Label {
-                  label: _("Sources & Accounts");
+                  label: _("Servers & Accounts");
                 }
               }
             }
@@ -130,17 +130,17 @@ template ReelMainWindow : Adw.ApplicationWindow {
         };
       };
     };
-    
+
     content: Adw.NavigationPage content_page {
       tag: "content";
       title: _("Content");
-      
+
       child: Adw.ToolbarView content_toolbar {
         [top]
         Adw.HeaderBar content_header {
           show-title: true;
         }
-        
+
         content: Adw.StatusPage empty_state {
           icon-name: "folder-symbolic";
           title: _("Select a Library");
@@ -158,7 +158,7 @@ menu primary_menu {
       action: "app.preferences";
     }
   }
-  
+
   section {
     item {
       label: _("About Reel");

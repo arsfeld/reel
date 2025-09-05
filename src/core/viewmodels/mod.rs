@@ -1,3 +1,4 @@
+pub mod authentication_view_model;
 pub mod details_view_model;
 pub mod home_view_model;
 pub mod library_view_model;
@@ -6,6 +7,7 @@ pub mod property;
 pub mod sidebar_view_model;
 pub mod sources_view_model;
 
+pub use authentication_view_model::AuthenticationViewModel;
 pub use details_view_model::DetailsViewModel;
 pub use property::{Property, PropertySubscriber};
 pub use sidebar_view_model::SidebarViewModel;

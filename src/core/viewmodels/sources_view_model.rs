@@ -14,9 +14,85 @@ pub struct SourceInfo {
     pub source: Source,
     pub libraries: Vec<Library>,
     pub sync_status: Option<SyncStatus>,
-    pub is_syncing: bool,
-    pub sync_progress: f32,
+    pub connection_status: ConnectionStatus,
+    pub sync_progress: SyncProgressInfo,
     pub last_error: Option<String>,
+}
+
+impl SourceInfo {
+    /// Create a friendly display name for this source
+    pub fn friendly_name(&self) -> String {
+        crate::models::source_utils::create_friendly_name(
+            &self.source.name,
+            &self.source.source_type,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ConnectionStatus {
+    Connected,
+    Connecting,
+    Disconnected,
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncProgressInfo {
+    pub is_syncing: bool,
+    pub overall_progress: f32,
+    pub current_stage: SyncStage,
+    pub stage_progress: f32,
+    pub items_processed: usize,
+    pub total_items: usize,
+    pub estimated_time_remaining: Option<std::time::Duration>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SyncStage {
+    Idle,
+    ConnectingToServer,
+    DiscoveringLibraries,
+    LoadingMovies {
+        library_name: String,
+    },
+    LoadingTVShows {
+        library_name: String,
+    },
+    LoadingEpisodes {
+        show_name: String,
+        season: u32,
+        current: usize,
+        total: usize,
+    },
+    LoadingMusic {
+        library_name: String,
+    },
+    ProcessingMetadata,
+    Complete,
+    Failed {
+        error: String,
+    },
+}
+
+impl Default for SyncProgressInfo {
+    fn default() -> Self {
+        Self {
+            is_syncing: false,
+            overall_progress: 0.0,
+            current_stage: SyncStage::Idle,
+            stage_progress: 0.0,
+            items_processed: 0,
+            total_items: 0,
+            estimated_time_remaining: None,
+        }
+    }
+}
+
+impl Default for ConnectionStatus {
+    fn default() -> Self {
+        Self::Disconnected
+    }
 }
 
 pub struct SourcesViewModel {
@@ -73,9 +149,51 @@ impl SourcesViewModel {
                         .ok()
                         .flatten();
 
-                    let sync_progress = self.sync_in_progress.get().await;
-                    let is_syncing = sync_progress.contains_key(&source.id);
-                    let progress = sync_progress.get(&source.id).copied().unwrap_or(0.0);
+                    let sync_progress_map = self.sync_in_progress.get().await;
+                    let is_syncing = sync_progress_map.contains_key(&source.id);
+                    let overall_progress =
+                        sync_progress_map.get(&source.id).copied().unwrap_or(0.0);
+
+                    // Determine connection status
+                    let connection_status = if source.is_online {
+                        ConnectionStatus::Connected
+                    } else {
+                        ConnectionStatus::Disconnected
+                    };
+
+                    // Create sync progress info
+                    let sync_progress = if is_syncing {
+                        SyncProgressInfo {
+                            is_syncing: true,
+                            overall_progress,
+                            current_stage: if overall_progress < 0.2 {
+                                SyncStage::ConnectingToServer
+                            } else if overall_progress < 0.4 {
+                                SyncStage::DiscoveringLibraries
+                            } else {
+                                // Determine stage based on library types
+                                if let Some(library) = libraries.first() {
+                                    match library.library_type.as_str() {
+                                        "movie" => SyncStage::LoadingMovies {
+                                            library_name: library.title.clone(),
+                                        },
+                                        "show" => SyncStage::LoadingTVShows {
+                                            library_name: library.title.clone(),
+                                        },
+                                        _ => SyncStage::ProcessingMetadata,
+                                    }
+                                } else {
+                                    SyncStage::ProcessingMetadata
+                                }
+                            },
+                            stage_progress: (overall_progress * 5.0) % 1.0, // Approximate stage progress
+                            items_processed: (overall_progress * 100.0) as usize,
+                            total_items: 100,               // Placeholder
+                            estimated_time_remaining: None, // TODO: Calculate based on sync speed
+                        }
+                    } else {
+                        SyncProgressInfo::default()
+                    };
 
                     let last_error = sync_status.as_ref().and_then(|s| {
                         if s.status == "failed" {
@@ -89,8 +207,8 @@ impl SourcesViewModel {
                         source,
                         libraries,
                         sync_status,
-                        is_syncing,
-                        sync_progress: progress,
+                        connection_status,
+                        sync_progress,
                         last_error,
                     });
                 }
@@ -256,7 +374,39 @@ impl SourcesViewModel {
 
                     let mut sources = self.sources.get().await;
                     if let Some(info) = sources.iter_mut().find(|s| s.source.id == source_id) {
-                        info.sync_progress = progress;
+                        info!(
+                            "Updating sync progress for source '{}': {} -> {}",
+                            info.source.name, info.sync_progress.overall_progress, progress
+                        );
+                        info.sync_progress.overall_progress = progress;
+                        info.sync_progress.is_syncing = true;
+
+                        // Update stage based on progress
+                        info.sync_progress.current_stage = if progress < 0.2 {
+                            SyncStage::ConnectingToServer
+                        } else if progress < 0.4 {
+                            SyncStage::DiscoveringLibraries
+                        } else if progress < 0.8 {
+                            // Determine stage based on library types
+                            if let Some(library) = info.libraries.first() {
+                                match library.library_type.as_str() {
+                                    "movie" => SyncStage::LoadingMovies {
+                                        library_name: library.title.clone(),
+                                    },
+                                    "show" => SyncStage::LoadingTVShows {
+                                        library_name: library.title.clone(),
+                                    },
+                                    _ => SyncStage::ProcessingMetadata,
+                                }
+                            } else {
+                                SyncStage::ProcessingMetadata
+                            }
+                        } else {
+                            SyncStage::Complete
+                        };
+
+                        info.sync_progress.stage_progress = (progress * 5.0) % 1.0;
+                        info.sync_progress.items_processed = (progress * 100.0) as usize;
                     }
                     self.sources.set(sources).await;
                 }
@@ -274,9 +424,22 @@ impl SourcesViewModel {
 
                     let mut sources = self.sources.get().await;
                     if let Some(info) = sources.iter_mut().find(|s| s.source.id == source_id) {
-                        info.is_syncing = false;
-                        info.sync_progress = 0.0;
-                        info.last_error = error;
+                        info.sync_progress.is_syncing = false;
+                        info.sync_progress.overall_progress =
+                            if error.is_none() { 1.0 } else { 0.0 };
+                        info.sync_progress.current_stage = if let Some(error_msg) = &error {
+                            SyncStage::Failed {
+                                error: error_msg.clone(),
+                            }
+                        } else {
+                            SyncStage::Complete
+                        };
+                        info.last_error = error.clone();
+
+                        // Update connection status based on sync result
+                        if error.is_none() {
+                            info.connection_status = ConnectionStatus::Connected;
+                        }
                     }
                     self.sources.set(sources).await;
 
@@ -284,6 +447,14 @@ impl SourcesViewModel {
                 }
             }
             EventType::LibraryCreated | EventType::LibraryDeleted | EventType::LibraryUpdated => {
+                let _ = self.load_sources().await;
+            }
+            EventType::UserAuthenticated => {
+                info!("User authenticated, refreshing sources");
+                let _ = self.load_sources().await;
+            }
+            EventType::UserLoggedOut => {
+                info!("User logged out, refreshing sources");
                 let _ = self.load_sources().await;
             }
             _ => {}
@@ -335,6 +506,8 @@ impl ViewModel for SourcesViewModel {
             EventType::LibraryCreated,
             EventType::LibraryUpdated,
             EventType::LibraryDeleted,
+            EventType::UserAuthenticated,
+            EventType::UserLoggedOut,
         ]);
 
         let mut subscriber = event_bus.subscribe_filtered(filter);

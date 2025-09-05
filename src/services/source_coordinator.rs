@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use chrono;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -43,6 +44,7 @@ pub struct SyncResult {
 ///
 /// This service centralizes the lifecycle management of media sources,
 /// including authentication, backend creation, and sync coordination.
+#[derive(Clone)]
 pub struct SourceCoordinator {
     auth_manager: Arc<AuthManager>,
     backend_manager: Arc<RwLock<BackendManager>>,
@@ -85,6 +87,16 @@ impl SourceCoordinator {
             .get_provider(&provider_id)
             .await
             .ok_or_else(|| anyhow!("Failed to retrieve newly added provider"))?;
+
+        // Save all discovered sources to database first
+        self.data_service
+            .sync_sources_to_database(&provider_id, &sources)
+            .await?;
+        info!(
+            "Saved {} Plex sources to database for provider {}",
+            sources.len(),
+            provider_id
+        );
 
         // Create backends for each discovered source
         for source in &sources {
@@ -130,6 +142,29 @@ impl SourceCoordinator {
             .await
             .ok_or_else(|| anyhow!("Failed to retrieve newly added provider"))?;
 
+        // Save the source to the database
+        let source_type_str = match &source.source_type {
+            SourceType::PlexServer { .. } => "plex",
+            SourceType::JellyfinServer => "jellyfin",
+            SourceType::NetworkShare { .. } => "local",
+            SourceType::LocalFolder { .. } => "local",
+        };
+
+        let source_model = crate::db::entities::SourceModel {
+            id: source.id.clone(),
+            name: source.name.clone(),
+            source_type: source_type_str.to_string(),
+            auth_provider_id: source.auth_provider_id.clone(),
+            connection_url: source.connection_info.primary_url.clone(),
+            is_online: true,
+            last_sync: None,
+            created_at: chrono::Utc::now().naive_utc(),
+            updated_at: chrono::Utc::now().naive_utc(),
+        };
+
+        self.data_service.add_source(source_model).await?;
+        info!("Saved Jellyfin source to database: {}", source.id);
+
         // Create and register the backend
         let status = self
             .create_and_register_backend(provider, source.clone())
@@ -146,6 +181,16 @@ impl SourceCoordinator {
         info!("Initializing all sources - offline-first");
 
         let providers = self.auth_manager.get_all_providers().await;
+        info!("Found {} auth providers to initialize", providers.len());
+        for provider in &providers {
+            info!(
+                "Auth provider: {} ({})",
+                provider.id(),
+                provider.provider_type()
+            );
+        }
+
+        let mut expected_source_ids = Vec::new();
         let mut all_statuses = Vec::new();
 
         for provider in providers {
@@ -160,7 +205,19 @@ impl SourceCoordinator {
                             sources.len(),
                             id
                         );
+
+                        // Ensure cached sources are also in database (in case they're missing)
+                        if let Err(e) = self
+                            .data_service
+                            .sync_sources_to_database(id, &sources)
+                            .await
+                        {
+                            warn!("Failed to sync cached sources to database: {}", e);
+                        }
+
                         for source in sources {
+                            expected_source_ids.push(source.id.clone());
+
                             // Initialize the source (create backend and test connection)
                             match self
                                 .initialize_source(provider.clone(), source.clone())
@@ -195,12 +252,22 @@ impl SourceCoordinator {
                         }
 
                         // Trigger background refresh to update any changes
-                        self.auth_manager.refresh_sources_background(id).await;
+                        self.refresh_sources_background(id).await;
                     } else {
                         // No cache, try to discover online
                         match self.auth_manager.discover_plex_sources(id).await {
                             Ok(sources) => {
+                                // Save discovered sources to database
+                                if let Err(e) = self
+                                    .data_service
+                                    .sync_sources_to_database(id, &sources)
+                                    .await
+                                {
+                                    error!("Failed to sync Plex sources to database: {}", e);
+                                }
+
                                 for source in sources {
+                                    expected_source_ids.push(source.id.clone());
                                     match self.initialize_source(provider.clone(), source).await {
                                         Ok(status) => all_statuses.push(status),
                                         Err(e) => {
@@ -219,6 +286,8 @@ impl SourceCoordinator {
                     }
                 }
                 AuthProvider::JellyfinAuth { id, server_url, .. } => {
+                    info!("Processing Jellyfin auth provider: {}", id);
+
                     // Create source from Jellyfin auth provider
                     let source = Source::new(
                         format!("source_{}", id),
@@ -227,8 +296,27 @@ impl SourceCoordinator {
                         Some(id.clone()),
                     );
 
+                    info!("Created Jellyfin source: {} ({})", source.name, source.id);
+
+                    // Sync Jellyfin source to database like Plex does
+                    if let Err(e) = self
+                        .data_service
+                        .sync_sources_to_database(id, &[source.clone()])
+                        .await
+                    {
+                        warn!("Failed to sync Jellyfin source to database: {}", e);
+                    }
+
+                    expected_source_ids.push(source.id.clone());
+                    info!("Initializing Jellyfin source: {}", source.id);
                     match self.initialize_source(provider.clone(), source).await {
-                        Ok(status) => all_statuses.push(status),
+                        Ok(status) => {
+                            info!(
+                                "Successfully initialized Jellyfin source: {} - status: {:?}",
+                                status.source_id, status.connection_status
+                            );
+                            all_statuses.push(status)
+                        }
                         Err(e) => {
                             error!("Failed to initialize Jellyfin source: {}", e);
                         }
@@ -245,6 +333,7 @@ impl SourceCoordinator {
                         Some(id.clone()),
                     );
 
+                    expected_source_ids.push(source.id.clone());
                     match self.initialize_source(provider.clone(), source).await {
                         Ok(status) => all_statuses.push(status),
                         Err(e) => {
@@ -257,6 +346,42 @@ impl SourceCoordinator {
                 }
             }
         }
+
+        // Perform authoritative cleanup - mark any sources not in config as offline
+        if !expected_source_ids.is_empty() {
+            info!(
+                "Cleaning up database to match config - {} expected sources",
+                expected_source_ids.len()
+            );
+            match self
+                .data_service
+                .cleanup_sources_from_config(&expected_source_ids)
+                .await
+            {
+                Ok(archived_sources) => {
+                    if !archived_sources.is_empty() {
+                        info!(
+                            "Config-based cleanup completed - {} invalid sources marked offline",
+                            archived_sources.len()
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to cleanup sources from config: {}", e);
+                }
+            }
+        }
+
+        // Log final statuses for debugging
+        let final_statuses = self.source_statuses.read().await;
+        info!("Final source statuses after initialization:");
+        for (source_id, status) in final_statuses.iter() {
+            info!(
+                "  {} - {} ({:?})",
+                source_id, status.source_name, status.connection_status
+            );
+        }
+        drop(final_statuses);
 
         Ok(all_statuses)
     }
@@ -342,10 +467,18 @@ impl SourceCoordinator {
         let statuses = self.source_statuses.read().await;
 
         info!("Found {} sources in statuses map", statuses.len());
+        info!("Current sources in statuses map:");
         for (source_id, status) in statuses.iter() {
             info!(
-                "Checking source {} with status: {:?}",
-                source_id, status.connection_status
+                "  {} - {} ({:?})",
+                source_id, status.source_name, status.connection_status
+            );
+        }
+
+        for (source_id, status) in statuses.iter() {
+            info!(
+                "Checking source {} ({}) with status: {:?}",
+                source_id, status.source_name, status.connection_status
             );
             if matches!(status.connection_status, ConnectionStatus::Connected) {
                 info!("Source {} is connected, syncing...", source_id);
@@ -592,5 +725,138 @@ impl SourceCoordinator {
     pub async fn refresh_all_backends(&self) -> Result<Vec<crate::backends::traits::SyncResult>> {
         let backend_manager = self.backend_manager.read().await;
         backend_manager.refresh_all_backends().await
+    }
+
+    /// Force a complete sync of all sources from config to database
+    /// This will update the database cache with the latest source information and friendly names
+    pub async fn force_sync_all_sources(&self) -> Result<()> {
+        info!("Forcing complete sync of all sources from config to database");
+
+        let providers = self.auth_manager.get_all_providers().await;
+
+        for provider in providers {
+            match &provider {
+                AuthProvider::PlexAccount { id, .. } => {
+                    // Sync cached Plex sources
+                    if let Some(sources) = self.auth_manager.get_cached_sources(id).await {
+                        info!("Syncing {} Plex sources for provider {}", sources.len(), id);
+                        if let Err(e) = self
+                            .data_service
+                            .sync_sources_to_database(id, &sources)
+                            .await
+                        {
+                            error!("Failed to sync Plex sources for provider {}: {}", id, e);
+                        }
+                    }
+
+                    // Also try to discover fresh sources if online
+                    if let Ok(fresh_sources) = self.auth_manager.discover_plex_sources(id).await {
+                        info!(
+                            "Syncing {} fresh Plex sources for provider {}",
+                            fresh_sources.len(),
+                            id
+                        );
+                        if let Err(e) = self
+                            .data_service
+                            .sync_sources_to_database(id, &fresh_sources)
+                            .await
+                        {
+                            error!(
+                                "Failed to sync fresh Plex sources for provider {}: {}",
+                                id, e
+                            );
+                        }
+                    }
+                }
+                AuthProvider::JellyfinAuth { id, server_url, .. } => {
+                    // Create and sync Jellyfin source
+                    let source = crate::models::Source::new(
+                        format!("source_{}", id),
+                        format!("Jellyfin - {}", server_url),
+                        crate::models::SourceType::JellyfinServer,
+                        Some(id.clone()),
+                    );
+
+                    info!("Syncing Jellyfin source for provider {}", id);
+                    if let Err(e) = self
+                        .data_service
+                        .sync_sources_to_database(id, &[source])
+                        .await
+                    {
+                        error!("Failed to sync Jellyfin source for provider {}: {}", id, e);
+                    }
+                }
+                AuthProvider::LocalFiles { id } => {
+                    // Create and sync Local source
+                    let source = crate::models::Source::new(
+                        format!("source_{}", id),
+                        "Local Files".to_string(),
+                        crate::models::SourceType::LocalFolder {
+                            path: std::path::PathBuf::from("~/Videos"),
+                        },
+                        Some(id.clone()),
+                    );
+
+                    info!("Syncing Local source for provider {}", id);
+                    if let Err(e) = self
+                        .data_service
+                        .sync_sources_to_database(id, &[source])
+                        .await
+                    {
+                        error!("Failed to sync Local source for provider {}: {}", id, e);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        info!("Complete source sync finished");
+        Ok(())
+    }
+
+    /// Refresh sources in background and sync to database (for dynamic Plex servers)
+    pub async fn refresh_sources_background(&self, provider_id: &str) {
+        let provider_id = provider_id.to_string();
+        let self_clone = Arc::new(self.clone());
+
+        tokio::spawn(async move {
+            info!(
+                "Background refresh of sources with database sync for provider {}",
+                provider_id
+            );
+
+            // Discover latest sources
+            match self_clone
+                .auth_manager
+                .discover_plex_sources(&provider_id)
+                .await
+            {
+                Ok(sources) => {
+                    // Sync to database (handles upsert and cleanup)
+                    if let Err(e) = self_clone
+                        .data_service
+                        .sync_sources_to_database(&provider_id, &sources)
+                        .await
+                    {
+                        error!(
+                            "Failed to sync sources to database during background refresh: {}",
+                            e
+                        );
+                    } else {
+                        info!(
+                            "Successfully synced {} sources to database for provider {}",
+                            sources.len(),
+                            provider_id
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to discover sources during background refresh: {}",
+                        e
+                    );
+                }
+            }
+        });
     }
 }

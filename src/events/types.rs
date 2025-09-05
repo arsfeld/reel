@@ -64,6 +64,7 @@ pub enum EventType {
     SourceUpdated,
     SourceRemoved,
     SourceOnlineStatusChanged,
+    SourcesCleanedUp,
 
     // Sync events
     SyncStarted,
@@ -183,6 +184,7 @@ impl EventType {
             EventType::SourceUpdated => "source.updated",
             EventType::SourceRemoved => "source.removed",
             EventType::SourceOnlineStatusChanged => "source.online_status_changed",
+            EventType::SourcesCleanedUp => "sources.cleaned_up",
             EventType::SyncStarted => "sync.started",
             EventType::SyncProgress => "sync.progress",
             EventType::SyncCompleted => "sync.completed",

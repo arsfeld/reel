@@ -69,6 +69,7 @@ image = "0.25"
 webp = "0.3"
 base64 = "0.22"
 uuid = { version = "1.18", features = ["v4", "serde"] }
+sha2 = "0.10"
 lru = "0.12"
 lazy_static = "1.5"
 
