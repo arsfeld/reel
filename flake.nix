@@ -50,6 +50,17 @@
           libadwaita
           libepoxy  # For OpenGL function loading
           
+          # Wayland support for Slint
+          wayland
+          wayland-protocols
+          libxkbcommon
+          
+          # Additional UI dependencies for Slint
+          fontconfig
+          freetype
+          libGL
+          libglvnd
+          
           # GStreamer and media
           gst_all_1.gstreamer
           gst_all_1.gst-plugins-base
@@ -395,6 +406,10 @@
           # AppImage building tools
           python3
           python3Packages.pip
+          
+          # Build optimization tools
+          mold         # Fast linker
+          clang        # Compiler for mold
         ] ++ lib.optionals pkgs.stdenv.isLinux [
           # Linux-specific tools
           appimage-run
@@ -521,6 +536,21 @@
               export GETTEXT_BIN_DIR="${pkgs.gettext}/bin"
               export GETTEXT_SYSTEM=1
             ''}
+            
+            # Configure mold linker for faster builds
+            export RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+            export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="clang"
+            
+            # Parallel compilation optimizations
+            export CARGO_BUILD_JOBS=$(nproc)
+            export CARGO_NET_GIT_FETCH_WITH_CLI=true
+            
+            # Enable incremental compilation for faster development builds
+            export CARGO_INCREMENTAL=1
+            
+            # Memory optimization for large projects
+            export CARGO_TARGET_DIR="$PWD/target"
+            
           '';
 
           # Environment variables

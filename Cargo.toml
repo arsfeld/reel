@@ -11,7 +11,9 @@ categories = ["multimedia", "gui"]
 
 [features]
 default = ["gtk"]
+# UI frameworks are mutually exclusive - only one should be enabled at build time
 gtk = ["dep:gtk4", "dep:gdk4", "dep:gdk-pixbuf", "dep:libadwaita", "dep:glib-build-tools"]
+slint = ["dep:slint", "dep:slint-build"]
 
 [dependencies]
 # GTK and UI (optional for GTK feature)
@@ -20,9 +22,13 @@ gdk4 = { version = "0.10", features = ["v4_14"], optional = true }
 gdk-pixbuf = { version = "0.21", optional = true }
 libadwaita = { version = "0.8", features = ["v1_5"], optional = true }
 
+# Slint UI framework (optional for slint feature)  
+slint = { version = "1.5", features = ["backend-qt"], optional = true }
+
 # Media playback
 gstreamer = "0.24"
 gstreamer-video = "0.24"
+gstreamer-app = "0.24"
 gstreamer-player = "0.24"
 gstreamer-pbutils = "0.24"
 libmpv2 = "5.0"
@@ -70,19 +76,30 @@ webp = "0.3"
 base64 = "0.22"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 sha2 = "0.10"
-lru = "0.12"
+lru = "0.16"
 lazy_static = "1.5"
 
 # Localization
 gettext-rs = { version = "0.7", features = ["gettext-system"] }
 
 [dev-dependencies]
-mockito = "1.7"
+# Testing framework
+tokio-test = "0.4"
 tempfile = "3.21"
+pretty_assertions = "1.4"
+serial_test = "3.2"
+mockall = "0.13"
 criterion = "0.7"
+
+# Existing dev dependencies
+mockito = "1.7"
+
+# Coverage
+cargo-tarpaulin = "0.32"
 
 [build-dependencies]
 glib-build-tools = { version = "0.21", optional = true }
+slint-build = { version = "1.5", optional = true }
 
 [profile.release]
 lto = true

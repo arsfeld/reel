@@ -13,22 +13,53 @@ mod services;
 mod state;
 mod utils;
 
-#[cfg(all(feature = "gtk"))]
 fn main() -> Result<()> {
-    use gtk4::prelude::*;
-    use libadwaita as adw;
-    use libadwaita::prelude::*;
-    use platforms::gtk::ReelApp;
     use tracing::info;
-
-    const APP_ID: &str = "dev.arsfeld.Reel";
 
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter("reel=debug")
         .init();
 
-    info!("Starting Reel GTK frontend");
+    // Run the appropriate frontend based on compile-time features
+    // Features are mutually exclusive - only one should be enabled at build time
+    #[cfg(all(feature = "gtk", not(feature = "slint")))]
+    {
+        info!("Starting Reel with GTK frontend");
+        // GTK needs async runtime
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(run_gtk_frontend())
+    }
+
+    #[cfg(all(feature = "slint", not(feature = "gtk")))]
+    {
+        info!("Starting Reel with Slint frontend");
+        // Slint runs on main thread
+        run_slint_frontend()
+    }
+
+    #[cfg(all(feature = "gtk", feature = "slint"))]
+    {
+        compile_error!(
+            "Both 'gtk' and 'slint' features are enabled. Please enable only one UI framework at build time."
+        )
+    }
+
+    #[cfg(not(any(feature = "gtk", feature = "slint")))]
+    {
+        compile_error!(
+            "No UI framework feature enabled. Please enable either 'gtk' or 'slint' feature."
+        )
+    }
+}
+
+#[cfg(feature = "gtk")]
+async fn run_gtk_frontend() -> Result<()> {
+    use gtk4::prelude::*;
+    use libadwaita as adw;
+    use libadwaita::prelude::*;
+    use platforms::gtk::ReelApp;
+    use tracing::info;
 
     // Initialize Tokio runtime for async operations
     let runtime = tokio::runtime::Runtime::new()?;
@@ -79,4 +110,27 @@ fn main() -> Result<()> {
     let exit_code = app.run();
 
     std::process::exit(exit_code.into());
+}
+
+#[cfg(feature = "slint")]
+fn run_slint_frontend() -> Result<()> {
+    use platforms::slint::ReelSlintApp;
+    use tracing::info;
+
+    info!("Initializing Slint frontend");
+
+    // Initialize GStreamer for video playback
+    gstreamer::init()?;
+
+    // Load configuration
+    let config = std::sync::Arc::new(tokio::sync::RwLock::new(crate::config::Config::load()?));
+
+    // Create and initialize the Slint app
+    let mut app = ReelSlintApp::new()?;
+    app.initialize(config)?;
+
+    // Run the application
+    let exit_code = app.run()?;
+
+    std::process::exit(exit_code);
 }

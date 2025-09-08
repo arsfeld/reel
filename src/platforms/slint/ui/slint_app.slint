@@ -1,0 +1,189 @@
+// Main Slint application UI definition - Native Platform Theming
+import { 
+    Button, VerticalBox, HorizontalBox, ScrollView, GroupBox, 
+    LineEdit, ListView, StandardListView, TabWidget
+} from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "Reel Media Player";
+    width: 1400px;
+    height: 900px;
+    // Use default native background - no custom colors
+    
+    // Properties for the main window state
+    in-out property <string> status-text: "Ready to stream your media";
+    in-out property <string> content-title: "Home";
+    callback show-sources();
+    callback show-library(/* library_id */ string); 
+    callback show-home();
+    callback quit();
+    
+    // Main desktop layout with native sidebar
+    HorizontalBox {
+        // Left Sidebar using native GroupBox for platform theming
+        GroupBox {
+            title: "Reel Media Player";
+            width: 320px;
+            
+            VerticalBox {
+                spacing: 8px;
+                
+                ScrollView {
+                    VerticalBox {
+                        spacing: 8px;
+                        
+                        // Home Navigation Button - Native styling
+                        Button {
+                            text: "🏠 Home - Recent from all sources";
+                            clicked => { show-home(); }
+                        }
+                        
+                        // Sources Section using native button
+                        HorizontalBox {
+                            spacing: 8px;
+                            
+                            Text {
+                                text: "SOURCES";
+                                horizontal-alignment: left;
+                                vertical-alignment: center;
+                            }
+                            
+                            Button {
+                                text: "Add Sources";
+                                clicked => { show-sources(); }
+                            }
+                        }
+                        
+                        // Source Groups using native GroupBox widgets
+                        GroupBox {
+                            title: "🟢 Plex Server - Connected";
+                            
+                            VerticalBox {
+                                spacing: 4px;
+                                
+                                Button {
+                                    text: "🎬 Movies (1,234 items)";
+                                    clicked => { show-library("plex:movies"); }
+                                }
+                                
+                                Button {
+                                    text: "📺 TV Shows (89 items)";
+                                    clicked => { show-library("plex:shows"); }
+                                }
+                            }
+                        }
+                        
+                        GroupBox {
+                            title: "🔴 Jellyfin - Disconnected";
+                            
+                            VerticalBox {
+                                spacing: 4px;
+                                
+                                Button {
+                                    text: "🎬 Movies (567 items)";
+                                    clicked => { show-library("jellyfin:movies"); }
+                                    enabled: false; // Disabled when disconnected
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Status and settings at bottom - native styling
+                HorizontalBox {
+                    spacing: 8px;
+                    
+                    Text {
+                        text: status-text;
+                        vertical-alignment: center;
+                    }
+                    
+                    Button {
+                        text: "⚙ Settings";
+                        clicked => { quit(); }
+                    }
+                }
+            }
+        }
+        
+        // Main Content Area using native GroupBox
+        GroupBox {
+            title: content-title;
+            
+            VerticalBox {
+                spacing: 8px;
+                
+                // Content header with native controls
+                HorizontalBox {
+                    spacing: 12px;
+                    alignment: center;
+                    
+                    // Native search input
+                    LineEdit {
+                        placeholder-text: "🔍 Search media...";
+                        width: 200px;
+                    }
+                    
+                    // Native view toggle buttons
+                    HorizontalBox {
+                        spacing: 4px;
+                        
+                        Button {
+                            text: "Grid View";
+                        }
+                        
+                        Button {
+                            text: "List View";
+                        }
+                    }
+                }
+                
+                // Main content area - using native scrollable view
+                ScrollView {
+                    // Welcome/Empty State using native widgets
+                    VerticalBox {
+                        spacing: 24px;
+                        alignment: center;
+                        padding: 60px;
+                        
+                        // Large welcome icon
+                        Text {
+                            text: "🎬";
+                            font-size: 64px;
+                            horizontal-alignment: center;
+                        }
+                        
+                        // Welcome text
+                        VerticalBox {
+                            spacing: 8px;
+                            alignment: center;
+                            
+                            Text {
+                                text: "Welcome to Reel";
+                                font-size: 32px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                            }
+                            
+                            Text {
+                                text: "Your media libraries will appear here";
+                                horizontal-alignment: center;
+                            }
+                            
+                            Text {
+                                text: "Connect your first media server to get started";
+                                horizontal-alignment: center;
+                            }
+                        }
+                        
+                        // Native button for adding sources
+                        Button {
+                            text: "Add Media Sources";
+                            clicked => { show-sources(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

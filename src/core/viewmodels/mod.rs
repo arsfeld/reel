@@ -9,6 +9,7 @@ pub mod sources_view_model;
 
 pub use authentication_view_model::AuthenticationViewModel;
 pub use details_view_model::DetailsViewModel;
+pub use library_view_model::LibraryViewModel;
 pub use property::{Property, PropertySubscriber};
 pub use sidebar_view_model::SidebarViewModel;
 

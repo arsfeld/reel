@@ -1,10 +1,29 @@
 use std::path::Path;
 
 fn main() {
+    // Ensure mutual exclusion of UI frameworks at build time
+    #[cfg(all(feature = "gtk", feature = "slint"))]
+    {
+        panic!(
+            "Both 'gtk' and 'slint' features are enabled. Please enable only one UI framework at build time."
+        );
+    }
+
+    #[cfg(not(any(feature = "gtk", feature = "slint")))]
+    {
+        panic!("No UI framework feature enabled. Please enable either 'gtk' or 'slint' feature.");
+    }
+
     // Only compile GTK resources when GTK feature is enabled
     #[cfg(feature = "gtk")]
     {
         compile_gtk_resources();
+    }
+
+    // Only compile Slint resources when Slint feature is enabled
+    #[cfg(feature = "slint")]
+    {
+        compile_slint_resources();
     }
 }
 
@@ -94,4 +113,22 @@ fn compile_gtk_resources() {
         gresource_path.to_str().unwrap(),
         "resources.gresource",
     );
+}
+
+#[cfg(feature = "slint")]
+fn compile_slint_resources() {
+    println!("cargo:rerun-if-changed=src/platforms/slint/ui/slint_app.slint");
+
+    // Configure Slint to use native platform theming
+    let config = slint_build::CompilerConfiguration::new();
+
+    // Enable native style for platform-specific appearance
+    // This will use the OS native look and feel (Qt on Linux, native on macOS/Windows)
+    unsafe {
+        std::env::set_var("SLINT_STYLE", "native");
+    }
+
+    // Compile with native theming configuration
+    slint_build::compile_with_config("src/platforms/slint/ui/slint_app.slint", config)
+        .expect("Failed to compile Slint UI with native theming");
 }
