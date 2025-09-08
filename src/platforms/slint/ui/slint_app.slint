@@ -1,185 +1,576 @@
-// Main Slint application UI definition - Native Platform Theming
-import { 
-    Button, VerticalBox, HorizontalBox, ScrollView, GroupBox, 
-    LineEdit, ListView, StandardListView, TabWidget
-} from "std-widgets.slint";
+// Reel Media Player - Desktop-Class Infuse-like Interface
+import { ScrollView, VerticalBox, HorizontalBox, LineEdit } from "std-widgets.slint";
 
+// Data structures
+export struct SourceData {
+    name: string,
+    icon: string,
+    selected: bool,
+    connected: bool,
+}
+
+export struct LibraryData {
+    name: string,
+    icon: string,
+    count: string,
+    selected: bool,
+}
+
+export struct MediaItemData {
+    id: string,
+    title: string,
+    poster: image,
+    year: string,
+    rating: float,
+    progress: float,
+}
+
+// Source item component
+component SourceItem inherits Rectangle {
+    in property <string> name;
+    in property <string> icon;
+    in property <bool> selected;
+    in property <bool> connected;
+    callback clicked();
+    
+    height: 36px;
+    background: selected ? #2a2a2a : touch.has-hover ? #202020 : @linear-gradient(0deg, transparent, transparent);
+    border-radius: 6px;
+    
+    HorizontalBox {
+        padding-top: 8px;
+        padding-bottom: 8px;
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        alignment: center;
+        
+        Text {
+            text: icon;
+            font-size: 14px;
+            opacity: connected ? 1.0 : 0.4;
+        }
+        
+        Text {
+            text: name;
+            color: connected ? #ffffff : #666666;
+            font-size: 13px;
+            font-weight: selected ? 600 : 400;
+        }
+        
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        
+        if !connected: Text {
+            text: "•";
+            color: #ff3b30;
+            font-size: 8px;
+        }
+    }
+    
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Library item component
+component LibraryItem inherits Rectangle {
+    in property <string> name;
+    in property <string> icon;
+    in property <string> count;
+    in property <bool> selected;
+    callback clicked();
+    
+    height: 36px;
+    background: selected ? #2a2a2a : touch.has-hover ? #202020 : @linear-gradient(0deg, transparent, transparent);
+    border-radius: 6px;
+    
+    HorizontalBox {
+        padding-top: 8px;
+        padding-bottom: 8px;
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        alignment: center;
+        
+        Text {
+            text: icon;
+            font-size: 14px;
+        }
+        
+        Text {
+            text: name;
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: selected ? 600 : 400;
+        }
+        
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        
+        Text {
+            text: count;
+            color: #666666;
+            font-size: 11px;
+        }
+    }
+    
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Add button component
+component AddButton inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    
+    height: 32px;
+    background: touch.has-hover ? #2a2a2a : @linear-gradient(0deg, transparent, transparent);
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: #2a2a2a;
+    
+    HorizontalBox {
+        padding-top: 6px;
+        padding-bottom: 6px;
+        padding-left: 12px;
+        padding-right: 12px;
+        alignment: center;
+        
+        Text {
+            text: "+";
+            color: #666666;
+            font-size: 14px;
+            font-weight: 400;
+        }
+        
+        Text {
+            text: root.text;
+            color: #666666;
+            font-size: 12px;
+            font-weight: 400;
+        }
+    }
+    
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Search bar component
+component SearchBar inherits Rectangle {
+    in property <string> placeholder;
+    in property <length> bar-width;
+    callback changed(string);
+    
+    width: root.bar-width;
+    height: 32px;
+    background: #252525;
+    border-radius: 6px;
+    
+    HorizontalBox {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+        alignment: center;
+        
+        Text {
+            text: "🔍";
+            font-size: 12px;
+            opacity: 0.5;
+        }
+        
+        LineEdit {
+            placeholder-text: root.placeholder;
+            edited(text) => { root.changed(text); }
+            font-size: 13px;
+        }
+    }
+}
+
+// View toggle button
+component ViewToggleButton inherits Rectangle {
+    in property <bool> grid-mode;
+    callback clicked();
+    
+    width: 80px;
+    height: 32px;
+    background: #252525;
+    border-radius: 6px;
+    
+    HorizontalBox {
+        spacing: 4px;
+        
+        Rectangle {
+            width: 36px;
+            background: grid-mode ? #007aff : @linear-gradient(0deg, transparent, transparent);
+            border-radius: 4px;
+            
+            Text {
+                text: "⊞";
+                color: grid-mode ? #ffffff : #666666;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        
+        Rectangle {
+            width: 36px;
+            background: !grid-mode ? #007aff : @linear-gradient(0deg, transparent, transparent);
+            border-radius: 4px;
+            
+            Text {
+                text: "☰";
+                color: !grid-mode ? #ffffff : #666666;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+    
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Media card component
+component MediaCard inherits Rectangle {
+    in property <string> title;
+    in property <string> year;
+    in property <float> rating;
+    in property <float> progress;
+    callback clicked();
+    
+    width: 150px;
+    height: 260px;
+    
+    VerticalBox {
+        spacing: 8px;
+        
+        // Poster container
+        poster := Rectangle {
+            width: 150px;
+            height: 225px;
+            background: #252525;
+            border-radius: 8px;
+            clip: true;
+            
+            // Placeholder poster
+            Rectangle {
+                width: 100%;
+                height: 100%;
+                background: @linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
+                
+                Text {
+                    text: "🎬";
+                    font-size: 48px;
+                    opacity: 0.2;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            
+            // Progress bar
+            if progress > 0: Rectangle {
+                y: parent.height - 4px;
+                width: parent.width;
+                height: 4px;
+                background: #1a1a1a;
+                
+                Rectangle {
+                    width: parent.width * progress;
+                    height: 100%;
+                    background: #007aff;
+                }
+            }
+            
+            // Touch area for interactions
+            touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: pointer;
+                clicked => { root.clicked(); }
+            }
+            
+            // Hover overlay
+            Rectangle {
+                width: 100%;
+                height: 100%;
+                background: touch.has-hover ? rgba(0, 0, 0, 0.3) : @linear-gradient(0deg, transparent, transparent);
+                
+                animate background { duration: 150ms; }
+            }
+        }
+        
+        // Title and metadata
+        VerticalBox {
+            spacing: 2px;
+            padding-left: 4px;
+            padding-right: 4px;
+            
+            Text {
+                text: title;
+                color: #ffffff;
+                font-size: 13px;
+                font-weight: 500;
+                overflow: elide;
+            }
+            
+            HorizontalBox {
+                spacing: 8px;
+                
+                Text {
+                    text: year;
+                    color: #666666;
+                    font-size: 11px;
+                }
+                
+                if rating > 0: Text {
+                    text: "★ " + rating;
+                    color: #ffa500;
+                    font-size: 11px;
+                }
+            }
+        }
+    }
+    
+    // Hover animation for elevation
+    animate y { duration: 150ms; }
+}
+
+// Main Application Window
 export component AppWindow inherits Window {
-    title: "Reel Media Player";
+    title: "Reel";
     width: 1400px;
     height: 900px;
-    // Use default native background - no custom colors
+    background: #1a1a1a;
     
-    // Properties for the main window state
-    in-out property <string> status-text: "Ready to stream your media";
-    in-out property <string> content-title: "Home";
+    // Window properties
+    in-out property <string> current-library-name: "All Media";
+    in-out property <[SourceData]> sources: [
+        { name: "Plex Server", icon: "🟢", selected: false, connected: true },
+        { name: "Jellyfin", icon: "🔴", selected: false, connected: false },
+    ];
+    in-out property <[LibraryData]> libraries: [
+        { name: "Movies", icon: "🎬", count: "1,234", selected: true },
+        { name: "TV Shows", icon: "📺", count: "89", selected: false },
+    ];
+    in-out property <[MediaItemData]> media-items: [];
+    
+    // Callbacks
     callback show-sources();
-    callback show-library(/* library_id */ string); 
+    callback show-library(string);
     callback show-home();
-    callback quit();
+    callback search(string);
+    callback toggle-view();
+    callback select-media(string);
     
-    // Main desktop layout with native sidebar
+    // Main layout
     HorizontalBox {
-        // Left Sidebar using native GroupBox for platform theming
-        GroupBox {
-            title: "Reel Media Player";
-            width: 320px;
+        padding: 0px;
+        spacing: 0px;
+        
+        // Sidebar - Clean, modern navigation
+        sidebar := Rectangle {
+            width: 240px;
+            background: #151515;
+            
+            // Subtle border on the right
+            Rectangle {
+                x: parent.width - 1px;
+                width: 1px;
+                height: parent.height;
+                background: #2a2a2a;
+            }
             
             VerticalBox {
-                spacing: 8px;
+                padding: 0px;
+                spacing: 0px;
+                
+                // App title area
+                Rectangle {
+                    height: 60px;
+                    background: #151515;
+                    
+                    HorizontalBox {
+                        padding: 20px;
+                        alignment: center;
+                        
+                        Text {
+                            text: "🎬  Reel";
+                            color: #ffffff;
+                            font-size: 18px;
+                            font-weight: 700;
+                        }
+                    }
+                }
                 
                 ScrollView {
                     VerticalBox {
-                        spacing: 8px;
+                        padding: 0px;
+                        spacing: 24px;
                         
-                        // Home Navigation Button - Native styling
-                        Button {
-                            text: "🏠 Home - Recent from all sources";
-                            clicked => { show-home(); }
-                        }
-                        
-                        // Sources Section using native button
-                        HorizontalBox {
-                            spacing: 8px;
+                        // Sources section
+                        VerticalBox {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            spacing: 4px;
                             
                             Text {
                                 text: "SOURCES";
-                                horizontal-alignment: left;
-                                vertical-alignment: center;
+                                color: #666666;
+                                font-size: 11px;
+                                font-weight: 600;
+                                letter-spacing: 1px;
                             }
                             
-                            Button {
-                                text: "Add Sources";
+                            // Source items
+                            for source in sources: SourceItem {
+                                name: source.name;
+                                icon: source.icon;
+                                selected: source.selected;
+                                connected: source.connected;
+                                clicked => { 
+                                    show-sources();
+                                }
+                            }
+                            
+                            // Add source button
+                            AddButton {
+                                text: "Add Source";
                                 clicked => { show-sources(); }
                             }
                         }
                         
-                        // Source Groups using native GroupBox widgets
-                        GroupBox {
-                            title: "🟢 Plex Server - Connected";
+                        // Libraries section
+                        VerticalBox {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            spacing: 4px;
                             
-                            VerticalBox {
-                                spacing: 4px;
-                                
-                                Button {
-                                    text: "🎬 Movies (1,234 items)";
-                                    clicked => { show-library("plex:movies"); }
-                                }
-                                
-                                Button {
-                                    text: "📺 TV Shows (89 items)";
-                                    clicked => { show-library("plex:shows"); }
-                                }
+                            Text {
+                                text: "LIBRARIES";
+                                color: #666666;
+                                font-size: 11px;
+                                font-weight: 600;
+                                letter-spacing: 1px;
                             }
-                        }
-                        
-                        GroupBox {
-                            title: "🔴 Jellyfin - Disconnected";
                             
-                            VerticalBox {
-                                spacing: 4px;
-                                
-                                Button {
-                                    text: "🎬 Movies (567 items)";
-                                    clicked => { show-library("jellyfin:movies"); }
-                                    enabled: false; // Disabled when disconnected
+                            // Library items
+                            for library in libraries: LibraryItem {
+                                name: library.name;
+                                icon: library.icon;
+                                count: library.count;
+                                selected: library.selected;
+                                clicked => {
+                                    show-library(library.name);
                                 }
                             }
                         }
                     }
                 }
                 
-                // Status and settings at bottom - native styling
-                HorizontalBox {
-                    spacing: 8px;
+                // Bottom status area
+                Rectangle {
+                    height: 50px;
+                    background: #0f0f0f;
                     
-                    Text {
-                        text: status-text;
-                        vertical-alignment: center;
-                    }
-                    
-                    Button {
-                        text: "⚙ Settings";
-                        clicked => { quit(); }
+                    VerticalBox {
+                        padding-top: 12px;
+                        padding-bottom: 12px;
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        
+                        Text {
+                            text: "Ready to stream";
+                            color: #666666;
+                            font-size: 11px;
+                        }
                     }
                 }
             }
         }
         
-        // Main Content Area using native GroupBox
-        GroupBox {
-            title: content-title;
+        // Content area
+        content := Rectangle {
+            background: #1a1a1a;
             
             VerticalBox {
-                spacing: 8px;
+                padding: 0px;
+                spacing: 0px;
                 
-                // Content header with native controls
-                HorizontalBox {
-                    spacing: 12px;
-                    alignment: center;
+                // Header bar
+                header := Rectangle {
+                    height: 60px;
+                    background: #1a1a1a;
                     
-                    // Native search input
-                    LineEdit {
-                        placeholder-text: "🔍 Search media...";
-                        width: 200px;
+                    Rectangle {
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: #2a2a2a;
                     }
                     
-                    // Native view toggle buttons
                     HorizontalBox {
-                        spacing: 4px;
+                        padding-left: 24px;
+                        padding-right: 24px;
+                        spacing: 24px;
+                        alignment: center;
                         
-                        Button {
-                            text: "Grid View";
+                        // Current view title
+                        Text {
+                            text: current-library-name;
+                            color: #ffffff;
+                            font-size: 20px;
+                            font-weight: 600;
                         }
                         
-                        Button {
-                            text: "List View";
+                        // Spacer
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                        
+                        // Search bar
+                        SearchBar {
+                            bar-width: 240px;
+                            placeholder: "Search...";
+                            changed(text) => { search(text); }
+                        }
+                        
+                        // View toggle
+                        ViewToggleButton {
+                            grid-mode: true;
+                            clicked => { toggle-view(); }
                         }
                     }
                 }
                 
-                // Main content area - using native scrollable view
+                // Media grid
                 ScrollView {
-                    // Welcome/Empty State using native widgets
-                    VerticalBox {
-                        spacing: 24px;
-                        alignment: center;
-                        padding: 60px;
+                    Rectangle {
+                        width: parent.width;
+                        min-height: parent.height;
                         
-                        // Large welcome icon
-                        Text {
-                            text: "🎬";
-                            font-size: 64px;
-                            horizontal-alignment: center;
-                        }
-                        
-                        // Welcome text
-                        VerticalBox {
-                            spacing: 8px;
-                            alignment: center;
-                            
-                            Text {
-                                text: "Welcome to Reel";
-                                font-size: 32px;
-                                font-weight: 600;
-                                horizontal-alignment: center;
+                        // Demo media items in a grid
+                        for i in 12: MediaCard {
+                            x: mod(i, 7) * 170px + 24px;
+                            y: floor(i / 7) * 280px + 24px;
+                            title: "Movie Title " + (i + 1);
+                            year: "2024";
+                            rating: 8.5;
+                            progress: i == 2 ? 0.45 : 0;
+                            clicked => {
+                                select-media("movie_" + i);
                             }
-                            
-                            Text {
-                                text: "Your media libraries will appear here";
-                                horizontal-alignment: center;
-                            }
-                            
-                            Text {
-                                text: "Connect your first media server to get started";
-                                horizontal-alignment: center;
-                            }
-                        }
-                        
-                        // Native button for adding sources
-                        Button {
-                            text: "Add Media Sources";
-                            clicked => { show-sources(); }
                         }
                     }
                 }

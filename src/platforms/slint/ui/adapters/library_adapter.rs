@@ -11,7 +11,7 @@ use tracing::{debug, info};
 slint::include_modules!();
 
 #[derive(Clone)]
-pub struct MediaItemData {
+pub struct MediaItemAdapter {
     pub id: SharedString,
     pub title: SharedString,
     pub poster_url: SharedString,
@@ -20,7 +20,7 @@ pub struct MediaItemData {
     pub duration: i32,
 }
 
-impl From<MediaItem> for MediaItemData {
+impl From<MediaItem> for MediaItemAdapter {
     fn from(item: MediaItem) -> Self {
         match item {
             MediaItem::Movie(movie) => Self {
@@ -79,7 +79,7 @@ pub struct LibraryAdapter {
     view_model: Arc<LibraryViewModel>,
     is_loading: Arc<AtomicBool>,
     error_message: Arc<tokio::sync::RwLock<String>>,
-    current_items: Arc<tokio::sync::RwLock<Vec<MediaItemData>>>,
+    current_items: Arc<tokio::sync::RwLock<Vec<MediaItemAdapter>>>,
 }
 
 impl LibraryAdapter {
@@ -101,11 +101,11 @@ impl LibraryAdapter {
         Ok(adapter)
     }
 
-    pub fn create_items_model(&self) -> Arc<VecModel<MediaItemData>> {
+    pub fn create_items_model(&self) -> Arc<VecModel<MediaItemAdapter>> {
         Arc::new(VecModel::default())
     }
 
-    pub async fn sync_to_vecmodel(&self, vec_model: &VecModel<MediaItemData>) {
+    pub async fn sync_to_vecmodel(&self, vec_model: &VecModel<MediaItemAdapter>) {
         let items = self.current_items.read().await;
         vec_model.set_vec(items.clone());
     }
@@ -137,8 +137,8 @@ impl LibraryAdapter {
                     debug!("filtered_items changed, updating internal model");
                     let items = view_model.filtered_items().get().await;
                     let items_len = items.len();
-                    let slint_items: Vec<MediaItemData> =
-                        items.into_iter().map(MediaItemData::from).collect();
+                    let slint_items: Vec<MediaItemAdapter> =
+                        items.into_iter().map(MediaItemAdapter::from).collect();
 
                     {
                         let mut current_items_guard = current_items.write().await;

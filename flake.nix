@@ -50,16 +50,9 @@
           libadwaita
           libepoxy  # For OpenGL function loading
           
-          # Wayland support for Slint
-          wayland
-          wayland-protocols
-          libxkbcommon
-          
           # Additional UI dependencies for Slint
           fontconfig
           freetype
-          libGL
-          libglvnd
           
           # GStreamer and media
           gst_all_1.gstreamer
@@ -97,6 +90,15 @@
           
           # Image processing
           librsvg
+        ] ++ lib.optionals pkgs.stdenv.isLinux [
+          # Wayland support for Slint (Linux-only)
+          wayland
+          wayland-protocols
+          libxkbcommon
+          
+          # OpenGL (Linux-specific)
+          libGL
+          libglvnd
         ] ++ linuxOnlyPackages ++ darwinOnlyPackages;
 
         pythonWithPkgs = pkgs.python3.withPackages (ps: with ps; [
@@ -407,10 +409,10 @@
           python3
           python3Packages.pip
           
-          # Build optimization tools
+        ] ++ lib.optionals pkgs.stdenv.isLinux [
+          # Build optimization tools (Linux-only)
           mold         # Fast linker
           clang        # Compiler for mold
-        ] ++ lib.optionals pkgs.stdenv.isLinux [
           # Linux-specific tools
           appimage-run
           gdb
@@ -537,9 +539,11 @@
               export GETTEXT_SYSTEM=1
             ''}
             
-            # Configure mold linker for faster builds
-            export RUSTFLAGS="-C link-arg=-fuse-ld=mold"
-            export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="clang"
+            # Configure mold linker for faster builds (Linux-only)
+            ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+              export RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+              export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="clang"
+            ''}
             
             # Parallel compilation optimizations
             export CARGO_BUILD_JOBS=$(nproc)

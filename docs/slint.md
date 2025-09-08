@@ -390,71 +390,229 @@ pub struct SlintMPVPlayer {
 // with OpenGL framebuffer to Slint Image conversion
 ```
 
-### Slint UI Integration
+### Slint UI Integration - Desktop-Class Design
 
 ```slint
-// ui/pages/player.slint
-import { Button, Slider, VerticalBox, HorizontalBox } from "std-widgets.slint";
+// ui/main_application.slint - Infuse-like Desktop Interface
+import { ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
-export component PlayerPage inherits Rectangle {
-    // Properties for video and controls
-    in property <bool> is-playing: false;
-    in property <duration> position: 0ms;
-    in property <duration> duration: 0ms;
-    in property <image> video-frame;
+export component MainApplication inherits Window {
+    title: "Reel";
+    width: 1400px;
+    height: 900px;
+    background: #1a1a1a;
     
-    // Callbacks for player control
-    callback play-pause();
-    callback seek(duration);
-    callback toggle-fullscreen();
-    
-    background: black;
-    
-    // Video display area
-    video-container := Rectangle {
-        width: 100%;
-        height: 100%;
+    // Main layout with sidebar and content area
+    HorizontalBox {
+        padding: 0;
+        spacing: 0;
         
-        // Video frame from MPV
-        video-display := Image {
-            source: video-frame;
-            width: 100%;
-            height: 100%;
-            image-fit: contain;
-        }
-        
-        // Player controls overlay
-        controls-overlay := Rectangle {
-            background: @linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.7) 100%);
-            height: 120px;
-            y: parent.height - self.height;
+        // Sidebar - Clean, modern navigation
+        sidebar := Rectangle {
+            width: 240px;
+            background: #151515;
+            border-color: #2a2a2a;
+            border-width: 0 1px 0 0;
             
             VerticalBox {
-                padding: 16px;
-                spacing: 8px;
+                padding: 20px 0;
+                spacing: 0;
                 
-                // Progress bar
-                progress-bar := Slider {
-                    minimum: 0;
-                    maximum: duration / 1ms;
-                    value: position / 1ms;
-                    changed => { seek(self.value * 1ms); }
+                // Sources section
+                sources-section := VerticalBox {
+                    padding: 0 16px;
+                    spacing: 8px;
+                    
+                    Text {
+                        text: "Sources";
+                        color: #888888;
+                        font-size: 11px;
+                        font-weight: 600;
+                        letter-spacing: 0.5px;
+                    }
+                    
+                    // Individual source items
+                    for source in sources: SourceItem {
+                        name: source.name;
+                        icon: source.icon;
+                        selected: source.selected;
+                    }
                 }
                 
-                // Control buttons
-                HorizontalBox {
-                    spacing: 16px;
-                    alignment: center;
+                // Libraries section
+                libraries-section := VerticalBox {
+                    padding: 16px;
+                    spacing: 8px;
                     
-                    play-button := Button {
-                        text: is-playing ? "⏸" : "▶";
-                        clicked => { play-pause(); }
+                    Text {
+                        text: "Libraries";
+                        color: #888888;
+                        font-size: 11px;
+                        font-weight: 600;
+                        letter-spacing: 0.5px;
                     }
                     
-                    fullscreen-button := Button {
-                        text: "⛶";
-                        clicked => { toggle-fullscreen(); }
+                    for library in libraries: LibraryItem {
+                        name: library.name;
+                        icon: library.icon;
+                        count: library.count;
+                        selected: library.selected;
                     }
+                }
+            }
+        }
+        
+        // Content area - Grid-based media browser
+        content := Rectangle {
+            background: #1a1a1a;
+            
+            VerticalBox {
+                padding: 0;
+                spacing: 0;
+                
+                // Header with search and filters
+                header := Rectangle {
+                    height: 60px;
+                    background: #1a1a1a;
+                    border-color: #2a2a2a;
+                    border-width: 0 0 1px 0;
+                    
+                    HorizontalBox {
+                        padding: 12px 24px;
+                        alignment: center;
+                        
+                        // Title
+                        Text {
+                            text: current-library-name;
+                            color: #ffffff;
+                            font-size: 18px;
+                            font-weight: 600;
+                        }
+                        
+                        Rectangle { }  // Spacer
+                        
+                        // Search and view options
+                        HorizontalBox {
+                            spacing: 12px;
+                            
+                            SearchField {
+                                width: 200px;
+                                placeholder-text: "Search...";
+                            }
+                            
+                            ViewToggle {
+                                grid-view: true;
+                                clicked => { toggle-view(); }
+                            }
+                        }
+                    }
+                }
+                
+                // Media grid with proper poster aspect ratios
+                ScrollView {
+                    GridView {
+                        padding: 24px;
+                        spacing: 20px;
+                        
+                        for item in media-items: MediaCard {
+                            title: item.title;
+                            poster: item.poster;
+                            year: item.year;
+                            rating: item.rating;
+                            progress: item.progress;
+                            width: 150px;  // Fixed width for posters
+                            height: 225px; // 2:3 aspect ratio
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Clean media card component
+export component MediaCard inherits Rectangle {
+    in property <string> title;
+    in property <image> poster;
+    in property <string> year;
+    in property <float> rating;
+    in property <float> progress;
+    
+    width: 150px;
+    height: 260px;  // Poster + text area
+    
+    VerticalBox {
+        spacing: 8px;
+        
+        // Poster with shadow and hover effect
+        poster-container := Rectangle {
+            width: 150px;
+            height: 225px;
+            border-radius: 8px;
+            drop-shadow-blur: 10px;
+            drop-shadow-color: rgba(0, 0, 0, 0.3);
+            drop-shadow-offset-y: 4px;
+            
+            Image {
+                source: poster;
+                width: 100%;
+                height: 100%;
+                image-fit: cover;
+            }
+            
+            // Progress bar overlay
+            if progress > 0: Rectangle {
+                background: @linear-gradient(180deg, transparent 70%, rgba(0, 0, 0, 0.8) 100%);
+                y: parent.height - 4px;
+                height: 4px;
+                
+                Rectangle {
+                    background: #007aff;  // macOS blue
+                    width: parent.width * progress;
+                    height: 100%;
+                }
+            }
+            
+            states [
+                hover when touch.has-hover: {
+                    in { animate y { duration: 150ms; easing: ease-out; } }
+                    y: -2px;
+                    drop-shadow-blur: 20px;
+                    drop-shadow-offset-y: 8px;
+                }
+            ]
+            
+            touch := TouchArea {
+                mouse-cursor: pointer;
+            }
+        }
+        
+        // Title and metadata
+        VerticalBox {
+            spacing: 2px;
+            
+            Text {
+                text: title;
+                color: #ffffff;
+                font-size: 13px;
+                font-weight: 500;
+                overflow: elide;
+                max-lines: 1;
+            }
+            
+            HorizontalBox {
+                spacing: 8px;
+                
+                Text {
+                    text: year;
+                    color: #888888;
+                    font-size: 11px;
+                }
+                
+                if rating > 0: Text {
+                    text: "★ " + rating;
+                    color: #ffa500;
+                    font-size: 11px;
                 }
             }
         }
@@ -482,26 +640,32 @@ export component PlayerPage inherits Rectangle {
 
 ### Current Implementation Status
 
-The basic Slint platform is now **fully functional** with a premium Netflix-like UI design:
+The basic Slint platform foundation is complete, ready for the Infuse-like desktop interface:
 
-#### ✅ Completed Features
-- **Premium Landing Page**: Netflix-inspired design with hero section, feature highlights, and responsive layout
-- **Slick UI Components**: Modern gradient backgrounds, typography, and interactive elements
+#### ✅ Completed Foundation
 - **Platform Detection**: Automatic detection of slint vs gtk features
 - **Build System**: Full Slint compilation pipeline
 - **Event Handling**: Callback system for navigation and user interactions
-- **Responsive Design**: 1400x900 window with proper scaling
+- **Window Management**: 1400x900 base window with proper sizing
 
-#### UI Design Features
-- **Dark Theme**: Professional dark color scheme with Netflix red (#e50914) accents
-- **Layered Layout**: 
-  - Navigation bar with brand logo and menu items
-  - Hero section with welcome messaging and primary actions
-  - Features section highlighting core capabilities
-  - Footer with status information
-- **Interactive Elements**: TouchArea components with hover states and pointer cursors
-- **Typography**: Modern font weights and sizes for visual hierarchy
-- **Premium Branding**: Consistent with "premium media player experience" positioning
+#### 🎯 Target UI Design: Desktop-Class Infuse Interface
+- **Desktop-First Design**: Professional media center interface optimized for desktop use
+- **Sidebar Navigation**: Clean, collapsible sidebar with source/library navigation (no nested frames)
+- **Content Grid**: Responsive poster grid with proper aspect ratios and hover effects
+- **Native Feel**: Platform-appropriate spacing, typography, and interactions for macOS/Linux/Windows
+- **Professional Dark Theme**: Subtle gradients, proper contrast, no garish colors
+- **Key UI Components**:
+  - Elegant sidebar with source management
+  - Grid-based media browser with smart lazy loading
+  - Detail views with backdrop blur effects
+  - Native-feeling playback controls
+  - Smooth transitions and animations
+- **Infuse-Inspired Features**:
+  - Clean metadata presentation
+  - Smart collections and filtering
+  - Elegant poster walls with proper shadows
+  - Professional typography and spacing
+  - Desktop-appropriate information density
 
 ### Phase 2: ViewModels Integration (Week 2)
 1. **Property Adapters**

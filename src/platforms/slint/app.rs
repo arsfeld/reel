@@ -54,16 +54,15 @@ impl ReelSlintApp {
         // Create the main window
         let main_window = AppWindow::new()?;
 
-        // Set initial status
-        main_window.set_status_text("Slint platform ready".into());
+        // Set initial library name
+        main_window.set_current_library_name("All Media".into());
 
         // Set up callbacks for desktop navigation
         let main_window_weak = main_window.as_weak();
         main_window.on_show_sources(move || {
             info!("Show sources page callback triggered");
             if let Some(window) = main_window_weak.upgrade() {
-                window.set_status_text("Opening sources configuration".into());
-                window.set_content_title("Sources".into());
+                window.set_current_library_name("Sources".into());
                 // TODO: Implement sources page navigation
             }
         });
@@ -72,8 +71,7 @@ impl ReelSlintApp {
         main_window.on_show_home(move || {
             info!("Show home page callback triggered");
             if let Some(window) = main_window_weak.upgrade() {
-                window.set_status_text("Showing recent content from all sources".into());
-                window.set_content_title("Home".into());
+                window.set_current_library_name("Home".into());
                 // TODO: Implement home page content loading
             }
         });
@@ -83,28 +81,33 @@ impl ReelSlintApp {
             info!("Show library callback triggered for: {}", library_id);
             if let Some(window) = main_window_weak.upgrade() {
                 // Parse library_id to get source and library info
-                let parts: Vec<&str> = library_id.splitn(2, ':').collect();
+                let parts: Vec<&str> = library_id.as_str().splitn(2, ':').collect();
                 if parts.len() == 2 {
-                    let (source_name, lib_name) = (parts[0], parts[1]);
-                    window.set_status_text(
-                        format!("Loading {} library from {}", lib_name, source_name).into(),
-                    );
-                    window.set_content_title(format!("{} - {}", source_name, lib_name).into());
+                    let (_source_name, lib_name) = (parts[0], parts[1]);
+                    window.set_current_library_name(lib_name.into());
                     // TODO: Implement library content loading
                 } else {
-                    window.set_status_text("Loading library".into());
-                    window.set_content_title("Library".into());
+                    window.set_current_library_name(library_id);
                 }
             }
         });
 
         let main_window_weak = main_window.as_weak();
-        main_window.on_quit(move || {
-            info!("Quit callback triggered");
-            if let Some(window) = main_window_weak.upgrade() {
-                window.hide().ok();
-            }
-            slint::quit_event_loop();
+        main_window.on_search(move |query| {
+            info!("Search callback triggered with query: {}", query);
+            // TODO: Implement search functionality
+        });
+
+        let main_window_weak = main_window.as_weak();
+        main_window.on_toggle_view(move || {
+            info!("Toggle view callback triggered");
+            // TODO: Implement view toggle
+        });
+
+        let main_window_weak = main_window.as_weak();
+        main_window.on_select_media(move |media_id| {
+            info!("Select media callback triggered for: {}", media_id);
+            // TODO: Implement media selection
         });
 
         // Show the window
