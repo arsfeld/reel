@@ -235,21 +235,16 @@ impl MpvPlayer {
 
     unsafe extern "C" fn on_mpv_render_update(ctx: *mut c_void) {
         unsafe {
-            // Use a simpler struct to pass through the context
+            // Use a simple struct that just marks frame as pending
             struct UpdateContext {
-                gl_area: *const GLArea,
-                frame_pending: *const AtomicBool,
+                frame_pending: Arc<AtomicBool>,
             }
 
             let update_ctx = &*(ctx as *const UpdateContext);
-            let gl_area = &*update_ctx.gl_area;
-            let frame_pending = &*update_ctx.frame_pending;
+            let frame_pending = &update_ctx.frame_pending;
 
-            // Only queue render if no frame is already pending
-            if !frame_pending.swap(true, Ordering::AcqRel) {
-                // Queue render directly without idle_add for lower latency
-                gl_area.queue_render();
-            }
+            // Just mark that a frame is pending - the timer will handle the actual render
+            frame_pending.store(true, Ordering::Release);
         }
     }
 
@@ -360,15 +355,13 @@ impl MpvPlayer {
 
             // Set up the update callback with our custom context
             if !self.inner.update_callback_registered.get() {
-                // Create update context that includes both GLArea and frame_pending flag
+                // Create update context that just signals frame pending
                 struct UpdateContext {
-                    gl_area: *const GLArea,
-                    frame_pending: *const AtomicBool,
+                    frame_pending: Arc<AtomicBool>,
                 }
 
                 let update_ctx = Box::new(UpdateContext {
-                    gl_area: gl_area as *const GLArea,
-                    frame_pending: Arc::as_ptr(&self.inner.frame_pending),
+                    frame_pending: self.inner.frame_pending.clone(),
                 });
 
                 mpv_render_context_set_update_callback(
@@ -636,8 +629,9 @@ impl MpvPlayer {
                         && let Ok(paused) = mpv.get_property::<bool>("pause")
                         && !paused
                     {
-                        // Only queue render if no frame is pending
-                        if !inner_timer.frame_pending.load(Ordering::Acquire) {
+                        // Check if MPV wants a render or if we need a regular update
+                        if inner_timer.frame_pending.swap(false, Ordering::AcqRel) {
+                            // MPV signaled it needs a render
                             gl_area_timer.queue_render();
                         }
                     }
