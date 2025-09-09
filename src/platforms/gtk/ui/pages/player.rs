@@ -337,11 +337,12 @@ impl PlayerPage {
                                 .root()
                                 .and_then(|r| r.downcast::<gtk4::Window>().ok())
                                 && window.is_fullscreen()
-                                && let Ok(texture) =
-                                    gdk::Texture::from_bytes(&glib::Bytes::from_static(&[0u8; 64]))
                             {
-                                let cursor = gdk::Cursor::from_texture(&texture, 0, 0, None);
-                                widget_for_fade.set_cursor(Some(&cursor));
+                                if let Some(invisible_cursor) =
+                                    PlayerPage::create_invisible_cursor()
+                                {
+                                    widget_for_fade.set_cursor(Some(&invisible_cursor));
+                                }
                             }
                             glib::ControlFlow::Break
                         } else {
@@ -359,6 +360,59 @@ impl PlayerPage {
                 },
             );
             hide_timer_clone.borrow_mut().replace(timer_id);
+        });
+
+        // Add leave event handler to hide controls immediately when mouse leaves
+        let controls_container_for_leave = controls_container.clone();
+        let top_left_osd_for_leave = top_left_osd.clone();
+        let top_right_osd_for_leave = top_right_osd.clone();
+        let hide_timer_for_leave = hide_timer.clone();
+        let widget_for_leave = widget.clone();
+
+        hover_controller.connect_leave(move |_| {
+            // Cancel any pending timer
+            if let Some(timer_id) = hide_timer_for_leave.borrow_mut().take() {
+                timer_id.remove();
+            }
+
+            // Hide controls immediately with fade animation
+            let fade_start_time = std::time::Instant::now();
+            let controls_for_fade = controls_container_for_leave.clone();
+            let top_left_for_fade = top_left_osd_for_leave.clone();
+            let top_right_for_fade = top_right_osd_for_leave.clone();
+            let widget_for_fade = widget_for_leave.clone();
+
+            glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+                let elapsed = fade_start_time.elapsed().as_millis() as f64;
+                let fade_duration = 200.0; // 200ms fade out
+
+                if elapsed >= fade_duration {
+                    controls_for_fade.set_opacity(0.0);
+                    controls_for_fade.set_visible(false);
+                    top_left_for_fade.set_opacity(0.0);
+                    top_left_for_fade.set_visible(false);
+                    top_right_for_fade.set_opacity(0.0);
+                    top_right_for_fade.set_visible(false);
+
+                    // Hide cursor when controls hidden and in fullscreen
+                    if let Some(window) = widget_for_fade
+                        .root()
+                        .and_then(|r| r.downcast::<gtk4::Window>().ok())
+                        && window.is_fullscreen()
+                    {
+                        if let Some(invisible_cursor) = PlayerPage::create_invisible_cursor() {
+                            widget_for_fade.set_cursor(Some(&invisible_cursor));
+                        }
+                    }
+                    glib::ControlFlow::Break
+                } else {
+                    let opacity = 1.0 - (elapsed / fade_duration);
+                    controls_for_fade.set_opacity(opacity);
+                    top_left_for_fade.set_opacity(opacity);
+                    top_right_for_fade.set_opacity(opacity);
+                    glib::ControlFlow::Continue
+                }
+            });
         });
 
         // Store the hover controller as we'll add it after playback starts
@@ -881,11 +935,8 @@ impl PlayerPage {
                             tr.set_visible(false);
 
                             // Hide cursor on initial idle
-                            if let Ok(texture) =
-                                gdk::Texture::from_bytes(&glib::Bytes::from_static(&[0u8; 64]))
-                            {
-                                let cursor = gdk::Cursor::from_texture(&texture, 0, 0, None);
-                                widget_for_idle.set_cursor(Some(&cursor));
+                            if let Some(invisible_cursor) = PlayerPage::create_invisible_cursor() {
+                                widget_for_idle.set_cursor(Some(&invisible_cursor));
                             }
                         }
                         glib::ControlFlow::Break
@@ -1020,8 +1071,7 @@ impl PlayerPage {
         self.widget.add_css_class("fullscreen");
         self.overlay.add_css_class("fullscreen");
 
-        // Hide cursor after inactivity in fullscreen
-        self.setup_cursor_hiding();
+        // Cursor hiding is handled by the motion controller timer
     }
 
     fn exit_fullscreen(&self, window: &gtk4::Window) {
@@ -1040,31 +1090,17 @@ impl PlayerPage {
         }
     }
 
-    fn setup_cursor_hiding(&self) {
-        // Hide cursor when idle in fullscreen
-        let widget = self.widget.clone();
-        glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
-            if let Some(window) = widget
-                .root()
-                .and_then(|r| r.downcast::<gtk4::Window>().ok())
-            {
-                if window.is_fullscreen() {
-                    // Create blank cursor to hide it
-                    let _display = widget.display();
-                    if let Ok(texture) =
-                        gdk::Texture::from_bytes(&glib::Bytes::from_static(&[0u8; 64]))
-                    {
-                        let cursor = gdk::Cursor::from_texture(&texture, 0, 0, None);
-                        widget.set_cursor(Some(&cursor));
-                    }
-                    glib::ControlFlow::Continue
-                } else {
-                    glib::ControlFlow::Break
-                }
-            } else {
-                glib::ControlFlow::Break
-            }
-        });
+    fn create_invisible_cursor() -> Option<gdk::Cursor> {
+        // Create a 1x1 transparent RGBA texture for invisible cursor
+        static RGBA_DATA: [u8; 4] = [0u8, 0u8, 0u8, 0u8]; // Transparent black pixel
+        let texture = gdk::MemoryTexture::new(
+            1,
+            1,
+            gdk::MemoryFormat::R8g8b8a8,
+            &glib::Bytes::from_static(&RGBA_DATA),
+            4, // rowstride for 1 pixel wide RGBA
+        );
+        Some(gdk::Cursor::from_texture(&texture, 0, 0, None))
     }
 
     async fn inhibit_suspend(&self) {
