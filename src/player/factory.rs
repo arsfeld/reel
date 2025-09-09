@@ -1,13 +1,14 @@
 use anyhow::Result;
 use gtk4;
 use std::time::Duration;
-use tracing::info;
+use tracing::{debug, error, info};
 
 use super::gstreamer_player::PlayerState as GstPlayerState;
 use super::mpv_player::PlayerState as MpvPlayerState;
 use super::{GStreamerPlayer, MpvPlayer};
 use crate::config::Config;
 
+#[derive(Debug)]
 pub enum PlayerBackend {
     GStreamer,
     Mpv,
@@ -41,37 +42,87 @@ impl Player {
     pub fn new(config: &Config) -> Result<Self> {
         let backend = PlayerBackend::from(config.playback.player_backend.as_str());
 
+        info!("🎬 Player Factory: Creating new player instance");
+        debug!(
+            "🎬 Player Factory: Requested backend: {}",
+            config.playback.player_backend
+        );
+        debug!("🎬 Player Factory: Parsed backend: {:?}", backend);
+        debug!("🎬 Player Factory: Target OS: {}", std::env::consts::OS);
+
         // Platform-specific backend selection and fallback
         #[cfg(target_os = "macos")]
         {
             // On macOS, try MPV first as it has better compatibility
             match backend {
                 PlayerBackend::Mpv => {
-                    info!("Creating MPV player backend for macOS");
+                    info!("🎬 Player Factory: Creating MPV player backend for macOS");
+                    debug!(
+                        "🎬 Player Factory: Attempting to initialize MPV with config: hardware_accel={}, cache_size={}MB",
+                        config.playback.hardware_acceleration, config.playback.mpv_cache_size_mb
+                    );
                     match MpvPlayer::new(config) {
-                        Ok(player) => return Ok(Player::Mpv(player)),
+                        Ok(player) => {
+                            info!("✅ Player Factory: Successfully created MPV player for macOS");
+                            return Ok(Player::Mpv(player));
+                        }
                         Err(e) => {
-                            tracing::warn!(
-                                "Failed to create MPV player on macOS: {}, falling back to GStreamer",
+                            warn!(
+                                "⚠️ Player Factory: Failed to create MPV player on macOS: {}",
                                 e
                             );
-                            info!("Creating GStreamer player backend as fallback");
-                            return Ok(Player::GStreamer(GStreamerPlayer::new()?));
+                            info!("🔄 Player Factory: Falling back to GStreamer");
+                            match GStreamerPlayer::new() {
+                                Ok(gst_player) => {
+                                    warn!(
+                                        "✅ Player Factory: Successfully created GStreamer fallback player"
+                                    );
+                                    return Ok(Player::GStreamer(gst_player));
+                                }
+                                Err(gst_e) => {
+                                    error!(
+                                        "❌ Player Factory: Both MPV and GStreamer failed on macOS. MPV: {}, GStreamer: {}",
+                                        e, gst_e
+                                    );
+                                    return Err(e); // Return original MPV error
+                                }
+                            }
                         }
                     }
                 }
                 PlayerBackend::GStreamer => {
-                    info!("Creating GStreamer player backend for macOS");
-                    // On macOS, GStreamer might have issues, so we try it but have MPV as fallback
+                    info!("🎬 Player Factory: Creating GStreamer player backend for macOS");
+                    debug!(
+                        "🎬 Player Factory: GStreamer on macOS may have compatibility issues, fallback available"
+                    );
                     match GStreamerPlayer::new() {
-                        Ok(player) => return Ok(Player::GStreamer(player)),
+                        Ok(player) => {
+                            info!(
+                                "✅ Player Factory: Successfully created GStreamer player for macOS"
+                            );
+                            return Ok(Player::GStreamer(player));
+                        }
                         Err(e) => {
-                            tracing::warn!(
-                                "Failed to create GStreamer player on macOS: {}, falling back to MPV",
+                            warn!(
+                                "⚠️ Player Factory: Failed to create GStreamer player on macOS: {}",
                                 e
                             );
-                            info!("Creating MPV player backend as fallback");
-                            return Ok(Player::Mpv(MpvPlayer::new(config)?));
+                            info!("🔄 Player Factory: Falling back to MPV");
+                            match MpvPlayer::new(config) {
+                                Ok(mpv_player) => {
+                                    warn!(
+                                        "✅ Player Factory: Successfully created MPV fallback player"
+                                    );
+                                    return Ok(Player::Mpv(mpv_player));
+                                }
+                                Err(mpv_e) => {
+                                    error!(
+                                        "❌ Player Factory: Both GStreamer and MPV failed on macOS. GStreamer: {}, MPV: {}",
+                                        e, mpv_e
+                                    );
+                                    return Err(e); // Return original GStreamer error
+                                }
+                            }
                         }
                     }
                 }
@@ -82,12 +133,42 @@ impl Player {
         {
             match backend {
                 PlayerBackend::GStreamer => {
-                    info!("Creating GStreamer player backend");
-                    Ok(Player::GStreamer(GStreamerPlayer::new()?))
+                    info!("🎬 Player Factory: Creating GStreamer player backend for Linux/Other");
+                    debug!(
+                        "🎬 Player Factory: GStreamer should have good compatibility on this platform"
+                    );
+                    match GStreamerPlayer::new() {
+                        Ok(player) => {
+                            info!("✅ Player Factory: Successfully created GStreamer player");
+                            Ok(Player::GStreamer(player))
+                        }
+                        Err(e) => {
+                            error!(
+                                "❌ Player Factory: Failed to create GStreamer player: {}",
+                                e
+                            );
+                            Err(e)
+                        }
+                    }
                 }
                 PlayerBackend::Mpv => {
-                    info!("Creating MPV player backend");
-                    Ok(Player::Mpv(MpvPlayer::new(config)?))
+                    info!("🎬 Player Factory: Creating MPV player backend for Linux/Other");
+                    debug!(
+                        "🎬 Player Factory: MPV config - hardware_accel={}, verbose_logging={}, cache_size={}MB",
+                        config.playback.hardware_acceleration,
+                        config.playback.mpv_verbose_logging,
+                        config.playback.mpv_cache_size_mb
+                    );
+                    match MpvPlayer::new(config) {
+                        Ok(player) => {
+                            info!("✅ Player Factory: Successfully created MPV player");
+                            Ok(Player::Mpv(player))
+                        }
+                        Err(e) => {
+                            error!("❌ Player Factory: Failed to create MPV player: {}", e);
+                            Err(e)
+                        }
+                    }
                 }
             }
         }
@@ -101,24 +182,77 @@ impl Player {
     }
 
     pub async fn load_media(&self, url: &str) -> Result<()> {
-        match self {
+        let backend_name = match self {
+            Player::GStreamer(_) => "GStreamer",
+            Player::Mpv(_) => "MPV",
+        };
+        info!("🎥 Player ({}): Loading media: {}", backend_name, url);
+        debug!(
+            "🎥 Player ({}): Media URL length: {} chars",
+            backend_name,
+            url.len()
+        );
+
+        let result = match self {
             Player::GStreamer(p) => p.load_media(url, None).await,
             Player::Mpv(p) => p.load_media(url, None).await,
+        };
+
+        match &result {
+            Ok(_) => info!("✅ Player ({}): Successfully loaded media", backend_name),
+            Err(e) => error!("❌ Player ({}): Failed to load media: {}", backend_name, e),
         }
+
+        result
     }
 
     pub async fn play(&self) -> Result<()> {
-        match self {
+        let backend_name = match self {
+            Player::GStreamer(_) => "GStreamer",
+            Player::Mpv(_) => "MPV",
+        };
+        debug!("▶️ Player ({}): Starting playback", backend_name);
+
+        let result = match self {
             Player::GStreamer(p) => p.play().await,
             Player::Mpv(p) => p.play().await,
+        };
+
+        match &result {
+            Ok(_) => info!(
+                "✅ Player ({}): Playback started successfully",
+                backend_name
+            ),
+            Err(e) => error!(
+                "❌ Player ({}): Failed to start playback: {}",
+                backend_name, e
+            ),
         }
+
+        result
     }
 
     pub async fn pause(&self) -> Result<()> {
-        match self {
+        let backend_name = match self {
+            Player::GStreamer(_) => "GStreamer",
+            Player::Mpv(_) => "MPV",
+        };
+        debug!("⏸️ Player ({}): Pausing playback", backend_name);
+
+        let result = match self {
             Player::GStreamer(p) => p.pause().await,
             Player::Mpv(p) => p.pause().await,
+        };
+
+        match &result {
+            Ok(_) => info!("✅ Player ({}): Playback paused successfully", backend_name),
+            Err(e) => error!(
+                "❌ Player ({}): Failed to pause playback: {}",
+                backend_name, e
+            ),
         }
+
+        result
     }
 
     pub async fn stop(&self) -> Result<()> {
@@ -237,6 +371,38 @@ impl Player {
         match self {
             Player::GStreamer(p) => p.get_buffer_percentage().await,
             Player::Mpv(p) => p.get_buffer_percentage().await,
+        }
+    }
+
+    /// Get the name of the currently active backend
+    pub fn get_backend_name(&self) -> &'static str {
+        match self {
+            Player::GStreamer(_) => "GStreamer",
+            Player::Mpv(_) => "MPV",
+        }
+    }
+
+    /// Get the backend type for comparison
+    pub fn get_backend_type(&self) -> PlayerBackend {
+        match self {
+            Player::GStreamer(_) => PlayerBackend::GStreamer,
+            Player::Mpv(_) => PlayerBackend::Mpv,
+        }
+    }
+
+    /// Log current player information for debugging
+    pub async fn log_player_info(&self) {
+        let backend = self.get_backend_name();
+        let state = self.get_state().await;
+        let position = self.get_position().await;
+        let duration = self.get_duration().await;
+
+        info!("🔍 Player Info: Backend={}, State={:?}", backend, state);
+        if let Some(pos) = position {
+            debug!("🔍 Player Info: Position={:.2}s", pos.as_secs_f64());
+        }
+        if let Some(dur) = duration {
+            debug!("🔍 Player Info: Duration={:.2}s", dur.as_secs_f64());
         }
     }
 }

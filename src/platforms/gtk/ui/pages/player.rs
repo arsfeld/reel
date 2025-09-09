@@ -4,6 +4,7 @@ use gtk4::{self, gdk, gio, glib, prelude::*};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace};
@@ -48,6 +49,7 @@ pub struct PlayerPage {
     loading_spinner: gtk4::Spinner,
     loading_label: gtk4::Label,
     error_overlay: gtk4::Box,
+    media_loading: Arc<AtomicBool>,
     error_label: gtk4::Label,
     view_model: Arc<PlayerViewModel>,
 }
@@ -362,14 +364,36 @@ impl PlayerPage {
             hide_timer_clone.borrow_mut().replace(timer_id);
         });
 
-        // Add leave event handler to hide controls immediately when mouse leaves
+        // Add separate hover controllers for controls to prevent hiding when mouse is over them
+        let controls_hover_controller = gtk4::EventControllerMotion::new();
+        let controls_mouse_over = Rc::new(RefCell::new(false));
+
+        let controls_mouse_over_enter = controls_mouse_over.clone();
+        controls_hover_controller.connect_enter(move |_, _, _| {
+            *controls_mouse_over_enter.borrow_mut() = true;
+        });
+
+        let controls_mouse_over_leave = controls_mouse_over.clone();
+        controls_hover_controller.connect_leave(move |_| {
+            *controls_mouse_over_leave.borrow_mut() = false;
+        });
+
+        controls_container.add_controller(controls_hover_controller);
+
+        // Add leave event handler to hide controls, but only if mouse is not over controls
         let controls_container_for_leave = controls_container.clone();
         let top_left_osd_for_leave = top_left_osd.clone();
         let top_right_osd_for_leave = top_right_osd.clone();
         let hide_timer_for_leave = hide_timer.clone();
         let widget_for_leave = widget.clone();
+        let controls_mouse_over_for_leave = controls_mouse_over.clone();
 
         hover_controller.connect_leave(move |_| {
+            // Don't hide if mouse is over controls
+            if *controls_mouse_over_for_leave.borrow() {
+                return;
+            }
+
             // Cancel any pending timer
             if let Some(timer_id) = hide_timer_for_leave.borrow_mut().take() {
                 timer_id.remove();
@@ -680,6 +704,7 @@ impl PlayerPage {
             loading_spinner,
             loading_label,
             error_overlay,
+            media_loading: Arc::new(AtomicBool::new(false)),
             error_label,
             view_model,
         }
@@ -732,6 +757,19 @@ impl PlayerPage {
         media_item: &MediaItem,
         state: Arc<AppState>,
     ) -> anyhow::Result<()> {
+        // Check if media is already loading - prevent concurrent load_media calls
+        if self
+            .media_loading
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            info!(
+                "PlayerPage::load_media() - Media already loading, ignoring request for: {}",
+                media_item.title()
+            );
+            return Ok(());
+        }
+
         info!(
             "PlayerPage::load_media() - Starting to load media: {}",
             media_item.title()
@@ -767,6 +805,7 @@ impl PlayerPage {
                 } else {
                     self.show_error_state("Failed to load media from server");
                 }
+                self.media_loading.store(false, Ordering::Release);
                 return Err(e);
             }
             // Retrieve stream info from VM
@@ -776,6 +815,7 @@ impl PlayerPage {
                     let err = anyhow::anyhow!("Stream information unavailable");
                     error!("PlayerPage::load_media() - VM did not provide stream info");
                     self.show_error_state("Failed to load media stream");
+                    self.media_loading.store(false, Ordering::Release);
                     return Err(err);
                 }
             };
@@ -797,7 +837,23 @@ impl PlayerPage {
             // Update loading message
             self.show_loading_state("Preparing video player...");
 
-            // Clear any existing video widget first
+            // Stop current playback and clean up player state before switching media
+            debug!("PlayerPage::load_media() - Stopping current playback before media switch");
+
+            // Stop position sync timer first
+            self.stop_position_sync_timer().await;
+
+            {
+                let player = self.player.read().await;
+                if let Err(e) = player.stop().await {
+                    debug!("PlayerPage::load_media() - Error stopping player: {}", e);
+                }
+            }
+
+            // Brief delay to ensure cleanup is complete before widget recreation
+            glib::timeout_future(std::time::Duration::from_millis(50)).await;
+
+            // Clear any existing video widget after stopping playback
             debug!("PlayerPage::load_media() - Clearing existing video widgets");
             while let Some(child) = self.video_container.first_child() {
                 self.video_container.remove(&child);
@@ -852,6 +908,7 @@ impl PlayerPage {
                 Err(e) => {
                     error!("Failed to load media into player: {}", e);
                     self.show_error_state(&format!("Failed to play video: {}", e));
+                    self.media_loading.store(false, Ordering::Release);
                     return Err(e);
                 }
             }
@@ -1003,10 +1060,15 @@ impl PlayerPage {
                 "PlayerPage::load_media() - Backend not found for ID: {}",
                 backend_id
             );
+            self.media_loading.store(false, Ordering::Release);
             return Err(anyhow::anyhow!("Backend not found for ID: {}", backend_id));
         }
 
         info!("PlayerPage::load_media() - Media loading complete");
+
+        // Reset loading flag
+        self.media_loading.store(false, Ordering::Release);
+
         Ok(())
     }
 

@@ -32,6 +32,9 @@ pub struct GeneralConfig {
         skip_serializing_if = "is_default_language"
     )]
     pub language: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_source_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -309,6 +312,15 @@ impl Config {
         }
     }
 
+    pub fn get_preferred_source_id(&self) -> Option<String> {
+        self.general.preferred_source_id.clone()
+    }
+
+    pub fn set_preferred_source_id(&mut self, source_id: Option<String>) -> Result<()> {
+        self.general.preferred_source_id = source_id;
+        self.save()
+    }
+
     fn config_path() -> Result<PathBuf> {
         #[cfg(target_os = "macos")]
         {
@@ -332,6 +344,7 @@ impl Default for GeneralConfig {
         Self {
             theme: default_theme(),
             language: default_language(),
+            preferred_source_id: None,
         }
     }
 }
