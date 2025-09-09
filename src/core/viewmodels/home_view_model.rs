@@ -20,10 +20,12 @@ pub struct MediaSection {
 pub enum SectionType {
     RecentlyAdded,
     ContinueWatching,
-    Recommended,
+    Suggested,
+    TopRated,
     Library(String),
     Genre(String),
     Trending,
+    RecentlyPlayed,
 }
 
 pub struct HomeViewModel {
@@ -36,6 +38,7 @@ pub struct HomeViewModel {
     is_loading: Property<bool>,
     error: Property<Option<String>>,
     section_limits: Property<HashMap<String, usize>>,
+    current_source_id: Property<Option<String>>, // Filter by source
     event_bus: Option<Arc<EventBus>>,
 }
 
@@ -57,6 +60,7 @@ impl HomeViewModel {
             is_loading: Property::new(false, "is_loading"),
             error: Property::new(None, "error"),
             section_limits: Property::new(default_limits, "section_limits"),
+            current_source_id: Property::new(None, "current_source_id"),
             event_bus: None,
         }
     }
@@ -97,13 +101,82 @@ impl HomeViewModel {
     }
 
     pub async fn load_home_content(&self) -> Result<()> {
+        // First load from cache immediately (offline-first)
+        let _ = self.load_home_content_from_cache().await;
+
+        // Then trigger a sync in the background if needed
+        let _ = self.load_home_content_with_sync().await;
+
+        Ok(())
+    }
+
+    async fn load_home_content_from_cache(&self) -> Result<()> {
+        use tracing::{debug, info, warn};
+
         self.is_loading.set(true).await;
         self.error.set(None).await;
 
         let mut sections = Vec::new();
+        let current_source_id = self.current_source_id.get().await;
+
+        info!(
+            "Loading home content for source filter: {:?}",
+            current_source_id
+        );
+
+        // First, try to get home sections from backends
+        let backend_sections = if let Some(ref source_id) = current_source_id {
+            // Get sections for specific source
+            debug!("Getting home sections for source: {}", source_id);
+            self.data_service
+                .get_home_sections_for_source(source_id)
+                .await
+                .unwrap_or_default()
+        } else {
+            // Get sections from all sources
+            debug!("Getting home sections from all sources");
+            self.data_service
+                .get_all_home_sections()
+                .await
+                .unwrap_or_default()
+        };
+
+        debug!("Found {} backend sections", backend_sections.len());
+
+        // Convert backend home sections to our format
+        for backend_section in backend_sections {
+            sections.push(MediaSection {
+                title: backend_section.title,
+                items: backend_section.items,
+                library_id: None, // Backend sections don't map to specific libraries
+                section_type: match backend_section.section_type {
+                    crate::models::HomeSectionType::ContinueWatching => {
+                        SectionType::ContinueWatching
+                    }
+                    crate::models::HomeSectionType::RecentlyAdded => SectionType::RecentlyAdded,
+                    crate::models::HomeSectionType::Suggested => SectionType::Suggested,
+                    crate::models::HomeSectionType::TopRated => SectionType::TopRated,
+                    crate::models::HomeSectionType::Trending => SectionType::Trending,
+                    crate::models::HomeSectionType::RecentlyPlayed => SectionType::RecentlyPlayed,
+                    crate::models::HomeSectionType::Custom(name) => SectionType::Genre(name),
+                },
+            });
+        }
+
+        // If we have backend sections, use them and skip the fallback
+        if !sections.is_empty() {
+            info!("Using {} backend sections", sections.len());
+            self.sections.set(sections).await;
+            self.is_loading.set(false).await;
+            return Ok(());
+        }
+
+        // Fallback: Create sections from database if no backend sections available
+        warn!("No backend sections found, falling back to database sections");
 
         match self.load_continue_watching().await {
             Ok(items) if !items.is_empty() => {
+                info!("Loaded {} continue watching items", items.len());
                 sections.push(MediaSection {
                     title: "Continue Watching".to_string(),
                     items: items.clone(),
@@ -113,12 +186,15 @@ impl HomeViewModel {
 
                 self.continue_watching.set(items).await;
             }
+            Ok(items) => {
+                info!("Continue watching returned {} items (empty)", items.len());
+            }
             Err(e) => error!("Failed to load continue watching: {}", e),
-            _ => {}
         }
 
         match self.load_recently_added().await {
             Ok(items) if !items.is_empty() => {
+                info!("Loaded {} recently added items", items.len());
                 if self.featured_item.get().await.is_none() && !items.is_empty() {
                     self.featured_item.set(Some(items[0].clone())).await;
                 }
@@ -132,12 +208,24 @@ impl HomeViewModel {
 
                 self.recently_added.set(items).await;
             }
+            Ok(items) => {
+                info!("Recently added returned {} items (empty)", items.len());
+            }
             Err(e) => error!("Failed to load recently added: {}", e),
-            _ => {}
         }
 
-        match self.data_service.get_all_libraries().await {
+        // Load libraries - filter by source if specified
+        let libraries_result = if let Some(ref source_id) = current_source_id {
+            info!("Loading libraries for source: {}", source_id);
+            self.data_service.get_libraries(source_id).await
+        } else {
+            info!("Loading libraries from all sources");
+            self.data_service.get_all_libraries().await
+        };
+
+        match libraries_result {
             Ok(libraries) => {
+                info!("Found {} libraries", libraries.len());
                 self.libraries.set(libraries.clone()).await;
 
                 let limit = self
@@ -149,26 +237,53 @@ impl HomeViewModel {
                     .unwrap_or(10);
 
                 for library in libraries.iter().take(3) {
+                    debug!("Processing library: {} ({})", library.title, library.id);
                     if let Ok(items) = self.data_service.get_media_items(&library.id).await {
+                        let items_count = items.len();
                         let limited_items: Vec<MediaItem> = items.into_iter().take(limit).collect();
+                        debug!(
+                            "Library {} has {} items (limited to {})",
+                            library.title,
+                            items_count,
+                            limited_items.len()
+                        );
 
                         if !limited_items.is_empty() {
-                            let friendly_title = Self::create_friendly_library_name(
-                                &library.title,
-                                &library.source_id,
-                            );
+                            let friendly_title = if current_source_id.is_some() {
+                                // When filtering by source, don't show source prefix
+                                library.title.clone()
+                            } else {
+                                // When showing all sources, show friendly names
+                                Self::create_friendly_library_name(
+                                    &library.title,
+                                    &library.source_id,
+                                )
+                            };
 
+                            debug!("Adding library section: {}", friendly_title);
                             sections.push(MediaSection {
                                 title: friendly_title,
                                 items: limited_items,
                                 library_id: Some(library.id.clone()),
                                 section_type: SectionType::Library(library.id.clone()),
                             });
+                        } else {
+                            debug!("Skipping empty library: {}", library.title);
                         }
+                    } else {
+                        warn!("Failed to get media items for library: {}", library.title);
                     }
                 }
             }
             Err(e) => error!("Failed to load libraries: {}", e),
+        }
+
+        info!("Final sections count: {}", sections.len());
+        if sections.is_empty() {
+            warn!(
+                "No sections available for source filter: {:?}",
+                current_source_id
+            );
         }
 
         self.sections.set(sections).await;
@@ -177,9 +292,23 @@ impl HomeViewModel {
         Ok(())
     }
 
+    async fn load_home_content_with_sync(&self) -> Result<()> {
+        // This method can trigger sync operations and refresh data
+        // For now, we just refresh from cache - the sync manager will
+        // handle background syncing and trigger events when new data arrives
+        self.load_home_content_from_cache().await
+    }
+
     async fn load_continue_watching(&self) -> Result<Vec<MediaItem>> {
-        // Get media items that are in progress
-        let items = self.data_service.get_continue_watching().await?;
+        // Get media items that are in progress, filtered by current source if specified
+        let current_source_id = self.current_source_id.get().await;
+        let items = if let Some(source_id) = current_source_id {
+            self.data_service
+                .get_continue_watching_for_source(&source_id)
+                .await?
+        } else {
+            self.data_service.get_continue_watching().await?
+        };
 
         // Filter items that have playback progress
         let mut result = Vec::new();
@@ -211,7 +340,17 @@ impl HomeViewModel {
             .copied()
             .unwrap_or(20);
 
-        self.data_service.get_recently_added(Some(limit)).await
+        // Filter by current source if specified
+        let current_source_id = self.current_source_id.get().await;
+        if let Some(source_id) = current_source_id {
+            // Get recently added from specific source
+            self.data_service
+                .get_recently_added_for_source(&source_id, Some(limit))
+                .await
+        } else {
+            // Get recently added from all sources
+            self.data_service.get_recently_added(Some(limit)).await
+        }
     }
 
     pub async fn refresh_section(&self, section_type: SectionType) -> Result<()> {
@@ -318,7 +457,7 @@ impl HomeViewModel {
             })
             .await;
 
-        let _ = self.load_home_content().await;
+        let _ = self.load_home_content_from_cache().await;
     }
 
     pub async fn set_featured_item(&self, item: MediaItem) {
@@ -328,7 +467,7 @@ impl HomeViewModel {
     async fn handle_event(&self, event: DatabaseEvent) {
         match event.event_type {
             EventType::MediaCreated | EventType::MediaUpdated | EventType::MediaDeleted => {
-                let _ = self.load_home_content().await;
+                let _ = self.load_home_content_from_cache().await;
             }
             EventType::PlaybackPositionUpdated | EventType::PlaybackCompleted => {
                 let _ = self.refresh_section(SectionType::ContinueWatching).await;
@@ -336,7 +475,11 @@ impl HomeViewModel {
             EventType::LibraryCreated
             | EventType::LibraryDeleted
             | EventType::LibraryItemCountChanged => {
-                let _ = self.load_home_content().await;
+                let _ = self.load_home_content_from_cache().await;
+            }
+            EventType::HomeSectionsUpdated => {
+                // Reload content when home sections are updated from sync
+                let _ = self.load_home_content_from_cache().await;
             }
             _ => {}
         }
@@ -366,6 +509,30 @@ impl HomeViewModel {
         &self.is_loading
     }
 
+    pub fn current_source_id(&self) -> &Property<Option<String>> {
+        &self.current_source_id
+    }
+
+    pub async fn set_source_filter(&self, source_id: Option<String>) -> Result<()> {
+        use tracing::info;
+
+        let old_source = self.current_source_id.get().await;
+        info!(
+            "Changing source filter from {:?} to {:?}",
+            old_source, source_id
+        );
+
+        // Clear existing sections immediately for instant feedback
+        self.sections.set(Vec::new()).await;
+        self.is_loading.set(true).await;
+
+        self.current_source_id.set(source_id).await;
+
+        // Reload content with new filter (from cache for immediate response)
+        info!("Reloading home content with new source filter");
+        self.load_home_content_from_cache().await
+    }
+
     pub async fn refresh(&self) -> Result<()> {
         // Use the existing load_home_content method which properly loads all sections
         self.load_home_content().await
@@ -384,6 +551,7 @@ impl ViewModel for HomeViewModel {
             EventType::LibraryCreated,
             EventType::LibraryDeleted,
             EventType::LibraryItemCountChanged,
+            EventType::HomeSectionsUpdated,
         ]);
 
         let mut subscriber = event_bus.subscribe_filtered(filter);
@@ -406,12 +574,13 @@ impl ViewModel for HomeViewModel {
             "recently_added" => Some(self.recently_added.subscribe()),
             "libraries" => Some(self.libraries.subscribe()),
             "is_loading" => Some(self.is_loading.subscribe()),
+            "current_source_id" => Some(self.current_source_id.subscribe()),
             _ => None,
         }
     }
 
     async fn refresh(&self) {
-        let _ = self.load_home_content().await;
+        let _ = self.load_home_content_from_cache().await;
     }
 
     fn dispose(&self) {}
@@ -429,6 +598,7 @@ impl Clone for HomeViewModel {
             is_loading: self.is_loading.clone(),
             error: self.error.clone(),
             section_limits: self.section_limits.clone(),
+            current_source_id: self.current_source_id.clone(),
             event_bus: self.event_bus.clone(),
         }
     }

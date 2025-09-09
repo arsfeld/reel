@@ -7,7 +7,7 @@ pub enum NavigationRequest {
     ShowShowDetails(crate::models::Show),
     ShowPlayer(MediaItem),
     ShowLibrary(String, crate::models::Library), // backend_id, library
-    ShowHome,
+    ShowHome(Option<String>),                    // Optional source_id for per-source home
     ShowSources,
     GoBack,
 }
@@ -30,7 +30,11 @@ impl NavigationRequest {
     }
 
     pub fn show_home() -> Self {
-        Self::ShowHome
+        Self::ShowHome(None) // Default: show all sources
+    }
+
+    pub fn show_home_for_source(source_id: String) -> Self {
+        Self::ShowHome(Some(source_id))
     }
 
     pub fn show_sources() -> Self {

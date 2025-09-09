@@ -59,6 +59,9 @@ pub enum EventType {
     LibraryDeleted,
     LibraryItemCountChanged,
 
+    // Home sections events
+    HomeSectionsUpdated,
+
     // Source events
     SourceAdded,
     SourceUpdated,
@@ -205,6 +208,7 @@ impl EventType {
             EventType::BackgroundTaskStarted => "system.task_started",
             EventType::BackgroundTaskCompleted => "system.task_completed",
             EventType::ErrorOccurred => "system.error",
+            EventType::HomeSectionsUpdated => "home.sections_updated",
         }
     }
 }
