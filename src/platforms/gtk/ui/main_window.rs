@@ -218,7 +218,7 @@ mod imp {
                 move |_, row| {
                     if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
                         info!("Home selected");
-                        obj.show_home_page();
+                        obj.show_home_page_for_source(None);
                     }
                 }
             ));
@@ -872,7 +872,7 @@ impl ReelMainWindow {
         imp.header_add_button.replace(None);
     }
 
-    fn show_home_page(&self) {
+    fn show_home_page_for_source(&self, source_id: Option<String>) {
         let imp = self.imp();
 
         // Prepare for navigation
@@ -890,9 +890,10 @@ impl ReelMainWindow {
 
                 let home_page = pages::HomePage::new(
                     state.clone(),
-                    move |title_label| {
-                        // Set the header title
-                        header_ref.set_title_widget(Some(title_label));
+                    source_id.clone(), // Pass the source filter
+                    move |title_widget| {
+                        // Set the header title widget (can be label or more complex widget)
+                        header_ref.set_title_widget(Some(title_widget));
                     },
                     move |nav_request| {
                         if let Some(window) = window_weak.upgrade() {
@@ -907,8 +908,13 @@ impl ReelMainWindow {
                 imp.home_page.replace(Some(home_page));
             }
         } else {
-            // Refresh the home page if it already exists
+            // Refresh the home page if it already exists and restore its header
             if let Some(home_page) = &*imp.home_page.borrow() {
+                // Re-setup the header with source selector since it was cleared during navigation
+                let header_ref = imp.content_header.clone();
+                home_page.setup_header_with_selector(move |title_widget| {
+                    header_ref.set_title_widget(Some(title_widget));
+                });
                 home_page.refresh();
             }
         }
@@ -966,7 +972,7 @@ impl ReelMainWindow {
         };
 
         if should_show_home {
-            self.show_home_page();
+            self.show_home_page_for_source(None);
         } else {
             // Just refresh the home page data if it exists
             if let Some(home_page) = &*imp.home_page.borrow() {
@@ -1017,7 +1023,7 @@ impl ReelMainWindow {
         };
 
         if should_show_home {
-            self.show_home_page();
+            self.show_home_page_for_source(None);
         } else if let Some(home_page) = &*imp.home_page.borrow() {
             home_page.refresh();
         }
@@ -1798,8 +1804,8 @@ impl ReelMainWindow {
         let state = self.imp().state.borrow().as_ref().unwrap().clone();
 
         match request {
-            NavigationRequest::ShowHome => {
-                self.show_home_page();
+            NavigationRequest::ShowHome(source_id) => {
+                self.show_home_page_for_source(source_id);
             }
             NavigationRequest::ShowSources => {
                 self.show_sources_page();
@@ -1819,12 +1825,47 @@ impl ReelMainWindow {
             NavigationRequest::GoBack => {
                 // Navigate back in history
                 if let Some(stack) = self.imp().content_stack.borrow().as_ref() {
+                    // Check if we're currently on the player page and clean it up
+                    if let Some(current_page) = stack.visible_child_name() {
+                        if current_page == "player" {
+                            // Stop the player before navigating away
+                            if let Some(player_page) = self.imp().player_page.borrow().as_ref() {
+                                let player_page = player_page.clone();
+                                let window_self = self.clone();
+                                glib::spawn_future_local(async move {
+                                    player_page.stop().await;
+
+                                    // Restore UI state
+                                    window_self.imp().content_header.set_visible(true);
+                                    window_self
+                                        .imp()
+                                        .content_toolbar
+                                        .set_top_bar_style(adw::ToolbarStyle::Raised);
+
+                                    // Restore window size
+                                    let (width, height) =
+                                        *window_self.imp().saved_window_size.borrow();
+                                    window_self.set_default_size(width, height);
+
+                                    // Restore sidebar
+                                    if let Some(content) = window_self.content()
+                                        && let Some(split_view) =
+                                            content.downcast_ref::<adw::NavigationSplitView>()
+                                    {
+                                        split_view.set_collapsed(false);
+                                        split_view.set_show_content(true);
+                                    }
+                                });
+                            }
+                        }
+                    }
+
                     // Pop from navigation stack if available
                     if let Some(previous_page) = self.imp().navigation_stack.borrow_mut().pop() {
                         stack.set_visible_child_name(&previous_page);
                     } else {
                         // Default to home
-                        self.show_home_page();
+                        self.show_home_page_for_source(None);
                     }
                 }
             }

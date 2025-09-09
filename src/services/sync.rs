@@ -158,6 +158,33 @@ impl SyncManager {
             return Err(anyhow::anyhow!("{}", error_msg));
         }
 
+        // Fetch and cache home sections first
+        match backend.get_home_sections().await {
+            Ok(sections) => {
+                info!("Found {} home sections", sections.len());
+
+                // Cache home sections for this backend
+                let home_sections_key = format!("{}:home_sections", backend_id);
+                if let Err(e) = self
+                    .data_service
+                    .store_home_sections(&home_sections_key, &sections)
+                    .await
+                {
+                    error!("Failed to cache home sections: {}", e);
+                    errors.push(format!("Failed to cache home sections: {}", e));
+                } else {
+                    items_synced += sections.len();
+                }
+            }
+            Err(e) => {
+                info!(
+                    "Backend doesn't provide home sections or failed to fetch: {}",
+                    e
+                );
+                // This is not a critical error, continue with library sync
+            }
+        }
+
         // Fetch libraries
         match backend.get_libraries().await {
             Ok(libraries) => {
