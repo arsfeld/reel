@@ -3,13 +3,12 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{debug, info, warn};
 
 use crate::config::Config;
-use crate::events::{
-    event_bus::EventBus,
-    types::{DatabaseEvent, EventPayload, EventType},
-};
+use crate::core::viewmodels::preferences_view_model::{PlayerBackend, ThemeOption};
+use crate::core::viewmodels::{PreferencesViewModel, PropertySubscriber, ViewModel};
+use crate::events::event_bus::EventBus;
 use tokio::sync::RwLock;
 
 mod imp {
@@ -17,15 +16,26 @@ mod imp {
 
     #[derive(Default)]
     pub struct PreferencesWindow {
-        pub config: RefCell<Option<Arc<RwLock<Config>>>>,
-        pub event_bus: RefCell<Option<Arc<EventBus>>>,
+        pub view_model: RefCell<Option<Arc<PreferencesViewModel>>>,
+        pub theme_subscriber: RefCell<Option<PropertySubscriber>>,
+        pub backend_subscriber: RefCell<Option<PropertySubscriber>>,
+        // Theme toggle buttons
+        pub theme_system_toggle: RefCell<Option<gtk4::ToggleButton>>,
+        pub theme_light_toggle: RefCell<Option<gtk4::ToggleButton>>,
+        pub theme_dark_toggle: RefCell<Option<gtk4::ToggleButton>>,
+        // Player backend toggle buttons
+        pub backend_gstreamer_toggle: RefCell<Option<gtk4::ToggleButton>>,
+        pub backend_mpv_toggle: RefCell<Option<gtk4::ToggleButton>>,
     }
 
     impl std::fmt::Debug for PreferencesWindow {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("PreferencesWindow")
-                .field("config", &"Arc<RwLock<Config>>")
-                .field("event_bus", &"Arc<EventBus>")
+                .field("view_model", &"Option<Arc<PreferencesViewModel>>")
+                .field("theme_subscriber", &"Option<PropertySubscriber>")
+                .field("backend_subscriber", &"Option<PropertySubscriber>")
+                .field("theme_toggles", &"ToggleButton group")
+                .field("backend_toggles", &"ToggleButton group")
                 .finish()
         }
     }
@@ -62,6 +72,9 @@ impl PreferencesWindow {
         config: Arc<RwLock<Config>>,
         event_bus: Arc<EventBus>,
     ) -> Self {
+        info!("🔧 PreferencesWindow: Creating new preferences dialog");
+        debug!("🔧 PreferencesWindow: Parent window provided");
+
         let window: Self = glib::Object::builder()
             .property("title", "Preferences")
             .property("modal", true)
@@ -70,8 +83,37 @@ impl PreferencesWindow {
             .property("default-height", 500)
             .build();
 
-        window.imp().config.replace(Some(config));
-        window.imp().event_bus.replace(Some(event_bus));
+        // Create ViewModel
+        debug!("🔧 PreferencesWindow: Creating PreferencesViewModel");
+        let view_model = Arc::new(PreferencesViewModel::new(config));
+        window.imp().view_model.replace(Some(view_model.clone()));
+        info!("✅ PreferencesWindow: ViewModel created and stored");
+
+        // Initialize ViewModel
+        let view_model_clone = view_model.clone();
+        let window_weak = window.downgrade();
+        debug!("🔧 PreferencesWindow: Starting ViewModel initialization task");
+        glib::spawn_future_local(async move {
+            view_model_clone.initialize(event_bus).await;
+            info!("✅ PreferencesWindow: ViewModel initialized successfully");
+
+            // Setup reactive subscriptions after initialization
+            if let Some(window) = window_weak.upgrade() {
+                debug!("🔧 PreferencesWindow: Setting up reactive subscriptions");
+                window.setup_reactive_subscriptions();
+
+                // Synchronize UI with ViewModel state after initialization
+                window.sync_ui_with_viewmodel().await;
+
+                info!("✅ PreferencesWindow: Reactive subscriptions established");
+            } else {
+                warn!(
+                    "⚠️ PreferencesWindow: Window was destroyed before subscriptions could be set up"
+                );
+            }
+        });
+
+        info!("✅ PreferencesWindow: Preferences dialog created successfully");
         window
     }
 
@@ -84,209 +126,511 @@ impl PreferencesWindow {
             .icon_name("applications-system-symbolic")
             .build();
 
+        // Theme selection group
         let appearance_group = adw::PreferencesGroup::builder().title("Appearance").build();
 
-        let theme_row = adw::ComboRow::builder()
-            .title("Theme")
-            .model(&gtk4::StringList::new(&["System", "Light", "Dark"]))
+        // Create theme toggle buttons with proper styling
+        let theme_system_toggle = gtk4::ToggleButton::builder()
+            .label("System")
+            .valign(gtk4::Align::Center)
+            .vexpand(false)
             .build();
+        let theme_light_toggle = gtk4::ToggleButton::builder()
+            .label("Light")
+            .valign(gtk4::Align::Center)
+            .vexpand(false)
+            .build();
+        let theme_dark_toggle = gtk4::ToggleButton::builder()
+            .label("Dark")
+            .valign(gtk4::Align::Center)
+            .vexpand(false)
+            .build();
+
+        // Create a linked box for grouped appearance
+        let theme_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(0) // No spacing for linked appearance
+            .css_classes(vec!["linked".to_string()]) // GTK linked style class
+            .valign(gtk4::Align::Center) // Center vertically
+            .vexpand(false) // Don't expand vertically
+            .build();
+        theme_box.append(&theme_system_toggle);
+        theme_box.append(&theme_light_toggle);
+        theme_box.append(&theme_dark_toggle);
+
+        let theme_row = adw::ActionRow::builder()
+            .title("Theme")
+            .subtitle("Choose the application theme")
+            .build();
+        theme_row.add_suffix(&theme_box);
+        theme_row.set_activatable_widget(Some(&theme_system_toggle));
 
         appearance_group.add(&theme_row);
         general_page.add(&appearance_group);
 
-        // Create Playback group
+        // Player backend selection group
         let playback_group = adw::PreferencesGroup::builder().title("Playback").build();
 
-        let player_backend_row = adw::ComboRow::builder()
-            .title("Player Backend")
-            .subtitle("Choose between GStreamer and MPV for media playback")
-            .model(&gtk4::StringList::new(&["GStreamer", "MPV"]))
+        // Create player backend toggle buttons with proper styling
+        let backend_gstreamer_toggle = gtk4::ToggleButton::builder()
+            .label("GStreamer")
+            .valign(gtk4::Align::Center)
+            .vexpand(false)
+            .build();
+        let backend_mpv_toggle = gtk4::ToggleButton::builder()
+            .label("MPV (Recommended)")
+            .valign(gtk4::Align::Center)
+            .vexpand(false)
             .build();
 
-        // Set current selections based on shared config
-        if let Some(config_arc) = self.imp().config.borrow().as_ref() {
-            // Load config asynchronously without blocking the main thread
-            let config_arc = config_arc.clone();
-            let theme_row_clone = theme_row.clone();
-            let player_backend_row_clone = player_backend_row.clone();
+        // Create a linked box for grouped appearance
+        let backend_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(0) // No spacing for linked appearance
+            .css_classes(vec!["linked".to_string()]) // GTK linked style class
+            .valign(gtk4::Align::Center) // Center vertically
+            .vexpand(false) // Don't expand vertically
+            .build();
+        backend_box.append(&backend_gstreamer_toggle);
+        backend_box.append(&backend_mpv_toggle);
 
-            glib::spawn_future_local(async move {
-                let config = config_arc.read().await;
+        let backend_row = adw::ActionRow::builder()
+            .title("Player Backend")
+            .subtitle("MPV provides better subtitle rendering")
+            .build();
+        backend_row.add_suffix(&backend_box);
+        backend_row.set_activatable_widget(Some(&backend_gstreamer_toggle));
 
-                // Set theme selection
-                let theme_index = match config.general.theme.as_str() {
-                    "light" => 1,
-                    "dark" => 2,
-                    _ => 0, // Default to System/auto
-                };
-                theme_row_clone.set_selected(theme_index);
-
-                // Set player backend selection (case-insensitive comparison)
-                let backend = config.playback.player_backend.to_lowercase();
-                info!(
-                    "Current player backend in config: '{}' (original: '{}')",
-                    backend, config.playback.player_backend
-                );
-
-                let selected_index = if backend == "gstreamer" {
-                    0
-                } else {
-                    1 // Default to MPV for "mpv" or any other value (since MPV is the default)
-                };
-                info!("Setting player backend combo to index: {}", selected_index);
-                player_backend_row_clone.set_selected(selected_index);
-            });
-        }
-
-        playback_group.add(&player_backend_row);
+        playback_group.add(&backend_row);
         general_page.add(&playback_group);
+
+        // Store references for reactive updates
+        imp.theme_system_toggle
+            .replace(Some(theme_system_toggle.clone()));
+        imp.theme_light_toggle
+            .replace(Some(theme_light_toggle.clone()));
+        imp.theme_dark_toggle
+            .replace(Some(theme_dark_toggle.clone()));
+        imp.backend_gstreamer_toggle
+            .replace(Some(backend_gstreamer_toggle.clone()));
+        imp.backend_mpv_toggle
+            .replace(Some(backend_mpv_toggle.clone()));
+
+        // Log initial UI state before reactive handlers are set up
+        debug!("🎮 PreferencesWindow: Initial toggle button states:");
+        debug!(
+            "  Theme - System:{}, Light:{}, Dark:{}",
+            theme_system_toggle.is_active(),
+            theme_light_toggle.is_active(),
+            theme_dark_toggle.is_active()
+        );
+        debug!(
+            "  Backend - GStreamer:{}, MPV:{}",
+            backend_gstreamer_toggle.is_active(),
+            backend_mpv_toggle.is_active()
+        );
 
         // Add page to window
         self.add(&general_page);
 
-        // Theme row handler
-        theme_row.connect_selected_notify(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |row| {
-                let selected = row.selected();
-                let theme = match selected {
-                    0 => "auto",
-                    1 => "light",
-                    2 => "dark",
-                    _ => "auto",
-                };
-                window.apply_theme(theme);
-            }
-        ));
-
-        // Player backend row handler
-        player_backend_row.connect_selected_notify(clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |row| {
-                let selected = row.selected();
-                let backend = match selected {
-                    1 => "mpv",
-                    _ => "gstreamer",
-                };
-                window.apply_player_backend(backend);
-            }
-        ));
+        // Set up reactive handlers
+        debug!("🎮 PreferencesWindow: About to setup reactive handlers for toggle buttons");
+        self.setup_reactive_handlers();
+        info!("✅ PreferencesWindow: Toggle button handlers established");
     }
 
-    fn apply_theme(&self, theme: &str) {
-        info!("Applying theme: {}", theme);
+    fn setup_reactive_handlers(&self) {
+        let imp = self.imp();
+
+        if let Some(view_model) = imp.view_model.borrow().as_ref() {
+            info!(
+                "🎮 PreferencesWindow: Setting up toggle button interaction handlers with ViewModel"
+            );
+
+            // Theme toggle button handlers
+            self.connect_theme_toggle_handlers(view_model.clone());
+
+            // Player backend toggle button handlers
+            self.connect_backend_toggle_handlers(view_model.clone());
+
+            info!("✅ PreferencesWindow: All toggle button handlers connected");
+        }
+    }
+
+    fn connect_theme_toggle_handlers(&self, view_model: Arc<PreferencesViewModel>) {
+        let imp = self.imp();
+
+        // System theme handler
+        if let Some(system_toggle) = imp.theme_system_toggle.borrow().as_ref() {
+            system_toggle.connect_toggled(clone!(
+                #[weak(rename_to = window)]
+                self,
+                #[strong]
+                view_model,
+                move |toggle| {
+                    if toggle.is_active() {
+                        info!("🎨 PreferencesWindow: USER SELECTED SYSTEM THEME");
+                        let theme = ThemeOption::System;
+                        window.apply_theme_to_ui(&theme);
+                        window.update_other_theme_toggles(&theme);
+
+                        let vm = view_model.clone();
+                        glib::spawn_future_local(async move {
+                            vm.set_theme(theme).await;
+                        });
+                    }
+                }
+            ));
+        }
+
+        // Light theme handler
+        if let Some(light_toggle) = imp.theme_light_toggle.borrow().as_ref() {
+            light_toggle.connect_toggled(clone!(
+                #[weak(rename_to = window)]
+                self,
+                #[strong]
+                view_model,
+                move |toggle| {
+                    if toggle.is_active() {
+                        info!("🎨 PreferencesWindow: USER SELECTED LIGHT THEME");
+                        let theme = ThemeOption::Light;
+                        window.apply_theme_to_ui(&theme);
+                        window.update_other_theme_toggles(&theme);
+
+                        let vm = view_model.clone();
+                        glib::spawn_future_local(async move {
+                            vm.set_theme(theme).await;
+                        });
+                    }
+                }
+            ));
+        }
+
+        // Dark theme handler
+        if let Some(dark_toggle) = imp.theme_dark_toggle.borrow().as_ref() {
+            dark_toggle.connect_toggled(clone!(
+                #[weak(rename_to = window)]
+                self,
+                #[strong]
+                view_model,
+                move |toggle| {
+                    if toggle.is_active() {
+                        info!("🎨 PreferencesWindow: USER SELECTED DARK THEME");
+                        let theme = ThemeOption::Dark;
+                        window.apply_theme_to_ui(&theme);
+                        window.update_other_theme_toggles(&theme);
+
+                        let vm = view_model.clone();
+                        glib::spawn_future_local(async move {
+                            vm.set_theme(theme).await;
+                        });
+                    }
+                }
+            ));
+        }
+
+        debug!("✅ PreferencesWindow: Theme toggle button handlers connected");
+    }
+
+    fn connect_backend_toggle_handlers(&self, view_model: Arc<PreferencesViewModel>) {
+        let imp = self.imp();
+
+        // GStreamer backend handler
+        if let Some(gst_toggle) = imp.backend_gstreamer_toggle.borrow().as_ref() {
+            gst_toggle.connect_toggled(clone!(
+                #[weak(rename_to = window)]
+                self,
+                #[strong]
+                view_model,
+                move |toggle| {
+                    if toggle.is_active() {
+                        info!("🎛️ PreferencesWindow: USER SELECTED GSTREAMER BACKEND");
+                        let backend = PlayerBackend::GStreamer;
+                        window.update_other_backend_toggles(&backend);
+
+                        let vm = view_model.clone();
+                        let window_weak = window.downgrade();
+                        glib::spawn_future_local(async move {
+                            vm.set_player_backend(backend.clone()).await;
+
+                            // Show toast notification
+                            if let Some(window) = window_weak.upgrade() {
+                                window.show_backend_changed_toast(&backend);
+                            }
+                        });
+                    }
+                }
+            ));
+        }
+
+        // MPV backend handler
+        if let Some(mpv_toggle) = imp.backend_mpv_toggle.borrow().as_ref() {
+            mpv_toggle.connect_toggled(clone!(
+                #[weak(rename_to = window)]
+                self,
+                #[strong]
+                view_model,
+                move |toggle| {
+                    if toggle.is_active() {
+                        info!("🎛️ PreferencesWindow: USER SELECTED MPV BACKEND");
+                        let backend = PlayerBackend::Mpv;
+                        window.update_other_backend_toggles(&backend);
+
+                        let vm = view_model.clone();
+                        let window_weak = window.downgrade();
+                        glib::spawn_future_local(async move {
+                            vm.set_player_backend(backend.clone()).await;
+
+                            // Show toast notification
+                            if let Some(window) = window_weak.upgrade() {
+                                window.show_backend_changed_toast(&backend);
+                            }
+                        });
+                    }
+                }
+            ));
+        }
+
+        debug!("✅ PreferencesWindow: Backend toggle button handlers connected");
+    }
+
+    fn setup_reactive_subscriptions(&self) {
+        let imp = self.imp();
+
+        if let Some(view_model) = imp.view_model.borrow().as_ref() {
+            debug!(
+                "🔄 PreferencesWindow: Setting up reactive subscriptions for ViewModel changes to toggle buttons"
+            );
+
+            // Subscribe to theme changes
+            let theme_subscriber = view_model.theme().subscribe();
+            let window_weak = self.downgrade();
+
+            // Clone subscriber for async task
+            let mut theme_sub_clone = view_model.theme().subscribe();
+            debug!(
+                "🔄 PreferencesWindow: Starting theme change subscription task for toggle buttons"
+            );
+            glib::spawn_future_local(async move {
+                while theme_sub_clone.wait_for_change().await {
+                    if let Some(window) = window_weak.upgrade() {
+                        if let Some(vm) = window.imp().view_model.borrow().as_ref() {
+                            let theme = vm.theme().get().await;
+                            debug!(
+                                "🔄 PreferencesWindow: Theme changed in ViewModel, updating toggle buttons to {:?}",
+                                theme
+                            );
+                            window.update_theme_toggle_buttons(&theme).await;
+                        }
+                    } else {
+                        debug!(
+                            "🔄 PreferencesWindow: Theme subscription ending (window destroyed)"
+                        );
+                        break;
+                    }
+                }
+            });
+
+            // Subscribe to player backend changes
+            let backend_subscriber = view_model.player_backend().subscribe();
+            let window_weak2 = self.downgrade();
+
+            // Clone subscriber for async task
+            let mut backend_sub_clone = view_model.player_backend().subscribe();
+            debug!(
+                "🎬 PreferencesWindow: Starting player backend change subscription task for toggle buttons"
+            );
+            glib::spawn_future_local(async move {
+                while backend_sub_clone.wait_for_change().await {
+                    if let Some(window) = window_weak2.upgrade() {
+                        if let Some(vm) = window.imp().view_model.borrow().as_ref() {
+                            let backend = vm.player_backend().get().await;
+                            info!(
+                                "🎬 PreferencesWindow: Player backend changed in ViewModel, updating toggle buttons to {:?}",
+                                backend
+                            );
+                            window.update_backend_toggle_buttons(&backend).await;
+                        }
+                    } else {
+                        debug!(
+                            "🎬 PreferencesWindow: Backend subscription ending (window destroyed)"
+                        );
+                        break;
+                    }
+                }
+            });
+
+            // Store subscribers to keep them alive
+            imp.theme_subscriber.replace(Some(theme_subscriber));
+            imp.backend_subscriber.replace(Some(backend_subscriber));
+            info!(
+                "✅ PreferencesWindow: Reactive subscriptions established successfully for toggle buttons"
+            );
+        } else {
+            warn!("⚠️ PreferencesWindow: No ViewModel available for reactive subscriptions");
+        }
+    }
+
+    fn apply_theme_to_ui(&self, theme: &ThemeOption) {
+        info!("Applying theme to UI: {:?}", theme);
 
         let style_manager = adw::StyleManager::default();
         match theme {
-            "light" => style_manager.set_color_scheme(adw::ColorScheme::ForceLight),
-            "dark" => style_manager.set_color_scheme(adw::ColorScheme::ForceDark),
-            _ => style_manager.set_color_scheme(adw::ColorScheme::PreferDark),
-        }
-
-        // Save theme preference
-        if let Some(config_arc) = self.imp().config.borrow().as_ref() {
-            let config_arc = config_arc.clone();
-            let event_bus = self.imp().event_bus.borrow().as_ref().cloned();
-            let theme = theme.to_string();
-            glib::spawn_future_local(async move {
-                let mut config = config_arc.write().await;
-                let old_theme = config.general.theme.clone();
-                config.general.theme = theme.clone();
-                if let Err(e) = config.save() {
-                    error!("Failed to save theme preference: {}", e);
-                } else if old_theme != theme {
-                    // Emit UserPreferencesChanged event
-                    if let Some(bus) = event_bus {
-                        let event = DatabaseEvent::new(
-                            EventType::UserPreferencesChanged,
-                            EventPayload::User {
-                                user_id: "local_user".to_string(),
-                                action: format!("theme_changed_to_{}", theme),
-                            },
-                        );
-
-                        if let Err(e) = bus.publish(event).await {
-                            tracing::warn!("Failed to publish UserPreferencesChanged event: {}", e);
-                        }
-                    }
-                }
-            });
+            ThemeOption::Light => style_manager.set_color_scheme(adw::ColorScheme::ForceLight),
+            ThemeOption::Dark => style_manager.set_color_scheme(adw::ColorScheme::ForceDark),
+            ThemeOption::System => style_manager.set_color_scheme(adw::ColorScheme::PreferDark),
         }
     }
 
-    fn apply_player_backend(&self, backend: &str) {
-        info!("Applying player backend: {}", backend);
+    async fn sync_ui_with_viewmodel(&self) {
+        let imp = self.imp();
 
-        // Save player backend preference
-        if let Some(config_arc) = self.imp().config.borrow().as_ref() {
-            let config_arc = config_arc.clone();
-            let event_bus = self.imp().event_bus.borrow().as_ref().cloned();
-            let backend_str = backend.to_string();
-            let window_weak = self.downgrade();
+        if let Some(view_model) = imp.view_model.borrow().as_ref() {
+            info!("🔄 PreferencesWindow: Synchronizing toggle buttons with ViewModel state");
 
-            glib::spawn_future_local(async move {
-                let mut config = config_arc.write().await;
-                let old_backend = config.playback.player_backend.clone();
-                config.playback.player_backend = backend_str.clone();
+            // Get current ViewModel values
+            let theme = view_model.theme().get().await;
+            let backend = view_model.player_backend().get().await;
 
-                if let Err(e) = config.save() {
-                    error!("Failed to save player backend preference: {}", e);
-                    return;
-                }
+            info!(
+                "🔄 PreferencesWindow: ViewModel state - theme={:?}, backend={:?}",
+                theme, backend
+            );
 
-                // Only notify if the backend actually changed
-                if old_backend != backend_str {
-                    // Emit UserPreferencesChanged event
-                    if let Some(bus) = event_bus {
-                        let event = DatabaseEvent::new(
-                            EventType::UserPreferencesChanged,
-                            EventPayload::User {
-                                user_id: "local_user".to_string(),
-                                action: format!("player_backend_changed_to_{}", backend_str),
-                            },
-                        );
+            // Update theme toggle buttons
+            self.update_theme_toggle_buttons(&theme).await;
 
-                        if let Err(e) = bus.publish(event).await {
-                            tracing::warn!("Failed to publish UserPreferencesChanged event: {}", e);
-                        }
-                    }
-                    info!(
-                        "Player backend changed from '{}' to '{}'",
-                        old_backend, backend_str
-                    );
+            // Update player backend toggle buttons
+            self.update_backend_toggle_buttons(&backend).await;
 
-                    // Show a toast notification
-                    if let Some(window) = window_weak.upgrade()
-                        && let Some(parent) = window
-                            .transient_for()
-                            .and_then(|w| w.downcast::<adw::ApplicationWindow>().ok())
-                    {
-                        let toast = adw::Toast::builder()
-                            .title(format!(
-                                "Player backend changed to {}",
-                                if backend_str == "mpv" {
-                                    "MPV"
-                                } else {
-                                    "GStreamer"
-                                }
-                            ))
-                            .timeout(3)
-                            .build();
+            info!("✅ PreferencesWindow: Toggle button synchronization completed");
+        } else {
+            warn!("⚠️ PreferencesWindow: No ViewModel available for toggle button synchronization");
+        }
+    }
 
-                        // Find the toast overlay in the main window
-                        if let Some(content) = parent
-                            .content()
-                            .and_then(|w| w.downcast::<adw::ToastOverlay>().ok())
-                        {
-                            content.add_toast(toast);
-                        } else {
-                            info!("Player backend will be used for next playback");
-                        }
-                    }
-                }
-            });
+    async fn update_theme_toggle_buttons(&self, theme: &ThemeOption) {
+        let imp = self.imp();
+
+        debug!(
+            "🔄 PreferencesWindow: Setting theme toggle buttons for {:?}",
+            theme
+        );
+
+        // Update toggle button states
+        if let Some(system_toggle) = imp.theme_system_toggle.borrow().as_ref() {
+            system_toggle.set_active(matches!(theme, ThemeOption::System));
+        }
+        if let Some(light_toggle) = imp.theme_light_toggle.borrow().as_ref() {
+            light_toggle.set_active(matches!(theme, ThemeOption::Light));
+        }
+        if let Some(dark_toggle) = imp.theme_dark_toggle.borrow().as_ref() {
+            dark_toggle.set_active(matches!(theme, ThemeOption::Dark));
+        }
+
+        info!(
+            "✅ PreferencesWindow: Theme toggle buttons updated to {:?}",
+            theme
+        );
+    }
+
+    async fn update_backend_toggle_buttons(&self, backend: &PlayerBackend) {
+        let imp = self.imp();
+
+        debug!(
+            "🎬 PreferencesWindow: Setting backend toggle buttons for {:?}",
+            backend
+        );
+
+        // Update toggle button states
+        if let Some(gst_toggle) = imp.backend_gstreamer_toggle.borrow().as_ref() {
+            gst_toggle.set_active(matches!(backend, PlayerBackend::GStreamer));
+        }
+        if let Some(mpv_toggle) = imp.backend_mpv_toggle.borrow().as_ref() {
+            mpv_toggle.set_active(matches!(backend, PlayerBackend::Mpv));
+        }
+
+        info!(
+            "✅ PreferencesWindow: Backend toggle buttons updated to {:?} ({})",
+            backend,
+            backend.display_name()
+        );
+    }
+
+    fn update_other_theme_toggles(&self, selected_theme: &ThemeOption) {
+        let imp = self.imp();
+
+        // Simple approach - just deactivate the others without recursion issues
+        if let Some(system_toggle) = imp.theme_system_toggle.borrow().as_ref() {
+            if !matches!(selected_theme, ThemeOption::System) && system_toggle.is_active() {
+                system_toggle.set_active(false);
+            }
+        }
+        if let Some(light_toggle) = imp.theme_light_toggle.borrow().as_ref() {
+            if !matches!(selected_theme, ThemeOption::Light) && light_toggle.is_active() {
+                light_toggle.set_active(false);
+            }
+        }
+        if let Some(dark_toggle) = imp.theme_dark_toggle.borrow().as_ref() {
+            if !matches!(selected_theme, ThemeOption::Dark) && dark_toggle.is_active() {
+                dark_toggle.set_active(false);
+            }
+        }
+    }
+
+    fn update_other_backend_toggles(&self, selected_backend: &PlayerBackend) {
+        let imp = self.imp();
+
+        // Simple approach - just deactivate the others without recursion issues
+        if let Some(gst_toggle) = imp.backend_gstreamer_toggle.borrow().as_ref() {
+            if !matches!(selected_backend, PlayerBackend::GStreamer) && gst_toggle.is_active() {
+                gst_toggle.set_active(false);
+            }
+        }
+        if let Some(mpv_toggle) = imp.backend_mpv_toggle.borrow().as_ref() {
+            if !matches!(selected_backend, PlayerBackend::Mpv) && mpv_toggle.is_active() {
+                mpv_toggle.set_active(false);
+            }
+        }
+    }
+
+    fn show_backend_changed_toast(&self, backend: &PlayerBackend) {
+        debug!("🍞 PreferencesWindow: Preparing to show toast notification for backend change");
+
+        if let Some(parent) = self
+            .transient_for()
+            .and_then(|w| w.downcast::<adw::ApplicationWindow>().ok())
+        {
+            debug!("🍞 PreferencesWindow: Found parent ApplicationWindow for toast");
+            let toast_message = format!("Player backend changed to {}", backend.display_name());
+            info!("🍞 PreferencesWindow: Toast message: '{}'", toast_message);
+
+            let toast = adw::Toast::builder()
+                .title(toast_message)
+                .timeout(3)
+                .build();
+
+            // Find the toast overlay in the main window
+            if let Some(content) = parent
+                .content()
+                .and_then(|w| w.downcast::<adw::ToastOverlay>().ok())
+            {
+                debug!("🍞 PreferencesWindow: Found ToastOverlay, showing toast");
+                content.add_toast(toast);
+                info!("✅ PreferencesWindow: Toast notification displayed successfully");
+            } else {
+                warn!("⚠️ PreferencesWindow: No ToastOverlay found in parent window");
+                info!(
+                    "🎬 PreferencesWindow: Player backend ({}) will be used for next playback",
+                    backend.display_name()
+                );
+            }
+        } else {
+            warn!("⚠️ PreferencesWindow: No parent ApplicationWindow found for toast notification");
+            info!(
+                "🎬 PreferencesWindow: Player backend ({}) will be used for next playback",
+                backend.display_name()
+            );
         }
     }
 }
