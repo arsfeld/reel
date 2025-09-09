@@ -4,13 +4,15 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{info, trace};
 
 use super::library::MediaCard;
 use crate::constants::*;
-use crate::models::{HomeSection, MediaItem};
+use crate::core::viewmodels::sidebar_view_model::SidebarViewModel;
+use crate::models::{HomeSection, HomeSectionType, MediaItem};
 use crate::platforms::gtk::ui::navigation::NavigationRequest;
-use crate::platforms::gtk::ui::viewmodels::home_view_model::HomeViewModel;
+use crate::platforms::gtk::ui::viewmodels::ViewModel;
+use crate::platforms::gtk::ui::viewmodels::home_view_model::{HomeViewModel, SectionType};
 use crate::state::AppState;
 use crate::utils::{ImageLoader, ImageSize};
 
@@ -19,6 +21,8 @@ mod imp {
 
     #[derive(Default)]
     pub struct HomePage {
+        pub container_box: gtk4::Box,   // Main container
+        pub source_selector: gtk4::Box, // Source tabs/buttons
         pub scrolled_window: gtk4::ScrolledWindow,
         pub main_box: gtk4::Box,
         pub sections: RefCell<Vec<HomeSection>>,
@@ -28,6 +32,8 @@ mod imp {
         pub section_cards: RefCell<HashMap<String, Vec<gtk4::Widget>>>,
         pub section_widgets: RefCell<HashMap<String, SectionWidgets>>,
         pub view_model: RefCell<Option<Arc<HomeViewModel>>>,
+        pub sidebar_view_model: RefCell<Option<Arc<SidebarViewModel>>>,
+        pub current_source_id: RefCell<Option<String>>,
     }
 
     pub struct SectionWidgets {
@@ -65,6 +71,13 @@ mod imp {
             obj.set_vexpand(true);
             obj.set_hexpand(true);
 
+            // Setup container
+            self.container_box
+                .set_orientation(gtk4::Orientation::Vertical);
+            self.container_box.set_vexpand(true);
+            self.container_box.set_hexpand(true);
+
+            // Setup scrolled window
             self.scrolled_window
                 .set_hscrollbar_policy(gtk4::PolicyType::Never);
             self.scrolled_window
@@ -81,6 +94,7 @@ mod imp {
 
             self.scrolled_window.set_child(Some(&self.main_box));
 
+            // Add scrolled window directly to page (source selector now in header)
             obj.append(&self.scrolled_window);
         }
     }
@@ -98,18 +112,37 @@ glib::wrapper! {
 impl HomePage {
     pub fn new<F>(
         state: Arc<AppState>,
+        source_id: Option<String>, // Filter by source
         setup_header: F,
         navigation_handler: impl Fn(NavigationRequest) + 'static,
     ) -> Self
     where
-        F: Fn(&gtk4::Label) + 'static,
+        F: Fn(&gtk4::Widget) + 'static,
     {
         let page: Self = glib::Object::builder().build();
 
-        // Initialize HomeViewModel
+        // Initialize HomeViewModel with source filter
         let data_service = state.data_service.clone();
-        let view_model = Arc::new(HomeViewModel::new(data_service));
+        let view_model = Arc::new(HomeViewModel::new(data_service.clone()));
         page.imp().view_model.replace(Some(view_model.clone()));
+
+        // Initialize SidebarViewModel to get source info
+        let sidebar_vm = Arc::new(SidebarViewModel::new(data_service));
+        page.imp()
+            .sidebar_view_model
+            .replace(Some(sidebar_vm.clone()));
+
+        // Store current source_id
+        page.imp().current_source_id.replace(source_id.clone());
+
+        // Set the source filter if provided
+        if let Some(ref source_id) = source_id {
+            let vm = view_model.clone();
+            let source_id_clone = source_id.clone();
+            glib::spawn_future_local(async move {
+                let _ = vm.set_source_filter(Some(source_id_clone)).await;
+            });
+        }
 
         // Initialize ViewModel with EventBus
         glib::spawn_future_local({
@@ -126,14 +159,16 @@ impl HomePage {
 
         page.imp().state.replace(Some(state.clone()));
 
+        // Setup source selector after state is initialized
+        page.setup_source_selector(sidebar_vm.clone());
+
         // Initialize image loader
         if let Ok(loader) = ImageLoader::new() {
             page.imp().image_loader.replace(Some(Arc::new(loader)));
         }
 
-        // Setup header
-        let title_label = gtk4::Label::new(Some("Home"));
-        setup_header(&title_label);
+        // Setup header with title and source selector
+        page.setup_header_with_selector(setup_header);
 
         // Set up internal media selection handler
         let state_clone = state.clone();
@@ -160,10 +195,160 @@ impl HomePage {
             }
         });
 
-        // Load homepage data
-        page.load_homepage();
-
         page
+    }
+
+    pub fn setup_header_with_selector<F>(&self, setup_header: F)
+    where
+        F: Fn(&gtk4::Widget) + 'static,
+    {
+        // Create a header box that contains the source selector
+        let header_box = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
+
+        // Create source selector but don't populate it yet (will be done by setup_source_selector)
+        let source_selector = &self.imp().source_selector;
+        source_selector.set_orientation(gtk4::Orientation::Horizontal);
+        source_selector.set_halign(gtk4::Align::Center);
+        source_selector.add_css_class("linked");
+        source_selector.add_css_class("pill");
+
+        header_box.append(source_selector);
+
+        // Call the setup_header callback with the complete header box
+        setup_header(header_box.upcast_ref());
+    }
+
+    fn setup_source_selector(&self, sidebar_vm: Arc<SidebarViewModel>) {
+        let imp = self.imp();
+        let weak_self = self.downgrade();
+
+        // Subscribe to sources changes
+        let mut sources_subscriber = sidebar_vm.sources().subscribe();
+        glib::spawn_future_local(async move {
+            while sources_subscriber.wait_for_change().await {
+                if let Some(page) = weak_self.upgrade() {
+                    page.refresh_source_selector().await;
+                }
+            }
+        });
+
+        // Initialize sidebar VM with EventBus
+        let sidebar_vm_clone = sidebar_vm.clone();
+        let state = imp.state.borrow().clone().unwrap();
+        glib::spawn_future_local(async move {
+            sidebar_vm_clone.initialize(state.event_bus.clone()).await;
+        });
+    }
+
+    async fn refresh_source_selector(&self) {
+        let imp = self.imp();
+
+        // Clear existing buttons
+        while let Some(child) = imp.source_selector.first_child() {
+            imp.source_selector.remove(&child);
+        }
+
+        if let Some(sidebar_vm) = &*imp.sidebar_view_model.borrow() {
+            let sources = sidebar_vm.sources().get().await;
+            let current_source_id = imp.current_source_id.borrow().clone();
+
+            // Add "All Sources" button
+            let all_button = gtk4::ToggleButton::with_label("All");
+            all_button.set_active(current_source_id.is_none());
+
+            let weak_self = self.downgrade();
+            all_button.connect_clicked(move |_| {
+                if let Some(page) = weak_self.upgrade() {
+                    page.switch_source(None);
+                }
+            });
+            imp.source_selector.append(&all_button);
+
+            // Add button for each source
+            for source in &sources {
+                let button = gtk4::ToggleButton::with_label(&source.name);
+                let is_current = current_source_id.as_ref() == Some(&source.id);
+                button.set_active(is_current);
+
+                // Store the source ID as a data attribute for later reference
+                unsafe {
+                    button.set_data("source_id", source.id.clone());
+                }
+
+                let source_id = source.id.clone();
+                let weak_self = self.downgrade();
+                button.connect_clicked(move |_| {
+                    if let Some(page) = weak_self.upgrade() {
+                        page.switch_source(Some(source_id.clone()));
+                    }
+                });
+
+                imp.source_selector.append(&button);
+            }
+
+            // Show selector only if there are multiple sources
+            if sources.len() > 1 || !sources.is_empty() {
+                imp.source_selector.set_visible(true);
+            } else {
+                imp.source_selector.set_visible(false);
+            }
+        }
+    }
+
+    fn switch_source(&self, source_id: Option<String>) {
+        let imp = self.imp();
+        imp.current_source_id.replace(source_id.clone());
+
+        // Update the button states immediately for responsive UI
+        self.update_source_selector_buttons(source_id.as_deref());
+
+        // Update the ViewModel filter
+        if let Some(view_model) = &*imp.view_model.borrow() {
+            let vm = view_model.clone();
+            let weak_self = self.downgrade();
+
+            // Show loading state during the switch
+            glib::spawn_future_local(async move {
+                // Set loading state for immediate feedback
+                let _ = vm.is_loading().set(true).await;
+
+                // Update the filter (this will reload content from cache)
+                let _ = vm.set_source_filter(source_id).await;
+
+                // Loading state will be cleared by the ViewModel automatically
+            });
+        }
+    }
+
+    fn update_source_selector_buttons(&self, current_source_id: Option<&str>) {
+        let imp = self.imp();
+        let source_selector = &imp.source_selector;
+
+        // Update button states
+        let mut child = source_selector.first_child();
+        let mut button_index = 0;
+
+        while let Some(widget) = child {
+            if let Some(button) = widget.downcast_ref::<gtk4::ToggleButton>() {
+                if button_index == 0 {
+                    // "All" button (first button)
+                    button.set_active(current_source_id.is_none());
+                } else {
+                    // Source-specific buttons - check against stored source ID
+                    unsafe {
+                        if let Some(button_source_id_ptr) = button.data::<String>("source_id") {
+                            let button_source_id = button_source_id_ptr.as_ref();
+                            let should_be_active = current_source_id == Some(button_source_id);
+                            button.set_active(should_be_active);
+                        } else {
+                            button.set_active(false);
+                        }
+                    }
+                }
+            }
+            child = widget.next_sibling();
+            button_index += 1;
+        }
     }
 
     fn setup_viewmodel_bindings(&self, view_model: Arc<HomeViewModel>) {
@@ -186,6 +371,17 @@ impl HomePage {
         glib::spawn_future_local(async move {
             while continue_subscriber.wait_for_change().await {
                 if let Some(page) = weak_self_continue.upgrade() {
+                    page.refresh_sections();
+                }
+            }
+        });
+
+        // Subscribe to sections changes
+        let weak_self_sections = self.downgrade();
+        let mut sections_subscriber = view_model.sections().subscribe();
+        glib::spawn_future_local(async move {
+            while sections_subscriber.wait_for_change().await {
+                if let Some(page) = weak_self_sections.upgrade() {
                     page.refresh_sections();
                 }
             }
@@ -216,101 +412,48 @@ impl HomePage {
     }
 
     fn refresh_sections(&self) {
-        // Call the existing load_homepage which already refreshes everything
-        self.load_homepage();
-    }
+        // Use ViewModel data instead of calling backend APIs directly
+        if let Some(view_model) = &*self.imp().view_model.borrow() {
+            let vm = view_model.clone();
+            let weak_self = self.downgrade();
 
-    fn load_homepage(&self) {
-        let imp = self.imp();
-        let state = imp.state.borrow().clone().unwrap();
-        let page_weak = self.downgrade();
+            glib::spawn_future_local(async move {
+                if let Some(page) = weak_self.upgrade() {
+                    // Get sections from ViewModel (database-backed)
+                    let sections = vm.sections().get().await;
 
-        glib::spawn_future_local(async move {
-            let source_coordinator = state.get_source_coordinator();
-            let all_backends = source_coordinator.get_all_backends().await;
-            let backend_count = all_backends.len();
-            let mut all_sections = Vec::new();
-
-            // Get DataService for database lookups
-            let data_service = state.data_service.clone();
-
-            // Collect sections from all backends
-            for (backend_id, backend) in all_backends {
-                match backend.get_home_sections().await {
-                    Ok(mut sections) => {
-                        info!(
-                            "Loaded {} homepage sections from backend {}",
-                            sections.len(),
-                            backend_id
-                        );
-
-                        // Resolve items from database using their backend IDs
-                        for section in &mut sections {
-                            let mut resolved_items = Vec::new();
-
-                            for item in &section.items {
-                                // Get the backend item ID from the item
-                                let backend_item_id = item.id();
-
-                                // Look up the item in the database using the backend ID
-                                match data_service
-                                    .get_media_item_by_backend_id(&backend_id, backend_item_id)
-                                    .await
-                                {
-                                    Ok(Some(db_item)) => {
-                                        resolved_items.push(db_item);
-                                    }
-                                    Ok(None) => {
-                                        // Item not found in database, might not be synced yet
-                                        // Keep the original item for now
-                                        debug!(
-                                            "Item {} from backend {} not found in database, using API data",
-                                            backend_item_id, backend_id
-                                        );
-                                        resolved_items.push(item.clone());
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "Failed to look up item {} from backend {}: {}",
-                                            backend_item_id, backend_id, e
-                                        );
-                                        // Keep the original item on error
-                                        resolved_items.push(item.clone());
-                                    }
+                    // Convert MediaSections to HomeSections
+                    let home_sections: Vec<HomeSection> = sections
+                        .into_iter()
+                        .map(|section| HomeSection {
+                            id: match &section.section_type {
+                                SectionType::ContinueWatching => "continue_watching".to_string(),
+                                SectionType::RecentlyAdded => "recently_added".to_string(),
+                                SectionType::Library(id) => format!("library_{}", id),
+                                _ => "other".to_string(),
+                            },
+                            title: section.title,
+                            section_type: match &section.section_type {
+                                SectionType::ContinueWatching => HomeSectionType::ContinueWatching,
+                                SectionType::RecentlyAdded => HomeSectionType::RecentlyAdded,
+                                SectionType::Library(_) => {
+                                    HomeSectionType::Custom("Library".to_string())
                                 }
-                            }
+                                _ => HomeSectionType::Custom("Other".to_string()),
+                            },
+                            items: section.items,
+                        })
+                        .collect();
 
-                            // Replace items with resolved ones from database
-                            section.items = resolved_items;
-
-                            // Prefix section IDs with backend_id to ensure uniqueness
-                            section.id = format!("{}_{}", backend_id, section.id);
-                            // Only add backend prefix to title if we have multiple backends
-                            if backend_count > 1 {
-                                section.title = format!("{} ({})", section.title, backend_id);
-                            }
+                    // Use main thread to update UI
+                    glib::idle_add_local_once(move || {
+                        if let Some(page) = weak_self.upgrade() {
+                            page.sync_sections(home_sections);
                         }
-                        all_sections.extend(sections);
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to load homepage sections from backend {}: {}",
-                            backend_id, e
-                        );
-                    }
+                    });
                 }
-            }
-
-            // Now sync all sections at once
-            if !all_sections.is_empty() {
-                info!("Total sections from all backends: {}", all_sections.len());
-                glib::idle_add_local_once(move || {
-                    if let Some(page) = page_weak.upgrade() {
-                        page.sync_sections(all_sections);
-                    }
-                });
-            }
-        });
+            });
+        }
     }
 
     fn sync_sections(&self, new_sections: Vec<HomeSection>) {
@@ -319,8 +462,33 @@ impl HomePage {
         let mut section_widgets = imp.section_widgets.borrow_mut();
         let old_sections = imp.sections.borrow();
 
-        // Build a set of new section IDs for quick lookup
-        let new_section_ids: Vec<String> = new_sections.iter().map(|s| s.id.clone()).collect();
+        // Check if we have any sections with content
+        let sections_with_content: Vec<&HomeSection> = new_sections
+            .iter()
+            .filter(|s| !s.items.is_empty())
+            .collect();
+
+        let has_content = !sections_with_content.is_empty();
+
+        // If we have content, ensure empty state is removed first
+        if has_content {
+            // Remove any empty state widgets (StatusPage) that might exist
+            let mut children_to_remove = Vec::new();
+            let mut child = main_box.first_child();
+            while let Some(widget) = child {
+                if widget.type_() == adw::StatusPage::static_type() {
+                    children_to_remove.push(widget.clone());
+                }
+                child = widget.next_sibling();
+            }
+            for widget in children_to_remove {
+                main_box.remove(&widget);
+            }
+        }
+
+        // Build a set of new section IDs for quick lookup (only sections with content)
+        let new_section_ids: Vec<String> =
+            sections_with_content.iter().map(|s| s.id.clone()).collect();
 
         // Remove sections that no longer exist
         let mut to_remove = Vec::new();
@@ -335,12 +503,8 @@ impl HomePage {
             }
         }
 
-        // Update or create sections
-        for (index, section) in new_sections.iter().enumerate() {
-            if section.items.is_empty() {
-                continue;
-            }
-
+        // Update or create sections (only process sections with content)
+        for (_index, section) in sections_with_content.iter().enumerate() {
             if let Some(widgets) = section_widgets.get(&section.id) {
                 // Section exists - update its items if needed
                 let old_section = old_sections.iter().find(|s| s.id == section.id);
@@ -366,8 +530,9 @@ impl HomePage {
         drop(old_sections);
         imp.sections.replace(new_sections);
 
-        // Show empty state if no sections
-        if section_widgets.is_empty() {
+        // Show empty state only if we have no content at all
+        if !has_content {
+            // Clear everything first
             while let Some(child) = main_box.first_child() {
                 main_box.remove(&child);
             }
@@ -427,9 +592,6 @@ impl HomePage {
     }
 
     fn create_section_widget(&self, section: &HomeSection) -> imp::SectionWidgets {
-        // This is essentially the old display_sections code for a single section
-        // but returning the widgets for tracking
-
         let section_box = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Vertical)
             .spacing(12)
@@ -574,196 +736,6 @@ impl HomePage {
         }
     }
 
-    // Old display_sections becomes unused
-    fn display_sections(&self, sections: Vec<HomeSection>) {
-        let imp = self.imp();
-        let main_box = &imp.main_box;
-
-        // Clear existing content
-        while let Some(child) = main_box.first_child() {
-            main_box.remove(&child);
-        }
-
-        // Check if we have sections first
-        if sections.is_empty() {
-            let empty_state = adw::StatusPage::builder()
-                .icon_name("folder-symbolic")
-                .title("No Content Available")
-                .description("Connect to a media server to see your content here")
-                .build();
-
-            main_box.append(&empty_state);
-            return;
-        }
-
-        // Add each section
-        for section in sections {
-            if section.items.is_empty() {
-                continue;
-            }
-
-            // Create section container
-            let section_box = gtk4::Box::builder()
-                .orientation(gtk4::Orientation::Vertical)
-                .spacing(12)
-                .build();
-
-            // Create section header
-            let header_box = gtk4::Box::builder()
-                .orientation(gtk4::Orientation::Horizontal)
-                .build();
-
-            let title_label = gtk4::Label::builder()
-                .label(&section.title)
-                .halign(gtk4::Align::Start)
-                .css_classes(["title-2"])
-                .build();
-
-            header_box.append(&title_label);
-
-            // Add "View All" button if there are many items
-            if section.items.len() > 10 {
-                let view_all_button = gtk4::Button::builder()
-                    .label("View All")
-                    .halign(gtk4::Align::End)
-                    .hexpand(true)
-                    .css_classes(["flat"])
-                    .build();
-
-                header_box.append(&view_all_button);
-            }
-
-            section_box.append(&header_box);
-
-            // Create horizontal scrollable list for items
-            let scrolled = gtk4::ScrolledWindow::builder()
-                .hscrollbar_policy(gtk4::PolicyType::Automatic)
-                .vscrollbar_policy(gtk4::PolicyType::Never)
-                .height_request(280) // Fixed height for media cards
-                .build();
-
-            let items_box = gtk4::Box::builder()
-                .orientation(gtk4::Orientation::Horizontal)
-                .spacing(12)
-                .build();
-
-            // Store section items for lazy loading
-            let section_items = Rc::new(section.items.clone());
-            let cards_rc = Rc::new(RefCell::new(Vec::new()));
-
-            // Create a deferred loading function
-            let self_weak = self.downgrade();
-            let items_box_weak = items_box.downgrade();
-            let cards_for_create = cards_rc.clone();
-            let section_items_for_create = section_items.clone();
-
-            // Function to create cards in batches
-            let create_cards_batch = Rc::new(move |start: usize, end: usize| {
-                if let Some(page) = self_weak.upgrade()
-                    && let Some(items_box) = items_box_weak.upgrade()
-                {
-                    let mut cards = cards_for_create.borrow_mut();
-
-                    for i in start..end.min(section_items_for_create.len()).min(20) {
-                        if i >= cards.len() {
-                            // Create card only if not already created
-                            if let Some(item) = section_items_for_create.get(i) {
-                                let card = page.create_media_card(item);
-                                cards.push(card.clone());
-                                items_box.append(&card);
-                            }
-                        }
-                    }
-                }
-            });
-
-            // Defer initial card creation
-            let create_initial = create_cards_batch.clone();
-            let cards_for_initial = cards_rc.clone();
-            glib::idle_add_local_once(move || {
-                create_initial(0, HOME_INITIAL_CARDS_PER_SECTION);
-
-                // Immediately trigger load on initial cards
-                glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
-                    let cards = cards_for_initial.borrow();
-                    for (i, card) in cards.iter().enumerate() {
-                        if i >= HOME_INITIAL_IMAGES_PER_SECTION {
-                            break;
-                        }
-                        if let Some(media_card) = card.downcast_ref::<super::library::MediaCard>() {
-                            media_card.trigger_load(ImageSize::Small);
-                        }
-                    }
-                });
-            });
-
-            // Setup scroll handler to create and load more as needed with debouncing
-            let cards_for_scroll = cards_rc.clone();
-            let create_batch_for_scroll = create_cards_batch.clone();
-            let section_id_for_scroll = section.id.clone();
-            let self_weak_for_scroll = self.downgrade();
-            let scroll_counter: Rc<RefCell<u32>> = Rc::new(RefCell::new(0));
-
-            scrolled.hadjustment().connect_value_changed(move |h_adj| {
-                let value = h_adj.value();
-                let page_size = h_adj.page_size();
-                let counter = scroll_counter.clone();
-
-                // Increment counter for this scroll event
-                let current_count = {
-                    let mut c = counter.borrow_mut();
-                    *c += 1;
-                    *c
-                };
-
-                // Debounce the actual loading
-                let cards_for_load = cards_for_scroll.clone();
-                let create_batch_for_load = create_batch_for_scroll.clone();
-                let section_id_for_load = section_id_for_scroll.clone();
-                let self_weak_for_load = self_weak_for_scroll.clone();
-                let counter_inner = counter.clone();
-
-                glib::timeout_add_local(
-                    std::time::Duration::from_millis(SCROLL_DEBOUNCE_MS),
-                    move || {
-                        // Check if this is still the latest scroll event
-                        if *counter_inner.borrow() != current_count {
-                            return glib::ControlFlow::Break;
-                        }
-
-                        // Calculate which cards are visible
-                        let card_width = 144.0; // Small card width + spacing (132 + 12)
-                        let start_idx = (value / card_width).floor() as usize;
-                        let end_idx = ((value + page_size) / card_width).ceil() as usize + 3; // +3 for buffer
-
-                        // Create cards if needed
-                        create_batch_for_load(start_idx, end_idx);
-
-                        // Simplified: Just trigger load on visible cards directly
-                        let cards = cards_for_load.borrow();
-                        for i in start_idx..end_idx.min(cards.len()) {
-                            if let Some(card) = cards.get(i)
-                                && let Some(media_card) =
-                                    card.downcast_ref::<super::library::MediaCard>()
-                            {
-                                media_card.trigger_load(ImageSize::Small);
-                            }
-                        }
-
-                        glib::ControlFlow::Break
-                    },
-                );
-            });
-
-            // Removed redundant trigger_initial_loads - cards already load in create_initial above
-
-            scrolled.set_child(Some(&items_box));
-            section_box.append(&scrolled);
-
-            main_box.append(&section_box);
-        }
-    }
-
     fn create_media_card(&self, item: &MediaItem) -> gtk4::Widget {
         // Use small size for homepage cards for faster loading
         let card = MediaCard::new(item.clone(), ImageSize::Small);
@@ -786,7 +758,7 @@ impl HomePage {
     }
 
     pub fn refresh(&self) {
-        self.load_homepage();
+        self.refresh_sections();
     }
 
     // Removed batch_load_visible_cards - no longer needed with simplified approach

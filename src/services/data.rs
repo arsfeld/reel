@@ -1041,15 +1041,20 @@ impl DataService {
         Ok(items)
     }
 
-    /// Get recently added items
-    pub async fn get_recently_added(&self, limit: Option<usize>) -> Result<Vec<MediaItem>> {
-        // This would order by added_at descending
-        let mut models = self.media_repo.find_all().await?;
-        models.sort_by(|a, b| b.added_at.cmp(&a.added_at));
+    pub async fn get_continue_watching_for_source(
+        &self,
+        source_id: &str,
+    ) -> Result<Vec<MediaItem>> {
+        // Get all media items with playback progress for a specific source
+        use crate::db::entities::{media_items, playback_progress};
+        use sea_orm::prelude::*;
 
-        if let Some(limit) = limit {
-            models.truncate(limit);
-        }
+        // Find all media items that have playback progress and match source_id
+        let models = media_items::Entity::find()
+            .inner_join(playback_progress::Entity)
+            .filter(media_items::Column::SourceId.eq(source_id))
+            .all(&*self.db)
+            .await?;
 
         let mut items = Vec::new();
         for model in models {
@@ -1062,6 +1067,183 @@ impl DataService {
         }
 
         Ok(items)
+    }
+
+    /// Get recently added items
+    pub async fn get_recently_added(&self, limit: Option<usize>) -> Result<Vec<MediaItem>> {
+        // Get all media items and sort by added_at descending
+        let mut models = self.media_repo.find_all().await?;
+        models.sort_by(|a, b| b.added_at.cmp(&a.added_at));
+
+        let mut items = Vec::new();
+        let mut seen_shows: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for model in models {
+            match MediaItem::try_from(model) {
+                Ok(MediaItem::Episode(episode)) => {
+                    // For episodes, check if we've already seen this show
+                    if let Some(ref show_id) = episode.show_id {
+                        if !seen_shows.contains(show_id) {
+                            // Try to get the parent show instead of the episode
+                            if let Ok(Some(show_model)) = self.media_repo.find_by_id(show_id).await
+                            {
+                                if let Ok(MediaItem::Show(show)) = MediaItem::try_from(show_model) {
+                                    items.push(MediaItem::Show(show));
+                                    seen_shows.insert(show_id.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(item) => {
+                    // For movies and shows, add them directly
+                    items.push(item);
+                }
+                Err(e) => {
+                    warn!("Failed to convert media item to domain model: {}", e);
+                }
+            }
+
+            // Apply limit after processing
+            if let Some(limit) = limit {
+                if items.len() >= limit {
+                    items.truncate(limit);
+                    break;
+                }
+            }
+        }
+
+        Ok(items)
+    }
+
+    pub async fn get_recently_added_for_source(
+        &self,
+        source_id: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<MediaItem>> {
+        // Get all media items and filter by source, then sort by added_at descending
+        let mut models = self.media_repo.find_all().await?;
+
+        // Filter by source_id
+        models.retain(|model| model.source_id == source_id);
+
+        // Sort by added_at descending (most recent first)
+        models.sort_by(|a, b| b.added_at.cmp(&a.added_at));
+
+        let mut items = Vec::new();
+        let mut seen_shows: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for model in models {
+            match MediaItem::try_from(model) {
+                Ok(MediaItem::Episode(episode)) => {
+                    // For episodes, check if we've already seen this show
+                    if let Some(ref show_id) = episode.show_id {
+                        if !seen_shows.contains(show_id) {
+                            // Try to get the parent show instead of the episode
+                            if let Ok(Some(show_model)) = self.media_repo.find_by_id(show_id).await
+                            {
+                                if let Ok(MediaItem::Show(show)) = MediaItem::try_from(show_model) {
+                                    items.push(MediaItem::Show(show));
+                                    seen_shows.insert(show_id.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(item) => {
+                    // For movies and shows, add them directly
+                    items.push(item);
+                }
+                Err(e) => {
+                    warn!("Failed to convert media item to domain model: {}", e);
+                }
+            }
+
+            // Apply limit after processing
+            if let Some(limit) = limit {
+                if items.len() >= limit {
+                    items.truncate(limit);
+                    break;
+                }
+            }
+        }
+
+        Ok(items)
+    }
+
+    /// Store home sections for a backend
+    pub async fn store_home_sections(
+        &self,
+        cache_key: &str,
+        sections: &[crate::models::HomeSection],
+    ) -> Result<()> {
+        // Store in memory cache for fast access
+        self.memory_cache
+            .write()
+            .await
+            .put(cache_key.to_string(), serde_json::to_value(sections)?);
+
+        // Also emit an event for home sections update
+        let _ = self
+            .event_bus
+            .publish(DatabaseEvent::new(
+                EventType::HomeSectionsUpdated,
+                EventPayload::System {
+                    message: format!("Home sections updated for {}", cache_key),
+                    details: Some(serde_json::json!({
+                        "cache_key": cache_key,
+                        "section_count": sections.len()
+                    })),
+                },
+            ))
+            .await;
+
+        Ok(())
+    }
+
+    /// Get cached home sections for a backend
+    pub async fn get_home_sections(
+        &self,
+        cache_key: &str,
+    ) -> Result<Vec<crate::models::HomeSection>> {
+        if let Some(value) = self.memory_cache.write().await.get(cache_key) {
+            if let Ok(sections) =
+                serde_json::from_value::<Vec<crate::models::HomeSection>>(value.clone())
+            {
+                return Ok(sections);
+            }
+        }
+
+        // Return empty if not cached
+        Ok(Vec::new())
+    }
+
+    /// Get home sections for all backends
+    pub async fn get_all_home_sections(&self) -> Result<Vec<crate::models::HomeSection>> {
+        let mut all_sections = Vec::new();
+        let cache = self.memory_cache.write().await;
+
+        // Look for all keys ending with ":home_sections"
+        for (key, value) in cache.iter() {
+            if key.ends_with(":home_sections") {
+                if let Ok(sections) =
+                    serde_json::from_value::<Vec<crate::models::HomeSection>>(value.clone())
+                {
+                    all_sections.extend(sections);
+                }
+            }
+        }
+
+        Ok(all_sections)
+    }
+
+    /// Get home sections for a specific source
+    pub async fn get_home_sections_for_source(
+        &self,
+        source_id: &str,
+    ) -> Result<Vec<crate::models::HomeSection>> {
+        let cache_key = format!("{}:home_sections", source_id);
+        self.get_home_sections(&cache_key).await
     }
 
     /// Update playback progress
