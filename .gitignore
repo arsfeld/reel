@@ -2,6 +2,8 @@
 /target/
 **/*.rs.bk
 
+tasks/
+
 # Nix
 .direnv
 
