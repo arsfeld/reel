@@ -16,6 +16,4 @@ pub use auth_dialog::ReelAuthDialog as AuthDialog;
 pub use main_window::ReelMainWindow as MainWindow;
 pub use preferences_window::PreferencesWindow;
 
-// Export navigation components
-pub use navigation::{NavigationManager, NavigationPage, NavigationState};
-pub use navigation_request::NavigationRequest;
+// Navigation components are used internally by main_window

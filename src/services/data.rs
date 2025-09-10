@@ -1401,4 +1401,9 @@ impl DataService {
             .find_by_library_paginated(library_id, offset as u64, limit as u64)
             .await
     }
+
+    /// Get reference to the event bus for publishing events
+    pub fn event_bus(&self) -> &Arc<EventBus> {
+        &self.event_bus
+    }
 }

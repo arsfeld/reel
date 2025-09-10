@@ -9,6 +9,7 @@ use super::filters::{SortOrder, WatchStatus};
 use super::navigation::NavigationManager;
 use super::pages;
 use crate::config::Config;
+use crate::services::initialization::AppInitializationState;
 use crate::state::AppState;
 use tokio::sync::RwLock;
 
@@ -369,8 +370,9 @@ impl ReelMainWindow {
         let window_weak = self.downgrade();
 
         glib::spawn_future_local(async move {
-            // Use SourceCoordinator to initialize all sources
+            // Use SourceCoordinator for reactive initialization
             let source_coordinator = state.get_source_coordinator();
+
             // First, load saved providers from config
             if let Err(e) = source_coordinator.get_auth_manager().load_providers().await {
                 error!("Failed to load providers: {}", e);
@@ -381,28 +383,13 @@ impl ReelMainWindow {
                 error!("Failed to migrate legacy backends: {}", e);
             }
 
-            // Initialize all sources
-            match source_coordinator.initialize_all_sources().await {
-                Ok(source_statuses) => {
-                    let connected_count = source_statuses
-                        .iter()
-                        .filter(|s| {
-                            matches!(
-                                s.connection_status,
-                                crate::services::source_coordinator::ConnectionStatus::Connected
-                            )
-                        })
-                        .count();
+            // Start reactive initialization (returns immediately)
+            let init_state = source_coordinator.initialize_sources_reactive();
+            info!("Started reactive source initialization - UI ready immediately");
 
-                    info!(
-                        "Initialized {} sources, {} connected",
-                        source_statuses.len(),
-                        connected_count
-                    );
-                }
-                Err(e) => {
-                    error!("Failed to initialize sources: {}", e);
-                }
+            // Set up progressive UI enhancement
+            if let Some(window) = window_weak.upgrade() {
+                window.setup_progressive_initialization(&init_state);
             }
 
             // Handle the results of backend initialization
@@ -1460,7 +1447,7 @@ impl ReelMainWindow {
 
         // Try to resize window to match video aspect ratio after a short delay
         // (to give GStreamer time to negotiate the video format)
-        let window_weak = self.downgrade();
+        let _window_weak = self.downgrade();
         let player_page_clone = player_page.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
             let window_weak = window_weak.clone();
@@ -1968,6 +1955,92 @@ impl ReelMainWindow {
         } else {
             imp.content_stack.borrow().as_ref().unwrap().clone()
         }
+    }
+
+    /// Set up progressive UI enhancement based on initialization state
+    fn setup_progressive_initialization(&self, init_state: &AppInitializationState) {
+        info!("Setting up progressive UI enhancement");
+
+        // Phase 1: UI is ready immediately (already handled by SidebarViewModel)
+        // The UI loads from cache and shows instantly
+
+        // Phase 2: Show connection progress in status label
+        let window_weak = self.downgrade();
+        let sources_connected = init_state.sources_connected.clone();
+        glib::spawn_future_local(async move {
+            let mut subscriber = sources_connected.subscribe();
+            while subscriber.wait_for_change().await {
+                if let Some(window) = window_weak.upgrade() {
+                    let sources = sources_connected.get_sync();
+                    let connected_count = sources
+                        .values()
+                        .filter(|status| {
+                            matches!(
+                                status,
+                                crate::services::initialization::SourceReadiness::Connected { .. }
+                            )
+                        })
+                        .count();
+                    let playback_ready_count =
+                        sources
+                            .values()
+                            .filter(|status| {
+                                matches!(status, 
+                            crate::services::initialization::SourceReadiness::PlaybackReady { .. } |
+                            crate::services::initialization::SourceReadiness::Connected { .. }
+                        )
+                            })
+                            .count();
+                    let total = sources.len();
+
+                    if total == 0 {
+                        window.imp().status_label.set_text("No sources configured");
+                    } else if connected_count == total {
+                        window
+                            .imp()
+                            .status_label
+                            .set_text(&format!("All {} sources connected", total));
+                        window.imp().sync_spinner.set_visible(false);
+                    } else if playback_ready_count > 0 {
+                        window.imp().status_label.set_text(&format!(
+                            "Ready for playback - {}/{} sources fully connected",
+                            connected_count, total
+                        ));
+                        window
+                            .imp()
+                            .sync_spinner
+                            .set_visible(connected_count < total);
+                        window
+                            .imp()
+                            .sync_spinner
+                            .set_spinning(connected_count < total);
+                    } else {
+                        window.imp().status_label.set_text(&format!(
+                            "Connecting sources... {}/{}",
+                            connected_count, total
+                        ));
+                        window.imp().sync_spinner.set_visible(true);
+                        window.imp().sync_spinner.set_spinning(true);
+                    }
+                }
+            }
+        });
+
+        // Phase 3: Update sync readiness
+        let window_weak = self.downgrade();
+        let sync_ready = init_state.sync_ready.clone();
+        glib::spawn_future_local(async move {
+            let mut subscriber = sync_ready.subscribe();
+            while subscriber.wait_for_change().await {
+                if let Some(_window) = window_weak.upgrade() {
+                    let ready = sync_ready.get_sync();
+                    if ready {
+                        info!("All sources ready for full synchronization");
+                        // Sync spinner will be controlled by SidebarViewModel sync status
+                    }
+                }
+            }
+        });
     }
 
     // Backend switching removed - each view must track its own backend_id

@@ -69,6 +69,16 @@ pub enum EventType {
     SourceOnlineStatusChanged,
     SourcesCleanedUp,
 
+    // Initialization events
+    SourceDiscovered,
+    SourcePlaybackReady,
+    SourceConnected,
+    SourceConnectionFailed,
+    AllSourcesDiscovered,
+    FirstSourceReady,
+    AllSourcesConnected,
+    InitializationStageCompleted,
+
     // Sync events
     SyncStarted,
     SyncProgress,
@@ -188,6 +198,14 @@ impl EventType {
             EventType::SourceRemoved => "source.removed",
             EventType::SourceOnlineStatusChanged => "source.online_status_changed",
             EventType::SourcesCleanedUp => "sources.cleaned_up",
+            EventType::SourceDiscovered => "source.discovered",
+            EventType::SourcePlaybackReady => "source.playback_ready",
+            EventType::SourceConnected => "source.connected",
+            EventType::SourceConnectionFailed => "source.connection_failed",
+            EventType::AllSourcesDiscovered => "sources.all_discovered",
+            EventType::FirstSourceReady => "sources.first_ready",
+            EventType::AllSourcesConnected => "sources.all_connected",
+            EventType::InitializationStageCompleted => "initialization.stage_completed",
             EventType::SyncStarted => "sync.started",
             EventType::SyncProgress => "sync.progress",
             EventType::SyncCompleted => "sync.completed",

@@ -17,6 +17,14 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     /// Check if the backend is initialized and ready to use
     async fn is_initialized(&self) -> bool;
 
+    /// Check if the backend has credentials and can attempt playback
+    /// This is faster than full initialization and enables streaming without full API connection
+    async fn is_playback_ready(&self) -> bool {
+        // Default implementation checks if initialized, but backends should override
+        // to check credentials without requiring full connection test
+        self.is_initialized().await
+    }
+
     /// Get the backend as Any for downcasting
     fn as_any(&self) -> &dyn std::any::Any;
 

@@ -2,14 +2,12 @@ use gtk4::{gdk, glib, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use once_cell::sync::Lazy;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{error, info, trace, warn};
 
 use crate::constants::*;
-use crate::core::viewmodels::property::PropertyLike;
 use crate::core::viewmodels::{ComputedProperty, Property, ViewModel};
 use crate::models::{Episode, Library, MediaItem, Movie, Show};
 use crate::platforms::gtk::ui::filters::{FilterManager, WatchStatus};
