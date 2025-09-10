@@ -195,6 +195,10 @@ jobs:
           # Enable ARM64 architecture for apt
           sudo dpkg --add-architecture arm64
           
+          # Modify default sources to only use amd64
+          sudo sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list
+          sudo sed -i 's/deb https/deb [arch=amd64] https/g' /etc/apt/sources.list
+          
           # Add ARM64 ports repository
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs) main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs)-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
@@ -357,6 +361,10 @@ jobs:
         run: |
           # Enable ARM64 architecture
           sudo dpkg --add-architecture arm64
+          
+          # Modify default sources to only use amd64
+          sudo sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list
+          sudo sed -i 's/deb https/deb [arch=amd64] https/g' /etc/apt/sources.list
           
           # Add ARM64 ports repository
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs) main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
