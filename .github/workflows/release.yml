@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      test_mode:
+        description: "Test mode - skip creating releases and uploading artifacts"
+        required: false
+        default: false
+        type: boolean
 
 env:
   CARGO_TERM_COLOR: always
@@ -160,6 +165,7 @@ jobs:
 
       - name: Create Release
         id: create_release
+        if: ${{ github.event.inputs.test_mode != 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.version }}
@@ -167,6 +173,12 @@ jobs:
           draft: true
           prerelease: ${{ steps.check_prerelease.outputs.is_prerelease == 'true' }}
           body_path: ${{ steps.check_release.outputs.exists == 'false' && 'release_body.md' || '' }}
+      
+      - name: Skip Release Creation (Test Mode)
+        if: ${{ github.event.inputs.test_mode == 'true' }}
+        run: |
+          echo "Test mode enabled - skipping release creation"
+          echo "Would have created release: ${{ steps.get_version.outputs.version }}"
 
   build-linux:
     needs: create-release
@@ -342,6 +354,7 @@ jobs:
           ./scripts/build-appimage.sh
 
       - name: Upload Linux Release Assets
+        if: ${{ github.event.inputs.test_mode != 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.version }}
@@ -350,6 +363,15 @@ jobs:
             reel-*.deb
             reel-*.rpm
             reel-*.AppImage
+      
+      - name: List Build Artifacts (Test Mode)
+        if: ${{ github.event.inputs.test_mode == 'true' }}
+        run: |
+          echo "Test mode - listing artifacts that would be uploaded:"
+          ls -lh reel-linux-*.tar.gz 2>/dev/null || echo "No tarballs found"
+          ls -lh reel-*.deb 2>/dev/null || echo "No deb packages found"
+          ls -lh reel-*.rpm 2>/dev/null || echo "No rpm packages found"
+          ls -lh reel-*.AppImage 2>/dev/null || echo "No AppImages found"
 
   build-flatpak:
     needs: create-release
@@ -451,12 +473,20 @@ jobs:
           tar -czf repo.tar.gz -C repo .
 
       - name: Upload Flatpak Release Assets
+        if: ${{ github.event.inputs.test_mode != 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.version }}
           files: |
             reel-*.flatpak
             repo.tar.gz
+      
+      - name: List Flatpak Artifacts (Test Mode)
+        if: ${{ github.event.inputs.test_mode == 'true' }}
+        run: |
+          echo "Test mode - listing artifacts that would be uploaded:"
+          ls -lh reel-*.flatpak 2>/dev/null || echo "No Flatpak bundles found"
+          ls -lh repo.tar.gz 2>/dev/null || echo "No repository tarball found"
 
   # macOS and Windows builds are disabled for now - we only test on Linux
   # Uncomment the sections below to enable multi-platform builds
