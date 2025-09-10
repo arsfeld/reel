@@ -4,11 +4,24 @@ set -e
 echo "Building AppImage..."
 
 VERSION=${VERSION:-$(grep '^version' Cargo.toml | cut -d'"' -f2)}
+ARCH=${ARCH:-x86_64}
 export VERSION
+export ARCH
 export DEPLOY_GTK_VERSION=4
 export LINUXDEPLOY_OUTPUT_VERSION=$VERSION
 
-echo "Building AppImage for version: $VERSION"
+# Map architecture names
+if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+    APPIMAGE_ARCH="aarch64"
+    ARCH_SUFFIX="aarch64"
+    LINUXDEPLOY_ARCH="aarch64"
+else
+    APPIMAGE_ARCH="x86_64"
+    ARCH_SUFFIX="x86_64"
+    LINUXDEPLOY_ARCH="x86_64"
+fi
+
+echo "Building AppImage for version: $VERSION (arch: $APPIMAGE_ARCH)"
 
 # Clean up previous builds
 rm -rf AppDir
@@ -19,16 +32,16 @@ rm -f linuxdeploy-plugin-*.sh
 
 # Download AppImage tools
 echo "=== Setting up AppImage tools ==="
-wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-chmod +x linuxdeploy-x86_64.AppImage
+wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${LINUXDEPLOY_ARCH}.AppImage
+chmod +x linuxdeploy-${LINUXDEPLOY_ARCH}.AppImage
 
 # Extract LinuxDeploy AppImage if FUSE is not available
-if ! ./linuxdeploy-x86_64.AppImage --help &>/dev/null; then
+if ! ./linuxdeploy-${LINUXDEPLOY_ARCH}.AppImage --help &>/dev/null; then
   echo "FUSE not available, extracting LinuxDeploy AppImage..."
-  ./linuxdeploy-x86_64.AppImage --appimage-extract &>/dev/null
+  ./linuxdeploy-${LINUXDEPLOY_ARCH}.AppImage --appimage-extract &>/dev/null
   LINUXDEPLOY="./squashfs-root/AppRun"
 else
-  LINUXDEPLOY="./linuxdeploy-x86_64.AppImage"
+  LINUXDEPLOY="./linuxdeploy-${LINUXDEPLOY_ARCH}.AppImage"
 fi
 
 wget -q https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
@@ -43,13 +56,27 @@ mkdir -p AppDir/usr/share/applications
 mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
 
 # Copy our files (assumes release binary already built)
-cp target/release/reel AppDir/usr/bin/
+if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+  # For cross-compilation, the binary is in a different location
+  if [ -f "target/aarch64-unknown-linux-gnu/release/reel" ]; then
+    cp target/aarch64-unknown-linux-gnu/release/reel AppDir/usr/bin/
+  else
+    echo "Error: Binary not found at target/aarch64-unknown-linux-gnu/release/reel"
+    exit 1
+  fi
+else
+  cp target/release/reel AppDir/usr/bin/
+fi
 chmod +x AppDir/usr/bin/reel
 cp data/dev.arsfeld.Reel.desktop AppDir/usr/share/applications/
 cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg AppDir/usr/share/icons/hicolor/scalable/apps/
 
 # Set library paths for dependency detection (Ubuntu standard paths)
-export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+  export LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
+else
+  export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+fi
 
 echo "=== Running LinuxDeploy with GTK4 and GStreamer plugins ==="
 $LINUXDEPLOY \
@@ -64,14 +91,14 @@ $LINUXDEPLOY \
 # Rename the output to our convention
 echo "=== Renaming AppImage ==="
 if ls Reel-*.AppImage 1> /dev/null 2>&1; then
-  mv Reel-*.AppImage reel-$VERSION-x86_64.AppImage
-  echo "✓ Renamed AppImage to reel-$VERSION-x86_64.AppImage"
+  mv Reel-*.AppImage reel-$VERSION-$ARCH_SUFFIX.AppImage
+  echo "✓ Renamed AppImage to reel-$VERSION-$ARCH_SUFFIX.AppImage"
 elif ls *.AppImage 1> /dev/null 2>&1; then
   # Fallback: find any AppImage that's not the tools
   for img in *.AppImage; do
     if [[ "$img" != linuxdeploy-*.AppImage ]]; then
-      mv "$img" reel-$VERSION-x86_64.AppImage
-      echo "✓ Renamed $img to reel-$VERSION-x86_64.AppImage"
+      mv "$img" reel-$VERSION-$ARCH_SUFFIX.AppImage
+      echo "✓ Renamed $img to reel-$VERSION-$ARCH_SUFFIX.AppImage"
       break
     fi
   done
@@ -82,10 +109,10 @@ else
 fi
 
 # Verify the AppImage was created successfully
-if [ -f "reel-$VERSION-x86_64.AppImage" ]; then
+if [ -f "reel-$VERSION-$ARCH_SUFFIX.AppImage" ]; then
   echo "✓ AppImage created successfully"
-  file "reel-$VERSION-x86_64.AppImage"
-  ls -lh "reel-$VERSION-x86_64.AppImage"
+  file "reel-$VERSION-$ARCH_SUFFIX.AppImage"
+  ls -lh "reel-$VERSION-$ARCH_SUFFIX.AppImage"
 else
   echo "✗ Expected AppImage file not found"
   ls -la *.AppImage 2>/dev/null || echo "No AppImage files found"

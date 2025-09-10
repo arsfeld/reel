@@ -102,11 +102,20 @@ jobs:
           ${{ steps.generate_notes.outputs.notes || '- Initial release' }}
 
           ## Downloads
+
+          ### x86_64 (Intel/AMD)
           - **Flatpak Bundle**: `reel-${{ steps.get_version.outputs.version }}-x86_64.flatpak` - Universal Linux package (recommended)
           - **Linux Tarball**: `reel-linux-x86_64.tar.gz` - Extract and run `./reel`
           - **Debian/Ubuntu**: `reel-${{ steps.get_version.outputs.version }}-amd64.deb` - Install with `sudo dpkg -i`
           - **Fedora/RHEL**: `reel-${{ steps.get_version.outputs.version }}-x86_64.rpm` - Install with `sudo rpm -i`
           - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage` - Portable, runs on most Linux distributions
+
+          ### ARM64 (aarch64)
+          - **Flatpak Bundle**: `reel-${{ steps.get_version.outputs.version }}-aarch64.flatpak` - Universal Linux package for ARM64
+          - **Linux Tarball**: `reel-linux-aarch64.tar.gz` - Extract and run `./reel`
+          - **Debian/Ubuntu**: `reel-${{ steps.get_version.outputs.version }}-arm64.deb` - Install with `sudo dpkg -i`
+          - **Fedora/RHEL**: `reel-${{ steps.get_version.outputs.version }}-aarch64.rpm` - Install with `sudo rpm -i`
+          - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-aarch64.AppImage` - Portable, runs on ARM64 Linux distributions
 
           ## Installation
 
@@ -161,11 +170,30 @@ jobs:
 
   build-linux:
     needs: create-release
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up QEMU for cross-compilation
+        if: matrix.arch == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Install cross-compilation tools
+        if: matrix.arch == 'aarch64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Install system dependencies
         run: |
@@ -192,6 +220,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || '' }}
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4
@@ -210,26 +240,54 @@ jobs:
           cargo install cargo-deb --locked || true
           cargo install cargo-generate-rpm --locked || true
 
-      - name: Build release binary
+      - name: Build release binary (native)
+        if: matrix.arch == 'x86_64'
         run: |
           cargo build --release
           strip target/release/reel
 
+      - name: Build release binary (cross-compile ARM64)
+        if: matrix.arch == 'aarch64'
+        run: |
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+          export CC=aarch64-linux-gnu-gcc
+          export CXX=aarch64-linux-gnu-g++
+          export AR=aarch64-linux-gnu-ar
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          cargo build --release --target aarch64-unknown-linux-gnu
+          aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/reel
+
       - name: Package as tarball
         run: |
-          cp target/release/reel reel
-          tar -czf reel-linux-x86_64.tar.gz reel
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            cp target/aarch64-unknown-linux-gnu/release/reel reel
+            tar -czf reel-linux-aarch64.tar.gz reel
+          else
+            cp target/release/reel reel
+            tar -czf reel-linux-x86_64.tar.gz reel
+          fi
 
       - name: Build Debian package
         run: |
-          cargo deb --no-build
-          mv target/debian/*.deb reel-${{ needs.create-release.outputs.version }}-amd64.deb || true
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            cargo deb --no-build --target aarch64-unknown-linux-gnu
+            mv target/aarch64-unknown-linux-gnu/debian/*.deb reel-${{ needs.create-release.outputs.version }}-arm64.deb || true
+          else
+            cargo deb --no-build
+            mv target/debian/*.deb reel-${{ needs.create-release.outputs.version }}-amd64.deb || true
+          fi
 
       - name: Build RPM package
         run: |
-          cargo generate-rpm
-          mv target/generate-rpm/*.rpm reel-${{ needs.create-release.outputs.version }}-x86_64.rpm || true
-      
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            cargo generate-rpm --target aarch64-unknown-linux-gnu
+            mv target/aarch64-unknown-linux-gnu/generate-rpm/*.rpm reel-${{ needs.create-release.outputs.version }}-aarch64.rpm || true
+          else
+            cargo generate-rpm
+            mv target/generate-rpm/*.rpm reel-${{ needs.create-release.outputs.version }}-x86_64.rpm || true
+          fi
+
       - name: Install additional AppImage dependencies
         run: |
           # Install additional dependencies that LinuxDeploy might need
@@ -238,46 +296,67 @@ jobs:
             desktop-file-utils \
             zsync \
             patchelf
-      
+
       - name: Build AppImage
         run: |
           # Set version environment variable for the build script
           export VERSION=${{ needs.create-release.outputs.version }}
-          
+          export ARCH=${{ matrix.arch }}
+
           # Use our standalone AppImage build script
           ./scripts/build-appimage.sh
-      
+
       - name: Upload Linux Release Assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.version }}
           files: |
-            reel-linux-x86_64.tar.gz
+            reel-linux-*.tar.gz
             reel-*.deb
             reel-*.rpm
             reel-*.AppImage
 
   build-flatpak:
     needs: create-release
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up QEMU for cross-compilation
+        if: matrix.arch == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Install Flatpak and dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder python3-aiohttp python3-toml
+          sudo apt-get install -y flatpak flatpak-builder
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48 org.freedesktop.Sdk.Extension.rust-stable//23.08
 
+      - name: Setup uv for Python dependency management
+        run: |
+          # Install uv
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
       - name: Build Flatpak
         run: |
-          # Set version environment variable for the build script
+          # Set version and architecture environment variables for the build script
           export VERSION=${{ needs.create-release.outputs.version }}
-          
+          export ARCH=${{ matrix.arch }}
+
           # Use our standalone Flatpak build script
           ./scripts/build-flatpak.sh
 
@@ -293,8 +372,6 @@ jobs:
           files: |
             reel-*.flatpak
             repo.tar.gz
-
-
 
   # macOS and Windows builds are disabled for now - we only test on Linux
   # Uncomment the sections below to enable multi-platform builds
