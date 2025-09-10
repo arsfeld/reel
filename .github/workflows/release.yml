@@ -102,6 +102,7 @@ jobs:
           ${{ steps.generate_notes.outputs.notes || '- Initial release' }}
 
           ## Downloads
+          - **Flatpak Bundle**: `reel-${{ steps.get_version.outputs.version }}-x86_64.flatpak` - Universal Linux package (recommended)
           - **Linux Tarball**: `reel-linux-x86_64.tar.gz` - Extract and run `./reel`
           - **Debian/Ubuntu**: `reel-${{ steps.get_version.outputs.version }}-amd64.deb` - Install with `sudo dpkg -i`
           - **Fedora/RHEL**: `reel-${{ steps.get_version.outputs.version }}-x86_64.rpm` - Install with `sudo rpm -i`
@@ -109,7 +110,14 @@ jobs:
 
           ## Installation
 
-          ### AppImage (Recommended)
+          ### Flatpak (Recommended)
+          ```bash
+          # Install the bundle
+          flatpak install --user reel-${{ steps.get_version.outputs.version }}-x86_64.flatpak
+          flatpak run dev.arsfeld.Reel
+          ```
+
+          ### AppImage
           ```bash
           chmod +x reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage
           ./reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage
@@ -237,7 +245,7 @@ jobs:
           export VERSION=${{ needs.create-release.outputs.version }}
           
           # Use our standalone AppImage build script
-          ./build-appimage.sh
+          ./scripts/build-appimage.sh
       
       - name: Upload Linux Release Assets
         uses: softprops/action-gh-release@v2
@@ -248,6 +256,45 @@ jobs:
             reel-*.deb
             reel-*.rpm
             reel-*.AppImage
+
+  build-flatpak:
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flatpak and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder python3-aiohttp python3-toml
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48 org.freedesktop.Sdk.Extension.rust-stable//23.08
+
+      - name: Build Flatpak
+        run: |
+          # Set version environment variable for the build script
+          export VERSION=${{ needs.create-release.outputs.version }}
+          
+          # Use our standalone Flatpak build script
+          ./scripts/build-flatpak.sh
+
+      - name: Package repository for distribution
+        run: |
+          # Create a tarball of the repository for hosting
+          tar -czf repo.tar.gz -C repo .
+
+      - name: Upload Flatpak Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: |
+            reel-*.flatpak
+            repo.tar.gz
+
+
 
   # macOS and Windows builds are disabled for now - we only test on Linux
   # Uncomment the sections below to enable multi-platform builds
