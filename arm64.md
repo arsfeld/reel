@@ -51,12 +51,22 @@ Ubuntu 24.04 uses the new deb822 format for package sources. ARM64 packages are 
     
     sudo apt-get update
     
-    # Install cross-compilation tools
+    # Install cross-compilation tools and ARM64 libraries
     sudo apt-get install -y \
       gcc-aarch64-linux-gnu \
       g++-aarch64-linux-gnu \
       pkg-config \
-      libssl-dev:arm64
+      libssl-dev:arm64 \
+      libgtk-4-dev:arm64 \
+      libadwaita-1-dev:arm64 \
+      libgstreamer1.0-dev:arm64 \
+      libgstreamer-plugins-base1.0-dev:arm64 \
+      libmpv-dev:arm64 \
+      libsqlite3-dev:arm64 \
+      libdbus-1-dev:arm64 \
+      libglib2.0-dev:arm64 \
+      libcairo2-dev:arm64 \
+      libpango1.0-dev:arm64
 ```
 
 ### 2. Set Up QEMU for ARM64 Emulation
@@ -73,31 +83,33 @@ QEMU is needed for running ARM64 binaries during the build process:
 
 ### 3. Configure Cross-Compilation Environment
 
-Set the proper environment variables for Rust and OpenSSL cross-compilation:
+**Simplified Approach**: Create a temporary Cargo configuration file instead of setting many environment variables:
 
 ```yaml
+- name: Setup Cargo config for ARM64 cross-compilation
+  if: matrix.arch == 'aarch64'
+  run: |
+    mkdir -p .cargo
+    cat > .cargo/config.toml << 'EOF'
+    [target.aarch64-unknown-linux-gnu]
+    linker = "aarch64-linux-gnu-gcc"
+    
+    [env]
+    PKG_CONFIG_ALLOW_CROSS = "1"
+    PKG_CONFIG_PATH = "/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+    OPENSSL_DIR = "/usr"
+    OPENSSL_LIB_DIR = "/usr/lib/aarch64-linux-gnu"
+    OPENSSL_INCLUDE_DIR = "/usr/include/aarch64-linux-gnu"
+    EOF
+
 - name: Build release binary (cross-compile ARM64)
   if: matrix.arch == 'aarch64'
   run: |
-    export PKG_CONFIG_ALLOW_CROSS=1
-    export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
-    export CC=aarch64-linux-gnu-gcc
-    export CXX=aarch64-linux-gnu-g++
-    export AR=aarch64-linux-gnu-ar
-    export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-    
-    # OpenSSL specific settings for cross-compilation
-    export OPENSSL_DIR=/usr
-    export OPENSSL_INCLUDE_DIR=/usr/include
-    export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
-    
-    # Prevent passing -m64 flag to ARM compiler
-    export HOST_CC=gcc
-    export TARGET_CC=aarch64-linux-gnu-gcc
-    
     cargo build --release --target aarch64-unknown-linux-gnu
     aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/reel
 ```
+
+This approach is cleaner and keeps all cross-compilation settings in one place. The `.cargo/config.toml` file is created only in CI and won't interfere with local development.
 
 ### 4. Fix Flatpak Remote Configuration
 
@@ -207,6 +219,14 @@ gh run view <run-id> --log-failed
 ### Issue 3: "No remote refs found for 'flathub'"
 **Cause**: Flatpak remote not properly configured for user installations  
 **Solution**: Add flathub remote for both system and user, update appstream metadata
+
+### Issue 4: "cannot find -lgobject-2.0" and other libraries
+**Cause**: Linker finding x86_64 libraries instead of ARM64 ones  
+**Solution**: Install ARM64 versions of all required libraries (GTK4, GLib, etc.)
+
+### Issue 5: "expected `*const u8`, found `*const i8`" in Rust code
+**Cause**: On ARM64 Linux, `c_char` is `u8` instead of `i8`  
+**Solution**: Use `libc::c_char` instead of hardcoding `i8` or `u8` types
 
 ## References
 
