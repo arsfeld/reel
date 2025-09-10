@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info};
 
 use super::filters::{SortOrder, WatchStatus};
+use super::navigation::NavigationManager;
 use super::pages;
 use crate::config::Config;
 use crate::state::AppState;
@@ -147,13 +148,12 @@ mod imp {
         pub player_page: RefCell<Option<crate::platforms::gtk::ui::pages::PlayerPage>>,
         pub show_details_page: RefCell<Option<crate::platforms::gtk::ui::pages::ShowDetailsPage>>,
         pub movie_details_page: RefCell<Option<crate::platforms::gtk::ui::pages::MovieDetailsPage>>,
-        pub back_button: RefCell<Option<gtk4::Button>>,
         pub saved_window_size: RefCell<(i32, i32)>,
         pub filter_controls: RefCell<Option<gtk4::Box>>,
         pub edit_mode: RefCell<bool>,
         pub library_visibility: RefCell<std::collections::HashMap<String, bool>>,
         pub all_libraries: RefCell<Vec<(crate::models::Library, usize)>>,
-        pub navigation_stack: RefCell<Vec<String>>, // Track navigation history
+        pub navigation_manager: RefCell<Option<Arc<NavigationManager>>>,
         pub header_add_button: RefCell<Option<gtk4::Button>>, // Track add button in header
         pub sidebar_viewmodel:
             RefCell<Option<Arc<crate::platforms::gtk::ui::viewmodels::SidebarViewModel>>>,
@@ -216,7 +216,7 @@ mod imp {
                 #[weak]
                 obj,
                 move |_, row| {
-                    if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
+                    if let Some(_action_row) = row.downcast_ref::<adw::ActionRow>() {
                         info!("Home selected");
                         obj.show_home_page_for_source(None);
                     }
@@ -259,6 +259,16 @@ impl ReelMainWindow {
         // Store state and config
         window.imp().state.replace(Some(state.clone()));
         window.imp().config.replace(Some(config));
+
+        // Initialize navigation manager
+        let navigation_manager =
+            Arc::new(NavigationManager::new(window.imp().content_header.clone()));
+        // Setup back button callback now that NavigationManager is in Arc
+        navigation_manager.setup_back_button_callback();
+        window
+            .imp()
+            .navigation_manager
+            .replace(Some(navigation_manager));
 
         // Initialize SidebarViewModel
         let sidebar_vm = Arc::new(
@@ -831,10 +841,7 @@ impl ReelMainWindow {
         info!("show_sources_page called");
         let imp = self.imp();
 
-        // Prepare for navigation
-        self.prepare_navigation();
-
-        // Get or create content stack
+        // Get or create content stack first to ensure it exists
         let content_stack = self.ensure_content_stack();
 
         // Create sources page if it doesn't exist
@@ -858,27 +865,21 @@ impl ReelMainWindow {
             imp.sources_page.replace(Some(sources_page));
         }
 
-        // Show the sources page
-        content_stack.set_visible_child_name("sources");
-    }
-
-    fn clear_header_end_widgets(&self) {
-        let imp = self.imp();
-
-        // Remove the add button if it exists
-        if let Some(button) = imp.header_add_button.borrow().as_ref() {
-            imp.content_header.remove(button);
+        // Use NavigationManager for reactive navigation
+        if let Some(nav_manager) = imp.navigation_manager.borrow().as_ref() {
+            let nav_manager = Arc::clone(nav_manager);
+            glib::spawn_future_local(async move {
+                nav_manager
+                    .navigate_to(super::navigation::NavigationPage::Sources)
+                    .await;
+            });
         }
-        imp.header_add_button.replace(None);
     }
 
     fn show_home_page_for_source(&self, source_id: Option<String>) {
         let imp = self.imp();
 
-        // Prepare for navigation
-        self.prepare_navigation();
-
-        // Get or create content stack
+        // Get or create content stack first to ensure it exists
         let content_stack = self.ensure_content_stack();
 
         // Create home page if it doesn't exist
@@ -919,8 +920,15 @@ impl ReelMainWindow {
             }
         }
 
-        // Show the home page
-        content_stack.set_visible_child_name("home");
+        // Use NavigationManager for reactive navigation
+        if let Some(nav_manager) = imp.navigation_manager.borrow().as_ref() {
+            let nav_manager = Arc::clone(nav_manager);
+            glib::spawn_future_local(async move {
+                nav_manager
+                    .navigate_to(super::navigation::NavigationPage::Home { source_id })
+                    .await;
+            });
+        }
     }
 
     pub async fn trigger_sync(&self, state: Arc<AppState>) {
@@ -1140,8 +1148,7 @@ impl ReelMainWindow {
         let imp = self.imp();
         let start_time = std::time::Instant::now();
 
-        // Prepare navigation and get stack
-        self.prepare_navigation();
+        // Get content stack
         let content_stack = self.ensure_content_stack();
 
         // Set transition for details pages
@@ -1165,7 +1172,7 @@ impl ReelMainWindow {
                 if let Some(window) = window_weak.upgrade() {
                     let movie_item = crate::models::MediaItem::Movie(movie.clone());
                     glib::spawn_future_local(async move {
-                        use super::navigation::NavigationRequest;
+                        use super::navigation_request::NavigationRequest;
                         window
                             .navigate_to(NavigationRequest::ShowPlayer(movie_item))
                             .await;
@@ -1181,9 +1188,6 @@ impl ReelMainWindow {
 
         // Update the content page title
         imp.content_page.set_title(&movie.title);
-
-        // Setup back button immediately for better UX
-        self.setup_back_button("Back to Library");
 
         // Start loading the movie data
         movie_details_page.load_movie(movie.clone());
@@ -1211,8 +1215,7 @@ impl ReelMainWindow {
         let imp = self.imp();
         let start_time = std::time::Instant::now();
 
-        // Prepare navigation and get stack
-        self.prepare_navigation();
+        // Get content stack
         let content_stack = self.ensure_content_stack();
 
         // Set transition for details pages
@@ -1236,7 +1239,7 @@ impl ReelMainWindow {
                 if let Some(window) = window_weak.upgrade() {
                     let episode_item = crate::models::MediaItem::Episode(episode.clone());
                     glib::spawn_future_local(async move {
-                        use super::navigation::NavigationRequest;
+                        use super::navigation_request::NavigationRequest;
                         window
                             .navigate_to(NavigationRequest::ShowPlayer(episode_item))
                             .await;
@@ -1252,9 +1255,6 @@ impl ReelMainWindow {
 
         // Update the content page title
         imp.content_page.set_title(&show.title);
-
-        // Setup back button immediately for better UX
-        self.setup_back_button("Back to Library");
 
         // Start loading the show data
         show_details_page.load_show(show.clone());
@@ -1292,75 +1292,40 @@ impl ReelMainWindow {
 
         let imp = self.imp();
 
-        // Prepare navigation and get stack
-        self.prepare_navigation();
+        // Get content stack
         let content_stack = self.ensure_content_stack();
         content_stack.set_transition_type(gtk4::StackTransitionType::SlideLeftRight);
         content_stack.set_transition_duration(300);
 
-        // Create or reuse player page
-        // Check if we need to recreate the player page due to backend change
-        let current_backend = {
-            let config = state.config.read().await;
-            config.playback.player_backend.clone()
-        };
+        // Always destroy and recreate PlayerPage for each media item
+        // This eliminates all MPV lifecycle issues and state pollution
+        info!(
+            "Destroying and recreating PlayerPage for media: {}",
+            media_item.title()
+        );
 
-        let needs_recreation = if let Some(existing_page) = self.imp().player_page.borrow().as_ref()
-        {
-            // Check if the backend has changed
-            let page_backend = existing_page.get_backend_type().await;
-            page_backend != current_backend
-        } else {
-            true // No existing page, need to create
-        };
+        // Cleanup and remove any existing player page
+        if let Some(old_page) = self.imp().player_page.borrow().as_ref() {
+            info!("Cleaning up existing PlayerPage");
+            old_page.cleanup().await;
+        }
 
-        let player_page = if needs_recreation {
-            info!("Creating new PlayerPage with backend: {}", current_backend);
+        // Remove old player page widget from stack
+        if let Some(old_widget) = content_stack.child_by_name("player") {
+            content_stack.remove(&old_widget);
+        }
 
-            // Cleanup old player page if it exists
-            if let Some(old_page) = self.imp().player_page.borrow().as_ref() {
-                old_page.cleanup().await;
-            }
+        // Clear the stored reference to allow proper Drop cleanup
+        self.imp().player_page.replace(None);
 
-            // Remove old player page widget from stack
-            if let Some(old_widget) = content_stack.child_by_name("player") {
-                content_stack.remove(&old_widget);
-            }
-
-            // Create new player page with current backend
-            let page = crate::platforms::gtk::ui::pages::PlayerPage::new(state.clone());
-            self.imp().player_page.replace(Some(page.clone()));
-            content_stack.add_named(page.widget(), Some("player"));
-            page
-        } else {
-            // Reuse existing page
-            let page = self.imp().player_page.borrow().as_ref().unwrap().clone();
-            if content_stack.child_by_name("player").is_none() {
-                content_stack.add_named(page.widget(), Some("player"));
-            }
-            page
-        };
+        // Create completely fresh PlayerPage instance
+        let player_page = crate::platforms::gtk::ui::pages::PlayerPage::new(state.clone());
+        self.imp().player_page.replace(Some(player_page.clone()));
+        content_stack.add_named(player_page.widget(), Some("player"));
 
         // Update the content page title first
         self.imp().content_page.set_title(media_item.title());
         debug!("MainWindow::show_player() - Updated content page title");
-
-        // Load the media (but don't block navigation on failure)
-        debug!("MainWindow::show_player() - Loading media into player");
-        if let Err(e) = player_page.load_media(media_item, state).await {
-            error!("MainWindow::show_player() - Failed to load media: {}", e);
-            // Show error dialog but still navigate to player page
-            let dialog =
-                adw::AlertDialog::new(Some("Failed to Load Media"), Some(&format!("Error: {}", e)));
-            dialog.add_response("ok", "OK");
-            dialog.set_default_response(Some("ok"));
-            dialog.present(Some(self));
-        }
-        // Clear any existing back buttons from the main header
-        if let Some(old_button) = imp.back_button.borrow().as_ref() {
-            imp.content_header.remove(old_button);
-        }
-        imp.back_button.replace(None);
 
         // Also clear any title widget that might have controls
         imp.content_header.set_title_widget(None::<&gtk4::Widget>);
@@ -1381,50 +1346,58 @@ impl ReelMainWindow {
         let window_weak = self.downgrade();
         player_page.set_on_back_clicked(move || {
             if let Some(window) = window_weak.upgrade() {
-                // Stop the player
+                // Stop the player and wait for completion before navigation
                 if let Some(player_page) = window.imp().player_page.borrow().as_ref() {
                     let player_page = player_page.clone();
+                    let window_clone = window.clone();
                     glib::spawn_future_local(async move {
+                        // FIRST: Stop player and wait for completion
                         player_page.stop().await;
+
+                        // THEN: Execute navigation on main thread
+                        glib::idle_add_local_once(move || {
+                            // Show header bar again and restore toolbar style
+                            window_clone.imp().content_header.set_visible(true);
+                            window_clone
+                                .imp()
+                                .content_toolbar
+                                .set_top_bar_style(adw::ToolbarStyle::Raised);
+
+                            // Restore window size
+                            let (width, height) = *window_clone.imp().saved_window_size.borrow();
+                            window_clone.set_default_size(width, height);
+
+                            // Restore sidebar
+                            if let Some(content) = window_clone.content()
+                                && let Some(split_view) =
+                                    content.downcast_ref::<adw::NavigationSplitView>()
+                            {
+                                split_view.set_collapsed(false);
+                                split_view.set_show_content(true);
+                            }
+
+                            // Use NavigationManager to go back to the previous page
+                            if let Some(nav_manager) =
+                                window_clone.imp().navigation_manager.borrow().as_ref()
+                            {
+                                let nav_manager = Arc::clone(nav_manager);
+                                glib::spawn_future_local(async move {
+                                    nav_manager.go_back().await;
+                                });
+                            } else {
+                                // Fallback if NavigationManager is not available
+                                if let Some(stack) =
+                                    window_clone.imp().content_stack.borrow().as_ref()
+                                {
+                                    if stack.child_by_name("home").is_some() {
+                                        stack.set_visible_child_name("home");
+                                    } else if stack.child_by_name("library").is_some() {
+                                        stack.set_visible_child_name("library");
+                                    }
+                                }
+                            }
+                        });
                     });
-                }
-
-                // Show header bar again and restore toolbar style
-                window.imp().content_header.set_visible(true);
-                window
-                    .imp()
-                    .content_toolbar
-                    .set_top_bar_style(adw::ToolbarStyle::Raised);
-
-                // Restore window size
-                let (width, height) = *window.imp().saved_window_size.borrow();
-                window.set_default_size(width, height);
-
-                // Restore sidebar
-                if let Some(content) = window.content()
-                    && let Some(split_view) = content.downcast_ref::<adw::NavigationSplitView>()
-                {
-                    split_view.set_collapsed(false);
-                    split_view.set_show_content(true);
-                }
-
-                // Navigate back to the previous page from navigation stack
-                let previous_page = window.imp().navigation_stack.borrow_mut().pop();
-                if let Some(page_name) = previous_page {
-                    if let Some(stack) = window.imp().content_stack.borrow().as_ref()
-                        && stack.child_by_name(&page_name).is_some()
-                    {
-                        stack.set_visible_child_name(&page_name);
-                    }
-                } else {
-                    // Fallback if no navigation history
-                    if let Some(stack) = window.imp().content_stack.borrow().as_ref() {
-                        if stack.child_by_name("home").is_some() {
-                            stack.set_visible_child_name("home");
-                        } else if stack.child_by_name("library").is_some() {
-                            stack.set_visible_child_name("library");
-                        }
-                    }
                 }
             }
         });
@@ -1434,24 +1407,38 @@ impl ReelMainWindow {
         imp.saved_window_size
             .replace((current_width, current_height));
 
-        // Push current page to navigation stack before switching to player
+        // Navigation stack management is now handled by NavigationManager
+        // The NavigationManager will track this navigation automatically when we call navigate_to
         if let Some(current_page) = content_stack.visible_child_name() {
-            imp.navigation_stack
-                .borrow_mut()
-                .push(current_page.to_string());
             info!(
-                "MainWindow::show_player() - Pushed '{}' to navigation stack",
+                "MainWindow::show_player() - Current page '{}' will be tracked by NavigationManager",
                 current_page
             );
         }
 
         // Defer the transition for smoother performance
         info!("MainWindow::show_player() - Switching stack to 'player' page");
+        let media_item_clone = media_item.clone();
+        let state_clone = state.clone();
+        let player_page_clone = player_page.clone();
+        let window_weak = self.downgrade();
         glib::timeout_add_local_once(std::time::Duration::from_millis(10), {
             let content_stack = content_stack.clone();
+            let media_item = media_item_clone;
+            let state = state_clone;
+            let player_page = player_page_clone;
             move || {
                 content_stack.set_visible_child_name("player");
                 info!("MainWindow::show_player() - Navigation to player complete");
+
+                // Load media after the page is visible so GLArea can be properly realized
+                glib::spawn_future_local(async move {
+                    debug!("Loading media after page transition");
+                    if let Err(e) = player_page.load_media(&media_item, state).await {
+                        error!("Failed to load media: {}", e);
+                        // Error is already handled by the PlayerPage error state - no dialog needed
+                    }
+                });
             }
         });
 
@@ -1507,8 +1494,7 @@ impl ReelMainWindow {
         let imp = self.imp();
         let start_time = std::time::Instant::now();
 
-        // Prepare navigation and get stack
-        self.prepare_navigation();
+        // Get content stack
         let content_stack = self.ensure_content_stack();
 
         // Set transition for library pages
@@ -1544,7 +1530,7 @@ impl ReelMainWindow {
                     if let Some(window) = window_weak.upgrade() {
                         let media_item = media_item.clone();
                         glib::spawn_future_local(async move {
-                            use super::navigation::NavigationRequest;
+                            use super::navigation_request::NavigationRequest;
                             use crate::models::MediaItem;
                             let nav_request = match &media_item {
                                 MediaItem::Movie(movie) => {
@@ -1573,9 +1559,6 @@ impl ReelMainWindow {
 
         // Update the content page title
         imp.content_page.set_title(&library.title);
-
-        // Setup back button
-        self.setup_back_button("Back to Libraries");
 
         // Update header bar title
         imp.content_header.set_title_widget(Some(
@@ -1629,9 +1612,6 @@ impl ReelMainWindow {
 
         let imp = self.imp();
 
-        // Prepare navigation (clears headers)
-        self.prepare_navigation();
-
         // Show empty state in content area
         if let Some(stack) = imp.content_stack.borrow().as_ref() {
             stack.set_visible_child_name("empty");
@@ -1639,12 +1619,6 @@ impl ReelMainWindow {
 
         // Reset content page title
         imp.content_page.set_title("Content");
-
-        // Clear back button completely
-        if let Some(back_button) = imp.back_button.borrow().as_ref() {
-            imp.content_header.remove(back_button);
-        }
-        imp.back_button.replace(None);
 
         // Reset header bar title
         imp.content_header.set_title_widget(gtk4::Widget::NONE);
@@ -1794,80 +1768,183 @@ impl ReelMainWindow {
         // Sources button is always visible at the bottom - no selector needed
     }
 
-    // Generic navigation handler
+    // Generic navigation handler - now uses NavigationManager as central coordinator
     pub async fn navigate_to(
         &self,
-        request: crate::platforms::gtk::ui::navigation::NavigationRequest,
+        request: crate::platforms::gtk::ui::navigation_request::NavigationRequest,
     ) {
-        use super::navigation::NavigationRequest;
+        use super::navigation_request::NavigationRequest;
 
+        // Convert NavigationRequest to NavigationPage and use NavigationManager
+        if let Some(nav_manager) = self.imp().navigation_manager.borrow().as_ref() {
+            let nav_page = self.navigation_request_to_page(&request);
+
+            // For NavigationPages, we need to ensure the page exists before navigating
+            self.ensure_page_exists_for_request(&request).await;
+
+            // Use NavigationManager for centralized navigation
+            let nav_manager = Arc::clone(nav_manager);
+            match nav_page {
+                Some(page) => {
+                    nav_manager.navigate_to(page).await;
+                }
+                None => {
+                    // Handle GoBack separately as it's not a page navigation
+                    if matches!(request, NavigationRequest::GoBack) {
+                        nav_manager.go_back().await;
+                    }
+                }
+            }
+        } else {
+            // Fallback to old navigation system if NavigationManager isn't available
+            let state = self.imp().state.borrow().as_ref().unwrap().clone();
+
+            match request {
+                NavigationRequest::ShowHome(source_id) => {
+                    self.show_home_page_for_source(source_id);
+                }
+                NavigationRequest::ShowSources => {
+                    self.show_sources_page();
+                }
+                NavigationRequest::ShowMovieDetails(movie) => {
+                    self.show_movie_details(movie, state).await;
+                }
+                NavigationRequest::ShowShowDetails(show) => {
+                    self.show_show_details(show, state).await;
+                }
+                NavigationRequest::ShowPlayer(media_item) => {
+                    self.show_player(&media_item, state).await;
+                }
+                NavigationRequest::ShowLibrary(backend_id, library) => {
+                    self.show_library_view(backend_id, library).await;
+                }
+                NavigationRequest::GoBack => {
+                    // Navigate back in history
+                    if let Some(stack) = self.imp().content_stack.borrow().as_ref() {
+                        // Check if we're currently on the player page and clean it up
+                        if let Some(current_page) = stack.visible_child_name() {
+                            if current_page == "player" {
+                                // Stop the player before navigating away
+                                if let Some(player_page) = self.imp().player_page.borrow().as_ref()
+                                {
+                                    let player_page = player_page.clone();
+                                    let window_self = self.clone();
+                                    glib::spawn_future_local(async move {
+                                        player_page.stop().await;
+
+                                        // Restore UI state
+                                        window_self.imp().content_header.set_visible(true);
+                                        window_self
+                                            .imp()
+                                            .content_toolbar
+                                            .set_top_bar_style(adw::ToolbarStyle::Raised);
+
+                                        // Restore window size
+                                        let (width, height) =
+                                            *window_self.imp().saved_window_size.borrow();
+                                        window_self.set_default_size(width, height);
+
+                                        // Restore sidebar
+                                        if let Some(content) = window_self.content()
+                                            && let Some(split_view) =
+                                                content.downcast_ref::<adw::NavigationSplitView>()
+                                        {
+                                            split_view.set_collapsed(false);
+                                            split_view.set_show_content(true);
+                                        }
+                                    });
+                                }
+                            }
+                        }
+
+                        // Use NavigationManager to go back
+                        if let Some(nav_manager) = self.imp().navigation_manager.borrow().as_ref() {
+                            let nav_manager = Arc::clone(nav_manager);
+                            glib::spawn_future_local(async move {
+                                nav_manager.go_back().await;
+                            });
+                        } else {
+                            // Default to home
+                            self.show_home_page_for_source(None);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Helper to convert NavigationRequest to NavigationPage
+    fn navigation_request_to_page(
+        &self,
+        request: &crate::platforms::gtk::ui::navigation_request::NavigationRequest,
+    ) -> Option<super::navigation::NavigationPage> {
+        use super::navigation::NavigationPage;
+        use super::navigation_request::NavigationRequest;
+
+        match request {
+            NavigationRequest::ShowHome(source_id) => Some(NavigationPage::Home {
+                source_id: source_id.clone(),
+            }),
+            NavigationRequest::ShowSources => Some(NavigationPage::Sources),
+            NavigationRequest::ShowMovieDetails(movie) => Some(NavigationPage::MovieDetails {
+                movie_id: movie.id.clone(),
+                title: movie.title.clone(),
+            }),
+            NavigationRequest::ShowShowDetails(show) => Some(NavigationPage::ShowDetails {
+                show_id: show.id.clone(),
+                title: show.title.clone(),
+            }),
+            NavigationRequest::ShowPlayer(media_item) => Some(NavigationPage::Player {
+                media_id: media_item.id().to_string(),
+                title: media_item.title().to_string(),
+            }),
+            NavigationRequest::ShowLibrary(backend_id, library) => Some(NavigationPage::Library {
+                backend_id: backend_id.clone(),
+                library_id: library.id.clone(),
+                title: library.title.clone(),
+            }),
+            NavigationRequest::GoBack => None, // Handle separately
+        }
+    }
+
+    // Helper to ensure the page widget exists before navigating
+    async fn ensure_page_exists_for_request(
+        &self,
+        request: &crate::platforms::gtk::ui::navigation_request::NavigationRequest,
+    ) {
+        use super::navigation_request::NavigationRequest;
         let state = self.imp().state.borrow().as_ref().unwrap().clone();
 
         match request {
-            NavigationRequest::ShowHome(source_id) => {
-                self.show_home_page_for_source(source_id);
+            NavigationRequest::ShowHome(_) => {
+                // Home page creation is handled in show_home_page_for_source
+                // We need to temporarily call it to ensure the page exists
+                // TODO: Refactor to separate page creation from navigation
             }
             NavigationRequest::ShowSources => {
-                self.show_sources_page();
+                // Sources page creation is handled in show_sources_page
+                // We need to temporarily call it to ensure the page exists
+                // TODO: Refactor to separate page creation from navigation
             }
             NavigationRequest::ShowMovieDetails(movie) => {
-                self.show_movie_details(movie, state).await;
+                // Movie details page is created in show_movie_details
+                self.show_movie_details(movie.clone(), state).await;
             }
             NavigationRequest::ShowShowDetails(show) => {
-                self.show_show_details(show, state).await;
+                // Show details page is created in show_show_details
+                self.show_show_details(show.clone(), state).await;
             }
             NavigationRequest::ShowPlayer(media_item) => {
-                self.show_player(&media_item, state).await;
+                // Player page is created in show_player
+                self.show_player(media_item, state).await;
             }
             NavigationRequest::ShowLibrary(backend_id, library) => {
-                self.show_library_view(backend_id, library).await;
+                // Library page is created in show_library_view
+                self.show_library_view(backend_id.clone(), library.clone())
+                    .await;
             }
             NavigationRequest::GoBack => {
-                // Navigate back in history
-                if let Some(stack) = self.imp().content_stack.borrow().as_ref() {
-                    // Check if we're currently on the player page and clean it up
-                    if let Some(current_page) = stack.visible_child_name() {
-                        if current_page == "player" {
-                            // Stop the player before navigating away
-                            if let Some(player_page) = self.imp().player_page.borrow().as_ref() {
-                                let player_page = player_page.clone();
-                                let window_self = self.clone();
-                                glib::spawn_future_local(async move {
-                                    player_page.stop().await;
-
-                                    // Restore UI state
-                                    window_self.imp().content_header.set_visible(true);
-                                    window_self
-                                        .imp()
-                                        .content_toolbar
-                                        .set_top_bar_style(adw::ToolbarStyle::Raised);
-
-                                    // Restore window size
-                                    let (width, height) =
-                                        *window_self.imp().saved_window_size.borrow();
-                                    window_self.set_default_size(width, height);
-
-                                    // Restore sidebar
-                                    if let Some(content) = window_self.content()
-                                        && let Some(split_view) =
-                                            content.downcast_ref::<adw::NavigationSplitView>()
-                                    {
-                                        split_view.set_collapsed(false);
-                                        split_view.set_show_content(true);
-                                    }
-                                });
-                            }
-                        }
-                    }
-
-                    // Pop from navigation stack if available
-                    if let Some(previous_page) = self.imp().navigation_stack.borrow_mut().pop() {
-                        stack.set_visible_child_name(&previous_page);
-                    } else {
-                        // Default to home
-                        self.show_home_page_for_source(None);
-                    }
-                }
+                // No page creation needed for GoBack
             }
         }
     }
@@ -1881,53 +1958,16 @@ impl ReelMainWindow {
             stack.add_named(&*imp.empty_state, Some("empty"));
             imp.content_toolbar.set_content(Some(&stack));
             imp.content_stack.replace(Some(stack.clone()));
+
+            // Connect the stack to the NavigationManager
+            if let Some(nav_manager) = imp.navigation_manager.borrow().as_ref() {
+                nav_manager.set_content_stack(stack.clone());
+            }
+
             stack
         } else {
             imp.content_stack.borrow().as_ref().unwrap().clone()
         }
-    }
-
-    // Helper to prepare for page navigation
-    fn prepare_navigation(&self) {
-        let imp = self.imp();
-
-        // Clear header end widgets
-        self.clear_header_end_widgets();
-
-        // Remove any filter controls
-        if let Some(filter_controls) = imp.filter_controls.borrow().as_ref() {
-            imp.content_header.remove(filter_controls);
-        }
-        imp.filter_controls.replace(None);
-    }
-
-    // Helper to setup back button
-    fn setup_back_button(&self, tooltip: &str) {
-        let imp = self.imp();
-
-        // Remove any existing back button
-        if let Some(old_button) = imp.back_button.borrow().as_ref() {
-            imp.content_header.remove(old_button);
-        }
-
-        // Create a new back button
-        let back_button = gtk4::Button::builder()
-            .icon_name("go-previous-symbolic")
-            .tooltip_text(tooltip)
-            .build();
-
-        let window_weak = self.downgrade();
-        back_button.connect_clicked(move |_| {
-            if let Some(window) = window_weak.upgrade() {
-                glib::spawn_future_local(async move {
-                    use super::navigation::NavigationRequest;
-                    window.navigate_to(NavigationRequest::GoBack).await;
-                });
-            }
-        });
-
-        imp.content_header.pack_start(&back_button);
-        imp.back_button.replace(Some(back_button));
     }
 
     // Backend switching removed - each view must track its own backend_id
