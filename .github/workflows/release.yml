@@ -260,7 +260,7 @@ jobs:
         run: |
           # Use cross for ARM64 cross-compilation
           cross build --release --target aarch64-unknown-linux-gnu
-          # Find and use the appropriate strip tool from Docker
+          # Strip the binary
           docker run --rm -v "$PWD":/work -w /work ghcr.io/cross-rs/aarch64-unknown-linux-gnu:latest \
             aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/reel
 
