@@ -187,8 +187,8 @@ jobs:
         include:
           - arch: x86_64
             runner: ubuntu-latest
-          - arch: aarch64
-            runner: ubuntu-latest
+          # - arch: aarch64
+          #   runner: ubuntu-latest
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
@@ -341,8 +341,8 @@ jobs:
         include:
           - arch: x86_64
             runner: ubuntu-latest
-          - arch: aarch64
-            runner: ubuntu-latest
+          # - arch: aarch64
+          #   runner: ubuntu-latest
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
