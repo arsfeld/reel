@@ -11,7 +11,7 @@ pub mod sources_view_model;
 pub use authentication_view_model::AuthenticationViewModel;
 pub use details_view_model::DetailsViewModel;
 pub use preferences_view_model::PreferencesViewModel;
-pub use property::{Property, PropertySubscriber};
+pub use property::{ComputedProperty, Property, PropertyLike, PropertySubscriber};
 pub use sidebar_view_model::SidebarViewModel;
 
 use crate::events::EventBus;
