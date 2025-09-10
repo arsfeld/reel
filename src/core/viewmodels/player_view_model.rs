@@ -247,7 +247,7 @@ impl PlayerViewModel {
                     self.duration.set(duration).await;
                 }
 
-                if let Ok(Some((position_ms, duration_ms))) =
+                if let Ok(Some((position_ms, _duration_ms))) =
                     self.data_service.get_playback_progress(&media_id).await
                 {
                     self.position.set(Duration::from_millis(position_ms)).await;
@@ -298,6 +298,7 @@ impl PlayerViewModel {
 
     pub async fn stop(&self) {
         self.playback_state.set(PlaybackState::Stopped).await;
+        self.is_loading.set(false).await; // Clear loading state to allow new media
         self.emit_playback_event(EventType::PlaybackStopped).await;
         self.save_progress().await;
         self.position.set(Duration::ZERO).await;
@@ -449,6 +450,39 @@ impl PlayerViewModel {
                     }
                 }
             }
+            EventType::SourceUpdated | EventType::SourceOnlineStatusChanged => {
+                // If we have pending media to load and a source just came online, retry loading
+                if let Some(current) = self.current_media.get().await {
+                    let backend_id = current.backend_id();
+
+                    // Check if this event is for the backend we're waiting for
+                    if let EventPayload::Source { id, .. } = &event.payload {
+                        if id == backend_id && self.is_loading.get().await {
+                            // Check if the source is now connected
+                            if let Some(status) = self
+                                .app_state
+                                .source_coordinator
+                                .get_source_status(backend_id)
+                                .await
+                            {
+                                match &status.connection_status {
+                                    crate::services::source_coordinator::ConnectionStatus::Connected => {
+                                        tracing::info!("PlayerViewModel: Backend {} is now connected, retrying media load", backend_id);
+                                        // Retry loading the stream and metadata
+                                        if let Err(e) = self.load_stream_and_metadata().await {
+                                            self.error.set(Some(format!("Failed to load media after backend connected: {}", e))).await;
+                                        }
+                                    }
+                                    _ => {
+                                        // Backend still not ready or has errors - will be handled by UI
+                                        tracing::debug!("PlayerViewModel: Backend {} status changed but not connected yet", backend_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -473,6 +507,10 @@ impl PlayerViewModel {
         &self.volume
     }
 
+    pub fn is_muted(&self) -> &Property<bool> {
+        &self.is_muted
+    }
+
     pub fn is_fullscreen(&self) -> &Property<bool> {
         &self.is_fullscreen
     }
@@ -495,6 +533,10 @@ impl PlayerViewModel {
 
     pub fn markers(&self) -> &Property<(Option<ChapterMarker>, Option<ChapterMarker>)> {
         &self.markers
+    }
+
+    pub fn next_episode(&self) -> &Property<Option<Episode>> {
+        &self.next_episode
     }
 
     // Check if media is currently playing
@@ -542,8 +584,12 @@ impl PlayerViewModel {
 impl ViewModel for PlayerViewModel {
     async fn initialize(&self, _event_bus: Arc<EventBus>) {
         // Subscribe using the non-optional event bus held by this VM
-        let filter =
-            EventFilter::new().with_types(vec![EventType::MediaUpdated, EventType::MediaDeleted]);
+        let filter = EventFilter::new().with_types(vec![
+            EventType::MediaUpdated,
+            EventType::MediaDeleted,
+            EventType::SourceUpdated,
+            EventType::SourceOnlineStatusChanged,
+        ]);
 
         let mut subscriber = self.event_bus.subscribe_filtered(filter);
         let self_clone = self.clone();
@@ -611,5 +657,45 @@ impl Clone for PlayerViewModel {
             event_bus: self.event_bus.clone(),
             last_progress_save: self.last_progress_save.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_playback_state_equality() {
+        // Test that PlaybackState variants work correctly for reactive comparison
+        let playing = PlaybackState::Playing;
+        let paused = PlaybackState::Paused;
+        let stopped = PlaybackState::Stopped;
+
+        assert_eq!(playing, PlaybackState::Playing);
+        assert_ne!(playing, paused);
+        assert_ne!(paused, stopped);
+
+        // Test the icon mapping logic used in reactive binding
+        let play_icon = match playing {
+            PlaybackState::Playing => "media-playback-pause-symbolic",
+            _ => "media-playback-start-symbolic",
+        };
+
+        let pause_icon = match paused {
+            PlaybackState::Playing => "media-playback-pause-symbolic",
+            _ => "media-playback-start-symbolic",
+        };
+
+        assert_eq!(play_icon, "media-playback-pause-symbolic");
+        assert_eq!(pause_icon, "media-playback-start-symbolic");
+    }
+
+    #[test]
+    fn test_playback_state_cloning() {
+        // Test that PlaybackState can be cloned (needed for reactive properties)
+        let original = PlaybackState::Playing;
+        let cloned = original.clone();
+
+        assert_eq!(original, cloned);
     }
 }

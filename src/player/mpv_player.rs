@@ -718,14 +718,40 @@ impl MpvPlayer {
     }
 
     pub async fn stop(&self) -> Result<()> {
-        debug!("MpvPlayer::stop() - Stopping playback");
+        debug!("MpvPlayer::stop() - Stopping playback with immediate audio cut");
 
         if let Some(ref mpv) = *self.inner.mpv.borrow() {
+            // IMMEDIATE: Mute volume for instant silence
+            if let Err(e) = mpv.command("set", &["volume", "0"]) {
+                warn!("Failed to mute volume during stop: {:?}", e);
+            }
+
+            // IMMEDIATE: Disable audio output completely
+            if let Err(e) = mpv.command("set", &["ao", "null"]) {
+                warn!("Failed to disable audio output: {:?}", e);
+            }
+
+            // THEN: Stop media playback
+            debug!("MpvPlayer::stop() - Sending stop command to MPV");
             mpv.command("stop", &[])
                 .map_err(|e| anyhow::anyhow!("Failed to stop: {:?}", e))?;
 
+            // Also clear the playlist to ensure no media is loaded
+            debug!("MpvPlayer::stop() - Clearing MPV playlist");
+            mpv.command("playlist-clear", &[])
+                .map_err(|e| anyhow::anyhow!("Failed to clear playlist: {:?}", e))?;
+
+            // Set idle mode to prevent MPV from closing
+            debug!("MpvPlayer::stop() - Setting MPV to idle mode");
+            mpv.command("set", &["idle", "yes"])
+                .map_err(|e| anyhow::anyhow!("Failed to set idle mode: {:?}", e))?;
+
             let mut state = self.inner.state.write().await;
             *state = PlayerState::Stopped;
+
+            info!("MpvPlayer::stop() - Playback stopped with immediate audio termination");
+        } else {
+            debug!("MpvPlayer::stop() - No MPV instance found, nothing to stop");
         }
         Ok(())
     }
@@ -1018,6 +1044,28 @@ impl MpvPlayer {
         let next = current.next();
         self.set_upscaling_mode(next).await?;
         Ok(next)
+    }
+
+    /// Clear internal GLArea reference and OpenGL context to prepare for widget recreation
+    pub fn clear_video_widget_state(&self) {
+        debug!("Clearing MPV internal GLArea state for widget recreation");
+
+        // Cancel the render timer first
+        if let Some(timer_id) = self.inner.timer_handle.borrow_mut().take() {
+            timer_id.remove();
+            debug!("Cancelled MPV render timer");
+        }
+
+        // Clear the GLArea reference - this will trigger cleanup when GLArea is destroyed
+        self.inner.gl_area.borrow_mut().take();
+
+        // Clear the render context reference - it will be recreated with new GLArea
+        self.inner.mpv_gl.borrow_mut().take();
+
+        // Reset callback registration flag
+        self.inner.update_callback_registered.set(false);
+
+        debug!("MPV internal state cleared for widget recreation");
     }
 
     fn apply_upscaling_settings(&self, mpv: &Mpv, mode: UpscalingMode) -> Result<()> {

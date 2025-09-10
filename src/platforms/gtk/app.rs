@@ -2,7 +2,6 @@ use adw::glib;
 use anyhow::Result;
 use gtk4::prelude::*;
 use libadwaita as adw;
-use libadwaita::prelude::*;
 use std::sync::Arc;
 use tracing::info;
 

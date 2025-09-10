@@ -139,7 +139,7 @@ impl Database {
         use crate::db::migrations::Migrator;
         use sea_orm_migration::MigratorTrait;
 
-        let applied = Migrator::get_applied_migrations(&*self.connection)
+        let _applied = Migrator::get_applied_migrations(&*self.connection)
             .await
             .context("Failed to get applied migrations")?;
 

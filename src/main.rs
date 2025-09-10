@@ -18,7 +18,7 @@ fn main() -> Result<()> {
     use gtk4::prelude::*;
     use libadwaita as adw;
     use libadwaita::prelude::*;
-    use platforms::gtk::ReelApp;
+    use platforms::gtk::app::ReelApp;
     use tracing::info;
 
     const APP_ID: &str = "dev.arsfeld.Reel";

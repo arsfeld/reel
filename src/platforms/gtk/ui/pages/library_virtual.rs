@@ -1,14 +1,13 @@
-use gtk4::{gdk, gio, glib, prelude::*, subclass::prelude::*};
+use gtk4::{gdk, glib, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use once_cell::sync::Lazy;
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, info, trace, warn};
 
-use crate::constants::*;
-use crate::models::{Episode, Library, MediaItem, Movie, Show};
+use crate::core::viewmodels::ViewModel;
+use crate::models::{Library, MediaItem};
 use crate::platforms::gtk::ui::filters::{FilterManager, WatchStatus};
 use crate::platforms::gtk::ui::viewmodels::library_view_model::LibraryViewModel;
 use crate::platforms::gtk::ui::widgets::virtual_media_list::{
@@ -108,7 +107,6 @@ impl LibraryVirtualView {
             let vm = view_model.clone();
             let event_bus = state.event_bus.clone();
             async move {
-                use crate::platforms::gtk::ui::viewmodels::ViewModel;
                 vm.initialize(event_bus).await;
             }
         });
@@ -522,7 +520,6 @@ impl LibraryVirtualView {
         if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
             let vm_clone = view_model.clone();
             glib::spawn_future_local(async move {
-                use crate::platforms::gtk::ui::viewmodels::ViewModel;
                 let _ = vm_clone.refresh().await;
             });
         }

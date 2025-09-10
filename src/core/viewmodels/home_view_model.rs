@@ -39,6 +39,7 @@ pub struct HomeViewModel {
     error: Property<Option<String>>,
     section_limits: Property<HashMap<String, usize>>,
     current_source_id: Property<Option<String>>, // Filter by source
+    backends_ready: Property<bool>,              // Track if backends are initialized and ready
     event_bus: Option<Arc<EventBus>>,
 }
 
@@ -61,6 +62,7 @@ impl HomeViewModel {
             error: Property::new(None, "error"),
             section_limits: Property::new(default_limits, "section_limits"),
             current_source_id: Property::new(None, "current_source_id"),
+            backends_ready: Property::new(false, "backends_ready"),
             event_bus: None,
         }
     }
@@ -513,6 +515,10 @@ impl HomeViewModel {
         &self.current_source_id
     }
 
+    pub fn backends_ready(&self) -> &Property<bool> {
+        &self.backends_ready
+    }
+
     pub async fn set_source_filter(&self, source_id: Option<String>) -> Result<()> {
         use tracing::info;
 
@@ -575,6 +581,7 @@ impl ViewModel for HomeViewModel {
             "libraries" => Some(self.libraries.subscribe()),
             "is_loading" => Some(self.is_loading.subscribe()),
             "current_source_id" => Some(self.current_source_id.subscribe()),
+            "backends_ready" => Some(self.backends_ready.subscribe()),
             _ => None,
         }
     }
@@ -599,6 +606,7 @@ impl Clone for HomeViewModel {
             error: self.error.clone(),
             section_limits: self.section_limits.clone(),
             current_source_id: self.current_source_id.clone(),
+            backends_ready: self.backends_ready.clone(),
             event_bus: self.event_bus.clone(),
         }
     }

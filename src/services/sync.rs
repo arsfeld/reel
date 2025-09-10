@@ -488,7 +488,7 @@ impl SyncManager {
         // Also maintain backward compatibility by caching typed lists
         match library_type {
             crate::models::LibraryType::Movies => {
-                let movies: Vec<Movie> = items
+                let _movies: Vec<Movie> = items
                     .iter()
                     .filter_map(|item| match item {
                         MediaItem::Movie(m) => Some(m.clone()),

@@ -405,4 +405,17 @@ impl Player {
             debug!("🔍 Player Info: Duration={:.2}s", dur.as_secs_f64());
         }
     }
+
+    /// Clear video widget state to prepare for widget recreation (MPV specific)
+    pub fn clear_video_widget_state(&self) {
+        match self {
+            Player::GStreamer(_) => {
+                // GStreamer doesn't need this - it creates new sinks each time
+                debug!("GStreamer doesn't require video widget state clearing");
+            }
+            Player::Mpv(p) => {
+                p.clear_video_widget_state();
+            }
+        }
+    }
 }
