@@ -648,8 +648,17 @@ impl SourceCoordinator {
         // Test connection
         let connection_status = match backend.initialize().await {
             Ok(_) => {
-                info!("Backend {} connected successfully", source.name);
-                ConnectionStatus::Connected
+                // Check if the backend is fully initialized (API client ready)
+                if backend.is_initialized().await {
+                    info!("Backend {} connected and fully initialized", source.name);
+                    ConnectionStatus::Connected
+                } else {
+                    warn!(
+                        "Backend {} initialized but not ready (API client missing)",
+                        source.name
+                    );
+                    ConnectionStatus::NeedsAuth
+                }
             }
             Err(e) => {
                 warn!("Backend {} failed to connect: {}", source.name, e);

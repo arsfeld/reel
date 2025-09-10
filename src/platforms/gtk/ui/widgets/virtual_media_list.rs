@@ -1,6 +1,5 @@
 use gtk4::{gio, glib, prelude::*, subclass::prelude::*};
 use std::cell::RefCell;
-use std::sync::Arc;
 use tracing::{debug, trace};
 
 use crate::models::MediaItem;

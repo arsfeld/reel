@@ -5,8 +5,12 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
-use crate::backends::traits::MediaBackend;
 use crate::models::{Episode, Show};
+use crate::platforms::gtk::ui::reactive::bindings::{
+    bind_css_class_to_property, bind_dropdown_to_property, bind_image_icon_to_property,
+    bind_image_to_property, bind_label_to_property, bind_text_to_computed_property,
+    bind_text_to_property, bind_visibility_to_computed_property, bind_visibility_to_property,
+};
 use crate::platforms::gtk::ui::viewmodels::{DetailsViewModel, ViewModel};
 use crate::state::AppState;
 use crate::utils::{ImageLoader, ImageSize};
@@ -78,11 +82,11 @@ mod imp {
 
         pub state: RefCell<Option<Arc<AppState>>>,
         pub viewmodel: RefCell<Option<Arc<DetailsViewModel>>>,
-        pub current_show: RefCell<Option<Show>>,
-        pub current_season: RefCell<Option<u32>>,
         pub on_episode_selected: RefCell<Option<Box<dyn Fn(&Episode)>>>,
         pub load_generation: RefCell<u64>,
         pub property_subscriptions: RefCell<Vec<tokio::sync::broadcast::Receiver<()>>>,
+        pub binding_handles:
+            RefCell<Vec<crate::platforms::gtk::ui::reactive::bindings::BindingHandle>>,
     }
 
     impl Default for ShowDetailsPage {
@@ -115,11 +119,10 @@ mod imp {
                 content_rating_label: Default::default(),
                 state: RefCell::new(None),
                 viewmodel: RefCell::new(None),
-                current_show: RefCell::new(None),
-                current_season: RefCell::new(None),
                 on_episode_selected: RefCell::new(None),
                 load_generation: RefCell::new(0),
                 property_subscriptions: RefCell::new(Vec::new()),
+                binding_handles: RefCell::new(Vec::new()),
             }
         }
     }
@@ -224,6 +227,18 @@ impl ShowDetailsPage {
                 });
             }
 
+            // Subscribe to current_item property for genre chips
+            if let Some(mut subscriber) = viewmodel.subscribe_to_property("current_item") {
+                let page_weak_clone = page_weak.clone();
+                glib::spawn_future_local(async move {
+                    while subscriber.wait_for_change().await {
+                        if let Some(page) = page_weak_clone.upgrade() {
+                            page.on_genres_changed().await;
+                        }
+                    }
+                });
+            }
+
             // Subscribe to is_loading property
             if let Some(mut subscriber) = viewmodel.subscribe_to_property("is_loading") {
                 let page_weak_clone = page_weak.clone();
@@ -236,41 +251,318 @@ impl ShowDetailsPage {
                 });
             }
 
-            // Subscribe to is_watched property
-            if let Some(mut subscriber) = viewmodel.subscribe_to_property("is_watched") {
-                let page_weak_clone = page_weak.clone();
-                glib::spawn_future_local(async move {
-                    while subscriber.wait_for_change().await {
-                        if let Some(page) = page_weak_clone.upgrade() {
-                            page.on_watched_changed().await;
-                        }
-                    }
-                });
-            }
-
-            // Subscribe to episodes property
+            // Subscribe to episodes property for reactive episode list
             if let Some(mut subscriber) = viewmodel.subscribe_to_property("episodes") {
                 let page_weak_clone = page_weak.clone();
                 glib::spawn_future_local(async move {
                     while subscriber.wait_for_change().await {
                         if let Some(page) = page_weak_clone.upgrade() {
-                            page.on_episodes_changed().await;
+                            page.on_episodes_list_changed().await;
                         }
                     }
                 });
             }
 
-            // Subscribe to seasons property
-            if let Some(mut subscriber) = viewmodel.subscribe_to_property("seasons") {
-                let page_weak_clone = page_weak.clone();
-                glib::spawn_future_local(async move {
-                    while subscriber.wait_for_change().await {
-                        if let Some(page) = page_weak_clone.upgrade() {
-                            page.on_seasons_changed().await;
+            // Set up reactive bindings for show details using current_item property
+            self.setup_reactive_show_details_bindings();
+        }
+    }
+
+    fn setup_reactive_show_details_bindings(&self) {
+        let imp = self.imp();
+
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            // Reactive binding for title
+            bind_label_to_property(
+                &imp.show_title,
+                viewmodel.current_item().clone(),
+                |detailed_info| {
+                    if let Some(info) = detailed_info {
+                        if let crate::models::MediaItem::Show(show) = &info.media {
+                            return show.title.clone();
                         }
                     }
-                });
-            }
+                    String::new()
+                },
+            );
+
+            // Reactive binding for year
+            bind_text_to_property(
+                &imp.year_label,
+                viewmodel.current_item().clone(),
+                |detailed_info| {
+                    if let Some(info) = detailed_info {
+                        if let crate::models::MediaItem::Show(show) = &info.media {
+                            if let Some(year) = show.year {
+                                return format!("{}", year);
+                            }
+                        }
+                    }
+                    String::new()
+                },
+            );
+
+            // Reactive binding for year visibility
+            bind_visibility_to_property(
+                &*imp.year_label,
+                viewmodel.current_item().clone(),
+                |detailed_info| {
+                    if let Some(info) = detailed_info {
+                        if let crate::models::MediaItem::Show(show) = &info.media {
+                            return show.year.is_some();
+                        }
+                    }
+                    false
+                },
+            );
+
+            // Reactive binding for rating
+            bind_text_to_property(
+                &imp.rating_label,
+                viewmodel.current_item().clone(),
+                |detailed_info| {
+                    if let Some(info) = detailed_info {
+                        if let crate::models::MediaItem::Show(show) = &info.media {
+                            if let Some(rating) = show.rating {
+                                return format!("{:.1}", rating);
+                            }
+                        }
+                    }
+                    String::new()
+                },
+            );
+
+            // Reactive binding for rating visibility
+            bind_visibility_to_property(
+                &*imp.rating_box,
+                viewmodel.current_item().clone(),
+                |detailed_info| {
+                    if let Some(info) = detailed_info {
+                        if let crate::models::MediaItem::Show(show) = &info.media {
+                            return show.rating.is_some();
+                        }
+                    }
+                    false
+                },
+            );
+
+            // Reactive binding for synopsis
+            bind_text_to_property(
+                &imp.synopsis_label,
+                viewmodel.current_item().clone(),
+                |detailed_info| {
+                    if let Some(info) = detailed_info {
+                        if let crate::models::MediaItem::Show(show) = &info.media {
+                            if let Some(overview) = &show.overview {
+                                return overview.clone();
+                            }
+                        }
+                    }
+                    String::new()
+                },
+            );
+
+            // Reactive binding for synopsis visibility
+            bind_visibility_to_property(
+                &*imp.synopsis_label,
+                viewmodel.current_item().clone(),
+                |detailed_info| {
+                    if let Some(info) = detailed_info {
+                        if let crate::models::MediaItem::Show(show) = &info.media {
+                            return show.overview.is_some()
+                                && !show.overview.as_ref().unwrap().trim().is_empty();
+                        }
+                    }
+                    false
+                },
+            );
+
+            // Reactive binding for poster image
+            bind_image_to_property(
+                &imp.show_poster,
+                viewmodel.current_item().clone(),
+                |detailed_info| {
+                    if let Some(info) = detailed_info {
+                        if let crate::models::MediaItem::Show(show) = &info.media {
+                            return show.poster_url.clone();
+                        }
+                    }
+                    None
+                },
+            );
+
+            // Reactive binding for backdrop image
+            bind_image_to_property(
+                &imp.show_backdrop,
+                viewmodel.current_item().clone(),
+                |detailed_info| {
+                    if let Some(info) = detailed_info {
+                        if let crate::models::MediaItem::Show(show) = &info.media {
+                            return show.backdrop_url.clone();
+                        }
+                    }
+                    None
+                },
+            );
+
+            // Reactive binding for poster placeholder visibility based on loading state
+            bind_visibility_to_property(
+                &*imp.poster_placeholder,
+                viewmodel.is_loading().clone(),
+                |is_loading| *is_loading, // Show placeholder when loading
+            );
+
+            // Reactive binding for episodes collection
+            // For now, we'll skip the reactive episodes binding and keep using the manual approach
+            // until we can resolve the thread safety issue with creating episode cards
+            // TODO: Implement reactive episodes binding once we can make episode card creation thread-safe
+
+            // Reactive binding for episode count
+            let episodes_count_handle = bind_text_to_property(
+                &*imp.episodes_count_label,
+                viewmodel.episodes().clone(),
+                |episodes| {
+                    let episode_count = episodes
+                        .iter()
+                        .filter(|item| matches!(item, crate::models::MediaItem::Episode(_)))
+                        .count();
+                    format!("{} episodes", episode_count)
+                },
+            );
+            imp.binding_handles.borrow_mut().push(episodes_count_handle);
+
+            // Reactive binding for episodes box visibility
+            let episodes_visibility_handle = bind_visibility_to_property(
+                &*imp.episodes_box,
+                viewmodel.episodes().clone(),
+                |episodes| !episodes.is_empty(),
+            );
+            imp.binding_handles
+                .borrow_mut()
+                .push(episodes_visibility_handle);
+
+            // Reactive binding for season dropdown
+            let season_dropdown_handle = bind_dropdown_to_property(
+                &*imp.season_dropdown,
+                viewmodel.seasons().clone(),
+                |season| format!("Season {}", season),
+            );
+            imp.binding_handles
+                .borrow_mut()
+                .push(season_dropdown_handle);
+
+            // Reactive binding for seasons count and visibility
+            let seasons_count_handle = bind_text_to_property(
+                &*imp.seasons_label,
+                viewmodel.seasons().clone(),
+                |seasons| format!("{} Seasons", seasons.len()),
+            );
+            imp.binding_handles.borrow_mut().push(seasons_count_handle);
+
+            let seasons_visibility_handle = bind_visibility_to_property(
+                &*imp.seasons_box,
+                viewmodel.seasons().clone(),
+                |seasons| !seasons.is_empty(),
+            );
+            imp.binding_handles
+                .borrow_mut()
+                .push(seasons_visibility_handle);
+
+            // Reactive binding for watched icon
+            let watched_icon_handle = bind_image_icon_to_property(
+                &*imp.watched_icon,
+                viewmodel.is_watched().clone(),
+                |is_watched| {
+                    if *is_watched {
+                        "checkbox-checked-symbolic".to_string()
+                    } else {
+                        "object-select-symbolic".to_string()
+                    }
+                },
+            );
+            imp.binding_handles.borrow_mut().push(watched_icon_handle);
+
+            // Reactive binding for watched label
+            let watched_label_handle = bind_text_to_property(
+                &*imp.watched_label,
+                viewmodel.is_watched().clone(),
+                |is_watched| {
+                    if *is_watched {
+                        "Season Watched".to_string()
+                    } else {
+                        "Mark Season as Watched".to_string()
+                    }
+                },
+            );
+            imp.binding_handles.borrow_mut().push(watched_label_handle);
+
+            // Reactive binding for CSS class on watched button
+            let watched_css_handle = bind_css_class_to_property(
+                &*imp.mark_watched_button,
+                viewmodel.is_watched().clone(),
+                "suggested-action",
+                |is_watched| !*is_watched, // Add suggested-action when NOT watched
+            );
+            imp.binding_handles.borrow_mut().push(watched_css_handle);
+
+            // Reactive bindings for show info fields
+            let network_handle = bind_text_to_computed_property(
+                &*imp.network_label,
+                viewmodel.show_network(),
+                |network| network.clone().unwrap_or_else(|| "Unknown".to_string()),
+            );
+            imp.binding_handles.borrow_mut().push(network_handle);
+
+            let network_visibility_handle = bind_visibility_to_computed_property(
+                &*imp.network_row,
+                viewmodel.show_network(),
+                |network| network.is_some(),
+            );
+            imp.binding_handles
+                .borrow_mut()
+                .push(network_visibility_handle);
+
+            let status_handle = bind_text_to_computed_property(
+                &*imp.status_label,
+                viewmodel.show_status(),
+                |status| status.clone().unwrap_or_else(|| "Unknown".to_string()),
+            );
+            imp.binding_handles.borrow_mut().push(status_handle);
+
+            let status_visibility_handle = bind_visibility_to_computed_property(
+                &*imp.status_row,
+                viewmodel.show_status(),
+                |status| status.is_some(),
+            );
+            imp.binding_handles
+                .borrow_mut()
+                .push(status_visibility_handle);
+
+            let content_rating_handle = bind_text_to_computed_property(
+                &*imp.content_rating_label,
+                viewmodel.show_content_rating(),
+                |rating| rating.clone().unwrap_or_else(|| "Not Rated".to_string()),
+            );
+            imp.binding_handles.borrow_mut().push(content_rating_handle);
+
+            let content_rating_visibility_handle = bind_visibility_to_computed_property(
+                &*imp.content_rating_row,
+                viewmodel.show_content_rating(),
+                |rating| rating.is_some(),
+            );
+            imp.binding_handles
+                .borrow_mut()
+                .push(content_rating_visibility_handle);
+
+            // Show info section visibility (show if any field has data)
+            let show_info_visibility_handle = bind_visibility_to_computed_property(
+                &*imp.show_info_section,
+                viewmodel.show_content_rating(), // Use content rating as a proxy since it's the only field with data currently
+                |rating| rating.is_some(),
+            );
+            imp.binding_handles
+                .borrow_mut()
+                .push(show_info_visibility_handle);
         }
     }
 
@@ -278,9 +570,6 @@ impl ShowDetailsPage {
         info!("Loading show details: {}", show.title);
 
         let imp = self.imp();
-
-        // Store current show for compatibility
-        imp.current_show.replace(Some(show.clone()));
 
         // Use ViewModel to load the media details
         if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
@@ -312,37 +601,15 @@ impl ShowDetailsPage {
     }
 
     async fn on_loading_changed(&self) {
-        let imp = self.imp();
+        // Loading states are now handled by reactive bindings
+        // Images and placeholder visibility are managed automatically
 
+        let imp = self.imp();
         if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
             let is_loading = viewmodel.is_loading().get().await;
-
             if is_loading {
-                // Show loading state
-                imp.show_poster.set_paintable(gtk4::gdk::Paintable::NONE);
-                imp.show_backdrop.set_paintable(gtk4::gdk::Paintable::NONE);
-                imp.poster_placeholder.set_visible(true);
+                // Clear episodes when starting to load
                 self.clear_episodes();
-            }
-        }
-    }
-
-    async fn on_watched_changed(&self) {
-        let imp = self.imp();
-
-        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
-            let is_watched = viewmodel.is_watched().get().await;
-
-            if is_watched {
-                imp.watched_icon
-                    .set_icon_name(Some("checkbox-checked-symbolic"));
-                imp.watched_label.set_text("Season Watched");
-                imp.mark_watched_button.remove_css_class("suggested-action");
-            } else {
-                imp.watched_icon
-                    .set_icon_name(Some("object-select-symbolic"));
-                imp.watched_label.set_text("Mark Season as Watched");
-                imp.mark_watched_button.add_css_class("suggested-action");
             }
         }
     }
@@ -354,75 +621,29 @@ impl ShowDetailsPage {
         debug!("Episodes changed in ViewModel");
     }
 
-    async fn on_seasons_changed(&self) {
+    async fn on_episodes_list_changed(&self) {
         let imp = self.imp();
 
         if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
-            let seasons = viewmodel.seasons().get().await;
-            tracing::info!("ShowDetailsPage: seasons updated: {:?}", seasons);
+            let episodes_models = viewmodel.episodes().get().await;
+            self.bind_episodes_to_box(&episodes_models).await;
+        }
+    }
 
-            if !seasons.is_empty() {
-                // Update season dropdown with available seasons
-                let season_strings: Vec<String> =
-                    seasons.iter().map(|s| format!("Season {}", s)).collect();
+    async fn bind_episodes_to_box(&self, episodes: &[crate::models::MediaItem]) {
+        let imp = self.imp();
 
-                // Build the StringList incrementally to avoid any transient lifetime issues
-                let string_list = gtk4::StringList::new(&[]);
-                for s in &season_strings {
-                    string_list.append(s);
-                }
-                imp.season_dropdown.set_model(Some(&string_list));
-                // Expression is optional for StringList; DropDown can display strings directly
-                // Clear any previous expression to use default string display
-                imp.season_dropdown.set_expression(gtk4::Expression::NONE);
-                // Ensure it has a reasonable width so text is visible
-                if imp.season_dropdown.width_request() <= 0 {
-                    imp.season_dropdown.set_width_request(140);
-                }
+        // Clear existing episodes
+        self.clear_episodes();
 
-                // Show the seasons box
-                imp.seasons_box.set_visible(true);
-                imp.seasons_label
-                    .set_text(&format!("{} Seasons", seasons.len()));
+        // Update episode count
+        imp.episodes_count_label
+            .set_text(&format!("{} episodes", episodes.len()));
 
-                // Select the first season by default
-                imp.season_dropdown.set_selected(0);
-                tracing::info!(
-                    "ShowDetailsPage: season dropdown model set ({} items), selected index 0",
-                    season_strings.len()
-                );
-
-                // Log current selection and model size just after updates
-                let selected_now = imp.season_dropdown.selected();
-                let model_items = imp
-                    .season_dropdown
-                    .model()
-                    .map(|m| m.n_items())
-                    .unwrap_or(0);
-                tracing::info!(
-                    "ShowDetailsPage: dropdown immediate state -> selected={} items={}",
-                    selected_now,
-                    model_items
-                );
-
-                // Some GTK versions briefly reset selection after setting model/expression.
-                // Apply a short delayed re-select to ensure we don't end up with (None).
-                let dropdown = imp.season_dropdown.clone();
-                glib::timeout_add_local_once(std::time::Duration::from_millis(20), move || {
-                    if dropdown.selected() == u32::MAX {
-                        dropdown.set_selected(0);
-                        tracing::info!("ShowDetailsPage: dropdown re-selected index 0 after delay");
-                    } else {
-                        tracing::info!(
-                            "ShowDetailsPage: dropdown selection persisted at {}",
-                            dropdown.selected()
-                        );
-                    }
-                });
-            } else {
-                // Hide season selector if no seasons
-                imp.seasons_box.set_visible(false);
-                tracing::info!("ShowDetailsPage: seasons empty; hiding selector");
+        // Convert and add episode cards
+        for episode_item in episodes {
+            if let crate::models::MediaItem::Episode(episode) = episode_item {
+                self.add_episode_card(episode.clone(), false);
             }
         }
     }
@@ -444,102 +665,20 @@ impl ShowDetailsPage {
             }
         };
 
-        // Load backdrop image with enhanced styling
-        if let Some(backdrop_url) = &show.backdrop_url {
-            let backdrop_picture = imp.show_backdrop.clone();
-            backdrop_picture.add_css_class("show-backdrop");
-            let url = backdrop_url.clone();
+        // Image loading is now handled by reactive bindings
+        // Add CSS classes for styling
+        imp.show_backdrop.add_css_class("show-backdrop");
+        imp.show_poster.add_css_class("show-poster");
+        imp.poster_placeholder
+            .add_css_class("show-poster-placeholder");
 
-            glib::spawn_future_local(async move {
-                match IMAGE_LOADER.load_image(&url, ImageSize::Large).await {
-                    Ok(texture) => {
-                        backdrop_picture.set_paintable(Some(&texture));
-                    }
-                    Err(e) => {
-                        error!("Failed to load show backdrop: {}", e);
-                    }
-                }
-            });
-        }
-
-        // Load poster image with enhanced 3D effect
-        if let Some(poster_url) = &show.poster_url {
-            let picture = imp.show_poster.clone();
-            picture.add_css_class("show-poster");
-            let placeholder = imp.poster_placeholder.clone();
-            placeholder.add_css_class("show-poster-placeholder");
-            let url = poster_url.clone();
-
-            glib::spawn_future_local(async move {
-                match IMAGE_LOADER.load_image(&url, ImageSize::Large).await {
-                    Ok(texture) => {
-                        picture.set_paintable(Some(&texture));
-                        placeholder.set_visible(false);
-                    }
-                    Err(e) => {
-                        error!("Failed to load show poster: {}", e);
-                        // Keep placeholder visible on error
-                    }
-                }
-            });
-        }
-
-        // Set title
-        imp.show_title.set_label(&show.title);
-
-        // Set year
-        if let Some(year) = show.year {
-            imp.year_label.set_text(&format!("{}", year));
-            imp.year_label.set_visible(true);
-        } else {
-            imp.year_label.set_visible(false);
-        }
-
-        // Set rating
-        if let Some(rating) = show.rating {
-            imp.rating_label.set_text(&format!("{:.1}", rating));
-            imp.rating_box.set_visible(true);
-        } else {
-            imp.rating_box.set_visible(false);
-        }
-
+        // Title, year, rating, synopsis are now handled by reactive bindings
         // Set seasons count - for shows, we'll need to extract this from metadata or use a default
         // Since we don't have season info in the database entity, we'll hide this for now
         // TODO: Extract season information from metadata or add to database schema
         imp.seasons_box.set_visible(false);
 
-        // Set synopsis
-        if let Some(overview) = &show.overview {
-            imp.synopsis_label.set_text(overview);
-            imp.synopsis_label.set_visible(true);
-        } else {
-            imp.synopsis_label.set_visible(false);
-        }
-
-        // Clear and populate genres
-        while let Some(child) = imp.genres_box.first_child() {
-            imp.genres_box.remove(&child);
-        }
-
-        for genre in &metadata.genres {
-            let genre_chip = adw::Bin::builder()
-                .css_classes(vec!["card", "compact", "genre-chip"])
-                .build();
-
-            let genre_label = gtk4::Label::builder()
-                .label(genre)
-                .css_classes(vec!["caption", "genre-label"])
-                .margin_top(6)
-                .margin_bottom(6)
-                .margin_start(12)
-                .margin_end(12)
-                .build();
-
-            genre_chip.set_child(Some(&genre_label));
-            imp.genres_box.insert(&genre_chip, -1);
-        }
-
-        imp.genres_box.set_visible(!metadata.genres.is_empty());
+        // Genre chips are now handled reactively by on_genres_changed()
 
         // Load episodes for the first season
         // For now, try to load season 1 episodes
@@ -558,35 +697,22 @@ impl ShowDetailsPage {
 
         let imp = self.imp();
 
-        // Clear existing episodes
-        self.clear_episodes();
-
-        // Store current season for compatibility
-        imp.current_season.replace(Some(season_number));
-
         // Use ViewModel to load episodes
         if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
             let viewmodel = viewmodel.clone();
 
             match viewmodel.select_season(season_number as i32).await {
                 Ok(_) => {
-                    // Get episodes from ViewModel
-                    let episodes_models = viewmodel.episodes().get().await;
-
-                    // Update episode count
-                    imp.episodes_count_label
-                        .set_text(&format!("{} episodes", episodes_models.len()));
-
-                    // Convert MediaItem enums to Episode structs for display
-                    for episode_item in episodes_models {
-                        if let crate::models::MediaItem::Episode(episode) = episode_item {
-                            self.add_episode_card(episode, false);
-                        }
-                    }
+                    // Episodes will be automatically updated via reactive binding to episodes property
+                    debug!(
+                        "Episodes loaded for season {}, reactive binding will update UI",
+                        season_number
+                    );
                 }
                 Err(e) => {
                     error!("Failed to load episodes: {}", e);
-                    // Show error message
+                    // Clear episodes and show error
+                    self.clear_episodes();
                     let error_label = gtk4::Label::builder()
                         .label(format!("Failed to load episodes: {}", e))
                         .css_classes(vec!["error"])
@@ -597,118 +723,15 @@ impl ShowDetailsPage {
         }
     }
 
-    async fn find_next_unwatched_season(&self, show: &Show) -> Option<(usize, u32)> {
-        let imp = self.imp();
-
-        if let Some(state) = imp.state.borrow().as_ref() {
-            let backend_id = &show.backend_id;
-            if let Some(backend) = state.source_coordinator.get_backend(backend_id).await {
-                // Check each season for unwatched episodes
-                for (index, season) in show.seasons.iter().enumerate() {
-                    match backend.get_episodes(&show.id, season.season_number).await {
-                        Ok(episodes) => {
-                            // Check if this season has any unwatched episodes
-                            if episodes.iter().any(|ep| ep.view_count == 0) {
-                                info!(
-                                    "Found unwatched episodes in season {}",
-                                    season.season_number
-                                );
-                                return Some((index, season.season_number));
-                            }
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to get episodes for season {}: {}",
-                                season.season_number, e
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        None
+    fn create_episode_card_widget(&self, episode: Episode) -> gtk4::Button {
+        self.create_episode_card_internal(episode, false)
     }
 
-    async fn load_episodes_with_highlight(&self, season_number: u32) {
-        info!(
-            "Loading episodes for season {} with highlight",
-            season_number
-        );
-
-        let imp = self.imp();
-
-        // Clear existing episodes
-        self.clear_episodes();
-
-        // Store current season
-        imp.current_season.replace(Some(season_number));
-
-        // Get the show
-        if let Some(show) = imp.current_show.borrow().as_ref() {
-            // Get backend and fetch episodes
-            if let Some(state) = imp.state.borrow().as_ref() {
-                let backend_id = &show.backend_id;
-                if let Some(backend) = state.source_coordinator.get_backend(backend_id).await {
-                    match backend.get_episodes(&show.id, season_number).await {
-                        Ok(episodes) => {
-                            // Update episode count
-                            imp.episodes_count_label
-                                .set_text(&format!("{} episodes", episodes.len()));
-
-                            // Find the first unwatched episode
-                            let first_unwatched_index =
-                                episodes.iter().position(|ep| ep.view_count == 0);
-
-                            // Add episode cards with highlight flag
-                            for (index, episode) in episodes.into_iter().enumerate() {
-                                let should_highlight = first_unwatched_index == Some(index);
-                                self.add_episode_card(episode, should_highlight);
-                            }
-
-                            // Scroll to the highlighted episode after a brief delay to ensure layout
-                            if first_unwatched_index.is_some() {
-                                let episodes_carousel = imp.episodes_carousel.clone();
-                                glib::timeout_add_local_once(
-                                    std::time::Duration::from_millis(100),
-                                    move || {
-                                        // Scroll to show the highlighted episode
-                                        let adjustment = episodes_carousel.hadjustment();
-                                        // Calculate approximate position (320px card width + spacing)
-                                        let card_width = 330.0; // 320px + spacing
-                                        let target_position =
-                                            first_unwatched_index.unwrap() as f64 * card_width;
-
-                                        // Center the card if possible
-                                        let viewport_width = adjustment.page_size();
-                                        let centered_position = (target_position
-                                            - viewport_width / 2.0
-                                            + card_width / 2.0)
-                                            .max(0.0);
-
-                                        adjustment.set_value(centered_position);
-                                    },
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to load episodes: {}", e);
-                            // Show error message
-                            let error_label = gtk4::Label::builder()
-                                .label(format!("Failed to load episodes: {}", e))
-                                .css_classes(vec!["error"])
-                                .build();
-                            imp.episodes_box.append(&error_label);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn add_episode_card(&self, episode: Episode, should_highlight: bool) {
-        let imp = self.imp();
-
+    fn create_episode_card_internal(
+        &self,
+        episode: Episode,
+        should_highlight: bool,
+    ) -> gtk4::Button {
         // Create episode card with enhanced styling (no default card background)
         let mut card_classes = vec!["episode-card", "flat"];
         if should_highlight {
@@ -892,7 +915,12 @@ impl ShowDetailsPage {
             }
         });
 
-        imp.episodes_box.append(&card);
+        card
+    }
+
+    fn add_episode_card(&self, episode: Episode, should_highlight: bool) {
+        let card = self.create_episode_card_internal(episode, should_highlight);
+        self.imp().episodes_box.append(&card);
     }
 
     fn clear_episodes(&self) {
@@ -920,61 +948,49 @@ impl ShowDetailsPage {
                     season_num
                 );
                 self.load_episodes(*season_num as u32).await;
-            } else if let Some(show) = imp.current_show.borrow().as_ref()
-                && let Some(season) = show.seasons.get(index as usize)
-            {
-                tracing::info!(
-                    "ShowDetailsPage: loading episodes for season {} (from metadata fallback)",
-                    season.season_number
-                );
-                // Fallback to metadata seasons if DB-derived seasons are unavailable
-                self.load_episodes(season.season_number).await;
             } else {
+                // Try to get season info from current media item metadata as fallback
+                if let Some(detailed_info) = viewmodel.current_item().get().await {
+                    if let crate::models::MediaItem::Show(show) = &detailed_info.media {
+                        if let Some(season) = show.seasons.get(index as usize) {
+                            tracing::info!(
+                                "ShowDetailsPage: loading episodes for season {} (from metadata fallback)",
+                                season.season_number
+                            );
+                            self.load_episodes(season.season_number).await;
+                            return;
+                        }
+                    }
+                }
+
                 tracing::warn!(
-                    "ShowDetailsPage: on_season_changed: no season found for index {} (vm len: {}, metadata len: {})",
+                    "ShowDetailsPage: on_season_changed: no season found for index {} (vm len: {})",
                     index,
-                    seasons.len(),
-                    imp.current_show
-                        .borrow()
-                        .as_ref()
-                        .map(|s| s.seasons.len())
-                        .unwrap_or(0)
+                    seasons.len()
                 );
             }
         }
     }
 
-    async fn load_episodes_for_show(&self, show_id: &str, season_number: u32) {
-        let imp = self.imp();
-
-        // Clear existing episodes
-        self.clear_episodes();
-
-        // Store current season for compatibility
-        imp.current_season.replace(Some(season_number));
-
+    async fn load_episodes_for_show(&self, _show_id: &str, season_number: u32) {
         // Use ViewModel to load episodes
-        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+        if let Some(viewmodel) = self.imp().viewmodel.borrow().as_ref() {
             let viewmodel = viewmodel.clone();
 
             match viewmodel.select_season(season_number as i32).await {
                 Ok(_) => {
-                    // Get episodes from ViewModel
-                    let episodes_models = viewmodel.episodes().get().await;
-
-                    // Update episode count
-                    imp.episodes_count_label
-                        .set_text(&format!("{} episodes", episodes_models.len()));
-
-                    // Convert and add episode cards
-                    for episode_item in episodes_models {
-                        if let crate::models::MediaItem::Episode(episode) = episode_item {
-                            self.add_episode_card(episode, false);
-                        }
-                    }
+                    // Episodes will be automatically updated via reactive binding to episodes property
+                    debug!("Episodes loaded for show, reactive binding will update UI");
                 }
                 Err(e) => {
                     error!("Failed to load episodes: {}", e);
+                    // Clear episodes and show error
+                    self.clear_episodes();
+                    let error_label = gtk4::Label::builder()
+                        .label(format!("Failed to load episodes: {}", e))
+                        .css_classes(vec!["error"])
+                        .build();
+                    self.imp().episodes_box.append(&error_label);
                 }
             }
         }
@@ -1004,6 +1020,57 @@ impl ShowDetailsPage {
                 }
             });
         }
+    }
+
+    async fn on_genres_changed(&self) {
+        let imp = self.imp();
+
+        if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
+            if let Some(detailed_info) = viewmodel.current_item().get().await {
+                self.bind_genres_to_flowbox(&detailed_info.metadata.genres)
+                    .await;
+            } else {
+                // Clear genres when no item is loaded
+                self.clear_genres();
+            }
+        }
+    }
+
+    async fn bind_genres_to_flowbox(&self, genres: &[String]) {
+        let imp = self.imp();
+
+        // Clear existing genre chips
+        self.clear_genres();
+
+        // Create new genre chips
+        for genre in genres {
+            let genre_chip = adw::Bin::builder()
+                .css_classes(vec!["card", "compact", "genre-chip"])
+                .build();
+
+            let genre_label = gtk4::Label::builder()
+                .label(genre)
+                .css_classes(vec!["caption", "genre-label"])
+                .margin_top(6)
+                .margin_bottom(6)
+                .margin_start(12)
+                .margin_end(12)
+                .build();
+
+            genre_chip.set_child(Some(&genre_label));
+            imp.genres_box.insert(&genre_chip, -1);
+        }
+
+        // Set visibility based on whether genres exist
+        imp.genres_box.set_visible(!genres.is_empty());
+    }
+
+    fn clear_genres(&self) {
+        let imp = self.imp();
+        while let Some(child) = imp.genres_box.first_child() {
+            imp.genres_box.remove(&child);
+        }
+        imp.genres_box.set_visible(false);
     }
 
     pub fn set_on_episode_selected<F>(&self, callback: F)

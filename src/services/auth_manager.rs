@@ -507,7 +507,7 @@ impl AuthManager {
     }
 
     /// Refresh token if needed (for providers that support it)
-    pub async fn refresh_token(&self, provider_id: &str) -> Result<()> {
+    pub async fn refresh_token(&self, _provider_id: &str) -> Result<()> {
         // TODO: Implement token refresh for providers that support it
         // For now, Plex tokens don't expire, but this is where we'd handle it
         Ok(())

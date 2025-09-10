@@ -1,5 +1,5 @@
 use gtk4::CompositeTemplate;
-use gtk4::{self, glib, prelude::*, subclass::prelude::*};
+use gtk4::{self, glib, subclass::prelude::*};
 
 #[allow(dead_code)]
 mod imp {

@@ -1,6 +1,5 @@
 use super::{Property, PropertySubscriber, ViewModel};
 use crate::db::entities::libraries::Model as Library;
-use crate::db::repository::MediaRepository;
 use crate::events::{DatabaseEvent, EventBus, EventFilter, EventType};
 use crate::models::MediaItem;
 use crate::services::DataService;

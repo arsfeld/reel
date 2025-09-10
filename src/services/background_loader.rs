@@ -161,7 +161,7 @@ impl BackgroundLoader {
     pub async fn load_library_items_with_progress(
         &self,
         library_id: String,
-        source_id: String,
+        _source_id: String,
         progress_tx: mpsc::Sender<LoadProgress>,
         chunk_size: usize,
     ) -> Result<Vec<MediaItem>> {
@@ -181,7 +181,7 @@ impl BackgroundLoader {
         self.total_items
             .store(total_count as u64, Ordering::Relaxed);
 
-        let mut all_items = Vec::new();
+        let all_items = Vec::new();
         let mut offset: i64 = 0;
 
         while offset < total_count {
@@ -277,7 +277,7 @@ impl BackgroundLoader {
 
 /// Helper to run background loading with automatic progress handling
 pub async fn load_with_progress<T, F>(
-    loader: Arc<BackgroundLoader>,
+    _loader: Arc<BackgroundLoader>,
     operation_name: &str,
     load_fn: F,
 ) -> Result<T>

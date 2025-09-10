@@ -120,7 +120,8 @@ impl Model {
     pub fn get_duration(&self) -> Option<std::time::Duration> {
         match (self.started_at, self.completed_at) {
             (Some(start), Some(end)) => {
-                let duration_secs = (end.timestamp() - start.timestamp()).max(0) as u64;
+                let duration_secs =
+                    (end.and_utc().timestamp() - start.and_utc().timestamp()).max(0) as u64;
                 Some(std::time::Duration::from_secs(duration_secs))
             }
             _ => None,

@@ -4,13 +4,15 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, trace};
 
 use super::library::MediaCard;
 use crate::constants::*;
+use crate::core::viewmodels::property::{ComputedProperty, Property};
 use crate::core::viewmodels::sidebar_view_model::SidebarViewModel;
 use crate::models::{HomeSection, HomeSectionType, MediaItem};
-use crate::platforms::gtk::ui::navigation::NavigationRequest;
+use crate::platforms::gtk::ui::navigation_request::NavigationRequest;
 use crate::platforms::gtk::ui::viewmodels::ViewModel;
 use crate::platforms::gtk::ui::viewmodels::home_view_model::{HomeViewModel, SectionType};
 use crate::state::AppState;
@@ -19,13 +21,14 @@ use crate::utils::{ImageLoader, ImageSize};
 mod imp {
     use super::*;
 
-    #[derive(Default)]
     pub struct HomePage {
         pub container_box: gtk4::Box,   // Main container
         pub source_selector: gtk4::Box, // Source tabs/buttons
         pub scrolled_window: gtk4::ScrolledWindow,
         pub main_box: gtk4::Box,
-        pub sections: RefCell<Vec<HomeSection>>,
+        pub sections: Property<Vec<HomeSection>>,
+        pub filtered_sections: RefCell<Option<ComputedProperty<Vec<HomeSection>>>>, // Computed: sections filtered by content and source
+        pub has_content: RefCell<Option<ComputedProperty<bool>>>, // Computed: whether filtered_sections is not empty
         pub state: RefCell<Option<Arc<AppState>>>,
         pub on_media_selected: RefCell<Option<Box<dyn Fn(&MediaItem)>>>,
         pub image_loader: RefCell<Option<Arc<ImageLoader>>>,
@@ -33,7 +36,31 @@ mod imp {
         pub section_widgets: RefCell<HashMap<String, SectionWidgets>>,
         pub view_model: RefCell<Option<Arc<HomeViewModel>>>,
         pub sidebar_view_model: RefCell<Option<Arc<SidebarViewModel>>>,
-        pub current_source_id: RefCell<Option<String>>,
+        pub current_source_id: Property<Option<String>>,
+        pub debounced_source_id: RefCell<Option<ComputedProperty<Option<String>>>>, // Debounced version for API calls
+    }
+
+    impl Default for HomePage {
+        fn default() -> Self {
+            Self {
+                container_box: gtk4::Box::default(),
+                source_selector: gtk4::Box::default(),
+                scrolled_window: gtk4::ScrolledWindow::default(),
+                main_box: gtk4::Box::default(),
+                sections: Property::new(Vec::new(), "sections"),
+                filtered_sections: RefCell::new(None),
+                has_content: RefCell::new(None),
+                state: RefCell::default(),
+                on_media_selected: RefCell::default(),
+                image_loader: RefCell::default(),
+                section_cards: RefCell::default(),
+                section_widgets: RefCell::default(),
+                view_model: RefCell::default(),
+                sidebar_view_model: RefCell::default(),
+                current_source_id: Property::new(None, "current_source_id"),
+                debounced_source_id: RefCell::new(None),
+            }
+        }
     }
 
     pub struct SectionWidgets {
@@ -133,7 +160,13 @@ impl HomePage {
             .replace(Some(sidebar_vm.clone()));
 
         // Store current source_id
-        page.imp().current_source_id.replace(source_id.clone());
+        if let Some(source_id) = &source_id {
+            let current_source_property = page.imp().current_source_id.clone();
+            let source_id = source_id.clone();
+            glib::spawn_future_local(async move {
+                current_source_property.set(Some(source_id)).await;
+            });
+        }
 
         // Set the source filter if provided
         if let Some(ref source_id) = source_id {
@@ -170,8 +203,11 @@ impl HomePage {
         // Setup header with title and source selector
         page.setup_header_with_selector(setup_header);
 
+        // Setup computed property updates
+        page.setup_computed_properties();
+
         // Set up internal media selection handler
-        let state_clone = state.clone();
+        let _state_clone = state.clone();
         page.set_on_media_selected(move |media_item| {
             info!("HomePage - Media selected: {}", media_item.title());
 
@@ -232,6 +268,18 @@ impl HomePage {
             }
         });
 
+        // Subscribe to current_source_id changes for reactive button state updates
+        let weak_self_reactive = self.downgrade();
+        let mut current_source_subscriber = imp.current_source_id.subscribe();
+        glib::spawn_future_local(async move {
+            while current_source_subscriber.wait_for_change().await {
+                if let Some(page) = weak_self_reactive.upgrade() {
+                    let current_source_id = page.imp().current_source_id.get().await;
+                    page.update_source_selector_buttons(current_source_id.as_deref());
+                }
+            }
+        });
+
         // Initialize sidebar VM with EventBus
         let sidebar_vm_clone = sidebar_vm.clone();
         let state = imp.state.borrow().clone().unwrap();
@@ -250,7 +298,7 @@ impl HomePage {
 
         if let Some(sidebar_vm) = &*imp.sidebar_view_model.borrow() {
             let sources = sidebar_vm.sources().get().await;
-            let current_source_id = imp.current_source_id.borrow().clone();
+            let current_source_id = imp.current_source_id.get().await;
 
             // Add "All Sources" button
             let all_button = gtk4::ToggleButton::with_label("All");
@@ -297,26 +345,37 @@ impl HomePage {
 
     fn switch_source(&self, source_id: Option<String>) {
         let imp = self.imp();
-        imp.current_source_id.replace(source_id.clone());
 
-        // Update the button states immediately for responsive UI
-        self.update_source_selector_buttons(source_id.as_deref());
+        // Update current_source_id Property immediately for UI responsiveness
+        // The debounced version will handle the API calls after the delay
+        let current_source_property = imp.current_source_id.clone();
+        glib::spawn_future_local(async move {
+            current_source_property.set(source_id).await;
+        });
+    }
 
-        // Update the ViewModel filter
+    async fn handle_debounced_source_change(&self) {
+        let imp = self.imp();
+
+        // Get the debounced source ID
+        let source_id = if let Some(debounced_prop) = &*imp.debounced_source_id.borrow() {
+            debounced_prop.get().await
+        } else {
+            return; // Debounced property not initialized yet
+        };
+
+        // Update the ViewModel filter with debounced API calls
         if let Some(view_model) = &*imp.view_model.borrow() {
             let vm = view_model.clone();
-            let weak_self = self.downgrade();
 
             // Show loading state during the switch
-            glib::spawn_future_local(async move {
-                // Set loading state for immediate feedback
-                let _ = vm.is_loading().set(true).await;
+            let _ = vm.is_loading().set(true).await;
 
-                // Update the filter (this will reload content from cache)
-                let _ = vm.set_source_filter(source_id).await;
+            // Update the filter (this will reload content from cache)
+            // This is now debounced, so rapid source switching won't spam API calls
+            let _ = vm.set_source_filter(source_id).await;
 
-                // Loading state will be cleared by the ViewModel automatically
-            });
+            // Loading state will be cleared by the ViewModel automatically
         }
     }
 
@@ -411,6 +470,97 @@ impl HomePage {
             .replace(Some(Box::new(callback)));
     }
 
+    async fn render_sections_declaratively(&self) {
+        let imp = self.imp();
+        let main_box = &imp.main_box;
+        let mut section_widgets = imp.section_widgets.borrow_mut();
+
+        let filtered_sections = if let Some(filtered_prop) = &*imp.filtered_sections.borrow() {
+            filtered_prop.get().await
+        } else {
+            return; // Computed properties not initialized yet
+        };
+
+        let old_sections = imp.sections.get().await;
+
+        // Build a set of new section IDs for quick lookup
+        let new_section_ids: Vec<String> = filtered_sections.iter().map(|s| s.id.clone()).collect();
+
+        // Remove sections that no longer exist
+        let mut to_remove = Vec::new();
+        for old_id in section_widgets.keys() {
+            if !new_section_ids.contains(old_id) {
+                to_remove.push(old_id.clone());
+            }
+        }
+        for id in to_remove {
+            if let Some(widgets) = section_widgets.remove(&id) {
+                main_box.remove(&widgets.container);
+            }
+        }
+
+        // Update or create sections
+        for (_index, section) in filtered_sections.iter().enumerate() {
+            if let Some(widgets) = section_widgets.get(&section.id) {
+                // Section exists - update its items if needed
+                let old_section = old_sections.iter().find(|s| s.id == section.id);
+                if let Some(old) = old_section
+                    && !Self::items_equal(&old.items, &section.items)
+                {
+                    self.update_section_items(widgets, section);
+                }
+
+                // Ensure it's at the right position by moving to end
+                main_box.remove(&widgets.container);
+                main_box.append(&widgets.container);
+            } else {
+                // New section - create it
+                let widgets = self.create_section_widget(section);
+                main_box.append(&widgets.container);
+                section_widgets.insert(section.id.clone(), widgets);
+            }
+        }
+    }
+
+    async fn update_empty_state(&self) {
+        let imp = self.imp();
+        let main_box = &imp.main_box;
+
+        let has_content = if let Some(has_content_prop) = &*imp.has_content.borrow() {
+            has_content_prop.get().await
+        } else {
+            return; // Computed properties not initialized yet
+        };
+
+        if has_content {
+            // Remove any empty state widgets (StatusPage) that might exist
+            let mut children_to_remove = Vec::new();
+            let mut child = main_box.first_child();
+            while let Some(widget) = child {
+                if widget.type_() == adw::StatusPage::static_type() {
+                    children_to_remove.push(widget.clone());
+                }
+                child = widget.next_sibling();
+            }
+            for widget in children_to_remove {
+                main_box.remove(&widget);
+            }
+        } else {
+            // Clear everything first
+            while let Some(child) = main_box.first_child() {
+                main_box.remove(&child);
+            }
+
+            let empty_state = adw::StatusPage::builder()
+                .icon_name("folder-symbolic")
+                .title("No Content Available")
+                .description("Connect to a media server to see your content here")
+                .build();
+
+            main_box.append(&empty_state);
+        }
+    }
+
     fn refresh_sections(&self) {
         // Use ViewModel data instead of calling backend APIs directly
         if let Some(view_model) = &*self.imp().view_model.borrow() {
@@ -445,105 +595,13 @@ impl HomePage {
                         })
                         .collect();
 
-                    // Use main thread to update UI
-                    glib::idle_add_local_once(move || {
-                        if let Some(page) = weak_self.upgrade() {
-                            page.sync_sections(home_sections);
-                        }
+                    // Update sections Property - computed properties and reactive bindings handle the rest
+                    let sections_property = page.imp().sections.clone();
+                    glib::spawn_future_local(async move {
+                        sections_property.set(home_sections).await;
                     });
                 }
             });
-        }
-    }
-
-    fn sync_sections(&self, new_sections: Vec<HomeSection>) {
-        let imp = self.imp();
-        let main_box = &imp.main_box;
-        let mut section_widgets = imp.section_widgets.borrow_mut();
-        let old_sections = imp.sections.borrow();
-
-        // Check if we have any sections with content
-        let sections_with_content: Vec<&HomeSection> = new_sections
-            .iter()
-            .filter(|s| !s.items.is_empty())
-            .collect();
-
-        let has_content = !sections_with_content.is_empty();
-
-        // If we have content, ensure empty state is removed first
-        if has_content {
-            // Remove any empty state widgets (StatusPage) that might exist
-            let mut children_to_remove = Vec::new();
-            let mut child = main_box.first_child();
-            while let Some(widget) = child {
-                if widget.type_() == adw::StatusPage::static_type() {
-                    children_to_remove.push(widget.clone());
-                }
-                child = widget.next_sibling();
-            }
-            for widget in children_to_remove {
-                main_box.remove(&widget);
-            }
-        }
-
-        // Build a set of new section IDs for quick lookup (only sections with content)
-        let new_section_ids: Vec<String> =
-            sections_with_content.iter().map(|s| s.id.clone()).collect();
-
-        // Remove sections that no longer exist
-        let mut to_remove = Vec::new();
-        for old_id in section_widgets.keys() {
-            if !new_section_ids.contains(old_id) {
-                to_remove.push(old_id.clone());
-            }
-        }
-        for id in to_remove {
-            if let Some(widgets) = section_widgets.remove(&id) {
-                main_box.remove(&widgets.container);
-            }
-        }
-
-        // Update or create sections (only process sections with content)
-        for (_index, section) in sections_with_content.iter().enumerate() {
-            if let Some(widgets) = section_widgets.get(&section.id) {
-                // Section exists - update its items if needed
-                let old_section = old_sections.iter().find(|s| s.id == section.id);
-                if let Some(old) = old_section
-                    && !Self::items_equal(&old.items, &section.items)
-                {
-                    self.update_section_items(widgets, section);
-                }
-
-                // Ensure it's at the right position by moving to end
-                // (GTK doesn't have reorder_child_after in GTK4)
-                main_box.remove(&widgets.container);
-                main_box.append(&widgets.container);
-            } else {
-                // New section - create it
-                let widgets = self.create_section_widget(section);
-                main_box.append(&widgets.container);
-                section_widgets.insert(section.id.clone(), widgets);
-            }
-        }
-
-        // Update stored sections
-        drop(old_sections);
-        imp.sections.replace(new_sections);
-
-        // Show empty state only if we have no content at all
-        if !has_content {
-            // Clear everything first
-            while let Some(child) = main_box.first_child() {
-                main_box.remove(&child);
-            }
-
-            let empty_state = adw::StatusPage::builder()
-                .icon_name("folder-symbolic")
-                .title("No Content Available")
-                .description("Connect to a media server to see your content here")
-                .build();
-
-            main_box.append(&empty_state);
         }
     }
 
@@ -755,6 +813,93 @@ impl HomePage {
         });
 
         card.upcast()
+    }
+
+    fn setup_computed_properties(&self) {
+        let imp = self.imp();
+
+        // Create computed property for filtered_sections using the new operators
+        let sections_prop = imp.sections.clone();
+        let current_source_prop = imp.current_source_id.clone();
+        let current_source_prop_for_debounce = current_source_prop.clone(); // Clone for debouncing
+
+        // Use ComputedProperty with dependencies for filtered_sections
+        let filtered_sections = ComputedProperty::new(
+            "filtered_sections",
+            vec![
+                Arc::new(sections_prop.clone()),
+                Arc::new(current_source_prop.clone()),
+            ],
+            move || {
+                let sections = sections_prop.get_sync();
+                let _current_source_id = current_source_prop.get_sync();
+
+                // Filter sections that have content
+                // TODO: Add source filtering logic when needed
+                sections
+                    .into_iter()
+                    .filter(|section| !section.items.is_empty()) // Must have content
+                    .collect()
+            },
+        );
+
+        // Create computed property for has_content using the map operator on filtered_sections
+        let has_content = filtered_sections.map(|sections: Vec<HomeSection>| !sections.is_empty());
+
+        // Create debounced source property - 300ms delay for API calls
+        let debounced_source_id =
+            current_source_prop_for_debounce.debounce(Duration::from_millis(300));
+
+        // Store the computed properties
+        imp.filtered_sections.replace(Some(filtered_sections));
+        imp.has_content.replace(Some(has_content));
+        imp.debounced_source_id.replace(Some(debounced_source_id));
+
+        // Set up subscriptions to the computed properties for UI updates
+        self.setup_computed_property_subscriptions();
+    }
+
+    fn setup_computed_property_subscriptions(&self) {
+        let imp = self.imp();
+
+        // Subscribe to filtered_sections changes for declarative UI binding
+        if let Some(filtered_sections) = &*imp.filtered_sections.borrow() {
+            let weak_self = self.downgrade();
+            let mut filtered_subscriber = filtered_sections.subscribe();
+            glib::spawn_future_local(async move {
+                while filtered_subscriber.wait_for_change().await {
+                    if let Some(page) = weak_self.upgrade() {
+                        page.render_sections_declaratively().await;
+                    }
+                }
+            });
+        }
+
+        // Subscribe to has_content changes for empty state management
+        if let Some(has_content) = &*imp.has_content.borrow() {
+            let weak_self = self.downgrade();
+            let mut content_subscriber = has_content.subscribe();
+            glib::spawn_future_local(async move {
+                while content_subscriber.wait_for_change().await {
+                    if let Some(page) = weak_self.upgrade() {
+                        page.update_empty_state().await;
+                    }
+                }
+            });
+        }
+
+        // Subscribe to debounced_source_id changes for API calls
+        if let Some(debounced_source_id) = &*imp.debounced_source_id.borrow() {
+            let weak_self = self.downgrade();
+            let mut debounced_subscriber = debounced_source_id.subscribe();
+            glib::spawn_future_local(async move {
+                while debounced_subscriber.wait_for_change().await {
+                    if let Some(page) = weak_self.upgrade() {
+                        page.handle_debounced_source_change().await;
+                    }
+                }
+            });
+        }
     }
 
     pub fn refresh(&self) {
