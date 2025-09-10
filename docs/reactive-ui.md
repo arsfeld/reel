@@ -2,34 +2,54 @@
 
 ## Executive Summary
 
-This document provides a comprehensive analysis of the reactive UI architecture implemented in the GNOME Reel application. The application demonstrates a modern reactive approach using ViewModels, Properties, and an EventBus for state management and UI updates.
+This document provides a comprehensive analysis of the reactive UI architecture implemented in the Reel application. The application demonstrates a modern reactive approach using ViewModels, Properties, and an EventBus for state management and UI updates.
 
 ## Architecture Overview
 
 ### Core Components
 
-#### 1. Property System (`src/ui/viewmodels/property.rs`)
+#### 1. Property System (`src/core/viewmodels/property.rs`)
 
 The foundation of our reactive architecture is the `Property<T>` system, which provides:
 
-- **Observable State**: Properties are wrapped in `Arc<RwLock<T>>` for thread-safe access
+- **Observable State**: Properties use `tokio::sync::watch` for efficient current value access
 - **Change Notifications**: Built on `tokio::sync::broadcast` for efficient multi-subscriber updates
 - **Subscription Model**: Each property can have multiple subscribers via `PropertySubscriber`
+- **Hybrid Architecture**: `watch` for state, `broadcast` for notifications (backward compatible)
 - **Lagged Broadcast Tolerance**: Subscribers gracefully handle broadcast lag, preventing dropped updates
 
 ```rust
 pub struct Property<T: Clone + Send + Sync> {
-    value: Arc<RwLock<T>>,
-    sender: broadcast::Sender<()>,
+    watch_sender: Arc<watch::Sender<T>>,
+    watch_receiver: watch::Receiver<T>,
+    broadcast_sender: broadcast::Sender<()>, // Backward compatibility
     name: String,
 }
 ```
 
-Key features:
+**Core API:**
+- `get()` / `get_sync()`: Get current value (sync version is truly synchronous)
+- `try_get()`: Non-blocking value access (returns `Option<T>`)
 - `set()`: Updates value and notifies all subscribers
 - `update()`: Mutates value in-place with a closure
 - `subscribe()`: Returns a unique `PropertySubscriber` for change notifications
-- `ComputedProperty`: Automatically updates based on dependencies
+- `name()`: Get property name for debugging
+
+**PropertySubscriber API:**
+- `wait_for_change()`: Async wait for next change notification
+- `try_recv()`: Non-blocking check for pending changes
+
+**Reactive Operators:**
+- `.map(f)`: Transform property with function `f` → `ComputedProperty<U>`
+- `.filter(predicate)`: Filter property values → `ComputedProperty<Option<T>>`
+- `.debounce(duration)`: Debounce rapid changes → `ComputedProperty<T>`
+- **Chainable**: `property.map(|x| x * 2).filter(|&x| x > 10).debounce(100ms)`
+
+**ComputedProperty:**
+- Automatically updates based on dependencies
+- Type-safe dependency management via `PropertyLike` trait
+- Automatic cleanup with task handles that abort on Drop
+- Same API as Property (get/set/subscribe/operators)
 
 #### 2. ViewModel Pattern (`src/ui/viewmodels/`)
 
@@ -146,34 +166,75 @@ struct UpdateBatch {
 - **Type Safety**: Strongly-typed events and properties
 - **Testability**: ViewModels can be tested independently of UI
 
+### 4. Reactive UI Binding Pattern
+
+**Show Details Page** demonstrates the successful implementation of a reusable reactive binding pattern:
+
+- **Reactive Helpers**: Generic binding functions for text, labels, images, and visibility
+- **Property Subscriptions**: Automatic UI updates when ViewModel properties change
+- **Transform Functions**: Clean separation of data transformation logic from UI code
+- **Lifecycle Management**: Proper subscription cleanup using weak references
+
+```rust
+// Implemented reactive binding helpers
+fn bind_text_to_property<T, F>(&self, widget: &gtk4::Label, property: Property<T>, transform: F)
+fn bind_visibility_to_property<T, F>(&self, widget: &impl WidgetExt, property: Property<T>, transform: F)
+fn bind_label_to_property<T, F>(&self, widget: &gtk4::Label, property: Property<T>, transform: F)
+fn bind_image_to_property<T, F>(&self, widget: &gtk4::Picture, property: Property<T>, transform: F)
+```
+
+These patterns can be extracted into a reusable GTK reactive binding library for other pages.
+
 ## Areas Needing Improvement
 
-### 1. Remaining Imperative Code
+### 1. Recent Progress: Show Details Page Migration ✅
 
-#### UI Pages Still Using RefCell Pattern
-The UI pages (`src/ui/pages/`) still heavily rely on GTK's imperative patterns:
+#### Completed Reactive Implementation
+The Show Details page (`src/platforms/gtk/ui/pages/show_details.rs`) has been successfully migrated to a fully reactive architecture:
 
-- **649 occurrences** of `imp()`, `.borrow()`, `.replace()` in pages
-- Direct manipulation of GTK widgets instead of declarative binding
-- Manual state management with `RefCell`
+- **100% ViewModel integration**: All data flows through DetailsViewModel
+- **Reactive UI bindings**: Title, year, rating, synopsis, images update automatically via Property subscriptions
+- **Zero manual widget manipulation**: Eliminated all `.set_text()`, `.set_visible()`, `.set_paintable()` calls
+- **Reactive loading states**: Placeholder visibility and image loading handled declaratively
+- **Event-driven updates**: Genre chips and episode lists update via reactive bindings
 
-**Example of current imperative approach**:
+**Example of implemented reactive approach**:
 ```rust
-// Current imperative pattern in library.rs
-self.imp().filtered_items.replace(items);
-if let Some(flow_box) = self.imp().flow_box.borrow().as_ref() {
-    flow_box.remove_all();
-    // Manual widget creation and insertion
-}
+// Reactive binding for show title
+self.bind_label_to_property(
+    &imp.show_title,
+    viewmodel.current_item().clone(),
+    |detailed_info| {
+        if let Some(info) = detailed_info {
+            if let MediaItem::Show(show) = &info.media {
+                return show.title.clone();
+            }
+        }
+        String::new()
+    },
+);
+
+// Reactive binding for image loading
+self.bind_image_to_property(
+    &imp.show_poster,
+    viewmodel.current_item().clone(),
+    |detailed_info| {
+        if let Some(info) = detailed_info {
+            if let MediaItem::Show(show) = &info.media {
+                return show.poster_url.clone();
+            }
+        }
+        None
+    },
+);
 ```
 
-**Recommended reactive approach**:
-```rust
-// Proposed declarative binding
-view_model.filtered_items
-    .bind_to(&flow_box.items)
-    .with_transform(|items| create_widgets(items));
-```
+#### Remaining Imperative Code
+While significant progress has been made, some UI pages still rely on GTK's imperative patterns:
+
+- **Library Page**: Still uses manual widget manipulation and RefCell state
+- **Player Page**: Direct GStreamer management
+- **Movie Details Page**: Similar patterns to the old show details page
 
 #### Direct Service Calls from UI
 Some UI components still make direct service calls instead of going through ViewModels:
@@ -183,11 +244,12 @@ Some UI components still make direct service calls instead of going through View
 
 ### 2. Missing Reactive Patterns
 
-#### No Computed Properties in Use
-While `ComputedProperty` is implemented, it's not utilized:
-- Filter results could be computed from search + items
-- Playback progress percentage could be computed
-- UI visibility states could be derived
+#### Limited Computed Properties Usage
+While `ComputedProperty` is implemented and available, it's underutilized:
+- **Show Details**: Successfully implemented reactive helper functions but could benefit from computed properties for complex state combinations
+- **Library Page**: Filter results could be computed from search + items
+- **Player Page**: Playback progress percentage could be computed
+- **General**: UI visibility states could be derived from multiple properties
 
 #### Limited Two-Way Binding
 Current implementation is mostly one-way (ViewModel → UI):
@@ -291,14 +353,16 @@ Arrays/Vecs are replaced wholesale instead of using reactive collections:
 
 ## Implementation Priority Matrix
 
-| Priority | Effort | Impact | Recommendation |
-|----------|--------|--------|----------------|
-| High | Low | High | Migrate remaining imperative UI code to ViewModels |
-| High | Medium | High | Implement Observable Collections |
-| Medium | Low | Medium | Add Computed Properties usage |
-| Medium | Medium | High | Create two-way binding framework |
-| Low | High | Medium | Build reactive UI DSL |
-| Low | Medium | Low | Add time-travel debugging |
+| Priority | Effort | Impact | Recommendation | Status |
+|----------|--------|--------|----------------|--------|
+| ~~High~~ | ~~Low~~ | ~~High~~ | ~~Show Details reactive migration~~ | ✅ **COMPLETED** |
+| High | Low | High | Migrate Movie Details page to reactive patterns | 🔄 **NEXT** |
+| High | Medium | High | Migrate Library page to reactive bindings | 📋 **PLANNED** |
+| High | Medium | High | Implement Observable Collections | 📋 **PLANNED** |
+| Medium | Low | Medium | Add Computed Properties usage | 📋 **PLANNED** |
+| Medium | Medium | High | Create two-way binding framework | 📋 **PLANNED** |
+| Low | High | Medium | Build reactive UI DSL | 📋 **FUTURE** |
+| Low | Medium | Low | Add time-travel debugging | 📋 **FUTURE** |
 
 ## Metrics for Success
 
@@ -316,8 +380,12 @@ Arrays/Vecs are replaced wholesale instead of using reactive collections:
 
 ## Conclusion
 
-The GNOME Reel application demonstrates a solid foundation for reactive UI with its Property system, ViewModels, and EventBus. The architecture successfully separates concerns and provides reactive updates for most components.
+The Reel application demonstrates a solid foundation for reactive UI with its Property system, ViewModels, and EventBus. The architecture successfully separates concerns and provides reactive updates for most components.
 
-However, significant opportunities exist to enhance the reactive nature of the application, particularly in the UI layer where GTK's imperative patterns still dominate. By addressing the identified gaps and implementing the recommended improvements, the application can achieve a fully reactive architecture that is more maintainable, performant, and developer-friendly.
+**Recent Progress**: The Show Details page migration represents a significant milestone, proving that GTK applications can successfully implement fully reactive patterns while maintaining performance and usability. The implemented reactive binding helpers provide a reusable foundation for migrating other pages.
 
-The gradual migration path suggested allows for incremental improvements without disrupting the existing functionality, making it practical to evolve the architecture while maintaining stability.
+**Key Achievement**: The elimination of manual widget manipulation (.set_text(), .set_visible(), .set_paintable()) demonstrates that declarative UI updates are both practical and beneficial in GTK applications, resulting in cleaner, more maintainable code.
+
+**Next Steps**: With the reactive patterns proven and helper functions established, the next logical step is migrating the Movie Details page using the same patterns, followed by the more complex Library page. The foundation is now solid for achieving a fully reactive architecture across the entire application.
+
+The gradual migration path allows for incremental improvements without disrupting existing functionality, making it practical to evolve the architecture while maintaining stability. Each migration builds on proven patterns, reducing implementation risk and development time.
