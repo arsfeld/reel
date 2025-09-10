@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to deploy (e.g., v0.4.0)'
+        description: "Release tag to deploy (e.g., v0.4.0)"
         required: true
         type: string
 
@@ -24,31 +24,31 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.release_tag }}"
           echo "Downloading repository for: $TAG"
-          
+
           # Download and extract
           curl -L -o repo.tar.gz \
             "https://github.com/${{ github.repository }}/releases/download/$TAG/repo.tar.gz"
-          
+
           mkdir -p flatpak
           cd flatpak
           tar -xzf ../repo.tar.gz
-          
+
           # Simple index page
-          cat > index.html << 'EOF'
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Reel Flatpak Repository</title>
-</head>
-<body>
-    <h1>Reel Flatpak Repository</h1>
-    <p>Add this repository:</p>
-    <pre>flatpak remote-add --user reel-repo https://arsfeld.github.io/gnome-reel/flatpak</pre>
-    <p>Install Reel:</p>
-    <pre>flatpak install --user reel-repo dev.arsfeld.Reel</pre>
-</body>
-</html>
-EOF
+          cat > index.html << EOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Reel Flatpak Repository</title>
+          </head>
+          <body>
+              <h1>Reel Flatpak Repository</h1>
+              <p>Add this repository:</p>
+              <pre>flatpak remote-add --user reel-repo https://arsfeld.github.io/gnome-reel/flatpak</pre>
+              <p>Install Reel:</p>
+              <pre>flatpak install --user reel-repo dev.arsfeld.Reel</pre>
+          </body>
+          </html>
+          EOF
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -56,7 +56,7 @@ EOF
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './flatpak'
+          path: "./flatpak"
 
       - name: Deploy to GitHub Pages
         id: deployment
