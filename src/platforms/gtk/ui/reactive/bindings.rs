@@ -1,4 +1,4 @@
-use crate::core::viewmodels::property::{ComputedProperty, Property, PropertyLike};
+use crate::core::viewmodels::property::{ComputedProperty, Property};
 use crate::utils::{ImageLoader, ImageSize};
 use gtk4::glib;
 use gtk4::prelude::*;

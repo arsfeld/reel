@@ -10,6 +10,7 @@ use crate::backends::{
     traits::MediaBackend,
 };
 use crate::models::{AuthProvider, Library, Source, SourceType};
+use crate::services::initialization::{AppInitializationState, SourceInfo, SourceReadiness};
 use crate::services::{AuthManager, DataService, SyncManager};
 
 /// Status of a media source connection
@@ -174,216 +175,6 @@ impl SourceCoordinator {
         statuses.insert(source.id.clone(), status);
 
         Ok(source)
-    }
-
-    /// Initialize all configured sources at startup - offline-first approach
-    pub async fn initialize_all_sources(&self) -> Result<Vec<SourceStatus>> {
-        info!("Initializing all sources - offline-first");
-
-        let providers = self.auth_manager.get_all_providers().await;
-        info!("Found {} auth providers to initialize", providers.len());
-        for provider in &providers {
-            info!(
-                "Auth provider: {} ({})",
-                provider.id(),
-                provider.provider_type()
-            );
-        }
-
-        let mut expected_source_ids = Vec::new();
-        let mut all_statuses = Vec::new();
-
-        for provider in providers {
-            match &provider {
-                AuthProvider::PlexAccount { id, .. } => {
-                    // First try to get cached sources for instant display
-                    let cached_sources = self.auth_manager.get_cached_sources(id).await;
-
-                    if let Some(sources) = cached_sources {
-                        info!(
-                            "Loading {} cached Plex sources for provider {}",
-                            sources.len(),
-                            id
-                        );
-
-                        // Ensure cached sources are also in database (in case they're missing)
-                        if let Err(e) = self
-                            .data_service
-                            .sync_sources_to_database(id, &sources)
-                            .await
-                        {
-                            warn!("Failed to sync cached sources to database: {}", e);
-                        }
-
-                        for source in sources {
-                            expected_source_ids.push(source.id.clone());
-
-                            // Initialize the source (create backend and test connection)
-                            match self
-                                .initialize_source(provider.clone(), source.clone())
-                                .await
-                            {
-                                Ok(status) => {
-                                    info!(
-                                        "Initialized cached source: {} - {:?}",
-                                        source.name, status.connection_status
-                                    );
-                                    all_statuses.push(status);
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "Failed to initialize cached source {}: {}",
-                                        source.name, e
-                                    );
-                                    // Even if initialization fails, add an offline status
-                                    let status = SourceStatus {
-                                        source_id: source.id.clone(),
-                                        source_name: source.name.clone(),
-                                        source_type: source.source_type.clone(),
-                                        connection_status: ConnectionStatus::Error(e.to_string()),
-                                        library_count: 0,
-                                    };
-                                    all_statuses.push(status.clone());
-
-                                    let mut statuses = self.source_statuses.write().await;
-                                    statuses.insert(source.id.clone(), status);
-                                }
-                            }
-                        }
-
-                        // Trigger background refresh to update any changes
-                        self.refresh_sources_background(id).await;
-                    } else {
-                        // No cache, try to discover online
-                        match self.auth_manager.discover_plex_sources(id).await {
-                            Ok(sources) => {
-                                // Save discovered sources to database
-                                if let Err(e) = self
-                                    .data_service
-                                    .sync_sources_to_database(id, &sources)
-                                    .await
-                                {
-                                    error!("Failed to sync Plex sources to database: {}", e);
-                                }
-
-                                for source in sources {
-                                    expected_source_ids.push(source.id.clone());
-                                    match self.initialize_source(provider.clone(), source).await {
-                                        Ok(status) => all_statuses.push(status),
-                                        Err(e) => {
-                                            error!("Failed to initialize Plex source: {}", e);
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Failed to discover Plex sources for provider {}: {}",
-                                    id, e
-                                );
-                            }
-                        }
-                    }
-                }
-                AuthProvider::JellyfinAuth { id, server_url, .. } => {
-                    info!("Processing Jellyfin auth provider: {}", id);
-
-                    // Create source from Jellyfin auth provider
-                    let source = Source::new(
-                        format!("source_{}", id),
-                        format!("Jellyfin - {}", server_url),
-                        SourceType::JellyfinServer,
-                        Some(id.clone()),
-                    );
-
-                    info!("Created Jellyfin source: {} ({})", source.name, source.id);
-
-                    // Sync Jellyfin source to database like Plex does
-                    if let Err(e) = self
-                        .data_service
-                        .sync_sources_to_database(id, &[source.clone()])
-                        .await
-                    {
-                        warn!("Failed to sync Jellyfin source to database: {}", e);
-                    }
-
-                    expected_source_ids.push(source.id.clone());
-                    info!("Initializing Jellyfin source: {}", source.id);
-                    match self.initialize_source(provider.clone(), source).await {
-                        Ok(status) => {
-                            info!(
-                                "Successfully initialized Jellyfin source: {} - status: {:?}",
-                                status.source_id, status.connection_status
-                            );
-                            all_statuses.push(status)
-                        }
-                        Err(e) => {
-                            error!("Failed to initialize Jellyfin source: {}", e);
-                        }
-                    }
-                }
-                AuthProvider::LocalFiles { id } => {
-                    // Create source from local files provider
-                    let source = Source::new(
-                        format!("source_{}", id),
-                        "Local Files".to_string(),
-                        SourceType::LocalFolder {
-                            path: std::path::PathBuf::from("~/Videos"),
-                        },
-                        Some(id.clone()),
-                    );
-
-                    expected_source_ids.push(source.id.clone());
-                    match self.initialize_source(provider.clone(), source).await {
-                        Ok(status) => all_statuses.push(status),
-                        Err(e) => {
-                            error!("Failed to initialize local source: {}", e);
-                        }
-                    }
-                }
-                _ => {
-                    warn!("Unhandled provider type: {:?}", provider);
-                }
-            }
-        }
-
-        // Perform authoritative cleanup - mark any sources not in config as offline
-        if !expected_source_ids.is_empty() {
-            info!(
-                "Cleaning up database to match config - {} expected sources",
-                expected_source_ids.len()
-            );
-            match self
-                .data_service
-                .cleanup_sources_from_config(&expected_source_ids)
-                .await
-            {
-                Ok(archived_sources) => {
-                    if !archived_sources.is_empty() {
-                        info!(
-                            "Config-based cleanup completed - {} invalid sources marked offline",
-                            archived_sources.len()
-                        );
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to cleanup sources from config: {}", e);
-                }
-            }
-        }
-
-        // Log final statuses for debugging
-        let final_statuses = self.source_statuses.read().await;
-        info!("Final source statuses after initialization:");
-        for (source_id, status) in final_statuses.iter() {
-            info!(
-                "  {} - {} ({:?})",
-                source_id, status.source_name, status.connection_status
-            );
-        }
-        drop(final_statuses);
-
-        Ok(all_statuses)
     }
 
     /// Sync a specific source
@@ -683,8 +474,9 @@ impl SourceCoordinator {
         // which also cleans up incorrectly added backends
         self.auth_manager.migrate_legacy_backends().await?;
 
-        // Re-initialize all sources after migration
-        self.initialize_all_sources().await?;
+        // Start reactive initialization after migration (non-blocking)
+        let _init_state = self.initialize_sources_reactive();
+        info!("Started reactive source initialization after migration");
 
         Ok(())
     }
@@ -867,5 +659,318 @@ impl SourceCoordinator {
                 }
             }
         });
+    }
+
+    /// New reactive initialization - returns immediately with Properties for non-blocking UI
+    pub fn initialize_sources_reactive(&self) -> AppInitializationState {
+        let init_state = AppInitializationState::new();
+
+        // Stage 1: Instant UI (0ms) - Enable UI immediately
+        self.stage1_instant_ui(&init_state);
+
+        // Stage 2: Background discovery (spawn async) - Load config/cache
+        self.stage2_background_discovery(init_state.clone());
+
+        // Stage 3: Network connections (spawn async) - Test connections
+        self.stage3_network_connections(init_state.clone());
+
+        init_state
+    }
+
+    /// Stage 1: Instant UI readiness - no blocking operations
+    fn stage1_instant_ui(&self, state: &AppInitializationState) {
+        // UI can display immediately (spawn tasks for async set calls)
+        let ui_ready = state.ui_ready.clone();
+        let cached_data_loaded = state.cached_data_loaded.clone();
+        tokio::spawn(async move {
+            ui_ready.set(true).await;
+            cached_data_loaded.set(true).await;
+        });
+
+        // Emit stage completion event asynchronously
+        let event_bus = self.data_service.event_bus().clone();
+        tokio::spawn(async move {
+            let event = crate::events::types::DatabaseEvent::new(
+                crate::events::types::EventType::InitializationStageCompleted,
+                crate::events::types::EventPayload::System {
+                    message: "UI ready for display".to_string(),
+                    details: Some(serde_json::json!({"component": "SourceCoordinator"})),
+                },
+            );
+            let _ = event_bus.publish(event).await;
+        });
+    }
+
+    /// Stage 2: Background discovery - load from config/cache
+    fn stage2_background_discovery(&self, state: AppInitializationState) {
+        let auth_manager = self.auth_manager.clone();
+        let data_service = self.data_service.clone();
+
+        tokio::spawn(async move {
+            let start_time = std::time::Instant::now();
+
+            // Discover sources from stored providers (fast - from cache/config)
+            let mut discovered_sources = Vec::new();
+
+            let providers = auth_manager.get_all_providers().await;
+            if !providers.is_empty() {
+                for provider in providers {
+                    match &provider {
+                        AuthProvider::PlexAccount { id, .. } => {
+                            if let Some(cached_sources) = auth_manager.get_cached_sources(id).await
+                            {
+                                for source in cached_sources {
+                                    // Convert to SourceInfo for UI display
+                                    let source_info = SourceInfo {
+                                        id: source.id.clone(),
+                                        name: source.name.clone(),
+                                        source_type: format!("{:?}", source.source_type),
+                                        libraries: Vec::new(), // Will be populated later
+                                        is_enabled: source.enabled,
+                                        connection_status: "Cached".to_string(),
+                                    };
+                                    discovered_sources.push(source_info);
+                                }
+                            }
+                        }
+                        AuthProvider::JellyfinAuth { id, .. } => {
+                            if let Some(cached_sources) = auth_manager.get_cached_sources(id).await
+                            {
+                                for source in cached_sources {
+                                    let source_info = SourceInfo {
+                                        id: source.id.clone(),
+                                        name: source.name.clone(),
+                                        source_type: format!("{:?}", source.source_type),
+                                        libraries: Vec::new(),
+                                        is_enabled: source.enabled,
+                                        connection_status: "Cached".to_string(),
+                                    };
+                                    discovered_sources.push(source_info);
+                                }
+                            }
+                        }
+                        AuthProvider::NetworkCredentials { .. }
+                        | AuthProvider::LocalFiles { .. } => {
+                            // These provider types don't have cached sources to discover
+                        }
+                    }
+                }
+            }
+
+            // Update the reactive state
+            state.sources_discovered.set(discovered_sources).await;
+
+            // Check if we have any cached credentials that indicate playback readiness
+            let has_credentials = !auth_manager.get_all_providers().await.is_empty();
+            state.playback_ready.set(has_credentials).await;
+
+            // Emit stage completion
+            let duration = start_time.elapsed();
+            let event_bus = data_service.event_bus().clone();
+            let event = crate::events::types::DatabaseEvent::new(
+                crate::events::types::EventType::InitializationStageCompleted,
+                crate::events::types::EventPayload::System {
+                    message: format!(
+                        "Background discovery completed in {}ms",
+                        duration.as_millis()
+                    ),
+                    details: Some(serde_json::json!({"component": "SourceCoordinator"})),
+                },
+            );
+            let _ = event_bus.publish(event).await;
+        });
+    }
+
+    /// Stage 3: Network connections - test actual connectivity  
+    fn stage3_network_connections(&self, state: AppInitializationState) {
+        let auth_manager = self.auth_manager.clone();
+        let data_service = self.data_service.clone();
+
+        tokio::spawn(async move {
+            let start_time = std::time::Instant::now();
+            let mut sources_connected = std::collections::HashMap::new();
+            let mut any_connected = false;
+
+            // Get all providers and attempt connections in parallel
+            let providers = auth_manager.get_all_providers().await;
+            if !providers.is_empty() {
+                let connection_futures: Vec<_> = providers.into_iter().map(|provider| {
+                    let auth_manager = auth_manager.clone();
+
+                    async move {
+                        match &provider {
+                            AuthProvider::PlexAccount { id, .. } => {
+                                if let Some(cached_sources) = auth_manager.get_cached_sources(id).await {
+                                    let mut source_results = Vec::new();
+                                    
+                                    for source in cached_sources {
+                                        // Attempt to create and test backend connection
+                                        let readiness = match Self::test_source_connection(&source, &provider, &auth_manager).await {
+                                            Ok(backend) => {
+                                                if backend.is_initialized().await {
+                                                    let library_count = backend.get_libraries().await.map(|libs| libs.len()).unwrap_or(0);
+                                                    SourceReadiness::Connected {
+                                                        api_client_status: crate::services::initialization::ApiClientStatus::Ready,
+                                                        library_count,
+                                                    }
+                                                } else if backend.is_playback_ready().await {
+                                                    SourceReadiness::PlaybackReady {
+                                                        credentials_valid: true,
+                                                        last_successful_connection: None,
+                                                    }
+                                                } else {
+                                                    SourceReadiness::Unavailable
+                                                }
+                                            }
+                                            Err(_) => {
+                                                // Even if connection fails, check if we have valid credentials
+                                                SourceReadiness::PlaybackReady {
+                                                    credentials_valid: true,
+                                                    last_successful_connection: None,
+                                                }
+                                            }
+                                        };
+                                        
+                                        source_results.push((source.id.clone(), readiness));
+                                    }
+                                    
+                                    source_results
+                                } else {
+                                    Vec::new()
+                                }
+                            }
+                            AuthProvider::JellyfinAuth { id, .. } => {
+                                if let Some(cached_sources) = auth_manager.get_cached_sources(id).await {
+                                    let mut source_results = Vec::new();
+                                    
+                                    for source in cached_sources {
+                                        let readiness = match Self::test_source_connection(&source, &provider, &auth_manager).await {
+                                            Ok(backend) => {
+                                                if backend.is_initialized().await {
+                                                    let library_count = backend.get_libraries().await.map(|libs| libs.len()).unwrap_or(0);
+                                                    SourceReadiness::Connected {
+                                                        api_client_status: crate::services::initialization::ApiClientStatus::Ready,
+                                                        library_count,
+                                                    }
+                                                } else if backend.is_playback_ready().await {
+                                                    SourceReadiness::PlaybackReady {
+                                                        credentials_valid: true,
+                                                        last_successful_connection: None,
+                                                    }
+                                                } else {
+                                                    SourceReadiness::Unavailable
+                                                }
+                                            }
+                                            Err(_) => {
+                                                SourceReadiness::PlaybackReady {
+                                                    credentials_valid: true,
+                                                    last_successful_connection: None,
+                                                }
+                                            }
+                                        };
+                                        
+                                        source_results.push((source.id.clone(), readiness));
+                                    }
+                                    
+                                    source_results
+                                } else {
+                                    Vec::new()
+                                }
+                            }
+                            AuthProvider::NetworkCredentials { .. } | AuthProvider::LocalFiles { .. } => {
+                                // These don't have cached sources yet - return empty
+                                Vec::new()
+                            }
+                        }
+                    }
+                }).collect();
+
+                // Process connection results as they complete
+                for future in connection_futures {
+                    let results = future.await;
+                    for (source_id, readiness) in results {
+                        if readiness.is_playable() {
+                            any_connected = true;
+                        }
+                        sources_connected.insert(source_id, readiness);
+                    }
+                }
+            }
+
+            // Update reactive state
+            state.sources_connected.set(sources_connected.clone()).await;
+            state.sync_ready.set(any_connected).await;
+
+            // Emit events for UI updates
+            let event_bus = data_service.event_bus().clone();
+
+            if any_connected {
+                let event = crate::events::types::DatabaseEvent::new(
+                    crate::events::types::EventType::FirstSourceReady,
+                    crate::events::types::EventPayload::System {
+                        message: "At least one source is ready for playback".to_string(),
+                        details: Some(serde_json::json!({"component": "SourceCoordinator"})),
+                    },
+                );
+                let _ = event_bus.publish(event).await;
+            }
+
+            let all_connected = sources_connected.values().all(|r| r.is_fully_connected());
+            if all_connected && !sources_connected.is_empty() {
+                let event = crate::events::types::DatabaseEvent::new(
+                    crate::events::types::EventType::AllSourcesConnected,
+                    crate::events::types::EventPayload::System {
+                        message: "All sources are fully connected".to_string(),
+                        details: Some(serde_json::json!({"component": "SourceCoordinator"})),
+                    },
+                );
+                let _ = event_bus.publish(event).await;
+            }
+
+            // Stage completion
+            let duration = start_time.elapsed();
+            let event = crate::events::types::DatabaseEvent::new(
+                crate::events::types::EventType::InitializationStageCompleted,
+                crate::events::types::EventPayload::System {
+                    message: format!(
+                        "Network connections completed in {}ms",
+                        duration.as_millis()
+                    ),
+                    details: Some(serde_json::json!({"component": "SourceCoordinator"})),
+                },
+            );
+            let _ = event_bus.publish(event).await;
+        });
+    }
+
+    /// Helper method to test a source connection without blocking
+    async fn test_source_connection(
+        source: &Source,
+        provider: &AuthProvider,
+        auth_manager: &Arc<AuthManager>,
+    ) -> Result<Arc<dyn MediaBackend>> {
+        // Create backend for testing
+        let backend = match (&source.source_type, provider) {
+            (SourceType::PlexServer { .. }, AuthProvider::PlexAccount { .. }) => {
+                let plex_backend =
+                    PlexBackend::from_auth(provider.clone(), source.clone(), auth_manager.clone())?;
+                Arc::new(plex_backend) as Arc<dyn MediaBackend>
+            }
+            (SourceType::JellyfinServer, AuthProvider::JellyfinAuth { .. }) => {
+                let jellyfin_backend = JellyfinBackend::from_auth(
+                    provider.clone(),
+                    source.clone(),
+                    auth_manager.clone(),
+                )?;
+                Arc::new(jellyfin_backend) as Arc<dyn MediaBackend>
+            }
+            _ => return Err(anyhow!("Unsupported source type")),
+        };
+
+        // Test initialization - this may fail but we still return the backend
+        // for playback readiness testing
+        let _ = backend.initialize().await;
+
+        Ok(backend)
     }
 }
