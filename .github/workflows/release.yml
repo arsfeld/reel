@@ -227,8 +227,8 @@ jobs:
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu \
-            libssl-dev:arm64 \
-            pkg-config-aarch64-linux-gnu
+            pkg-config \
+            libssl-dev:arm64
 
       - name: Install system dependencies
         run: |
@@ -411,7 +411,7 @@ jobs:
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu \
-            pkg-config-aarch64-linux-gnu \
+            pkg-config \
             libssl-dev:arm64
 
       - name: Install Flatpak and dependencies
