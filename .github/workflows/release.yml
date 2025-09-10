@@ -303,30 +303,25 @@ jobs:
           cargo build --release
           strip target/release/reel
 
+      - name: Setup Cargo config for ARM64 cross-compilation
+        if: matrix.arch == 'aarch64'
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          
+          [env]
+          PKG_CONFIG_ALLOW_CROSS = "1"
+          PKG_CONFIG_PATH = "/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          OPENSSL_DIR = "/usr"
+          OPENSSL_LIB_DIR = "/usr/lib/aarch64-linux-gnu"
+          OPENSSL_INCLUDE_DIR = "/usr/include/aarch64-linux-gnu"
+          EOF
+
       - name: Build release binary (cross-compile ARM64)
         if: matrix.arch == 'aarch64'
         run: |
-          export PKG_CONFIG_ALLOW_CROSS=1
-          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
-          export PKG_CONFIG_SYSROOT_DIR=/
-          export CC=aarch64-linux-gnu-gcc
-          export CXX=aarch64-linux-gnu-g++
-          export AR=aarch64-linux-gnu-ar
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-          
-          # Library paths for cross-compilation
-          export LIBRARY_PATH=/usr/lib/aarch64-linux-gnu
-          export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu
-          
-          # OpenSSL specific settings for cross-compilation
-          export OPENSSL_DIR=/usr
-          export OPENSSL_INCLUDE_DIR=/usr/include
-          export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
-          
-          # Prevent passing -m64 flag to ARM compiler
-          export HOST_CC=gcc
-          export TARGET_CC=aarch64-linux-gnu-gcc
-          
           cargo build --release --target aarch64-unknown-linux-gnu
           aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/reel
 
@@ -482,23 +477,28 @@ jobs:
           # Install uv
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      
+      - name: Setup Cargo config for ARM64 Flatpak build
+        if: matrix.arch == 'aarch64'
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          
+          [env]
+          PKG_CONFIG_ALLOW_CROSS = "1"
+          PKG_CONFIG_PATH = "/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          OPENSSL_DIR = "/usr"
+          OPENSSL_LIB_DIR = "/usr/lib/aarch64-linux-gnu"
+          OPENSSL_INCLUDE_DIR = "/usr/include/aarch64-linux-gnu"
+          EOF
 
       - name: Build Flatpak
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+          ARCH: ${{ matrix.arch }}
         run: |
-          # Set version and architecture environment variables for the build script
-          export VERSION=${{ needs.create-release.outputs.version }}
-          export ARCH=${{ matrix.arch }}
-          
-          # Set cross-compilation environment for ARM64
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
-            export PKG_CONFIG_ALLOW_CROSS=1
-            export OPENSSL_DIR=/usr
-            export OPENSSL_INCLUDE_DIR=/usr/include
-            export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
-          fi
-
-          # Use our standalone Flatpak build script
           ./scripts/build-flatpak.sh
 
       - name: Package repository for distribution
