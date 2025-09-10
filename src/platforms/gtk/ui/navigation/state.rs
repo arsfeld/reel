@@ -1,4 +1,3 @@
-use gtk4::prelude::*;
 use std::sync::Arc;
 
 use super::types::NavigationPage;

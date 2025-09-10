@@ -77,7 +77,7 @@ impl SyncStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, TimeDelta, Utc};
+    use chrono::{TimeDelta, Utc};
 
     #[test]
     fn test_default_values() {
