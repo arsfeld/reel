@@ -98,6 +98,26 @@ Download the latest release from the [Releases page](https://github.com/arsfeld/
 > [!WARNING]
 > **Pre-built packages are experimental**: These packages are automatically generated and may not be thoroughly tested. If you encounter issues, consider building from source using the Nix development environment.
 
+### 📋 System Requirements
+
+#### Minimum OS Versions
+- **Ubuntu/Debian**: Ubuntu 24.04 LTS or newer (packages built against Ubuntu 24.04)
+- **Fedora**: Fedora 40 or newer
+- **Other distros**: Use AppImage or Flatpak for maximum compatibility
+
+#### Required Libraries
+| Library | Minimum Version | Notes |
+|---------|-----------------|-------|
+| **libadwaita** | 1.5 | UI toolkit |
+| **GTK4** | 4.13.5 | GUI framework |
+| **GStreamer** | 1.20+ | Media framework with plugins-bad |
+| **MPV** | libmpv2 0.29+ | Primary video player backend |
+| **glibc** | 2.35+ | With 64-bit time_t support |
+| **OpenSSL** | 3.0+ | TLS/SSL support |
+
+> [!NOTE]
+> **For older distributions**: If your system doesn't meet these requirements (e.g., Ubuntu 22.04, Fedora 39), please use the **AppImage** or **Flatpak** versions which bundle their own dependencies.
+
 #### AppImage (Universal - Recommended)
 ```bash
 # Download the AppImage
@@ -108,7 +128,7 @@ chmod +x reel-*.AppImage
 
 #### Debian/Ubuntu (.deb)
 ```bash
-# Download and install the .deb package
+# Download and install the .deb package (requires Ubuntu 24.04+)
 wget https://github.com/arsfeld/reel/releases/latest/download/reel-v0.4.0-amd64.deb
 sudo dpkg -i reel-*.deb
 sudo apt-get install -f  # Install dependencies if needed
@@ -116,7 +136,7 @@ sudo apt-get install -f  # Install dependencies if needed
 
 #### Fedora/RHEL/openSUSE (.rpm)
 ```bash
-# Download and install the .rpm package
+# Download and install the .rpm package (requires Fedora 40+)
 wget https://github.com/arsfeld/reel/releases/latest/download/reel-v0.4.0-x86_64.rpm
 sudo dnf install ./reel-*.rpm
 # or for older systems:
