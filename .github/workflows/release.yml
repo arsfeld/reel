@@ -195,62 +195,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU for cross-compilation
+      - name: Set up Docker for cross-compilation
         if: matrix.arch == 'aarch64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Install cross-compilation tools
-        if: matrix.arch == 'aarch64'
-        run: |
-          # Enable ARM64 architecture for apt
-          sudo dpkg --add-architecture arm64
-          
-          # Remove the default Ubuntu sources that don't support ARM64
-          sudo rm -f /etc/apt/sources.list.d/ubuntu.sources
-          
-          # Create proper deb822 format sources for both amd64 and arm64
-          cat <<EOF | sudo tee /etc/apt/sources.list.d/amd64.sources
-          Types: deb
-          URIs: http://azure.archive.ubuntu.com/ubuntu/
-          Suites: noble noble-updates noble-backports
-          Components: main restricted universe multiverse
-          Architectures: amd64
-          
-          Types: deb
-          URIs: http://security.ubuntu.com/ubuntu/
-          Suites: noble-security
-          Components: main restricted universe multiverse
-          Architectures: amd64
-          EOF
-          
-          cat <<EOF | sudo tee /etc/apt/sources.list.d/arm64.sources
-          Types: deb
-          URIs: http://ports.ubuntu.com/ubuntu-ports/
-          Suites: noble noble-updates noble-backports noble-security
-          Components: main restricted universe multiverse
-          Architectures: arm64
-          EOF
-          
-          sudo apt-get update
-          
-          # Install cross-compilation tools and libraries
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            pkg-config \
-            libssl-dev:arm64 \
-            libgtk-4-dev:arm64 \
-            libadwaita-1-dev:arm64 \
-            libgstreamer1.0-dev:arm64 \
-            libgstreamer-plugins-base1.0-dev:arm64 \
-            libmpv-dev:arm64 \
-            libsqlite3-dev:arm64 \
-            libdbus-1-dev:arm64 \
-            libglib2.0-dev:arm64 \
-            libcairo2-dev:arm64 \
-            libpango1.0-dev:arm64
+        uses: docker/setup-buildx-action@v3
 
       - name: Install system dependencies
         run: |
@@ -276,9 +223,10 @@ jobs:
             file
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || '' }}
+          toolchain: stable
+          target: ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || '' }}
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4
@@ -296,6 +244,10 @@ jobs:
         run: |
           cargo install cargo-deb --locked || true
           cargo install cargo-generate-rpm --locked || true
+          # Install cross for ARM64 cross-compilation
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            cargo install cross --git https://github.com/cross-rs/cross || true
+          fi
 
       - name: Build release binary (native)
         if: matrix.arch == 'x86_64'
@@ -303,27 +255,14 @@ jobs:
           cargo build --release
           strip target/release/reel
 
-      - name: Setup Cargo config for ARM64 cross-compilation
-        if: matrix.arch == 'aarch64'
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml << 'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-          
-          [env]
-          PKG_CONFIG_ALLOW_CROSS = "1"
-          PKG_CONFIG_PATH = "/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
-          OPENSSL_DIR = "/usr"
-          OPENSSL_LIB_DIR = "/usr/lib/aarch64-linux-gnu"
-          OPENSSL_INCLUDE_DIR = "/usr/include/aarch64-linux-gnu"
-          EOF
-
       - name: Build release binary (cross-compile ARM64)
         if: matrix.arch == 'aarch64'
         run: |
-          cargo build --release --target aarch64-unknown-linux-gnu
-          aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/reel
+          # Use cross for ARM64 cross-compilation
+          cross build --release --target aarch64-unknown-linux-gnu
+          # Find and use the appropriate strip tool from Docker
+          docker run --rm -v "$PWD":/work -w /work ghcr.io/cross-rs/aarch64-unknown-linux-gnu:latest \
+            aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/reel
 
       - name: Package as tarball
         run: |
@@ -338,6 +277,7 @@ jobs:
       - name: Build Debian package
         run: |
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            # For cross-compiled binaries, we need to ensure cargo-deb uses the right target
             cargo deb --no-build --target aarch64-unknown-linux-gnu
             mv target/aarch64-unknown-linux-gnu/debian/*.deb reel-${{ needs.create-release.outputs.version }}-arm64.deb || true
           else
@@ -348,6 +288,7 @@ jobs:
       - name: Build RPM package
         run: |
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            # For cross-compiled binaries, ensure cargo-generate-rpm uses the right target
             cargo generate-rpm --target aarch64-unknown-linux-gnu
             mv target/aarch64-unknown-linux-gnu/generate-rpm/*.rpm reel-${{ needs.create-release.outputs.version }}-aarch64.rpm || true
           else
@@ -409,52 +350,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU for cross-compilation
+      - name: Set up Docker for cross-compilation
         if: matrix.arch == 'aarch64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Install cross-compilation dependencies for ARM64
-        if: matrix.arch == 'aarch64'
-        run: |
-          # Enable ARM64 architecture
-          sudo dpkg --add-architecture arm64
-          
-          # Remove the default Ubuntu sources that don't support ARM64
-          sudo rm -f /etc/apt/sources.list.d/ubuntu.sources
-          
-          # Create proper deb822 format sources for both amd64 and arm64
-          cat <<EOF | sudo tee /etc/apt/sources.list.d/amd64.sources
-          Types: deb
-          URIs: http://azure.archive.ubuntu.com/ubuntu/
-          Suites: noble noble-updates noble-backports
-          Components: main restricted universe multiverse
-          Architectures: amd64
-          
-          Types: deb
-          URIs: http://security.ubuntu.com/ubuntu/
-          Suites: noble-security
-          Components: main restricted universe multiverse
-          Architectures: amd64
-          EOF
-          
-          cat <<EOF | sudo tee /etc/apt/sources.list.d/arm64.sources
-          Types: deb
-          URIs: http://ports.ubuntu.com/ubuntu-ports/
-          Suites: noble noble-updates noble-backports noble-security
-          Components: main restricted universe multiverse
-          Architectures: arm64
-          EOF
-          
-          sudo apt-get update
-          
-          # Install cross-compilation tools
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            pkg-config \
-            libssl-dev:arm64
+        uses: docker/setup-buildx-action@v3
 
       - name: Install Flatpak and dependencies
         run: |
@@ -478,27 +376,24 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
       
-      - name: Setup Cargo config for ARM64 Flatpak build
+      - name: Setup Rust and cross for ARM64
         if: matrix.arch == 'aarch64'
         run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml << 'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-          
-          [env]
-          PKG_CONFIG_ALLOW_CROSS = "1"
-          PKG_CONFIG_PATH = "/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
-          OPENSSL_DIR = "/usr"
-          OPENSSL_LIB_DIR = "/usr/lib/aarch64-linux-gnu"
-          OPENSSL_INCLUDE_DIR = "/usr/include/aarch64-linux-gnu"
-          EOF
+          # Install cross for ARM64 cross-compilation within Flatpak build
+          cargo install cross --git https://github.com/cross-rs/cross || true
 
       - name: Build Flatpak
         env:
           VERSION: ${{ needs.create-release.outputs.version }}
           ARCH: ${{ matrix.arch }}
+          CROSS_COMPILE: ${{ matrix.arch == 'aarch64' && '1' || '0' }}
         run: |
+          # Export cross tool for ARM64 builds
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            export CARGO_BUILD_COMMAND="cross build --release --target aarch64-unknown-linux-gnu"
+          else
+            export CARGO_BUILD_COMMAND="cargo build --release"
+          fi
           ./scripts/build-flatpak.sh
 
       - name: Package repository for distribution
