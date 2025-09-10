@@ -192,8 +192,16 @@ jobs:
       - name: Install cross-compilation tools
         if: matrix.arch == 'aarch64'
         run: |
+          # Enable ARM64 architecture for apt
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          
+          # Install cross-compilation tools and libraries
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libssl-dev:arm64 \
+            pkg-config-aarch64-linux-gnu
 
       - name: Install system dependencies
         run: |
@@ -338,6 +346,20 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Install cross-compilation dependencies for ARM64
+        if: matrix.arch == 'aarch64'
+        run: |
+          # Enable ARM64 architecture
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          
+          # Install cross-compilation tools
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            pkg-config-aarch64-linux-gnu \
+            libssl-dev:arm64
+
       - name: Install Flatpak and dependencies
         run: |
           sudo apt-get update
@@ -356,6 +378,15 @@ jobs:
           # Set version and architecture environment variables for the build script
           export VERSION=${{ needs.create-release.outputs.version }}
           export ARCH=${{ matrix.arch }}
+          
+          # Set cross-compilation environment for ARM64
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+            export PKG_CONFIG_ALLOW_CROSS=1
+            export OPENSSL_DIR=/usr
+            export OPENSSL_INCLUDE_DIR=/usr/include
+            export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
+          fi
 
           # Use our standalone Flatpak build script
           ./scripts/build-flatpak.sh
