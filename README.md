@@ -5,8 +5,9 @@
   
   **A modern GTK4 media player for GNOME, built with Rust for performance and reliability.**
   
-  [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-  [![GTK4](https://img.shields.io/badge/GTK-4.0-blue.svg?style=flat-square)](https://gtk.org/)
+  [![CI](https://github.com/arsfeld/reel/actions/workflows/ci.yml/badge.svg)](https://github.com/arsfeld/reel/actions/workflows/ci.yml)
+  [![Rust](https://img.shields.io/badge/rust-1.89%2B-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+  [![GTK4](https://img.shields.io/badge/GTK-4.14%2B-blue.svg?style=flat-square)](https://gtk.org/)
   [![License](https://img.shields.io/badge/license-GPLv3-green.svg?style=flat-square)](LICENSE)
   [![Nix Flakes](https://img.shields.io/badge/nix-flakes-5277C3.svg?style=flat-square&logo=nixos&logoColor=white)](https://nixos.wiki/wiki/Flakes)
   [![libadwaita](https://img.shields.io/badge/libadwaita-1.4-purple.svg?style=flat-square)](https://gnome.pages.gitlab.gnome.org/libadwaita/)
