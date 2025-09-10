@@ -4,7 +4,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::db::{
     connection::DatabaseConnection,
-    entities::{LibraryModel, Source, SourceModel},
+    entities::LibraryModel,
     repository::{
         LibraryRepository, LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl,
         PlaybackRepository, PlaybackRepositoryImpl, Repository, SourceRepositoryImpl,
@@ -1009,7 +1009,7 @@ impl DataService {
     /// Get latest sync status
     pub async fn get_latest_sync_status(
         &self,
-        source_id: &str,
+        _source_id: &str,
     ) -> Result<Option<crate::db::entities::SyncStatusModel>> {
         // Note: This assumes we have a sync status repository, which may need to be added
         // For now, return None to avoid compilation errors
@@ -1252,7 +1252,7 @@ impl DataService {
         media_id: &str,
         position_ms: i64,
         duration_ms: i64,
-        watched: bool,
+        _watched: bool,
     ) -> Result<()> {
         self.playback_repo
             .upsert_progress(media_id, None, position_ms, duration_ms)
@@ -1285,7 +1285,7 @@ impl DataService {
                     {
                         use std::time::Duration as StdDuration;
                         let position = StdDuration::from_millis(progress.position_ms as u64);
-                        let duration = StdDuration::from_millis(progress.duration_ms as u64);
+                        let _duration = StdDuration::from_millis(progress.duration_ms as u64);
                         ep.playback_position = Some(position);
                         // Consider watched either explicit flag or >90% complete
                         let near_complete = progress.duration_ms > 0
@@ -1327,7 +1327,7 @@ impl DataService {
                     {
                         use std::time::Duration as StdDuration;
                         let position = StdDuration::from_millis(progress.position_ms as u64);
-                        let duration = StdDuration::from_millis(progress.duration_ms as u64);
+                        let _duration = StdDuration::from_millis(progress.duration_ms as u64);
                         ep.playback_position = Some(position);
                         let near_complete = progress.duration_ms > 0
                             && (progress.position_ms as f64 / progress.duration_ms as f64) > 0.9;

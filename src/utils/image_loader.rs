@@ -11,14 +11,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use tokio::fs;
 use tokio::sync::{Mutex, RwLock, Semaphore};
-use tracing::{debug, info, trace};
+use tracing::{info, trace};
 
 #[cfg(feature = "gtk")]
 use gdk4 as gdk;
 #[cfg(feature = "gtk")]
 use gtk4::gdk_pixbuf::Pixbuf;
 #[cfg(feature = "gtk")]
-use gtk4::{gio, glib, prelude::*};
+use gtk4::{gio, glib};
 
 /// Image size variants for different UI contexts
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

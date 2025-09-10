@@ -1,7 +1,8 @@
-use super::{Property, PropertySubscriber, ViewModel};
+use super::{ComputedProperty, Property, PropertySubscriber, ViewModel};
 use crate::events::{DatabaseEvent, EventBus, EventFilter, EventPayload, EventType};
-use crate::models::MediaItem;
+use crate::models::{MediaItem, StreamInfo};
 use crate::services::DataService;
+use crate::state::AppState;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -45,6 +46,7 @@ pub struct DetailedMediaInfo {
 
 pub struct DetailsViewModel {
     data_service: Arc<DataService>,
+    app_state: Option<std::sync::Weak<AppState>>,
     current_item: Property<Option<DetailedMediaInfo>>,
     media_id: Property<Option<String>>,
     is_loading: Property<bool>,
@@ -60,6 +62,10 @@ pub struct DetailsViewModel {
     episodes: Property<Vec<MediaItem>>,
     seasons: Property<Vec<i32>>,
     is_loading_episodes: Property<bool>,
+    // Stream info properties for reactive loading
+    stream_info: Property<Option<StreamInfo>>,
+    stream_info_loading: Property<bool>,
+    stream_info_error: Property<Option<String>>,
     event_bus: Option<Arc<EventBus>>,
 }
 
@@ -77,6 +83,7 @@ impl DetailsViewModel {
     pub fn new(data_service: Arc<DataService>) -> Self {
         Self {
             data_service,
+            app_state: None,
             current_item: Property::new(None, "current_item"),
             media_id: Property::new(None, "media_id"),
             is_loading: Property::new(false, "is_loading"),
@@ -98,8 +105,74 @@ impl DetailsViewModel {
             episodes: Property::new(Vec::new(), "episodes"),
             seasons: Property::new(Vec::new(), "seasons"),
             is_loading_episodes: Property::new(false, "is_loading_episodes"),
+            // Stream info properties
+            stream_info: Property::new(None, "stream_info"),
+            stream_info_loading: Property::new(false, "stream_info_loading"),
+            stream_info_error: Property::new(None, "stream_info_error"),
             event_bus: None,
         }
+    }
+
+    pub async fn load_media_item(&self, media: MediaItem) -> Result<()> {
+        self.is_loading.set(true).await;
+        self.error.set(None).await;
+        self.media_id.set(Some(media.id().to_string())).await;
+
+        let metadata = self.extract_metadata(&media).await;
+
+        let playback_progress = self
+            .data_service
+            .get_playback_progress(&media.id())
+            .await
+            .ok()
+            .flatten();
+
+        if let Some((position_ms, duration_ms)) = playback_progress {
+            // Consider watched if >90% complete
+            let watched = position_ms as f64 / duration_ms as f64 > 0.9;
+            self.is_watched.set(watched).await;
+        }
+
+        let related = self.load_related_media(&media).await;
+        self.related_items.set(related.clone()).await;
+
+        let detailed_info = DetailedMediaInfo {
+            media: media.clone(),
+            metadata,
+            playback_progress,
+            related,
+        };
+
+        self.current_item.set(Some(detailed_info)).await;
+
+        // If this is a show, load episodes for the first season
+        if let MediaItem::Show(show) = &media {
+            info!(
+                "DetailsViewModel::load_media_item: show loaded id={} title={}",
+                show.id, show.title
+            );
+            self.load_seasons_for_show(&media).await;
+
+            // Load episodes for the first season
+            if let Some(first_season) = self.seasons.get().await.first() {
+                info!(
+                    "DetailsViewModel::load_media_item: first season determined: {}",
+                    first_season
+                );
+                let _ = self
+                    .load_episodes_for_season(&media.id(), *first_season)
+                    .await;
+            }
+        }
+
+        // Load stream info for movies (shows don't have direct stream info)
+        if let MediaItem::Movie(_) = &media {
+            self.load_stream_info_async(&media).await;
+        }
+
+        self.is_loading.set(false).await;
+
+        Ok(())
     }
 
     pub async fn load_media(&self, media_id: String) -> Result<()> {
@@ -154,6 +227,11 @@ impl DetailsViewModel {
                             .load_episodes_for_season(&media_id, *first_season)
                             .await;
                     }
+                }
+
+                // Load stream info for movies (shows don't have direct stream info)
+                if let MediaItem::Movie(_) = &media {
+                    self.load_stream_info_async(&media).await;
                 }
 
                 self.is_loading.set(false).await;
@@ -460,7 +538,7 @@ impl DetailsViewModel {
 
     /// Mark all episodes in the current season as watched
     pub async fn mark_season_as_watched(&self) {
-        if let Some(season) = self.current_season.get().await {
+        if let Some(_season) = self.current_season.get().await {
             let episodes = self.episodes.get().await;
             for episode_item in episodes {
                 if let MediaItem::Episode(episode) = episode_item {
@@ -613,6 +691,110 @@ impl DetailsViewModel {
     pub fn is_loading_episodes(&self) -> &Property<bool> {
         &self.is_loading_episodes
     }
+
+    pub fn stream_info(&self) -> &Property<Option<StreamInfo>> {
+        &self.stream_info
+    }
+
+    pub fn stream_info_loading(&self) -> &Property<bool> {
+        &self.stream_info_loading
+    }
+
+    pub fn stream_info_error(&self) -> &Property<Option<String>> {
+        &self.stream_info_error
+    }
+
+    // Show info computed properties
+    pub fn show_network(&self) -> ComputedProperty<Option<String>> {
+        ComputedProperty::new("show_network", vec![Arc::new(self.current_item.clone())], {
+            let current_item = self.current_item.clone();
+            move || {
+                if let Some(detailed_info) = current_item.get_sync() {
+                    if let MediaItem::Show(_show) = &detailed_info.media {
+                        // TODO: Add network field to Show struct or extract from metadata
+                        // For now, return None since Show struct doesn't have network field
+                        return None;
+                    }
+                }
+                None
+            }
+        })
+    }
+
+    pub fn show_status(&self) -> ComputedProperty<Option<String>> {
+        ComputedProperty::new("show_status", vec![Arc::new(self.current_item.clone())], {
+            let current_item = self.current_item.clone();
+            move || {
+                if let Some(detailed_info) = current_item.get_sync() {
+                    if let MediaItem::Show(_show) = &detailed_info.media {
+                        // TODO: Add status field to Show struct or extract from metadata
+                        // For now, return None since Show struct doesn't have status field
+                        return None;
+                    }
+                }
+                None
+            }
+        })
+    }
+
+    pub fn show_content_rating(&self) -> ComputedProperty<Option<String>> {
+        ComputedProperty::new(
+            "show_content_rating",
+            vec![Arc::new(self.current_item.clone())],
+            {
+                let current_item = self.current_item.clone();
+                move || {
+                    if let Some(detailed_info) = current_item.get_sync() {
+                        if let MediaItem::Show(_show) = &detailed_info.media {
+                            // Extract content rating from metadata
+                            return detailed_info.metadata.content_rating.clone();
+                        }
+                    }
+                    None
+                }
+            },
+        )
+    }
+
+    pub fn set_app_state(&mut self, app_state: std::sync::Weak<AppState>) {
+        self.app_state = Some(app_state);
+    }
+
+    async fn load_stream_info_async(&self, media: &MediaItem) {
+        if let MediaItem::Movie(movie) = media {
+            self.stream_info_loading.set(true).await;
+            self.stream_info_error.set(None).await;
+
+            if let Some(app_state_weak) = &self.app_state {
+                if let Some(app_state) = app_state_weak.upgrade() {
+                    let backend_id = &movie.backend_id;
+                    match app_state.source_coordinator.get_backend(backend_id).await {
+                        Some(backend) => match backend.get_stream_url(&movie.id).await {
+                            Ok(stream_info) => {
+                                self.stream_info.set(Some(stream_info)).await;
+                            }
+                            Err(e) => {
+                                error!("Failed to load stream info: {}", e);
+                                self.stream_info_error.set(Some(e.to_string())).await;
+                            }
+                        },
+                        None => {
+                            let msg = "Backend not available".to_string();
+                            self.stream_info_error.set(Some(msg)).await;
+                        }
+                    }
+                } else {
+                    let msg = "App state not available".to_string();
+                    self.stream_info_error.set(Some(msg)).await;
+                }
+            } else {
+                let msg = "App state not initialized".to_string();
+                self.stream_info_error.set(Some(msg)).await;
+            }
+
+            self.stream_info_loading.set(false).await;
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -647,6 +829,10 @@ impl ViewModel for DetailsViewModel {
             "episodes" => Some(self.episodes.subscribe()),
             "seasons" => Some(self.seasons.subscribe()),
             "is_loading_episodes" => Some(self.is_loading_episodes.subscribe()),
+            // Added: expose stream info updates to the UI
+            "stream_info" => Some(self.stream_info.subscribe()),
+            "stream_info_loading" => Some(self.stream_info_loading.subscribe()),
+            "stream_info_error" => Some(self.stream_info_error.subscribe()),
             _ => None,
         }
     }
@@ -664,6 +850,7 @@ impl Clone for DetailsViewModel {
     fn clone(&self) -> Self {
         Self {
             data_service: self.data_service.clone(),
+            app_state: self.app_state.clone(),
             current_item: self.current_item.clone(),
             media_id: self.media_id.clone(),
             is_loading: self.is_loading.clone(),
@@ -678,6 +865,9 @@ impl Clone for DetailsViewModel {
             episodes: self.episodes.clone(),
             seasons: self.seasons.clone(),
             is_loading_episodes: self.is_loading_episodes.clone(),
+            stream_info: self.stream_info.clone(),
+            stream_info_loading: self.stream_info_loading.clone(),
+            stream_info_error: self.stream_info_error.clone(),
             event_bus: self.event_bus.clone(),
         }
     }

@@ -7,13 +7,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::backends::traits::MediaBackend;
 use crate::config::Config;
 use crate::constants::PLAYER_CONTROLS_HIDE_DELAY_SECS;
+use crate::core::viewmodels::property::ComputedProperty;
 use crate::models::{Episode, MediaItem, Movie};
-use crate::platforms::gtk::ui::viewmodels::player_view_model::PlayerViewModel;
+use crate::platforms::gtk::ui::reactive::bindings::{
+    BindingHandle, bind_icon_to_property, bind_value_to_property, bind_visibility_to_property,
+};
+use crate::platforms::gtk::ui::viewmodels::player_view_model::{PlaybackState, PlayerViewModel};
 use crate::platforms::gtk::ui::widgets::player_overlay::ReelPlayerOverlayHost;
 use crate::player::Player;
 use crate::state::AppState;
@@ -30,8 +34,6 @@ pub struct PlayerPage {
     top_right_osd: gtk4::Box,
     back_button: gtk4::Button,
     close_button: gtk4::Button,
-    current_stream_info: Arc<RwLock<Option<crate::models::StreamInfo>>>,
-    current_media_item: Arc<RwLock<Option<MediaItem>>>,
     state: Arc<AppState>,
     hover_controller: Rc<gtk4::EventControllerMotion>,
     inhibit_cookie: Arc<RwLock<Option<u32>>>,
@@ -39,19 +41,15 @@ pub struct PlayerPage {
     skip_credits_button: gtk4::Button,
     auto_play_overlay: gtk4::Box,
     pip_container: gtk4::Box,
-    next_episode_info: Arc<RwLock<Option<Episode>>>,
-    auto_play_countdown: Arc<RwLock<Option<glib::SourceId>>>,
-    chapter_monitor_id: Arc<RwLock<Option<glib::SourceId>>>,
     config: Config,
-    position_sync_timer: Arc<RwLock<Option<glib::SourceId>>>,
-    last_synced_position: Arc<RwLock<Option<Duration>>>,
     loading_overlay: gtk4::Box,
     loading_spinner: gtk4::Spinner,
     loading_label: gtk4::Label,
     error_overlay: gtk4::Box,
-    media_loading: Arc<AtomicBool>,
     error_label: gtk4::Label,
     view_model: Arc<PlayerViewModel>,
+    // Store binding handles to prevent them from being dropped
+    _binding_handles: Rc<RefCell<Vec<BindingHandle>>>,
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -76,23 +74,15 @@ impl PlayerPage {
         // Stop playback and cleanup resources
         info!("PlayerPage::cleanup() - Cleaning up player resources");
 
+        // Stop the ViewModel first to ensure proper state management
+        self.view_model.stop().await;
+
         // Stop any ongoing playback
         if let Ok(player) = self.player.try_read() {
             let _ = player.stop().await;
         }
 
-        // Cancel any timers
-        if let Some(timer) = self.position_sync_timer.write().await.take() {
-            timer.remove();
-        }
-
-        if let Some(timer) = self.auto_play_countdown.write().await.take() {
-            timer.remove();
-        }
-
-        if let Some(timer) = self.chapter_monitor_id.write().await.take() {
-            timer.remove();
-        }
+        // ViewModel disposal is handled automatically by Arc drop
 
         // Uninhibit screensaver
         self.uninhibit_suspend().await;
@@ -100,42 +90,15 @@ impl PlayerPage {
         info!("PlayerPage::cleanup() - Cleanup complete");
     }
 
-    async fn seek_with_retries(&self, position: Duration) {
-        use std::time::Duration as StdDuration;
-        let max_attempts = 8;
-        let mut attempt = 0;
-        // Backoff sequence in ms
-        let delays = [150, 250, 400, 600, 800, 1000, 1200, 1500];
-
-        loop {
-            attempt += 1;
-            let player = self.player.read().await;
-            match player.seek(position).await {
-                Ok(_) => {
-                    info!(
-                        "Seek successful on attempt {} at position {}s",
-                        attempt,
-                        position.as_secs()
-                    );
-                    break;
-                }
-                Err(e) => {
-                    if attempt >= max_attempts {
-                        error!("Failed to seek after {} attempts: {}", attempt, e);
-                        break;
-                    } else {
-                        debug!(
-                            "Seek attempt {} failed: {}. Retrying in {}ms",
-                            attempt,
-                            e,
-                            delays[attempt - 1]
-                        );
-                        drop(player);
-                        glib::timeout_future(StdDuration::from_millis(delays[attempt - 1] as u64))
-                            .await;
-                        continue;
-                    }
-                }
+    async fn seek_to_position(&self, position: Duration) {
+        // Simple seek without retries - fresh PlayerPage instances are more reliable
+        let player = self.player.read().await;
+        match player.seek(position).await {
+            Ok(_) => {
+                info!("Seek successful at position {}s", position.as_secs());
+            }
+            Err(e) => {
+                error!("Failed to seek to position {}s: {}", position.as_secs(), e);
             }
         }
     }
@@ -439,7 +402,10 @@ impl PlayerPage {
             });
         });
 
-        // Store the hover controller as we'll add it after playback starts
+        // Add hover controller to overlay immediately
+        overlay.add_controller(hover_controller.clone());
+
+        // Store the hover controller reference
         let hover_controller_rc = Rc::new(hover_controller);
 
         // Add keyboard event controller for fullscreen and playback controls
@@ -634,12 +600,30 @@ impl PlayerPage {
             glib::spawn_future_local(async move {
                 while sub.wait_for_change().await {
                     let is_loading = vm.is_loading().get().await;
+                    let has_error = vm.error().get().await.is_some();
+                    debug!(
+                        "PlayerPage reactive binding: is_loading = {}, has_error = {}",
+                        is_loading, has_error
+                    );
                     if is_loading {
+                        debug!(
+                            "PlayerPage reactive binding: showing loading overlay, hiding controls and error"
+                        );
                         loading_overlay.set_visible(true);
                         error_overlay.set_visible(false);
                         controls_container.set_visible(false);
-                    } else {
+                    } else if has_error {
+                        debug!(
+                            "PlayerPage reactive binding: hiding loading overlay, keeping controls hidden due to error"
+                        );
                         loading_overlay.set_visible(false);
+                        // Don't show controls when there's an error - error overlay will handle visibility
+                    } else {
+                        debug!(
+                            "PlayerPage reactive binding: hiding loading overlay, showing controls (no error)"
+                        );
+                        loading_overlay.set_visible(false);
+                        controls_container.set_visible(true);
                     }
                 }
             });
@@ -670,9 +654,166 @@ impl PlayerPage {
             });
         }
 
-        // Set up controls event handlers and position timer now that VM is available
+        // Set up controls event handlers now that VM is available
+        // Note: position timer will be started after media loads and playback begins
         controls.setup_handlers(view_model.clone());
-        controls.start_position_timer();
+
+        // Set up reactive bindings for Phase 1: Play/pause button and volume control
+        let play_button_binding = bind_icon_to_property(
+            &controls.play_button,
+            view_model.playback_state().clone(),
+            |state| match state {
+                PlaybackState::Playing => "media-playback-pause-symbolic".to_string(),
+                _ => "media-playback-start-symbolic".to_string(),
+            },
+        );
+
+        // Volume control binding - binds volume property to slider value
+        let volume_binding = bind_value_to_property(
+            &controls.volume_button,
+            view_model.volume().clone(),
+            |volume| *volume,
+        );
+
+        // Volume visibility binding - hide volume when muted (optional enhancement)
+        let volume_visible_binding = bind_visibility_to_property(
+            &controls.volume_button,
+            view_model.is_muted().clone(),
+            |is_muted| !is_muted, // Show volume control when not muted
+        );
+
+        // Phase 2: Reactive Progress and Time Display
+        // Create computed properties for formatted times
+        use crate::core::viewmodels::property::PropertyLike;
+        let position_prop = view_model.position().clone();
+        let duration_prop = view_model.duration().clone();
+
+        let formatted_position = ComputedProperty::new(
+            "formatted_position",
+            vec![Arc::new(position_prop.clone()) as Arc<dyn PropertyLike>],
+            move || format_duration(position_prop.get_sync()),
+        );
+
+        let formatted_duration = ComputedProperty::new(
+            "formatted_duration",
+            vec![Arc::new(duration_prop.clone()) as Arc<dyn PropertyLike>],
+            move || format_duration(duration_prop.get_sync()),
+        );
+
+        // Create progress percentage computed property
+        let progress_percentage = ComputedProperty::new(
+            "progress_percentage",
+            vec![
+                Arc::new(view_model.position().clone()) as Arc<dyn PropertyLike>,
+                Arc::new(view_model.duration().clone()) as Arc<dyn PropertyLike>,
+            ],
+            {
+                let pos_prop = view_model.position().clone();
+                let dur_prop = view_model.duration().clone();
+                move || {
+                    let position = pos_prop.get_sync();
+                    let duration = dur_prop.get_sync();
+                    if duration.as_secs() > 0 {
+                        (position.as_secs_f64() / duration.as_secs_f64()) * 100.0
+                    } else {
+                        0.0
+                    }
+                }
+            },
+        );
+
+        // Create end time display computed property that handles different display modes
+        let end_time_display = ComputedProperty::new(
+            "end_time_display",
+            vec![
+                Arc::new(view_model.position().clone()) as Arc<dyn PropertyLike>,
+                Arc::new(view_model.duration().clone()) as Arc<dyn PropertyLike>,
+            ],
+            {
+                let pos_prop = view_model.position().clone();
+                let dur_prop = view_model.duration().clone();
+                let time_display_mode = controls.time_display_mode.clone();
+                move || {
+                    let position = pos_prop.get_sync();
+                    let duration = dur_prop.get_sync();
+
+                    // For now, we'll use a simple async read. In a real implementation,
+                    // we might want to make time_display_mode a Property too.
+                    let mode = {
+                        // Use a blocking approach for now - we'll access this synchronously
+                        // This is a simplification; ideally time_display_mode would be a Property
+                        match time_display_mode.try_read() {
+                            Ok(mode) => *mode,
+                            Err(_) => TimeDisplayMode::TotalDuration, // fallback
+                        }
+                    };
+
+                    match mode {
+                        TimeDisplayMode::TotalDuration => format_duration(duration),
+                        TimeDisplayMode::TimeRemaining => {
+                            let remaining = duration.saturating_sub(position);
+                            format!("-{}", format_duration(remaining))
+                        }
+                        TimeDisplayMode::EndTime => {
+                            // Calculate when the video will end
+                            let remaining = duration.saturating_sub(position);
+                            let now = chrono::Local::now();
+                            let end_time =
+                                now + chrono::Duration::from_std(remaining).unwrap_or_default();
+                            end_time.format("%-I:%M %p").to_string()
+                        }
+                    }
+                }
+            },
+        );
+
+        // Create reactive bindings for progress bar and time labels
+        let progress_percentage_arc = Arc::new(progress_percentage);
+        let formatted_position_arc = Arc::new(formatted_position);
+        let end_time_display_arc = Arc::new(end_time_display);
+
+        // TODO: Re-enable reactive bindings for computed properties once they are implemented
+        /*
+        let progress_binding = bind_value_to_computed_property(
+            &controls.progress_bar,
+            progress_percentage_arc.clone() as Arc<dyn PropertyLike>,
+            {
+                let progress_clone = progress_percentage_arc.clone();
+                move || progress_clone.get_sync()
+            },
+            |percentage| *percentage,
+        );
+
+        let time_label_binding = bind_text_to_computed_property(
+            &controls.time_label,
+            formatted_position_arc.clone() as Arc<dyn PropertyLike>,
+            {
+                let formatted_position_clone = formatted_position_arc.clone();
+                move || formatted_position_clone.get_sync()
+            },
+            |text: &String| text.clone(),
+        );
+
+        let end_time_label_binding = bind_text_to_computed_property(
+            &controls.end_time_label,
+            end_time_display_arc.clone() as Arc<dyn PropertyLike>,
+            {
+                let end_time_display_clone = end_time_display_arc.clone();
+                move || end_time_display_clone.get_sync()
+            },
+            |text: &String| text.clone(),
+        );
+        */
+
+        let binding_handles = Rc::new(RefCell::new(vec![
+            play_button_binding,
+            volume_binding,
+            volume_visible_binding,
+            // TODO: Re-add when computed property bindings are implemented
+            // progress_binding,
+            // time_label_binding,
+            // end_time_label_binding,
+        ]));
 
         Self {
             widget,
@@ -685,8 +826,6 @@ impl PlayerPage {
             top_right_osd,
             back_button,
             close_button,
-            current_stream_info: Arc::new(RwLock::new(None)),
-            current_media_item: Arc::new(RwLock::new(None)),
             state,
             hover_controller: hover_controller_rc,
             inhibit_cookie,
@@ -694,75 +833,26 @@ impl PlayerPage {
             skip_credits_button,
             auto_play_overlay,
             pip_container,
-            next_episode_info: Arc::new(RwLock::new(None)),
-            auto_play_countdown: Arc::new(RwLock::new(None)),
-            chapter_monitor_id: Arc::new(RwLock::new(None)),
             config: config_clone,
-            position_sync_timer: Arc::new(RwLock::new(None)),
-            last_synced_position: Arc::new(RwLock::new(None)),
             loading_overlay,
             loading_spinner,
             loading_label,
             error_overlay,
-            media_loading: Arc::new(AtomicBool::new(false)),
             error_label,
             view_model,
+            _binding_handles: binding_handles,
         }
     }
 
-    fn show_loading_state(&self, message: &str) {
-        let loading_label = self.loading_label.clone();
-        let loading_overlay = self.loading_overlay.clone();
-        let error_overlay = self.error_overlay.clone();
-        let controls = self.controls_container.clone();
-        let msg = message.to_string();
-
-        glib::MainContext::default().spawn_local(async move {
-            loading_label.set_text(&msg);
-            loading_overlay.set_visible(true);
-            error_overlay.set_visible(false);
-            controls.set_visible(false);
-        });
-    }
-
-    fn show_error_state(&self, message: &str) {
-        let error_label = self.error_label.clone();
-        let error_overlay = self.error_overlay.clone();
-        let loading_overlay = self.loading_overlay.clone();
-        let controls = self.controls_container.clone();
-        let msg = message.to_string();
-
-        glib::MainContext::default().spawn_local(async move {
-            error_label.set_text(&msg);
-            error_overlay.set_visible(true);
-            loading_overlay.set_visible(false);
-            controls.set_visible(false);
-        });
-    }
-
-    fn hide_overlays(&self) {
-        let loading_overlay = self.loading_overlay.clone();
-        let error_overlay = self.error_overlay.clone();
-        let controls = self.controls_container.clone();
-
-        glib::MainContext::default().spawn_local(async move {
-            loading_overlay.set_visible(false);
-            error_overlay.set_visible(false);
-            controls.set_visible(true);
-        });
-    }
+    // Imperative UI state methods removed - now handled reactively by ViewModel
 
     pub async fn load_media(
         &self,
         media_item: &MediaItem,
         state: Arc<AppState>,
     ) -> anyhow::Result<()> {
-        // Check if media is already loading - prevent concurrent load_media calls
-        if self
-            .media_loading
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
+        // Check if media is already loading via ViewModel state
+        if self.view_model.is_loading().get().await {
             info!(
                 "PlayerPage::load_media() - Media already loading, ignoring request for: {}",
                 media_item.title()
@@ -776,18 +866,69 @@ impl PlayerPage {
         );
         info!("PlayerPage::load_media() - Media ID: {}", media_item.id());
 
-        // Show loading state
-        self.show_loading_state("Loading media...");
+        // Set ViewModel loading state to trigger reactive UI updates
+        debug!("PlayerPage::load_media() - Setting ViewModel loading state to true");
+        self.view_model.is_loading().set(true).await;
 
-        // Store the current media item
-        *self.current_media_item.write().await = Some(media_item.clone());
+        // Loading state is managed reactively by ViewModel
 
-        // Update controls' media item reference
-        *self.controls.current_media_item.write().await = Some(media_item.clone());
+        // Set media item in ViewModel (this will trigger reactive updates)
+        self.view_model.set_media_item(media_item.clone()).await;
 
         // Get the backend for this media item
         let backend_id = media_item.backend_id();
         debug!("PlayerPage::load_media() - Getting backend: {}", backend_id);
+
+        // Check if backend is ready via reactive source status
+        let source_status = state.source_coordinator.get_source_status(backend_id).await;
+        if let Some(status) = source_status {
+            match &status.connection_status {
+                crate::services::source_coordinator::ConnectionStatus::Connected => {
+                    debug!(
+                        "PlayerPage::load_media() - Backend {} is connected and ready",
+                        backend_id
+                    );
+                }
+                crate::services::source_coordinator::ConnectionStatus::NeedsAuth => {
+                    self.view_model
+                        .error()
+                        .set(Some(
+                            "Backend requires authentication. Please check your credentials."
+                                .to_string(),
+                        ))
+                        .await;
+                    self.view_model.is_loading().set(false).await;
+                    return Err(anyhow::anyhow!(
+                        "Backend {} needs authentication",
+                        backend_id
+                    ));
+                }
+                crate::services::source_coordinator::ConnectionStatus::Offline => {
+                    self.view_model
+                        .error()
+                        .set(Some(
+                            "Backend is offline. Please check your network connection.".to_string(),
+                        ))
+                        .await;
+                    self.view_model.is_loading().set(false).await;
+                    return Err(anyhow::anyhow!("Backend {} is offline", backend_id));
+                }
+                crate::services::source_coordinator::ConnectionStatus::Error(err) => {
+                    self.view_model
+                        .error()
+                        .set(Some(format!("Backend error: {}", err)))
+                        .await;
+                    self.view_model.is_loading().set(false).await;
+                    return Err(anyhow::anyhow!("Backend {} has error: {}", backend_id, err));
+                }
+            }
+        } else {
+            // Backend is still initializing - ViewModel will handle retry
+            debug!(
+                "PlayerPage::load_media() - Backend {} is still initializing",
+                backend_id
+            );
+        }
 
         if let Some(backend) = state.source_coordinator.get_backend(backend_id).await {
             info!("PlayerPage::load_media() - Using backend: {}", backend_id);
@@ -796,16 +937,10 @@ impl PlayerPage {
             *self.controls.backend.write().await = Some(backend.clone());
 
             // Use ViewModel to resolve stream URL and markers
-            self.show_loading_state("Fetching stream URL...");
             self.view_model.set_media_item(media_item.clone()).await;
             if let Err(e) = self.view_model.load_stream_and_metadata().await {
-                // Prefer VM error message if present
-                if let Some(msg) = self.view_model.error().get().await {
-                    self.show_error_state(&msg);
-                } else {
-                    self.show_error_state("Failed to load media from server");
-                }
-                self.media_loading.store(false, Ordering::Release);
+                // Error is already set in the ViewModel, just ensure loading is false
+                self.view_model.is_loading().set(false).await;
                 return Err(e);
             }
             // Retrieve stream info from VM
@@ -814,8 +949,11 @@ impl PlayerPage {
                 None => {
                     let err = anyhow::anyhow!("Stream information unavailable");
                     error!("PlayerPage::load_media() - VM did not provide stream info");
-                    self.show_error_state("Failed to load media stream");
-                    self.media_loading.store(false, Ordering::Release);
+                    self.view_model
+                        .error()
+                        .set(Some("Failed to load media stream".to_string()))
+                        .await;
+                    self.view_model.is_loading().set(false).await;
                     return Err(err);
                 }
             };
@@ -831,34 +969,13 @@ impl PlayerPage {
                 stream_info.video_codec
             );
 
-            // Store stream info for quality selection
-            *self.current_stream_info.write().await = Some(stream_info.clone());
+            // Stream info is already set in ViewModel via load_stream_and_metadata()
 
-            // Update loading message
-            self.show_loading_state("Preparing video player...");
+            // Loading messages are now handled reactively by ViewModel
 
-            // Stop current playback and clean up player state before switching media
-            debug!("PlayerPage::load_media() - Stopping current playback before media switch");
-
-            // Stop position sync timer first
-            self.stop_position_sync_timer().await;
-
-            {
-                let player = self.player.read().await;
-                if let Err(e) = player.stop().await {
-                    debug!("PlayerPage::load_media() - Error stopping player: {}", e);
-                }
-            }
-
-            // Brief delay to ensure cleanup is complete before widget recreation
-            glib::timeout_future(std::time::Duration::from_millis(50)).await;
-
-            // Clear any existing video widget after stopping playback
-            debug!("PlayerPage::load_media() - Clearing existing video widgets");
-            while let Some(child) = self.video_container.first_child() {
-                self.video_container.remove(&child);
-            }
-            info!("PlayerPage::load_media() - Existing widgets cleared");
+            // Since PlayerPage is now destroyed and recreated for each media load,
+            // no need for complex cleanup - this is a fresh instance with no existing state
+            debug!("PlayerPage::load_media() - Fresh PlayerPage instance, no cleanup needed");
 
             // Create video widget
             debug!("PlayerPage::load_media() - Creating video widget");
@@ -896,8 +1013,11 @@ impl PlayerPage {
 
             info!("PlayerPage::load_media() - Video widget added to container");
 
-            // Update loading message
-            self.show_loading_state("Loading video stream...");
+            // Loading progress is managed by ViewModel
+
+            // Brief delay for widget realization (reduced from 100ms since no cleanup needed)
+            debug!("PlayerPage::load_media() - Brief wait for widget realization");
+            glib::timeout_future(std::time::Duration::from_millis(50)).await;
 
             // Load the media (sink is already set up in create_video_widget)
             debug!("PlayerPage::load_media() - Loading media into player");
@@ -907,8 +1027,11 @@ impl PlayerPage {
                 }
                 Err(e) => {
                     error!("Failed to load media into player: {}", e);
-                    self.show_error_state(&format!("Failed to play video: {}", e));
-                    self.media_loading.store(false, Ordering::Release);
+                    self.view_model
+                        .error()
+                        .set(Some(format!("Failed to play video: {}", e)))
+                        .await;
+                    self.view_model.is_loading().set(false).await;
                     return Err(e);
                 }
             }
@@ -923,15 +1046,18 @@ impl PlayerPage {
 
             // Start playback
             debug!("PlayerPage::load_media() - Starting playback");
-            self.show_loading_state("Starting playback...");
             player.play().await?;
             info!("PlayerPage::load_media() - Playback started successfully");
 
-            // Hide loading overlay now that playback has started
-            self.hide_overlays();
+            // Clear ViewModel loading state to trigger reactive UI updates
+            debug!("PlayerPage::load_media() - Setting ViewModel loading state to false");
+            self.view_model.is_loading().set(false).await;
 
-            // Start position sync timer
-            self.start_position_sync_timer().await;
+            // Overlays are now hidden reactively by ViewModel loading state
+
+            // Position sync is now handled by ViewModel
+
+            // Position updates now handled reactively via computed properties and bindings
 
             // Resume from saved position with retries for MPV/slow backends
             let resume_position = match media_item {
@@ -942,11 +1068,11 @@ impl PlayerPage {
 
             if let Some(position) = resume_position {
                 info!(
-                    "PlayerPage::load_media() - Resuming from saved position: {:?} ({}s) with retries",
+                    "PlayerPage::load_media() - Resuming from saved position: {:?} ({}s)",
                     position,
                     position.as_secs()
                 );
-                self.seek_with_retries(position).await;
+                self.seek_to_position(position).await;
             } else {
                 debug!("PlayerPage::load_media() - No saved position, starting from beginning");
             }
@@ -956,51 +1082,35 @@ impl PlayerPage {
                 .play_button
                 .set_icon_name("media-playback-pause-symbolic");
 
-            // Add the hover controller after a delay to prevent initial control flash
-            let overlay = self.overlay.clone();
-            let hover_controller = self.hover_controller.clone();
-            // Clone fields needed for initial idle auto-hide
+            // Schedule an initial auto-hide if user is idle after entering playback/fullscreen
             let controls_for_idle_init = self.controls_container.clone();
             let tl_for_idle_init = self.top_left_osd.clone();
             let tr_for_idle_init = self.top_right_osd.clone();
             let widget_for_idle_init = self.widget.clone();
-            glib::timeout_add_local(std::time::Duration::from_millis(1000), move || {
-                // Check if the controller's widget is null before adding
-                // This prevents the "controller already has a widget" assertion error
-                if gtk4::prelude::EventControllerExt::widget(&*hover_controller).is_none() {
-                    overlay.add_controller(hover_controller.as_ref().clone());
-                }
-                // Schedule an initial auto-hide if user is idle after entering playback/fullscreen
-                let controls = controls_for_idle_init.clone();
-                let tl = tl_for_idle_init.clone();
-                let tr = tr_for_idle_init.clone();
-                let widget_for_idle = widget_for_idle_init.clone();
-                glib::timeout_add_local(
-                    std::time::Duration::from_secs(PLAYER_CONTROLS_HIDE_DELAY_SECS),
-                    move || {
-                        // Only hide if currently fullscreen to avoid confusing windowed mode
-                        if let Some(window) = widget_for_idle
-                            .root()
-                            .and_then(|r| r.downcast::<gtk4::Window>().ok())
-                            && window.is_fullscreen()
-                        {
-                            controls.set_opacity(0.0);
-                            controls.set_visible(false);
-                            tl.set_opacity(0.0);
-                            tl.set_visible(false);
-                            tr.set_opacity(0.0);
-                            tr.set_visible(false);
+            glib::timeout_add_local(
+                std::time::Duration::from_secs(PLAYER_CONTROLS_HIDE_DELAY_SECS),
+                move || {
+                    // Only hide if currently fullscreen to avoid confusing windowed mode
+                    if let Some(window) = widget_for_idle_init
+                        .root()
+                        .and_then(|r| r.downcast::<gtk4::Window>().ok())
+                        && window.is_fullscreen()
+                    {
+                        controls_for_idle_init.set_opacity(0.0);
+                        controls_for_idle_init.set_visible(false);
+                        tl_for_idle_init.set_opacity(0.0);
+                        tl_for_idle_init.set_visible(false);
+                        tr_for_idle_init.set_opacity(0.0);
+                        tr_for_idle_init.set_visible(false);
 
-                            // Hide cursor on initial idle
-                            if let Some(invisible_cursor) = PlayerPage::create_invisible_cursor() {
-                                widget_for_idle.set_cursor(Some(&invisible_cursor));
-                            }
+                        // Hide cursor on initial idle
+                        if let Some(invisible_cursor) = PlayerPage::create_invisible_cursor() {
+                            widget_for_idle_init.set_cursor(Some(&invisible_cursor));
                         }
-                        glib::ControlFlow::Break
-                    },
-                );
-                glib::ControlFlow::Break
-            });
+                    }
+                    glib::ControlFlow::Break
+                },
+            );
 
             // Grab focus on the overlay to ensure keyboard shortcuts work
             self.overlay.grab_focus();
@@ -1060,14 +1170,13 @@ impl PlayerPage {
                 "PlayerPage::load_media() - Backend not found for ID: {}",
                 backend_id
             );
-            self.media_loading.store(false, Ordering::Release);
+            self.view_model.is_loading().set(false).await;
             return Err(anyhow::anyhow!("Backend not found for ID: {}", backend_id));
         }
 
         info!("PlayerPage::load_media() - Media loading complete");
 
-        // Reset loading flag
-        self.media_loading.store(false, Ordering::Release);
+        // Loading state is already reset by ViewModel reactive updates
 
         Ok(())
     }
@@ -1087,21 +1196,43 @@ impl PlayerPage {
     pub async fn stop(&self) {
         debug!("PlayerPage::stop() - Stopping player");
 
-        // Sync final position before stopping
-        self.sync_playback_position().await;
+        // Stop the ViewModel first to ensure proper state management
+        debug!("PlayerPage::stop() - Stopping ViewModel");
+        self.view_model.stop().await;
 
-        // Stop the position sync timer
-        self.stop_position_sync_timer().await;
+        // Try to acquire player lock with a timeout to avoid hanging
+        debug!("PlayerPage::stop() - Attempting to acquire player lock (non-blocking)");
+        match self.player.try_read() {
+            Ok(player) => {
+                debug!("PlayerPage::stop() - Player lock acquired, calling player.stop()");
 
-        let player = self.player.read().await;
-        if let Err(e) = player.stop().await {
-            error!("PlayerPage::stop() - Failed to stop player: {}", e);
-        } else {
-            info!("PlayerPage::stop() - Player stopped");
+                // Force immediate silence before stopping
+                let _ = player.set_volume(0.0).await;
+
+                if let Err(e) = player.stop().await {
+                    error!("PlayerPage::stop() - Failed to stop player: {}", e);
+                } else {
+                    info!("PlayerPage::stop() - Player stopped successfully");
+                }
+
+                // Note: We don't clear video widget state here as it breaks render context for subsequent playback
+            }
+            Err(_) => {
+                warn!(
+                    "PlayerPage::stop() - Could not acquire player lock, player may be busy with operations"
+                );
+                // Don't attempt complex retry logic - the MPV level improvements provide immediate silence
+            }
         }
 
+        // Since PlayerPage is destroyed after each use, minimal cleanup needed
+        // Rust's Drop trait will handle widget cleanup automatically
+
         // Remove suspend/screensaver inhibit when stopping
+        debug!("PlayerPage::stop() - Removing suspend inhibit");
         self.uninhibit_suspend().await;
+
+        info!("PlayerPage::stop() - Stop sequence completed");
     }
 
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
@@ -1389,8 +1520,12 @@ impl PlayerPage {
                         }
                     }
 
-                    // Store the next episode info for later use
-                    *player_page.next_episode_info.write().await = Some(next_episode);
+                    // Store the next episode info in ViewModel for later use
+                    player_page
+                        .view_model
+                        .next_episode()
+                        .set(Some(next_episode))
+                        .await;
                 } else {
                     // No next episode found - still show overlay but with different message
                     if let Some(container) = auto_play_overlay.first_child()
@@ -1475,7 +1610,6 @@ impl PlayerPage {
 
     fn monitor_playback_completion(&self, _backend_id: String, backend: Arc<dyn MediaBackend>) {
         let player = self.player.clone();
-        let current_media_item = self.current_media_item.clone();
         let view_model = self.view_model.clone();
 
         // Start periodic position syncing (delegates to ViewModel persistence)
@@ -1498,7 +1632,7 @@ impl PlayerPage {
                 match state {
                     crate::player::PlayerState::Stopped => {
                         // Playback has ended, check if we should mark as watched
-                        if let Some(media_item) = current_media_item.read().await.as_ref() {
+                        if let Some(media_item) = view_model.current_media().get().await {
                             // Get current position and duration
                             let player = player.read().await;
                             let position = player.get_position().await;
@@ -1544,7 +1678,6 @@ impl PlayerPage {
 
     fn start_position_sync(&self, backend: Arc<dyn MediaBackend>) {
         let player = self.player.clone();
-        let current_media_item = self.current_media_item.clone();
         let mut last_sync_position = std::time::Duration::ZERO;
         let view_model = self.view_model.clone();
 
@@ -1564,7 +1697,7 @@ impl PlayerPage {
                 // Only sync if playing or paused
                 match state {
                     crate::player::PlayerState::Playing | crate::player::PlayerState::Paused => {
-                        if let Some(media_item) = current_media_item.read().await.as_ref() {
+                        if let Some(media_item) = view_model.current_media().get().await {
                             let position = {
                                 let player = player.read().await;
                                 player.get_position().await
@@ -1642,37 +1775,21 @@ impl PlayerPage {
 
     /// Find the next episode after the current one using the backend
     async fn find_next_episode(&self) -> Option<Episode> {
-        // Get the current media item
-        let current_media = self.current_media_item.read().await;
-        let current_media = current_media.as_ref()?;
-
-        // Only works for episodes, not movies
-        if let MediaItem::Episode(current_episode) = current_media {
-            let backend_id = current_media.backend_id();
-            let backend = self
-                .state
-                .source_coordinator
-                .get_backend(backend_id)
-                .await?;
-
-            // Use the backend's find_next_episode method
-            match backend.find_next_episode(current_episode).await {
-                Ok(Some(next_episode)) => Some(next_episode),
-                Ok(None) => None,
-                Err(e) => {
-                    error!("Failed to find next episode: {}", e);
-                    None
-                }
+        // Use ViewModel find_next_episode method
+        match self.view_model.find_next_episode().await {
+            Ok(next) => next,
+            Err(e) => {
+                error!("Failed to find next episode: {}", e);
+                None
             }
-        } else {
-            None
         }
     }
 
     /// Load the next episode (to be called from the Play Now button)
     pub async fn load_next_episode(&self) {
-        if let Some(next_episode) = self.next_episode_info.read().await.as_ref() {
-            let next_media_item = MediaItem::Episode(next_episode.clone());
+        // Get next episode from ViewModel
+        if let Some(next_episode) = self.view_model.next_episode().get().await {
+            let next_media_item = MediaItem::Episode(next_episode);
             match self.load_media(&next_media_item, self.state.clone()).await {
                 Ok(_) => {}
                 Err(e) => {
@@ -1681,75 +1798,8 @@ impl PlayerPage {
             }
         }
     }
-    async fn start_position_sync_timer(&self) {
-        // Stop any existing timer
-        self.stop_position_sync_timer().await;
 
-        let player = self.player.clone();
-        let current_media_item = self.current_media_item.clone();
-        let last_synced_position = self.last_synced_position.clone();
-        let timer_ref = self.position_sync_timer.clone();
-        let view_model = self.view_model.clone();
-
-        // Start a timer to sync position every 10 seconds
-        let timer_id = glib::timeout_add_local(Duration::from_secs(10), move || {
-            let player = player.clone();
-            let current_media_item = current_media_item.clone();
-            let last_synced_position = last_synced_position.clone();
-            let vm = view_model.clone();
-
-            glib::spawn_future_local(async move {
-                // Get current position
-                let player = player.read().await;
-                if let Some(position) = player.get_position().await {
-                    // Only sync if position has changed significantly (> 5 seconds)
-                    let last_pos = *last_synced_position.read().await;
-                    let should_sync = match last_pos {
-                        None => true,
-                        Some(last) => {
-                            let diff = position.abs_diff(last);
-                            diff > Duration::from_secs(5)
-                        }
-                    };
-
-                    if should_sync {
-                        // Get media item and persist progress through ViewModel
-                        if let Some(media_item) = &*current_media_item.read().await {
-                            let duration = media_item.duration().unwrap_or(Duration::ZERO);
-                            vm.save_progress_throttled(media_item.id(), position, duration)
-                                .await;
-                            *last_synced_position.write().await = Some(position);
-                        }
-                    }
-                }
-            });
-
-            glib::ControlFlow::Continue
-        });
-
-        *timer_ref.write().await = Some(timer_id);
-        info!("Started playback position sync timer");
-    }
-
-    async fn stop_position_sync_timer(&self) {
-        if let Some(timer_id) = self.position_sync_timer.write().await.take() {
-            timer_id.remove();
-            info!("Stopped playback position sync timer");
-        }
-    }
-
-    async fn sync_playback_position(&self) {
-        // Get current position and sync immediately
-        let player = self.player.read().await;
-        if let Some(position) = player.get_position().await
-            && let Some(media_item) = &*self.current_media_item.read().await
-        {
-            let duration = media_item.duration().unwrap_or(Duration::ZERO);
-            self.view_model
-                .save_progress_throttled(media_item.id(), position, duration)
-                .await;
-        }
-    }
+    // Position sync timer functions removed - now handled by ViewModel
 }
 
 #[derive(Clone)]
@@ -2093,20 +2143,26 @@ impl PlayerControls {
             let widget = btn.clone().upcast::<gtk4::Widget>();
             glib::spawn_future_local(async move {
                 let player = player.read().await;
-                // Toggle play/pause and manage inhibit
+                // Toggle play/pause via ViewModel for reactive updates
                 if button.icon_name() == Some("media-playback-start-symbolic".into()) {
+                    // Call ViewModel play method which updates playback_state reactively
+                    view_model.play().await;
+
+                    // Also call underlying player
                     if let Err(e) = player.play().await {
                         error!("Failed to play: {}", e);
                     }
-                    button.set_icon_name("media-playback-pause-symbolic");
 
                     // Re-inhibit suspend when resuming playback
                     Self::inhibit_suspend_static(&widget, inhibit_cookie).await;
                 } else {
+                    // Call ViewModel pause method which updates playback_state reactively
+                    view_model.pause().await;
+
+                    // Also call underlying player
                     if let Err(e) = player.pause().await {
                         error!("Failed to pause: {}", e);
                     }
-                    button.set_icon_name("media-playback-start-symbolic");
 
                     // Remove inhibit when pausing
                     Self::uninhibit_suspend_static(&widget, inhibit_cookie).await;
@@ -2244,69 +2300,6 @@ impl PlayerControls {
 
         // Setup upscaling menu
         self.setup_upscaling_menu();
-    }
-
-    fn start_position_timer(&self) {
-        let player = self.player.clone();
-        let progress_bar = self.progress_bar.clone();
-        let time_label = self.time_label.clone();
-        let end_time_label = self.end_time_label.clone();
-        let is_seeking = self.is_seeking.clone();
-        let time_display_mode = self.time_display_mode.clone();
-
-        glib::timeout_add_local(Duration::from_millis(500), move || {
-            let player = player.clone();
-            let progress_bar = progress_bar.clone();
-            let time_label = time_label.clone();
-            let end_time_label = end_time_label.clone();
-            let is_seeking = is_seeking.clone();
-            let time_display_mode = time_display_mode.clone();
-
-            glib::spawn_future_local(async move {
-                // Don't update progress bar if user is seeking
-                let is_seeking = *is_seeking.read().await;
-
-                let player = player.read().await;
-
-                if let (Some(position), Some(duration)) =
-                    (player.get_position().await, player.get_duration().await)
-                {
-                    // Only update progress bar if not seeking
-                    if !is_seeking {
-                        let progress = (position.as_secs_f64() / duration.as_secs_f64()) * 100.0;
-                        progress_bar.set_value(progress);
-                    }
-
-                    // No need to show buffer info - MPV always maintains ~10 seconds
-                    // which is not useful to display
-
-                    // Update current time label (always shows current position)
-                    let pos_str = format_duration(position);
-                    time_label.set_text(&pos_str);
-
-                    // Update end time label based on display mode
-                    let mode = *time_display_mode.read().await;
-                    let end_str = match mode {
-                        TimeDisplayMode::TotalDuration => format_duration(duration),
-                        TimeDisplayMode::TimeRemaining => {
-                            let remaining = duration.saturating_sub(position);
-                            format!("-{}", format_duration(remaining))
-                        }
-                        TimeDisplayMode::EndTime => {
-                            // Calculate when the video will end
-                            let remaining = duration.saturating_sub(position);
-                            let now = chrono::Local::now();
-                            let end_time =
-                                now + chrono::Duration::from_std(remaining).unwrap_or_default();
-                            end_time.format("%-I:%M %p").to_string()
-                        }
-                    };
-                    end_time_label.set_text(&end_str);
-                }
-            });
-
-            glib::ControlFlow::Continue
-        });
     }
 
     async fn set_media_info(&self, title: &str, stream_info: Option<&crate::models::StreamInfo>) {

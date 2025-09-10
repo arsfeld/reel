@@ -5,13 +5,15 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 use tracing::{error, info, trace, warn};
 
 use crate::constants::*;
+use crate::core::viewmodels::property::PropertyLike;
+use crate::core::viewmodels::{ComputedProperty, Property, ViewModel};
 use crate::models::{Episode, Library, MediaItem, Movie, Show};
 use crate::platforms::gtk::ui::filters::{FilterManager, WatchStatus};
+use crate::platforms::gtk::ui::reactive_bindings;
 use crate::platforms::gtk::ui::viewmodels::library_view_model::LibraryViewModel;
 use crate::state::AppState;
 use crate::utils::{ImageLoader, ImageSize};
@@ -32,6 +34,7 @@ mod imp {
         pub loading_spinner: RefCell<Option<gtk4::Spinner>>,
         pub empty_state: RefCell<Option<adw::StatusPage>>,
         pub stack: RefCell<Option<gtk4::Stack>>,
+        pub search_entry: RefCell<Option<gtk4::SearchEntry>>,
 
         pub state: RefCell<Option<Arc<AppState>>>,
         pub library: RefCell<Option<Library>>,
@@ -39,13 +42,16 @@ mod imp {
         pub current_view_size: RefCell<ImageSize>,
         pub on_media_selected: RefCell<Option<Box<dyn Fn(&MediaItem)>>>,
         pub filter_manager: RefCell<FilterManager>,
-        pub all_media_items: RefCell<Vec<MediaItem>>,
-        pub filtered_items: RefCell<Vec<MediaItem>>,
-        pub cards_by_index: RefCell<HashMap<usize, MediaCard>>,
-        pub cards_by_id: RefCell<HashMap<String, MediaCard>>,
+        // Legacy RefCell containers removed - using reactive bindings instead
         pub view_model: RefCell<Option<Arc<LibraryViewModel>>>,
+        // Stage 1: Add reactive properties for UI interactions
+        pub search_query: Property<String>,
+        pub watch_status: Property<crate::core::viewmodels::library_view_model::WatchStatus>,
+        pub sort_order: Property<crate::core::viewmodels::library_view_model::SortOrder>,
         pub update_scheduled: Cell<bool>,
         pub pending_items: RefCell<Option<Vec<MediaItem>>>,
+        // Stage 2: Computed properties for UI state
+        pub stack_state: RefCell<Option<ComputedProperty<String>>>,
     }
 
     impl std::fmt::Debug for LibraryView {
@@ -73,19 +79,28 @@ mod imp {
                 loading_spinner: RefCell::new(None),
                 empty_state: RefCell::new(None),
                 stack: RefCell::new(None),
+                search_entry: RefCell::new(None),
                 state: RefCell::new(None),
                 library: RefCell::new(None),
                 backend_id: RefCell::new(None),
                 current_view_size: RefCell::new(ImageSize::Medium),
                 on_media_selected: RefCell::new(None),
                 filter_manager: RefCell::new(FilterManager::new()),
-                all_media_items: RefCell::new(Vec::new()),
-                filtered_items: RefCell::new(Vec::new()),
-                cards_by_index: RefCell::new(HashMap::new()),
-                cards_by_id: RefCell::new(HashMap::new()),
+                // Initialize search query property
+                search_query: Property::new(String::new(), "search_query"),
+                watch_status: Property::new(
+                    crate::core::viewmodels::library_view_model::WatchStatus::All,
+                    "watch_status",
+                ),
+                sort_order: Property::new(
+                    crate::core::viewmodels::library_view_model::SortOrder::TitleAsc,
+                    "sort_order",
+                ),
                 view_model: RefCell::new(None),
                 update_scheduled: Cell::new(false),
                 pending_items: RefCell::new(None),
+                // Stage 2: Computed properties for UI state
+                stack_state: RefCell::new(None),
             }
         }
     }
@@ -131,13 +146,27 @@ impl LibraryView {
             let vm = view_model.clone();
             let event_bus = state.event_bus.clone();
             async move {
-                use crate::platforms::gtk::ui::viewmodels::ViewModel;
                 vm.initialize(event_bus).await;
             }
         });
 
         // Subscribe to ViewModel property changes
-        view.setup_viewmodel_bindings(view_model);
+        view.setup_viewmodel_bindings(view_model.clone());
+
+        // Setup reactive FlowBox binding
+        view.setup_reactive_flowbox_binding(view_model.clone());
+
+        // Stage 1: Setup reactive search with debouncing
+        view.setup_reactive_search(view_model.clone());
+
+        // Stage 3: Setup two-way search entry binding
+        view.setup_search_entry_binding();
+
+        // Stage 1: Setup reactive watch status and sort order properties
+        view.setup_reactive_filters(view_model.clone());
+
+        // Stage 2: Setup computed properties for UI state
+        view.setup_computed_properties(view_model.clone());
 
         view.imp().state.replace(Some(state));
         view.imp().current_view_size.replace(ImageSize::Medium);
@@ -241,7 +270,17 @@ impl LibraryView {
 
         stack.add_named(&empty_state, Some("empty"));
 
-        // Add stack directly to the view
+        // Create search entry
+        let search_entry = gtk4::SearchEntry::builder()
+            .placeholder_text("Search movies...")
+            .margin_start(12)
+            .margin_end(12)
+            .margin_top(12)
+            .margin_bottom(6)
+            .build();
+
+        // Add search entry and stack to the view
+        self.append(&search_entry);
         self.append(&stack);
 
         // Store references
@@ -250,51 +289,51 @@ impl LibraryView {
         imp.loading_spinner.replace(Some(loading_spinner));
         imp.empty_state.replace(Some(empty_state));
         imp.stack.replace(Some(stack));
+        imp.search_entry.replace(Some(search_entry.clone()));
 
         // We'll connect button clicks directly on cards instead of flow box activation
     }
 
-    fn setup_viewmodel_bindings(&self, view_model: Arc<LibraryViewModel>) {
-        let weak_self = self.downgrade();
+    /// Stage 3: Setup reactive FlowBox binding to replace manual display_media_items()
+    fn setup_reactive_flowbox_binding(&self, view_model: Arc<LibraryViewModel>) {
+        if let Some(flow_box) = self.imp().flow_box.borrow().as_ref() {
+            let filtered_items_property = view_model.filtered_items();
 
-        // Subscribe to filtered items changes (these are what should be displayed)
-        let mut items_subscriber = view_model.filtered_items().subscribe();
-        glib::spawn_future_local(async move {
-            while items_subscriber.wait_for_change().await {
-                if let Some(view) = weak_self.upgrade()
-                    && let Some(vm) = &*view.imp().view_model.borrow()
-                {
-                    let items = vm.filtered_items().get_sync();
-                    view.update_items_from_viewmodel(items);
-                }
-            }
-        });
+            // Create card factory that connects click handlers
+            let weak_self_for_factory = self.downgrade();
+            let card_factory = move |item: &MediaItem, size: ImageSize| {
+                let card = MediaCard::new(item.clone(), size);
 
-        // Subscribe to loading state
-        let weak_self_loading = self.downgrade();
-        let mut loading_subscriber = view_model.is_loading().subscribe();
-        glib::spawn_future_local(async move {
-            while loading_subscriber.wait_for_change().await {
-                if let Some(view) = weak_self_loading.upgrade()
-                    && let Some(vm) = &*view.imp().view_model.borrow()
-                {
-                    let is_loading = vm.is_loading().get_sync();
-                    if let Some(stack) = view.imp().stack.borrow().as_ref() {
-                        if is_loading {
-                            stack.set_visible_child_name("loading");
-                        } else {
-                            // Check ViewModel's filtered_items using sync access
-                            let vm_items = vm.filtered_items().get_sync();
-                            if vm_items.is_empty() {
-                                stack.set_visible_child_name("empty");
-                            } else {
-                                stack.set_visible_child_name("content");
-                            }
+                // Connect click handler
+                let view_for_callback = weak_self_for_factory.clone();
+                let item_clone = item.clone();
+                card.connect_clicked(move |_| {
+                    if let Some(view) = view_for_callback.upgrade() {
+                        info!("Media item selected: {}", item_clone.title());
+                        if let Some(callback) = view.imp().on_media_selected.borrow().as_ref() {
+                            callback(&item_clone);
                         }
                     }
-                }
-            }
-        });
+                });
+
+                card
+            };
+
+            // Setup reactive binding to replace manual display_media_items()
+            reactive_bindings::bind_flowbox_to_media_items(
+                flow_box,
+                &filtered_items_property,
+                card_factory,
+            );
+
+            info!(
+                "[REACTIVE] Setup reactive FlowBox binding to replace manual display_media_items()"
+            );
+        }
+    }
+
+    fn setup_viewmodel_bindings(&self, view_model: Arc<LibraryViewModel>) {
+        // NOTE: Filtered items subscription removed - now handled by reactive FlowBox binding
 
         // Subscribe to error state
         let weak_self_error = self.downgrade();
@@ -310,6 +349,141 @@ impl LibraryView {
                 }
             }
         });
+    }
+
+    /// Stage 1: Setup reactive search with debouncing
+    fn setup_reactive_search(&self, view_model: Arc<LibraryViewModel>) {
+        let search_property = &self.imp().search_query;
+
+        // Create debounced search property (300ms delay)
+        let debounced_search = search_property.debounce(Duration::from_millis(300));
+
+        // Filter out empty/short queries
+        let filtered_search =
+            debounced_search.filter(|query| !query.is_empty() && query.len() >= 2);
+
+        // Subscribe to debounced, filtered search changes
+        let mut search_subscriber = filtered_search.subscribe();
+        glib::spawn_future_local(async move {
+            while search_subscriber.wait_for_change().await {
+                if let Some(query) = filtered_search.get_sync() {
+                    // Send to ViewModel
+                    view_model.search(query).await;
+                }
+            }
+        });
+
+        info!("[REACTIVE] Setup debounced search with 300ms delay and min 2 chars");
+    }
+
+    /// Stage 3: Setup two-way binding between search entry widget and reactive property
+    fn setup_search_entry_binding(&self) {
+        if let Some(search_entry) = self.imp().search_entry.borrow().as_ref() {
+            let search_query_property = &self.imp().search_query;
+
+            // Use the two-way binding utility
+            reactive_bindings::bind_search_entry_two_way(search_entry, search_query_property);
+
+            info!("[REACTIVE] Setup two-way search entry binding");
+        } else {
+            warn!("[REACTIVE] Could not setup search entry binding - widget not found");
+        }
+    }
+
+    /// Stage 1: Setup reactive watch status and sort order filters
+    fn setup_reactive_filters(&self, view_model: Arc<LibraryViewModel>) {
+        let watch_status_property = &self.imp().watch_status;
+        let sort_order_property = &self.imp().sort_order;
+
+        // Subscribe to watch status changes
+        let mut watch_status_subscriber = watch_status_property.subscribe();
+        let watch_status_property_clone = watch_status_property.clone();
+        let view_model_watch = view_model.clone();
+        glib::spawn_future_local(async move {
+            while watch_status_subscriber.wait_for_change().await {
+                let status = watch_status_property_clone.get_sync();
+                // Send to ViewModel
+                view_model_watch.set_watch_status(status).await;
+            }
+        });
+
+        // Subscribe to sort order changes
+        let mut sort_order_subscriber = sort_order_property.subscribe();
+        let sort_order_property_clone = sort_order_property.clone();
+        let view_model_sort = view_model.clone();
+        glib::spawn_future_local(async move {
+            while sort_order_subscriber.wait_for_change().await {
+                let order = sort_order_property_clone.get_sync();
+                // Send to ViewModel
+                view_model_sort.set_sort_order(order).await;
+            }
+        });
+
+        info!("[REACTIVE] Setup reactive watch status and sort order filters");
+    }
+
+    /// Stage 2: Setup computed properties for UI state
+    fn setup_computed_properties(&self, view_model: Arc<LibraryViewModel>) {
+        // Create computed property for stack state
+        let is_loading_property = view_model.is_loading();
+        let filtered_items_property = view_model.filtered_items();
+
+        // Convert to Arc<dyn PropertyLike> for ComputedProperty
+        let is_loading_arc: Arc<dyn crate::core::viewmodels::PropertyLike> =
+            Arc::new(is_loading_property.clone());
+        let filtered_items_arc: Arc<dyn crate::core::viewmodels::PropertyLike> =
+            Arc::new(filtered_items_property.clone());
+
+        let stack_state =
+            ComputedProperty::new("stack_state", vec![is_loading_arc, filtered_items_arc], {
+                let is_loading_clone = is_loading_property.clone();
+                let filtered_items_clone = filtered_items_property.clone();
+                move || {
+                    let is_loading = is_loading_clone.get_sync();
+                    let filtered_items = filtered_items_clone.get_sync();
+
+                    if is_loading {
+                        "loading".to_string()
+                    } else if filtered_items.is_empty() {
+                        "empty".to_string()
+                    } else {
+                        "content".to_string()
+                    }
+                }
+            });
+
+        // Get initial stack state before moving stack_state
+        let initial_stack_state = stack_state.get_sync();
+
+        // Subscribe to stack state changes and update UI before storing
+        let weak_self = self.downgrade();
+        let mut stack_subscriber = stack_state.subscribe();
+
+        self.imp().stack_state.replace(Some(stack_state));
+        glib::spawn_future_local(async move {
+            while stack_subscriber.wait_for_change().await {
+                if let Some(view) = weak_self.upgrade()
+                    && let Some(stack_state_prop) = view.imp().stack_state.borrow().as_ref()
+                {
+                    let stack_child_name = stack_state_prop.get_sync();
+                    if let Some(stack) = view.imp().stack.borrow().as_ref() {
+                        stack.set_visible_child_name(&stack_child_name);
+                        info!("[REACTIVE] Stack state changed to: {}", stack_child_name);
+                    }
+                }
+            }
+        });
+
+        // Set initial stack state
+        if let Some(stack) = self.imp().stack.borrow().as_ref() {
+            stack.set_visible_child_name(&initial_stack_state);
+            info!(
+                "[REACTIVE] Initial stack state set to: {}",
+                initial_stack_state
+            );
+        }
+
+        info!("[REACTIVE] Setup computed property for stack state");
     }
 
     fn update_items_from_viewmodel(&self, items: Vec<crate::models::MediaItem>) {
@@ -337,7 +511,8 @@ impl LibraryView {
                             "[PERF] Processing {} pending items in idle callback",
                             items.len()
                         );
-                        view.display_media_items(items);
+                        // Note: display_media_items() disabled - using reactive bindings instead
+                        // view.display_media_items(items);
                     }
                     view.imp().update_scheduled.set(false);
                 }
@@ -538,7 +713,7 @@ impl LibraryView {
                     .filter_map(|member| {
                         let name = member.get("name")?.as_str()?.to_string();
                         let job = member.get("job")?.as_str()?.to_string();
-                        let department = member
+                        let _department = member
                             .get("department")
                             .and_then(|d| d.as_str())
                             .map(String::from);
@@ -654,424 +829,6 @@ impl LibraryView {
         // Simplified: removed predictive preloading as it may cause issues
         // Images will load on-demand through trigger_load() instead
         trace!("Skipping predictive preload for {} items", items.len());
-    }
-
-    fn display_media_items(&self, items: Vec<MediaItem>) {
-        let start = Instant::now();
-        info!(
-            "[PERF] display_media_items: Starting with {} items",
-            items.len()
-        );
-        let imp = self.imp();
-
-        // Store new filtered items
-        let old_items = imp.filtered_items.borrow().clone();
-        info!(
-            "[PERF] Old items count: {}, New items count: {}",
-            old_items.len(),
-            items.len()
-        );
-        imp.filtered_items.replace(items.clone());
-
-        let flow_box = imp.flow_box.borrow().clone();
-        let scrolled_window = imp.scrolled_window.borrow().clone();
-        let stack = imp.stack.borrow().clone();
-        let current_size = *imp.current_view_size.borrow();
-
-        if let Some(flow_box) = flow_box {
-            if items.is_empty() {
-                info!("[PERF] Items empty, clearing flow_box and showing empty state");
-                // Clear and show empty state
-                while let Some(child) = flow_box.first_child() {
-                    flow_box.remove(&child);
-                }
-                imp.cards_by_index.borrow_mut().clear();
-                imp.cards_by_id.borrow_mut().clear();
-
-                // Show empty state
-                if let Some(stack) = stack {
-                    stack.set_visible_child_name("empty");
-                }
-            } else {
-                // Perform differential update only if we have existing items
-                if !old_items.is_empty() && self.should_use_differential_update(&old_items, &items)
-                {
-                    info!(
-                        "[PERF] Using differential update for {} -> {} items",
-                        old_items.len(),
-                        items.len()
-                    );
-                    self.differential_update_items(&flow_box, &old_items, &items, current_size);
-                } else {
-                    // Full refresh for initial load or major changes
-                    info!(
-                        "[PERF] Using full refresh for {} items (old: {})",
-                        items.len(),
-                        old_items.len()
-                    );
-                    self.full_refresh_items(
-                        &flow_box,
-                        items.clone(),
-                        current_size,
-                        scrolled_window,
-                        stack,
-                    );
-                }
-            }
-        } else {
-            warn!("[PERF] No flow_box available!");
-        }
-
-        let elapsed = start.elapsed();
-        warn!(
-            "[PERF] display_media_items completed in {:?} for {} items (>16ms: {})",
-            elapsed,
-            items.len(),
-            elapsed.as_millis() > 16
-        );
-    }
-
-    /// Check if we should use differential update (for minor changes) or full refresh
-    fn should_use_differential_update(
-        &self,
-        old_items: &[MediaItem],
-        new_items: &[MediaItem],
-    ) -> bool {
-        // Use differential update for small changes to avoid flicker
-        // Full refresh for major changes or different ordering
-
-        // If more than 50% of items changed, do full refresh
-        let changed_threshold = old_items.len() / 2;
-        let mut changes = 0;
-
-        for old_item in old_items {
-            if !new_items.iter().any(|new| new.id() == old_item.id()) {
-                changes += 1;
-                if changes > changed_threshold {
-                    return false;
-                }
-            }
-        }
-
-        true
-    }
-
-    /// Perform differential update - only add/remove changed items
-    fn differential_update_items(
-        &self,
-        flow_box: &gtk4::FlowBox,
-        old_items: &[MediaItem],
-        new_items: &[MediaItem],
-        current_size: ImageSize,
-    ) {
-        let start = Instant::now();
-        info!(
-            "[PERF] differential_update_items: old={}, new={}",
-            old_items.len(),
-            new_items.len()
-        );
-        let imp = self.imp();
-        let mut cards_by_index = imp.cards_by_index.borrow_mut();
-        let mut cards_by_id = imp.cards_by_id.borrow_mut();
-
-        // Build lookup maps
-        let old_ids: std::collections::HashSet<String> =
-            old_items.iter().map(|item| item.id().to_string()).collect();
-        let new_ids: std::collections::HashSet<String> =
-            new_items.iter().map(|item| item.id().to_string()).collect();
-
-        // Find items to remove
-        let to_remove: Vec<String> = old_ids.difference(&new_ids).cloned().collect();
-        info!("[PERF] Items to remove: {}", to_remove.len());
-
-        // Find items to add
-        let to_add: Vec<String> = new_ids.difference(&old_ids).cloned().collect();
-        info!("[PERF] Items to add: {}", to_add.len());
-
-        // Update existing cards' content for items present in both sets (e.g., progress changes)
-        let common_ids: Vec<String> = old_ids.intersection(&new_ids).cloned().collect();
-        info!("[PERF] Common items to update: {}", common_ids.len());
-        let new_by_id: HashMap<String, &MediaItem> = new_items
-            .iter()
-            .map(|it| (it.id().to_string(), it))
-            .collect();
-        for id in &common_ids {
-            if let Some(card) = cards_by_id.get(id)
-                && let Some(new_item) = new_by_id.get(id)
-            {
-                card.update_content((*new_item).clone());
-            }
-        }
-
-        // Remove cards for items that are no longer in the list
-        if !to_remove.is_empty() {
-            let remove_start = Instant::now();
-            let mut removed_count = 0;
-            let mut child = flow_box.first_child();
-            while let Some(flow_child) = child {
-                let next = flow_child.next_sibling();
-
-                if let Some(fc) = flow_child.downcast_ref::<gtk4::FlowBoxChild>()
-                    && let Some(card) = fc.child().and_then(|w| w.downcast::<MediaCard>().ok())
-                {
-                    let card_id = card.media_item().id().to_string();
-                    if to_remove.contains(&card_id) {
-                        flow_box.remove(&flow_child);
-                        removed_count += 1;
-                        // Remove from maps
-                        cards_by_index.retain(|_, c| c.media_item().id() != card_id);
-                        cards_by_id.remove(&card_id);
-                    }
-                }
-
-                child = next;
-            }
-            let remove_elapsed = remove_start.elapsed();
-            info!(
-                "[PERF] Removed {} cards in {:?}",
-                removed_count, remove_elapsed
-            );
-        }
-
-        // Add new cards for items that weren't in the old list
-        let add_start = Instant::now();
-        let mut added_count = 0;
-        for (idx, item) in new_items.iter().enumerate() {
-            let item_id = item.id().to_string();
-            if to_add.contains(&item_id) {
-                added_count += 1;
-                let card = MediaCard::new(item.clone(), current_size);
-
-                // Connect click handler
-                let view_weak = self.downgrade();
-                let item_clone = item.clone();
-                card.connect_clicked(move |_| {
-                    if let Some(view) = view_weak.upgrade() {
-                        info!("Media item selected: {}", item_clone.title());
-                        if let Some(callback) = view.imp().on_media_selected.borrow().as_ref() {
-                            callback(&item_clone);
-                        }
-                    }
-                });
-
-                let child = gtk4::FlowBoxChild::new();
-                child.set_child(Some(&card));
-
-                // Insert at correct position
-                if idx < flow_box.observe_children().n_items() as usize {
-                    flow_box.insert(&child, idx as i32);
-                } else {
-                    flow_box.append(&child);
-                }
-
-                cards_by_index.insert(idx, card.clone());
-                cards_by_id.insert(item_id, card.clone());
-
-                // Trigger load for new card
-                card.trigger_load(current_size);
-            }
-        }
-        if added_count > 0 {
-            let add_elapsed = add_start.elapsed();
-            info!("[PERF] Added {} cards in {:?}", added_count, add_elapsed);
-        }
-
-        // Reorder if needed (only if items are the same but order changed)
-        if to_add.is_empty() && to_remove.is_empty() && old_items.len() == new_items.len() {
-            // Check if order changed
-            let order_changed = old_items
-                .iter()
-                .zip(new_items.iter())
-                .any(|(old, new)| old.id() != new.id());
-
-            if order_changed {
-                // For reordering, it's simpler to rebuild
-                self.full_refresh_items(flow_box, new_items.to_vec(), current_size, None, None);
-            } else {
-                // Ensure indices map matches current children
-                drop(cards_by_index);
-                self.rebuild_cards_index_map(flow_box);
-            }
-        } else {
-            // After structural changes, rebuild index map
-            drop(cards_by_index);
-            self.rebuild_cards_index_map(flow_box);
-        }
-
-        // Show content
-        if let Some(stack) = imp.stack.borrow().as_ref() {
-            stack.set_visible_child_name("content");
-        }
-
-        let elapsed = start.elapsed();
-        warn!(
-            "[PERF] differential_update_items completed in {:?} (add: {}, remove: {}, update: {}) >16ms: {}",
-            elapsed,
-            to_add.len(),
-            to_remove.len(),
-            common_ids.len(),
-            elapsed.as_millis() > 16
-        );
-    }
-
-    /// Perform full refresh - clear and recreate all items
-    fn full_refresh_items(
-        &self,
-        flow_box: &gtk4::FlowBox,
-        items: Vec<MediaItem>,
-        current_size: ImageSize,
-        scrolled_window: Option<gtk4::ScrolledWindow>,
-        stack: Option<gtk4::Stack>,
-    ) {
-        let start = Instant::now();
-        info!(
-            "[PERF] full_refresh_items: Starting with {} items",
-            items.len()
-        );
-        let imp = self.imp();
-        imp.cards_by_index.borrow_mut().clear();
-        imp.cards_by_id.borrow_mut().clear();
-
-        // Clear existing items
-        let mut removed_count = 0;
-        while let Some(child) = flow_box.first_child() {
-            flow_box.remove(&child);
-            removed_count += 1;
-        }
-        info!(
-            "[PERF] Removed {} existing children from flow_box",
-            removed_count
-        );
-
-        if !items.is_empty() {
-            // Store items for lazy creation
-            let items_rc = Rc::new(items);
-            let cards_rc = Rc::new(RefCell::new(Vec::new()));
-
-            // Function to create cards in batches
-            let weak_self = self.downgrade();
-            let flow_box_weak = flow_box.downgrade();
-            let cards_for_create = cards_rc.clone();
-            let items_for_create = items_rc.clone();
-
-            let create_cards_batch = Rc::new(move |start: usize, end: usize| {
-                if let Some(view) = weak_self.upgrade()
-                    && let Some(flow_box) = flow_box_weak.upgrade()
-                {
-                    let mut cards = cards_for_create.borrow_mut();
-                    let mut cards_by_index = view.imp().cards_by_index.borrow_mut();
-                    let mut cards_by_id = view.imp().cards_by_id.borrow_mut();
-
-                    for i in start..end.min(items_for_create.len()) {
-                        if i >= cards.len() {
-                            // Create card only if not already created
-                            if let Some(item) = items_for_create.get(i) {
-                                let card = MediaCard::new(item.clone(), current_size);
-
-                                // Connect click handler to each card
-                                let view_weak = view.downgrade();
-                                let item_clone = card.media_item();
-                                card.connect_clicked(move |_| {
-                                    if let Some(view) = view_weak.upgrade() {
-                                        info!("Media item selected: {}", item_clone.title());
-                                        if let Some(callback) =
-                                            view.imp().on_media_selected.borrow().as_ref()
-                                        {
-                                            callback(&item_clone);
-                                        }
-                                    }
-                                });
-
-                                let child = gtk4::FlowBoxChild::new();
-                                child.set_child(Some(&card));
-                                flow_box.append(&child);
-                                let id_key = item.id().to_string();
-                                cards.push(card.clone());
-                                cards_by_index.insert(i, card.clone());
-                                cards_by_id.insert(id_key, card);
-                            }
-                        }
-                    }
-                }
-            });
-
-            // Defer initial card creation to avoid blocking
-            let create_initial = create_cards_batch.clone();
-            let weak_self = self.downgrade();
-            glib::idle_add_local_once(move || {
-                info!("[PERF] Creating initial {} cards", INITIAL_CARDS_TO_CREATE);
-                let create_start = Instant::now();
-                create_initial(0, INITIAL_CARDS_TO_CREATE);
-                let create_elapsed = create_start.elapsed();
-                if create_elapsed.as_millis() > 16 {
-                    warn!("[PERF] Initial card creation took {:?}", create_elapsed);
-                }
-
-                // Simplified: trigger load directly on created cards
-                if let Some(view) = weak_self.upgrade() {
-                    glib::timeout_add_local_once(
-                        std::time::Duration::from_millis(100),
-                        move || {
-                            // Trigger load on initial visible cards
-                            let load_start = Instant::now();
-                            let cards_idx = view.imp().cards_by_index.borrow();
-                            let load_count = INITIAL_IMAGES_TO_LOAD.min(cards_idx.len());
-                            info!("[PERF] Triggering initial load for {} cards", load_count);
-                            for i in 0..load_count {
-                                if let Some(card) = cards_idx.get(&i) {
-                                    card.trigger_load(ImageSize::Medium);
-                                }
-                            }
-                            let load_elapsed = load_start.elapsed();
-                            if load_elapsed.as_millis() > 16 {
-                                warn!("[PERF] Initial image triggers took {:?}", load_elapsed);
-                            }
-                        },
-                    );
-                }
-            });
-
-            // Show content
-            if let Some(ref stack) = stack {
-                stack.set_visible_child_name("content");
-            }
-
-            // Set up progressive loading with card creation and batch loading
-            if let Some(ref scrolled_window) = scrolled_window {
-                self.setup_progressive_loading_with_batch(
-                    scrolled_window.clone(),
-                    flow_box.clone(),
-                    create_cards_batch.clone(),
-                    cards_rc.clone(),
-                    items_rc.len(),
-                );
-            }
-            // Ensure index map consistency after creation
-            self.rebuild_cards_index_map(flow_box);
-        }
-
-        let elapsed = start.elapsed();
-        warn!(
-            "[PERF] full_refresh_items completed in {:?} (>32ms: {})",
-            elapsed,
-            elapsed.as_millis() > 32
-        );
-    }
-
-    fn rebuild_cards_index_map(&self, flow_box: &gtk4::FlowBox) {
-        let mut index_map: HashMap<usize, MediaCard> = HashMap::new();
-        let mut idx = 0usize;
-        let mut child = flow_box.first_child();
-        while let Some(flow_child) = child {
-            if let Some(fc) = flow_child.downcast_ref::<gtk4::FlowBoxChild>() {
-                if let Some(card) = fc.child().and_then(|w| w.downcast::<MediaCard>().ok()) {
-                    index_map.insert(idx, card);
-                }
-                idx += 1;
-            }
-            child = flow_child.next_sibling();
-        }
-        self.imp().cards_by_index.replace(index_map);
     }
 
     fn setup_progressive_loading(
@@ -1240,65 +997,73 @@ impl LibraryView {
     }
 
     pub fn update_watch_status_filter(&self, status: WatchStatus) {
-        if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
-            let vm_status = match status {
-                WatchStatus::All => crate::platforms::gtk::ui::viewmodels::library_view_model::WatchStatus::All,
-                WatchStatus::Watched => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::WatchStatus::Watched
-                }
-                WatchStatus::Unwatched => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::WatchStatus::Unwatched
-                }
-                WatchStatus::InProgress => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::WatchStatus::InProgress
-                }
-            };
-            let vm_clone = view_model.clone();
-            glib::spawn_future_local(async move {
-                vm_clone.set_watch_status(vm_status).await;
-            });
-        }
+        // Stage 1: Use reactive property instead of calling ViewModel directly
+        let vm_status = match status {
+            WatchStatus::All => crate::core::viewmodels::library_view_model::WatchStatus::All,
+            WatchStatus::Watched => {
+                crate::core::viewmodels::library_view_model::WatchStatus::Watched
+            }
+            WatchStatus::Unwatched => {
+                crate::core::viewmodels::library_view_model::WatchStatus::Unwatched
+            }
+            WatchStatus::InProgress => {
+                crate::core::viewmodels::library_view_model::WatchStatus::InProgress
+            }
+        };
+
+        // Set the reactive property - this will trigger the ViewModel update
+        let watch_status_property = &self.imp().watch_status;
+        glib::spawn_future_local({
+            let watch_status_property = watch_status_property.clone();
+            async move {
+                watch_status_property.set(vm_status).await;
+            }
+        });
     }
 
     pub fn update_sort_order(&self, order: crate::platforms::gtk::ui::filters::SortOrder) {
-        if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
-            let vm_sort_order = match order {
-                crate::platforms::gtk::ui::filters::SortOrder::TitleAsc => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::TitleAsc
-                }
-                crate::platforms::gtk::ui::filters::SortOrder::TitleDesc => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::TitleDesc
-                }
-                crate::platforms::gtk::ui::filters::SortOrder::YearAsc => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::YearAsc
-                }
-                crate::platforms::gtk::ui::filters::SortOrder::YearDesc => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::YearDesc
-                }
-                crate::platforms::gtk::ui::filters::SortOrder::RatingAsc => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::RatingAsc
-                }
-                crate::platforms::gtk::ui::filters::SortOrder::RatingDesc => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::RatingDesc
-                }
-                crate::platforms::gtk::ui::filters::SortOrder::DateAddedAsc => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::AddedAsc
-                }
-                crate::platforms::gtk::ui::filters::SortOrder::DateAddedDesc => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::AddedDesc
-                }
-                crate::platforms::gtk::ui::filters::SortOrder::DateWatchedAsc => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::AddedAsc
-                } // Fallback to AddedAsc
-                crate::platforms::gtk::ui::filters::SortOrder::DateWatchedDesc => {
-                    crate::platforms::gtk::ui::viewmodels::library_view_model::SortOrder::AddedDesc
-                } // Fallback to AddedDesc
-            };
-            let vm_clone = view_model.clone();
-            glib::spawn_future_local(async move {
-                vm_clone.set_sort_order(vm_sort_order).await;
-            });
-        }
+        // Stage 1: Use reactive property instead of calling ViewModel directly
+        let vm_sort_order = match order {
+            crate::platforms::gtk::ui::filters::SortOrder::TitleAsc => {
+                crate::core::viewmodels::library_view_model::SortOrder::TitleAsc
+            }
+            crate::platforms::gtk::ui::filters::SortOrder::TitleDesc => {
+                crate::core::viewmodels::library_view_model::SortOrder::TitleDesc
+            }
+            crate::platforms::gtk::ui::filters::SortOrder::YearAsc => {
+                crate::core::viewmodels::library_view_model::SortOrder::YearAsc
+            }
+            crate::platforms::gtk::ui::filters::SortOrder::YearDesc => {
+                crate::core::viewmodels::library_view_model::SortOrder::YearDesc
+            }
+            crate::platforms::gtk::ui::filters::SortOrder::RatingAsc => {
+                crate::core::viewmodels::library_view_model::SortOrder::RatingAsc
+            }
+            crate::platforms::gtk::ui::filters::SortOrder::RatingDesc => {
+                crate::core::viewmodels::library_view_model::SortOrder::RatingDesc
+            }
+            crate::platforms::gtk::ui::filters::SortOrder::DateAddedAsc => {
+                crate::core::viewmodels::library_view_model::SortOrder::AddedAsc
+            }
+            crate::platforms::gtk::ui::filters::SortOrder::DateAddedDesc => {
+                crate::core::viewmodels::library_view_model::SortOrder::AddedDesc
+            }
+            crate::platforms::gtk::ui::filters::SortOrder::DateWatchedAsc => {
+                crate::core::viewmodels::library_view_model::SortOrder::AddedAsc
+            } // Fallback to AddedAsc
+            crate::platforms::gtk::ui::filters::SortOrder::DateWatchedDesc => {
+                crate::core::viewmodels::library_view_model::SortOrder::AddedDesc
+            } // Fallback to AddedDesc
+        };
+
+        // Set the reactive property - this will trigger the ViewModel update
+        let sort_order_property = &self.imp().sort_order;
+        glib::spawn_future_local({
+            let sort_order_property = sort_order_property.clone();
+            async move {
+                sort_order_property.set(vm_sort_order).await;
+            }
+        });
     }
 
     pub fn get_filter_manager(&self) -> std::cell::Ref<FilterManager> {
@@ -1306,10 +1071,23 @@ impl LibraryView {
     }
 
     pub fn search(&self, query: String) {
-        if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
-            let vm_clone = view_model.clone();
+        // Stage 1: Use reactive search query property with debouncing
+        let search_property = &self.imp().search_query;
+        let view_model = self.imp().view_model.borrow().clone();
+
+        // Set the reactive property
+        glib::spawn_future_local({
+            let search_property = search_property.clone();
+            let query = query.clone();
+            async move {
+                search_property.set(query).await;
+            }
+        });
+
+        // Keep existing direct call for now (will be replaced by reactive binding)
+        if let Some(vm) = view_model {
             glib::spawn_future_local(async move {
-                vm_clone.search(query).await;
+                vm.search(query).await;
             });
         }
     }
@@ -1318,14 +1096,16 @@ impl LibraryView {
         if let Some(view_model) = self.imp().view_model.borrow().as_ref() {
             let vm_clone = view_model.clone();
             glib::spawn_future_local(async move {
-                use crate::platforms::gtk::ui::viewmodels::ViewModel;
                 let _ = vm_clone.refresh().await;
             });
         }
     }
 
-    /// Simplified: Just trigger load on visible cards
-    fn batch_load_visible_cards(&self, start_idx: usize, end_idx: usize) {
+    /// LEGACY METHOD: Simplified: Just trigger load on visible cards
+    #[allow(dead_code)]
+    fn _batch_load_visible_cards_legacy(&self, _start_idx: usize, _end_idx: usize) {
+        // Commented out - using reactive bindings instead
+        /*
         let cards_by_index = self.imp().cards_by_index.borrow();
         let current_size = *self.imp().current_view_size.borrow();
 
@@ -1337,6 +1117,7 @@ impl LibraryView {
         }
 
         trace!("Triggered load for cards {}-{}", start_idx, end_idx);
+        */
     }
 
     fn setup_progressive_loading_with_batch(
@@ -1401,7 +1182,8 @@ impl LibraryView {
 
                     // Batch load images for visible cards
                     if let Some(view) = weak_self.upgrade() {
-                        view.batch_load_visible_cards(start_idx, end_idx);
+                        // Note: batch_load_visible_cards() disabled - using reactive bindings instead
+                        // view.batch_load_visible_cards(start_idx, end_idx);
                     }
 
                     glib::ControlFlow::Break
@@ -1629,7 +1411,7 @@ impl MediaCard {
         picture.set_paintable(None::<&gdk::Paintable>);
     }
 
-    fn update_content(&self, media_item: MediaItem) {
+    pub fn update_content(&self, media_item: MediaItem) {
         let imp = self.imp();
 
         // For episodes, show the show name as title and episode info as subtitle
