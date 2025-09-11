@@ -557,6 +557,79 @@ glib::spawn_future_local(async move {
 3. **Clear Status Communication**: Users understand connection progress
 4. **Graceful Degradation**: App remains functional with partial connectivity
 
+## ✅ CRITICAL RUNTIME FIXES (September 2025)
+
+**🔧 BACKEND REGISTRATION BUG FIXED**: A critical runtime issue was discovered and resolved where backends were being tested during reactive initialization but never actually stored in the BackendManager, causing video playback failures.
+
+### Issues Identified & Fixed
+
+**❌ Problem 1: Missing Backend Registration**
+- Reactive initialization tested backend connections but discarded the backend instances
+- `test_source_connection()` created backends but never called `register_backend()`
+- Result: Video playback failed with "Backend not found" errors
+
+**✅ Solution: Store Backends in BackendManager**
+```rust
+// FIXED: Store successfully created backends for playback
+if is_initialized || is_playback_ready {
+    let mut backend_mgr = backend_manager.write().await;
+    backend_mgr.register_backend(source.id.clone(), backend.clone());
+    // Backend now available for video playback
+}
+```
+
+**❌ Problem 2: Sync Never Triggered**
+- Reactive initialization completed but sync was never called
+- No automatic triggering of `sync_manager.sync_backend()` after successful connections
+
+**✅ Solution: Auto-trigger Sync for Connected Backends**
+```rust
+// FIXED: Automatically start sync for fully connected backends
+if is_initialized {
+    tokio::spawn({
+        let sync_manager = sync_manager.clone();
+        let source_id = source.id.clone();
+        let backend = backend.clone();
+        async move {
+            if let Err(e) = sync_manager.sync_backend(&source_id, backend).await {
+                tracing::warn!("Background sync failed for {}: {}", source_id, e);
+            }
+        }
+    });
+}
+```
+
+### Runtime Verification ✅
+
+**Successful Logs Proving Fix:**
+```
+Started reactive source initialization - UI ready immediately
+URL https://10-1-1-5.f0d4900e448644aea0c903ebfee340be.plex.direct:32400 is reachable, using it
+Starting sync for backend: plex_server_cf3ab3f4d9d8f220ff50d53aa4ee73240465e7c7
+PlexApi::get_home_sections() - Starting to fetch homepage data
+```
+
+### Impact & Benefits
+
+1. **🎯 Video Playback Fixed**: Backends now properly registered and available for streaming
+2. **🔄 Automatic Sync**: Background sync happens automatically without user intervention  
+3. **⚡ Instant UI + Working Backends**: Best of both worlds - instant UI load AND working functionality
+4. **🛡️ Robust Architecture**: Maintains reactive benefits while ensuring backend availability
+
+### Files Modified
+
+**`src/services/source_coordinator.rs:784-899`**
+- Added backend registration to `stage3_network_connections()`
+- Added automatic sync triggering for connected backends
+- Fixed method name from `add_backend()` to `register_backend()`
+
+**Key Changes:**
+- Line 818-821: Register backends in BackendManager when playback-ready or connected
+- Line 824-835: Auto-trigger sync for fully connected backends  
+- Line 883-885: Duplicate fix for Jellyfin backends
+
+This resolves the final gap between reactive initialization (instant UI) and functional backends (working video playback + sync).
+
 ### Next Steps (Phase 4)
 
 Future enhancements for production readiness:

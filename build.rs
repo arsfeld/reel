@@ -36,6 +36,7 @@ fn compile_gtk_resources() {
         "movie_details.blp",
         "show_details.blp",
         "player.blp",
+        "sidebar.blp",
     ];
 
     // Compile each Blueprint file to UI
@@ -44,10 +45,7 @@ fn compile_gtk_resources() {
         let output_name = file.replace(".blp", ".ui");
         let output_path = ui_dir.join(&output_name);
 
-        println!(
-            "cargo:warning=Compiling {} to {:?}",
-            input_path, output_path
-        );
+        println!("cargo:info=Compiling {} to {:?}", input_path, output_path);
 
         let output = std::process::Command::new("blueprint-compiler")
             .arg("compile")
@@ -80,6 +78,7 @@ fn compile_gtk_resources() {
     <file>movie_details.ui</file>
     <file>show_details.ui</file>
     <file>player.ui</file>
+    <file>sidebar.ui</file>
     <file>style.css</file>
   </gresource>
 </gresources>"#
