@@ -31,6 +31,7 @@ pub trait Repository<T> {
     async fn delete(&self, id: &str) -> Result<()>;
 
     /// Count all entities
+    #[allow(dead_code)]
     async fn count(&self) -> Result<u64>;
 }
 

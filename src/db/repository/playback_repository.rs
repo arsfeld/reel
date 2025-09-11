@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 /// Repository trait for PlaybackProgress entities
 #[async_trait]
+#[allow(dead_code)]
 pub trait PlaybackRepository: Repository<PlaybackProgressModel> {
     /// Find playback progress for a specific media item
     async fn find_by_media_id(&self, media_id: &str) -> Result<Option<PlaybackProgressModel>>;
