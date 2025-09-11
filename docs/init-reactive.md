@@ -2,41 +2,41 @@
 
 ## Executive Summary
 
-~~This document outlines a comprehensive plan to transform Reel's app initialization from a blocking, synchronous process to a fully reactive, asynchronous system that provides instant UI responsiveness while sources connect in the background.~~
+This document outlines a comprehensive plan to transform Reel's app initialization from a blocking, synchronous process to a fully reactive, asynchronous system that provides instant UI responsiveness while sources connect in the background.
 
-**✅ IMPLEMENTATION STATUS**: **Phase 1 Foundation Complete** - The reactive asynchronous initialization architecture has been successfully implemented! The core transformation from blocking to non-blocking startup is complete and fully functional.
+**✅ IMPLEMENTATION STATUS**: **Phase 1 Complete** - Foundation layer implemented with backend registration and auto-sync.
 
 ## Current State Analysis
 
-### ~~Blocking Initialization Issues~~ ✅ ADDRESSED
-- ~~**UI Blocked**: `initialize_all_sources()` runs synchronously during startup at `main_window.rs:385`~~ → **FIXED**: New `initialize_sources_reactive()` returns immediately
-- ~~**Network Dependencies**: Each source requires successful network connection before UI loads~~ → **FIXED**: UI loads instantly with cached data
-- ~~**Sequential Processing**: Sources initialize one-by-one instead of in parallel~~ → **FIXED**: Parallel connection processing in stage 3
-- ~~**Binary State**: Sources are either "Connected" or "unusable" with no intermediate states~~ → **FIXED**: `SourceReadiness` enum with 4 granular states
-- ~~**Playback Blocked**: Video playback waits for full connection when only API credentials are needed~~ → **FIXED**: `is_playback_ready()` enables streaming without full connection
+### Blocking Initialization Issues
+- **UI Blocked**: `initialize_all_sources()` runs synchronously during startup at `main_window.rs:385`
+- **Network Dependencies**: Each source requires successful network connection before UI loads
+- **Sequential Processing**: Sources initialize one-by-one instead of in parallel
+- **Binary State**: Sources are either "Connected" or "unusable" with no intermediate states
+- **Playback Blocked**: Video playback waits for full connection when only API credentials are needed
 
-### ~~Architecture Problems~~ ✅ SOLVED
+### Architecture Problems
 ```rust
-// ❌ Old blocking pattern (REPLACED)
+// Current blocking pattern
 match source_coordinator.initialize_all_sources().await {
     Ok(source_statuses) => {
         // UI can now load - but user waited 3-10 seconds
     }
 }
 
-// ✅ New reactive pattern (IMPLEMENTED)
+// Proposed reactive pattern
 let init_state = source_coordinator.initialize_sources_reactive();
 // Returns immediately! UI shows instantly while background tasks run
 ```
 
 ## Reactive Initialization Architecture
 
-### 1. Multi-Stage Reactive Properties ✅ IMPLEMENTED
+### 1. Multi-Stage Reactive Properties
 
-~~Create~~ **CREATED** graduated readiness states using the existing Property system:
+Create graduated readiness states using the existing Property system:
 
 ```rust
-// ✅ IMPLEMENTED in src/services/initialization.rs
+// TODO: Implement in src/services/initialization.rs
 pub struct AppInitializationState {
     // Stage 1: Instant (0ms)
     pub ui_ready: Property<bool>,                    // UI can display immediately
@@ -81,12 +81,12 @@ impl MainWindow {
 }
 ```
 
-### 3. Asynchronous Initialization Pipeline ✅ IMPLEMENTED
+### 3. Asynchronous Initialization Pipeline
 
-~~Transform~~ **TRANSFORMED** source initialization into parallel, reactive stages:
+Transform source initialization into parallel, reactive stages:
 
 ```rust
-// ✅ IMPLEMENTED in src/services/source_coordinator.rs
+// TODO: Implement in src/services/source_coordinator.rs
 impl SourceCoordinator {
     /// New reactive initialization - returns immediately with Properties
     pub fn initialize_sources_reactive(&self) -> AppInitializationState {
@@ -154,12 +154,12 @@ impl SourceCoordinator {
 }
 ```
 
-## 4. Playback-Ready vs Fully-Connected States ✅ IMPLEMENTED
+## 4. Playback-Ready vs Fully-Connected States
 
-~~Introduce~~ **INTRODUCED** granular connection states for better UX:
+Introduce granular connection states for better UX:
 
 ```rust
-// ✅ IMPLEMENTED in src/services/initialization.rs
+// TODO: Implement in src/services/initialization.rs
 #[derive(Debug, Clone)]
 pub enum SourceReadiness {
     /// No credentials or configuration available
@@ -183,7 +183,7 @@ pub enum SourceReadiness {
     },
 }
 
-// ✅ IMPLEMENTED in src/backends/traits.rs
+// TODO: Implement in src/backends/traits.rs
 impl MediaBackend {
     /// New method: Check if playback is possible without full connection
     async fn is_playback_ready(&self) -> bool {
@@ -240,12 +240,12 @@ impl HomeViewModel {
 }
 ```
 
-## 6. Event-Driven Connection Updates ✅ IMPLEMENTED
+## 6. Event-Driven Connection Updates
 
-~~Use~~ **USING** the EventBus for reactive connection status updates:
+Use the EventBus for reactive connection status updates:
 
 ```rust
-// ✅ IMPLEMENTED in src/events/types.rs
+// TODO: Implement in src/events/types.rs
 pub enum EventType {
     // ... existing events ...
     
@@ -372,24 +372,27 @@ impl MainWindow {
 
 ## Implementation Phases
 
-### Phase 1: Foundation (Week 1) ✅ COMPLETED
+### Phase 1: Foundation (Week 1) ✅ COMPLETE
 - [x] Create `AppInitializationState` with reactive properties
 - [x] Add `is_playback_ready()` method to MediaBackend trait
-- [x] Implement `SourceReadiness` enum with granular states
+- [x] Implement `SourceReadiness` enum with granular states (including Syncing variant)
 - [x] Add initialization events to EventBus
+- [x] Fix backend registration bug - backends now properly stored in BackendManager
+- [x] Implement auto-sync for connected backends
+- [x] Rename initialization methods to be more descriptive
 
-### Phase 2: Async Pipeline (Week 2) ✅ COMPLETED  
-- [x] Implement `initialize_sources_reactive()` with parallel processing
-- [x] Create staged initialization (instant UI, background discovery, network connections)
-- [x] Fix remaining compilation errors (match exhaustiveness issues resolved)
-- [x] Remove deprecated blocking `initialize_all_sources()` method
-- [x] Update MainWindow to use non-blocking initialization
+### Phase 2: Async Pipeline (Week 2)
+- [ ] Implement `initialize_sources_reactive()` with parallel processing
+- [ ] Create staged initialization (instant UI, background discovery, network connections)
+- [ ] Fix remaining compilation errors
+- [ ] Remove deprecated blocking `initialize_all_sources()` method
+- [ ] Update MainWindow to use non-blocking initialization
 
-### Phase 3: Progressive Enhancement (Week 3) ✅ COMPLETED
-- [x] Implement progressive feature enablement based on readiness states
-- [x] Update ViewModels to handle partial initialization gracefully
-- [x] Add UI feedback for connection progress
-- [x] Implement fallback to cached content when sources offline
+### Phase 3: Progressive Enhancement (Week 3)
+- [ ] Implement progressive feature enablement based on readiness states
+- [ ] Update ViewModels to handle partial initialization gracefully
+- [ ] Add UI feedback for connection progress
+- [ ] Implement fallback to cached content when sources offline
 
 ### Phase 4: Polish & Optimization (Week 4)
 - [ ] Add connection retry logic with exponential backoff
@@ -420,7 +423,7 @@ impl MainWindow {
 ## Risk Mitigation
 
 ### Backwards Compatibility
-- ~~Maintain existing `initialize_all_sources()` for migration period~~ → **COMPLETED**: Migration successful, deprecated method removed
+- Maintain existing `initialize_all_sources()` for migration period
 - Gradual rollout with feature flags
 - Fallback to synchronous initialization if reactive fails
 
@@ -458,67 +461,67 @@ impl MainWindow {
 
 ## Conclusion
 
-~~This reactive asynchronous initialization plan transforms~~ **✅ TRANSFORMATION COMPLETE** - Reel ~~from~~ **has been transformed from** a blocking startup experience ~~to~~ **into** an instantly responsive app that progressively enables features as backend capabilities become available. ~~By leveraging~~ **The implementation leveraged** the existing Property system and reactive architecture ~~, we can provide~~ **to provide** immediate UI feedback while maintaining the robust connection handling the app requires.
+This reactive asynchronous initialization plan transforms Reel from a blocking startup experience to an instantly responsive app that progressively enables features as backend capabilities become available. By leveraging the existing Property system and reactive architecture, we can provide immediate UI feedback while maintaining the robust connection handling the app requires.
 
-**🎯 KEY ACHIEVEMENT**: The separation of "playback readiness" (has credentials, can attempt streaming) from "full connectivity" (can sync metadata, browse remote content) ~~allows~~ **now allows** users to start watching content within seconds while background processes handle the full feature set.
+**🎯 KEY GOAL**: The separation of "playback readiness" (has credentials, can attempt streaming) from "full connectivity" (can sync metadata, browse remote content) will allow users to start watching content within seconds while background processes handle the full feature set.
 
-**🏗️ ARCHITECTURE SUCCESS**: The implementation ~~follows~~ **successfully followed** Reel's established reactive patterns, making it a natural evolution of the current architecture rather than a complete rewrite.
+**🏗️ ARCHITECTURE PLAN**: The implementation will follow Reel's established reactive patterns, making it a natural evolution of the current architecture rather than a complete rewrite.
 
-## ✅ Phase 3: UI Integration Complete
+## Phase 3: UI Integration
 
-**Phase 3 COMPLETED**: The reactive UI integration has been successfully implemented:
-- ✅ Progressive UI feature enablement based on source readiness states
-- ✅ Reactive binding of AppInitializationState properties to UI elements  
-- ✅ Connection status indicators and loading progress feedback
-- ✅ Graceful handling of offline/partial connectivity scenarios
+**Phase 3 TODO**: The reactive UI integration needs to be implemented:
+- [ ] Progressive UI feature enablement based on source readiness states
+- [ ] Reactive binding of AppInitializationState properties to UI elements  
+- [ ] Connection status indicators and loading progress feedback
+- [ ] Graceful handling of offline/partial connectivity scenarios
 
-The complete blocking-to-reactive transformation is **100% complete and functional**.
+The blocking-to-reactive transformation is **not yet started**.
 
-## 🚀 Implementation Results
+## 🚀 Implementation Goals
 
-**✅ PHASE 1 COMPLETE** - Foundation successfully implemented:
-- **0ms UI Load Time**: ✅ UI appears instantly 
-- **Parallel Processing**: ✅ Sources connect simultaneously
-- **Graduated States**: ✅ 4-level SourceReadiness system
-- **Event-Driven**: ✅ Reactive updates via EventBus
-- **Non-Blocking**: ✅ Background async initialization
+**PHASE 1 GOALS** - Foundation to be implemented:
+- **0ms UI Load Time**: UI should appear instantly 
+- **Parallel Processing**: Sources should connect simultaneously
+- **Graduated States**: 4-level SourceReadiness system
+- **Event-Driven**: Reactive updates via EventBus
+- **Non-Blocking**: Background async initialization
 
-**🔧 PHASE 2 RESULTS**: All compilation errors resolved + MainWindow integration completed successfully
+**PHASE 2 GOALS**: Resolve compilation errors + MainWindow integration
 
-**🎨 PHASE 3 RESULTS**: Progressive UI enhancement fully implemented with reactive status updates
+**PHASE 3 GOALS**: Progressive UI enhancement with reactive status updates
 
-## 📋 Implementation Summary
+## 📋 Implementation Plan
 
-**✅ COMPLETED TASKS**:
-1. **Fixed compilation errors** - Resolved match exhaustiveness issues in source_coordinator.rs
-2. **Removed deprecated code** - Completely removed blocking `initialize_all_sources()` method (208 lines)
-3. **Updated MainWindow integration** - Replaced blocking calls with reactive `initialize_sources_reactive()`
-4. **Cleaned up unused imports** - Removed deprecated reactive implementation imports
-5. **Implemented progressive UI** - Added `setup_progressive_initialization()` with reactive status binding
-6. **Added connection progress feedback** - Real-time status updates showing source connection state
-7. **Verified functionality** - Application builds and compiles successfully
+**TODO TASKS**:
+1. **Fix compilation errors** - Resolve match exhaustiveness issues in source_coordinator.rs
+2. **Remove deprecated code** - Remove blocking `initialize_all_sources()` method
+3. **Update MainWindow integration** - Replace blocking calls with reactive `initialize_sources_reactive()`
+4. **Clean up unused imports** - Remove deprecated reactive implementation imports
+5. **Implement progressive UI** - Add `setup_progressive_initialization()` with reactive status binding
+6. **Add connection progress feedback** - Real-time status updates showing source connection state
+7. **Verify functionality** - Ensure application builds and compiles successfully
 
-**🎯 TECHNICAL ACHIEVEMENTS**:
-- **0ms UI Load Time**: Window appears instantly instead of blocking for 3-10 seconds
-- **Parallel Processing**: Sources connect simultaneously rather than sequentially  
-- **Non-blocking Architecture**: All network operations moved to background
-- **Progressive States**: 4-level SourceReadiness system provides granular feedback
-- **Reactive UI Bindings**: Status label and spinner update based on connection progress
-- **Progressive Enhancement**: Features enable as source capabilities become available
+**🎯 TECHNICAL GOALS**:
+- **0ms UI Load Time**: Window should appear instantly instead of blocking for 3-10 seconds
+- **Parallel Processing**: Sources should connect simultaneously rather than sequentially  
+- **Non-blocking Architecture**: All network operations should move to background
+- **Progressive States**: 4-level SourceReadiness system should provide granular feedback
+- **Reactive UI Bindings**: Status label and spinner should update based on connection progress
+- **Progressive Enhancement**: Features should enable as source capabilities become available
 
-**📊 CODE CHANGES**:
-- `main_window.rs:385` - Replaced blocking initialization with reactive approach
-- `main_window.rs:1960-2019` - Added `setup_progressive_initialization()` method with reactive UI bindings
-- `source_coordinator.rs:691` - Updated migration to use reactive initialization
-- `source_coordinator.rs:184-391` - Removed entire deprecated method (208 lines)
-- Fixed match syntax errors and cleaned up 5+ unused imports across multiple files
-- Added AppInitializationState import to MainWindow for Phase 3 UI integration
+**📊 PLANNED CODE CHANGES**:
+- `main_window.rs:385` - Replace blocking initialization with reactive approach
+- `main_window.rs:1960-2019` - Add `setup_progressive_initialization()` method with reactive UI bindings
+- `source_coordinator.rs:691` - Update migration to use reactive initialization
+- `source_coordinator.rs:184-391` - Remove entire deprecated method
+- Fix match syntax errors and clean up unused imports across multiple files
+- Add AppInitializationState import to MainWindow for Phase 3 UI integration
 
 ## 🎨 Phase 3: Progressive UI Enhancement Details
 
-### Implemented Features
+### Planned Features
 
-**✅ Real-time Connection Status Updates**
+**Real-time Connection Status Updates**
 ```rust
 // main_window.rs:1967-2002 - Reactive status label binding
 let sources_connected = init_state.sources_connected.clone();
@@ -534,18 +537,18 @@ glib::spawn_future_local(async move {
 });
 ```
 
-**✅ Progressive Spinner Management**
+**Progressive Spinner Management**
 - Spinner shows during connection attempts
 - Hides when all sources are connected
 - Provides visual feedback for ongoing network operations
 
-**✅ Granular Status Messages**
+**Granular Status Messages**
 - "No sources configured" - when no sources exist
 - "Connecting sources... 1/3" - during initial connection
 - "Ready for playback - 1/3 sources fully connected" - when some sources are playback ready
 - "All 3 sources connected" - when fully initialized
 
-**✅ Playback-Ready vs Fully-Connected Distinction**
+**Playback-Ready vs Fully-Connected Distinction**
 - Users can start streaming as soon as credentials are available
 - Full metadata sync continues in background
 - Clear indication of what functionality is available
@@ -557,51 +560,46 @@ glib::spawn_future_local(async move {
 3. **Clear Status Communication**: Users understand connection progress
 4. **Graceful Degradation**: App remains functional with partial connectivity
 
-## ✅ CRITICAL RUNTIME FIXES (September 2025)
+## ✅ CRITICAL RUNTIME ISSUES FIXED
 
-**🔧 BACKEND REGISTRATION BUG FIXED**: A critical runtime issue was discovered and resolved where backends were being tested during reactive initialization but never actually stored in the BackendManager, causing video playback failures.
+**🔧 BACKEND REGISTRATION BUG**: **FIXED** - Backends are now properly registered and sync is auto-triggered.
 
-### Issues Identified & Fixed
+### Issues Fixed in Phase 1
 
-**❌ Problem 1: Missing Backend Registration**
+**Problem 1: Missing Backend Registration** ✅ FIXED
 - Reactive initialization tested backend connections but discarded the backend instances
 - `test_source_connection()` created backends but never called `register_backend()`
-- Result: Video playback failed with "Backend not found" errors
-
-**✅ Solution: Store Backends in BackendManager**
+- **Solution Implemented**: Backends are now registered in `connect_and_register_backends()`:
 ```rust
-// FIXED: Store successfully created backends for playback
+// Successfully created backends are now stored for playback
 if is_initialized || is_playback_ready {
     let mut backend_mgr = backend_manager.write().await;
     backend_mgr.register_backend(source.id.clone(), backend.clone());
-    // Backend now available for video playback
+    tracing::info!("Registered backend for source: {}", source.id);
 }
 ```
 
-**❌ Problem 2: Sync Never Triggered**
+**Problem 2: Sync Never Triggered** ✅ FIXED
 - Reactive initialization completed but sync was never called
 - No automatic triggering of `sync_manager.sync_backend()` after successful connections
-
-**✅ Solution: Auto-trigger Sync for Connected Backends**
+- **Solution Implemented**: Auto-sync now triggers for connected backends:
 ```rust
-// FIXED: Automatically start sync for fully connected backends
+// Automatically start sync for fully connected backends
 if is_initialized {
-    tokio::spawn({
-        let sync_manager = sync_manager.clone();
-        let source_id = source.id.clone();
-        let backend = backend.clone();
-        async move {
-            if let Err(e) = sync_manager.sync_backend(&source_id, backend).await {
-                tracing::warn!("Background sync failed for {}: {}", source_id, e);
-            }
+    let sync_manager = sync_manager.clone();
+    let source_id = source.id.clone();
+    let backend_clone = backend.clone();
+    tokio::spawn(async move {
+        if let Err(e) = sync_manager.sync_backend(&source_id, backend_clone).await {
+            tracing::warn!("Background sync failed for {}: {}", source_id, e);
         }
     });
 }
 ```
 
-### Runtime Verification ✅
+### Runtime Verification Needed
 
-**Successful Logs Proving Fix:**
+**Expected Logs After Fix:**
 ```
 Started reactive source initialization - UI ready immediately
 URL https://10-1-1-5.f0d4900e448644aea0c903ebfee340be.plex.direct:32400 is reachable, using it
@@ -609,26 +607,31 @@ Starting sync for backend: plex_server_cf3ab3f4d9d8f220ff50d53aa4ee73240465e7c7
 PlexApi::get_home_sections() - Starting to fetch homepage data
 ```
 
-### Impact & Benefits
+### Expected Impact & Benefits
 
-1. **🎯 Video Playback Fixed**: Backends now properly registered and available for streaming
-2. **🔄 Automatic Sync**: Background sync happens automatically without user intervention  
+1. **🎯 Video Playback**: Backends should be properly registered and available for streaming
+2. **🔄 Automatic Sync**: Background sync should happen automatically without user intervention  
 3. **⚡ Instant UI + Working Backends**: Best of both worlds - instant UI load AND working functionality
-4. **🛡️ Robust Architecture**: Maintains reactive benefits while ensuring backend availability
+4. **🛡️ Robust Architecture**: Should maintain reactive benefits while ensuring backend availability
 
-### Files Modified
+### Files Modified in Phase 1
 
-**`src/services/source_coordinator.rs:784-899`**
-- Added backend registration to `stage3_network_connections()`
-- Added automatic sync triggering for connected backends
-- Fixed method name from `add_backend()` to `register_backend()`
+**`src/services/initialization.rs`**
+- Added `Syncing` variant to `SourceReadiness` enum (line 59-61)
+- Added `SyncProgress` struct for tracking sync state (line 93-98)
 
-**Key Changes:**
-- Line 818-821: Register backends in BackendManager when playback-ready or connected
-- Line 824-835: Auto-trigger sync for fully connected backends  
-- Line 883-885: Duplicate fix for Jellyfin backends
+**`src/events/types.rs`**
+- Added `Initialization` payload type for event system (line 188-193)
 
-This resolves the final gap between reactive initialization (instant UI) and functional backends (working video playback + sync).
+**`src/services/source_coordinator.rs`**
+- Renamed `stage1_instant_ui` → `enable_ui_immediately` (line 661)
+- Renamed `stage2_background_discovery` → `discover_cached_sources` (line 685)
+- Renamed `stage3_network_connections` → `connect_and_register_backends` (line 769)
+- Added backend registration in `connect_and_register_backends()` (lines 801-806, 867-872)
+- Added automatic sync triggering for connected backends (lines 809-818, 875-884)
+- Fixed backend registration to use `register_backend()` instead of non-existent `add_backend()`
+
+These changes resolve the gap between reactive initialization (instant UI) and functional backends (working video playback + sync).
 
 ### Next Steps (Phase 4)
 

@@ -185,6 +185,12 @@ pub enum EventPayload {
         message: String,
         details: Option<serde_json::Value>,
     },
+    Initialization {
+        source_id: Option<String>,
+        stage: Option<String>,
+        readiness: Option<String>,
+        error: Option<String>,
+    },
 }
 
 /// Event source indicating where the event originated

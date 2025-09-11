@@ -645,20 +645,20 @@ impl SourceCoordinator {
     pub fn initialize_sources_reactive(&self) -> AppInitializationState {
         let init_state = AppInitializationState::new();
 
-        // Stage 1: Instant UI (0ms) - Enable UI immediately
-        self.stage1_instant_ui(&init_state);
+        // Enable UI immediately without blocking (0ms)
+        self.enable_ui_immediately(&init_state);
 
-        // Stage 2: Background discovery (spawn async) - Load config/cache
-        self.stage2_background_discovery(init_state.clone());
+        // Discover sources from cache/config without network calls (100-500ms)
+        self.discover_cached_sources(init_state.clone());
 
-        // Stage 3: Network connections (spawn async) - Test connections
-        self.stage3_network_connections(init_state.clone());
+        // Connect to backends, register them, and trigger sync (1-10s)
+        self.connect_and_register_backends(init_state.clone());
 
         init_state
     }
 
-    /// Stage 1: Instant UI readiness - no blocking operations
-    fn stage1_instant_ui(&self, state: &AppInitializationState) {
+    /// Enable UI immediately without any blocking operations
+    fn enable_ui_immediately(&self, state: &AppInitializationState) {
         // UI can display immediately (spawn tasks for async set calls)
         let ui_ready = state.ui_ready.clone();
         let cached_data_loaded = state.cached_data_loaded.clone();
@@ -681,8 +681,8 @@ impl SourceCoordinator {
         });
     }
 
-    /// Stage 2: Background discovery - load from config/cache
-    fn stage2_background_discovery(&self, state: AppInitializationState) {
+    /// Discover sources from cache and config without network calls
+    fn discover_cached_sources(&self, state: AppInitializationState) {
         let auth_manager = self.auth_manager.clone();
         let data_service = self.data_service.clone();
 
@@ -765,10 +765,12 @@ impl SourceCoordinator {
         });
     }
 
-    /// Stage 3: Network connections - test actual connectivity
-    fn stage3_network_connections(&self, state: AppInitializationState) {
+    /// Connect to backends, register them for playback, and trigger sync
+    fn connect_and_register_backends(&self, state: AppInitializationState) {
         let auth_manager = self.auth_manager.clone();
         let data_service = self.data_service.clone();
+        let backend_manager = self.backend_manager.clone();
+        let sync_manager = self.sync_manager.clone();
 
         tokio::spawn(async move {
             let start_time = std::time::Instant::now();
@@ -780,6 +782,8 @@ impl SourceCoordinator {
             if !providers.is_empty() {
                 let connection_futures: Vec<_> = providers.into_iter().map(|provider| {
                     let auth_manager = auth_manager.clone();
+                    let backend_manager = backend_manager.clone();
+                    let sync_manager = sync_manager.clone();
 
                     async move {
                         match &provider {
@@ -789,16 +793,38 @@ impl SourceCoordinator {
 
                                     for source in cached_sources {
                                         // Attempt to create and test backend connection
-                                        let readiness = match Self::test_source_connection(&source, &provider, &auth_manager).await {
+                                        let (readiness, _backend_opt) = match Self::test_source_connection(&source, &provider, &auth_manager).await {
                                             Ok(backend) => {
-                                                if backend.is_initialized().await {
+                                                let is_initialized = backend.is_initialized().await;
+                                                let is_playback_ready = backend.is_playback_ready().await;
+
+                                                // Register backend if it's usable
+                                                if is_initialized || is_playback_ready {
+                                                    let mut backend_mgr = backend_manager.write().await;
+                                                    backend_mgr.register_backend(source.id.clone(), backend.clone());
+                                                    tracing::info!("Registered backend for source: {}", source.id);
+                                                }
+
+                                                // Trigger sync for fully connected backends
+                                                if is_initialized {
+                                                    let sync_manager = sync_manager.clone();
+                                                    let source_id = source.id.clone();
+                                                    let backend_clone = backend.clone();
+                                                    tokio::spawn(async move {
+                                                        if let Err(e) = sync_manager.sync_backend(&source_id, backend_clone).await {
+                                                            tracing::warn!("Background sync failed for {}: {}", source_id, e);
+                                                        }
+                                                    });
+                                                }
+
+                                                let readiness = if is_initialized {
                                                     let library_count = backend.get_libraries().await.map(|libs| libs.len()).unwrap_or(0);
                                                     SourceReadiness::Connected {
                                                         server_name: "Unknown".to_string(),
                                                         api_client_status: crate::services::initialization::ApiClientStatus::Ready,
                                                         library_count: library_count as u32,
                                                     }
-                                                } else if backend.is_playback_ready().await {
+                                                } else if is_playback_ready {
                                                     SourceReadiness::PlaybackReady {
                                                         server_name: "Unknown".to_string(),
                                                         credentials_valid: true,
@@ -806,15 +832,17 @@ impl SourceCoordinator {
                                                     }
                                                 } else {
                                                     SourceReadiness::Unavailable
-                                                }
+                                                };
+
+                                                (readiness, Some(backend))
                                             }
                                             Err(_) => {
                                                 // Even if connection fails, check if we have valid credentials
-                                                SourceReadiness::PlaybackReady {
+                                                (SourceReadiness::PlaybackReady {
                                                     server_name: "Unknown".to_string(),
                                                     credentials_valid: true,
                                                     last_successful_connection: None,
-                                                }
+                                                }, None)
                                             }
                                         };
 
@@ -831,16 +859,38 @@ impl SourceCoordinator {
                                     let mut source_results = Vec::new();
 
                                     for source in cached_sources {
-                                        let readiness = match Self::test_source_connection(&source, &provider, &auth_manager).await {
+                                        let (readiness, _backend_opt) = match Self::test_source_connection(&source, &provider, &auth_manager).await {
                                             Ok(backend) => {
-                                                if backend.is_initialized().await {
+                                                let is_initialized = backend.is_initialized().await;
+                                                let is_playback_ready = backend.is_playback_ready().await;
+
+                                                // Register backend if it's usable
+                                                if is_initialized || is_playback_ready {
+                                                    let mut backend_mgr = backend_manager.write().await;
+                                                    backend_mgr.register_backend(source.id.clone(), backend.clone());
+                                                    tracing::info!("Registered backend for source: {}", source.id);
+                                                }
+
+                                                // Trigger sync for fully connected backends
+                                                if is_initialized {
+                                                    let sync_manager = sync_manager.clone();
+                                                    let source_id = source.id.clone();
+                                                    let backend_clone = backend.clone();
+                                                    tokio::spawn(async move {
+                                                        if let Err(e) = sync_manager.sync_backend(&source_id, backend_clone).await {
+                                                            tracing::warn!("Background sync failed for {}: {}", source_id, e);
+                                                        }
+                                                    });
+                                                }
+
+                                                let readiness = if is_initialized {
                                                     let library_count = backend.get_libraries().await.map(|libs| libs.len()).unwrap_or(0);
                                                     SourceReadiness::Connected {
                                                         server_name: "Unknown".to_string(),
                                                         api_client_status: crate::services::initialization::ApiClientStatus::Ready,
                                                         library_count: library_count as u32,
                                                     }
-                                                } else if backend.is_playback_ready().await {
+                                                } else if is_playback_ready {
                                                     SourceReadiness::PlaybackReady {
                                                         server_name: "Unknown".to_string(),
                                                         credentials_valid: true,
@@ -848,14 +898,16 @@ impl SourceCoordinator {
                                                     }
                                                 } else {
                                                     SourceReadiness::Unavailable
-                                                }
+                                                };
+
+                                                (readiness, Some(backend))
                                             }
                                             Err(_) => {
-                                                SourceReadiness::PlaybackReady {
+                                                (SourceReadiness::PlaybackReady {
                                                     server_name: "Unknown".to_string(),
                                                     credentials_valid: true,
                                                     last_successful_connection: None,
-                                                }
+                                                }, None)
                                             }
                                         };
 
