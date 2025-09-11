@@ -8,7 +8,7 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Check if columns already exist by attempting to query them
         // This is a workaround for SQLite not properly handling add_column_if_not_exists
-        let db = manager.get_connection();
+        let _db = manager.get_connection();
 
         // Try to add parent_id column - will fail silently if it exists
         match manager
@@ -167,6 +167,7 @@ impl MigrationTrait for Migration {
 #[derive(Iden)]
 enum MediaItems {
     Table,
+    #[allow(dead_code)]
     Id,
     ParentId,
     SeasonNumber,

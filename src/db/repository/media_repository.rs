@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 /// Repository trait for MediaItem entities
 #[async_trait]
+#[allow(dead_code)]
 pub trait MediaRepository: Repository<MediaItemModel> {
     /// Find media items by library
     async fn find_by_library(&self, library_id: &str) -> Result<Vec<MediaItemModel>>;
