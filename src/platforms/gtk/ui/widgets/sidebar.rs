@@ -6,7 +6,6 @@ use std::sync::Arc;
 use super::super::main_window::ReelMainWindow;
 use crate::core::viewmodels::property::Property;
 use crate::core::viewmodels::sidebar_view_model::{LibraryInfo, SidebarViewModel, SourceInfo};
-use crate::events::{DatabaseEvent, EventPayload, EventType};
 use crate::platforms::gtk::ui::reactive::bindings::{
     BindingHandle, bind_image_icon_to_property, bind_spinner_to_property, bind_text_to_property,
     bind_visibility_to_property,
@@ -363,10 +362,10 @@ impl Sidebar {
                         if parts.len() == 2 {
                             let source_id = parts[0].to_string();
                             let library_id = parts[1].to_string();
-                            let library_title = action_row.title().to_string();
+                            let _library_title = action_row.title().to_string();
 
                             // Find the actual library_type from SidebarViewModel data
-                            let library_type = if let Some(viewmodel) = _sidebar.get_viewmodel() {
+                            let _library_type = if let Some(viewmodel) = _sidebar.get_viewmodel() {
                                 let sources = viewmodel.sources().get_sync();
                                 sources.iter()
                                     .find(|source| source.id == source_id)
@@ -381,16 +380,13 @@ impl Sidebar {
                                 "movies".to_string()
                             };
 
-                            // Emit library navigation event instead of direct MainWindow call
-                            let sidebar_clone = _sidebar.clone();
-                            glib::spawn_future_local(async move {
-                                sidebar_clone.emit_library_navigation_event(
-                                    source_id,
-                                    library_id,
-                                    library_title,
-                                    library_type,
-                                ).await;
-                            });
+                            // Navigate to library using MainWindow
+                            if let Some(main_window) = _sidebar.imp().main_window.borrow().as_ref()
+                                && let Some(window) = main_window.upgrade()
+                            {
+                                let library_key = format!("{}:{}", source_id, library_id);
+                                window.navigate_to_library(&library_key);
+                            }
                         }
                     }
                 });
@@ -431,11 +427,12 @@ impl Sidebar {
             let sidebar_weak_clone = sidebar_weak.clone();
             home_row.connect_activated(move |_| {
                 if let Some(sidebar) = sidebar_weak_clone.upgrade() {
-                    // Emit home navigation event instead of direct MainWindow call
-                    let sidebar_clone = sidebar.clone();
-                    glib::spawn_future_local(async move {
-                        sidebar_clone.emit_home_navigation_event(None).await;
-                    });
+                    // Navigate to home using MainWindow
+                    if let Some(main_window) = sidebar.imp().main_window.borrow().as_ref()
+                        && let Some(window) = main_window.upgrade()
+                    {
+                        window.show_home_page_for_source(None);
+                    }
                 }
             });
 
@@ -445,43 +442,6 @@ impl Sidebar {
 
     pub fn get_viewmodel(&self) -> Option<Arc<SidebarViewModel>> {
         self.imp().sidebar_viewmodel.borrow().as_ref().cloned()
-    }
-
-    /// Emit library navigation event through SidebarViewModel's EventBus
-    async fn emit_library_navigation_event(
-        &self,
-        source_id: String,
-        library_id: String,
-        library_title: String,
-        library_type: String,
-    ) {
-        if let Some(viewmodel) = self.get_viewmodel() {
-            let event = DatabaseEvent::new(
-                EventType::LibraryNavigationRequested,
-                EventPayload::LibraryNavigation {
-                    source_id,
-                    library_id,
-                    library_title,
-                    library_type,
-                },
-            );
-            if let Err(e) = viewmodel.emit_event(event).await {
-                eprintln!("Failed to emit library navigation event: {}", e);
-            }
-        }
-    }
-
-    /// Emit home navigation event through SidebarViewModel's EventBus
-    async fn emit_home_navigation_event(&self, source_id: Option<String>) {
-        if let Some(viewmodel) = self.get_viewmodel() {
-            let event = DatabaseEvent::new(
-                EventType::HomeNavigationRequested,
-                EventPayload::HomeNavigation { source_id },
-            );
-            if let Err(e) = viewmodel.emit_event(event).await {
-                eprintln!("Failed to emit home navigation event: {}", e);
-            }
-        }
     }
 
     // Accessors for template children (useful for reactive bindings)

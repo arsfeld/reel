@@ -239,41 +239,6 @@ impl SidebarViewModel {
         self.show_spinner.set(false).await;
     }
 
-    /// Handle library created event
-    async fn on_library_created(&self, source_id: &str, library_id: &str) {
-        tracing::info!("Library created: {} in source {}", library_id, source_id);
-        // Reload the specific source's libraries
-        self.load_sources().await;
-    }
-
-    /// Handle library updated event
-    async fn on_library_updated(&self, library_id: &str) {
-        tracing::info!("Library updated: {}", library_id);
-        // Reload sources to get updated library info
-        self.load_sources().await;
-    }
-
-    /// Handle source added event
-    async fn on_source_added(&self, source_id: &str) {
-        tracing::info!("Source added: {}", source_id);
-        self.load_sources().await;
-    }
-
-    /// Handle source online status change
-    async fn on_source_status_changed(&self, source_id: &str, is_online: bool) {
-        tracing::info!("Source {} status changed: online={}", source_id, is_online);
-
-        // Update the source status in memory first for quick UI update
-        let mut sources = self.sources.get().await;
-        if let Some(source) = sources.iter_mut().find(|s| s.id == source_id) {
-            source.is_online = is_online;
-        }
-        self.sources.set(sources).await;
-
-        // Then reload from database for full consistency
-        self.load_sources().await;
-    }
-
     /// Static method to reload sources from event handler context
     async fn reload_sources(
         data_service: Arc<DataService>,
@@ -398,24 +363,6 @@ impl SidebarViewModel {
         }
 
         let _ = is_loading_prop.set(false).await;
-    }
-
-    /// Handle sync events
-    async fn on_sync_started(&self, source_id: &str) {
-        self.show_spinner.set(true).await;
-        self.status_text
-            .set(format!("Syncing {}...", source_id))
-            .await;
-        self.status_icon
-            .set("emblem-synchronizing-symbolic".to_string())
-            .await;
-    }
-
-    async fn on_sync_completed(&self, source_id: &str) {
-        tracing::info!("Sync completed for source: {}", source_id);
-        self.show_spinner.set(false).await;
-        // Reload to get updated library counts
-        self.load_sources().await;
     }
 }
 
@@ -606,9 +553,5 @@ impl ViewModel for SidebarViewModel {
 
     async fn refresh(&self) {
         self.load_sources().await;
-    }
-
-    fn dispose(&self) {
-        // Clean up if needed
     }
 }

@@ -30,7 +30,7 @@ pub enum PlayerState {
     Playing,
     Paused,
     Stopped,
-    Error(String),
+    Error,
 }
 
 pub enum Player {
@@ -290,13 +290,6 @@ impl Player {
         }
     }
 
-    pub fn get_video_widget(&self) -> Option<gtk4::Widget> {
-        match self {
-            Player::GStreamer(p) => p.get_video_widget(),
-            Player::Mpv(p) => p.get_video_widget(),
-        }
-    }
-
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
         match self {
             Player::GStreamer(p) => p.get_video_dimensions().await,
@@ -312,7 +305,7 @@ impl Player {
                 GstPlayerState::Playing => PlayerState::Playing,
                 GstPlayerState::Paused => PlayerState::Paused,
                 GstPlayerState::Stopped => PlayerState::Stopped,
-                GstPlayerState::Error(e) => PlayerState::Error(e),
+                GstPlayerState::Error => PlayerState::Error,
             },
             Player::Mpv(p) => match p.get_state().await {
                 MpvPlayerState::Idle => PlayerState::Idle,
@@ -320,7 +313,7 @@ impl Player {
                 MpvPlayerState::Playing => PlayerState::Playing,
                 MpvPlayerState::Paused => PlayerState::Paused,
                 MpvPlayerState::Stopped => PlayerState::Stopped,
-                MpvPlayerState::Error(e) => PlayerState::Error(e),
+                // MpvPlayerState::Error => PlayerState::Error, // Removed unused Error variant
             },
         }
     }
@@ -364,58 +357,6 @@ impl Player {
         match self {
             Player::GStreamer(p) => p.get_current_subtitle_track().await,
             Player::Mpv(p) => p.get_current_subtitle_track().await,
-        }
-    }
-
-    pub async fn get_buffer_percentage(&self) -> Option<f64> {
-        match self {
-            Player::GStreamer(p) => p.get_buffer_percentage().await,
-            Player::Mpv(p) => p.get_buffer_percentage().await,
-        }
-    }
-
-    /// Get the name of the currently active backend
-    pub fn get_backend_name(&self) -> &'static str {
-        match self {
-            Player::GStreamer(_) => "GStreamer",
-            Player::Mpv(_) => "MPV",
-        }
-    }
-
-    /// Get the backend type for comparison
-    pub fn get_backend_type(&self) -> PlayerBackend {
-        match self {
-            Player::GStreamer(_) => PlayerBackend::GStreamer,
-            Player::Mpv(_) => PlayerBackend::Mpv,
-        }
-    }
-
-    /// Log current player information for debugging
-    pub async fn log_player_info(&self) {
-        let backend = self.get_backend_name();
-        let state = self.get_state().await;
-        let position = self.get_position().await;
-        let duration = self.get_duration().await;
-
-        info!("🔍 Player Info: Backend={}, State={:?}", backend, state);
-        if let Some(pos) = position {
-            debug!("🔍 Player Info: Position={:.2}s", pos.as_secs_f64());
-        }
-        if let Some(dur) = duration {
-            debug!("🔍 Player Info: Duration={:.2}s", dur.as_secs_f64());
-        }
-    }
-
-    /// Clear video widget state to prepare for widget recreation (MPV specific)
-    pub fn clear_video_widget_state(&self) {
-        match self {
-            Player::GStreamer(_) => {
-                // GStreamer doesn't need this - it creates new sinks each time
-                debug!("GStreamer doesn't require video widget state clearing");
-            }
-            Player::Mpv(p) => {
-                p.clear_video_widget_state();
-            }
         }
     }
 }

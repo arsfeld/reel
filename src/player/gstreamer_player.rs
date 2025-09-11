@@ -17,7 +17,7 @@ pub enum PlayerState {
     Playing,
     Paused,
     Stopped,
-    Error(String),
+    Error,
 }
 
 pub struct GStreamerPlayer {
@@ -422,69 +422,6 @@ impl GStreamerPlayer {
         let ghost_pad = gst::GhostPad::with_target(&sink_pad).ok()?;
         bin.add_pad(&ghost_pad).ok()?;
 
-        Some(bin.upcast())
-    }
-
-    fn create_subtitle_filter(&self) -> Option<gst::Element> {
-        info!("Creating subtitle filter for colorspace conversion");
-
-        // According to GStreamer docs, subtitle overlay should happen at sink level
-        // But we need to ensure proper colorspace for the overlay composition
-        let bin = gst::Bin::new();
-
-        // Use videoconvertscale if available, fallback to videoconvert
-        let convert = if let Ok(convert) = gst::ElementFactory::make("videoconvertscale")
-            .name("subtitle_convert")
-            .build()
-        {
-            info!("Using videoconvertscale for subtitle filter");
-            convert
-        } else if let Ok(convert) = gst::ElementFactory::make("videoconvert")
-            .name("subtitle_convert")
-            .build()
-        {
-            info!("Using videoconvert for subtitle filter (videoconvertscale not available)");
-            convert
-        } else {
-            error!("Failed to create any video converter for subtitle filter");
-            return None;
-        };
-
-        // Configure for optimal performance (0 = auto-detect threads)
-        convert.set_property("n-threads", 0u32);
-
-        // IMPORTANT: Set matrix-mode to ensure proper color conversion
-        // This helps with YUV to RGB conversion issues
-        if convert.has_property("matrix-mode") {
-            // 0 = full range, 1 = GST_VIDEO_MATRIX_MODE_INPUT_ONLY
-            convert.set_property_from_str("matrix-mode", "input-only");
-            info!("Set matrix-mode to input-only for proper colorspace conversion");
-        }
-
-        // Set dither to none to avoid artifacts
-        if convert.has_property("dither") {
-            convert.set_property_from_str("dither", "none");
-            info!("Disabled dithering to avoid artifacts");
-        }
-
-        info!("Configured subtitle filter with auto-detected thread count");
-
-        // Add to bin and create ghost pads
-        if bin.add(&convert).is_err() {
-            error!("Failed to add converter to subtitle filter bin");
-            return None;
-        }
-
-        let sink_pad = convert.static_pad("sink")?;
-        let src_pad = convert.static_pad("src")?;
-
-        let ghost_sink = gst::GhostPad::with_target(&sink_pad).ok()?;
-        let ghost_src = gst::GhostPad::with_target(&src_pad).ok()?;
-
-        bin.add_pad(&ghost_sink).ok()?;
-        bin.add_pad(&ghost_src).ok()?;
-
-        info!("Successfully created subtitle filter");
         Some(bin.upcast())
     }
 
@@ -944,10 +881,6 @@ impl GStreamerPlayer {
         Ok(())
     }
 
-    pub fn get_video_widget(&self) -> Option<gtk4::Widget> {
-        self.video_widget.borrow().clone()
-    }
-
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
         if let Some(playbin) = self.playbin.borrow().as_ref() {
             // Get video sink's pad
@@ -1019,7 +952,7 @@ impl GStreamerPlayer {
                     err.debug()
                 );
                 let mut state = state.write().await;
-                *state = PlayerState::Error(err.error().to_string());
+                *state = PlayerState::Error;
             }
             MessageView::StateChanged(state_changed) => {
                 if state_changed
@@ -1328,12 +1261,5 @@ impl GStreamerPlayer {
         } else {
             -1
         }
-    }
-
-    pub async fn get_buffer_percentage(&self) -> Option<f64> {
-        // GStreamer buffering is complex and varies by pipeline
-        // For streaming content, it's usually a small fixed buffer
-        // Not particularly useful to display, so returning None
-        None
     }
 }
