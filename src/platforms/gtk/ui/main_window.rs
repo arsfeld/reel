@@ -7,9 +7,9 @@ use tracing::{debug, error, info};
 
 use super::filters::{SortOrder, WatchStatus};
 use super::navigation::NavigationManager;
-use super::pages;
 use super::widgets::sidebar::Sidebar;
 use crate::config::Config;
+use crate::platforms::gtk::ui::page_factory::PageFactory;
 use crate::state::AppState;
 use tokio::sync::RwLock;
 
@@ -51,6 +51,7 @@ mod imp {
         pub sidebar_viewmodel:
             RefCell<Option<Arc<crate::platforms::gtk::ui::viewmodels::SidebarViewModel>>>,
         pub sidebar_widget: RefCell<Option<Sidebar>>,
+        pub page_factory: RefCell<Option<crate::platforms::gtk::ui::page_factory::PageFactory>>,
     }
 
     #[glib::object_subclass]
@@ -127,6 +128,10 @@ impl ReelMainWindow {
             .imp()
             .navigation_manager
             .replace(Some(navigation_manager));
+
+        // Initialize PageFactory
+        let page_factory = PageFactory::new(state.clone());
+        window.imp().page_factory.replace(Some(page_factory));
 
         // Initialize SidebarViewModel
         let sidebar_vm = Arc::new(
@@ -257,10 +262,15 @@ impl ReelMainWindow {
             }
 
             // Start reactive initialization (returns immediately)
-            let _init_state = source_coordinator.initialize_sources_reactive();
+            let init_state = source_coordinator.initialize_sources_reactive();
             info!("Started reactive source initialization - UI ready immediately");
 
-            // Progressive UI enhancement is now handled by the Sidebar widget's reactive bindings
+            // Pass initialization state to sidebar for progressive UI enhancement
+            if let Some(window) = window_weak.upgrade() {
+                if let Some(sidebar) = window.imp().sidebar_widget.borrow().as_ref() {
+                    sidebar.set_initialization_state(init_state.clone());
+                }
+            }
 
             // Handle the results of backend initialization
             if let Some(window) = window_weak.upgrade() {
@@ -427,24 +437,24 @@ impl ReelMainWindow {
         let content_stack = self.ensure_content_stack();
 
         // Create sources page if it doesn't exist
-        if content_stack.child_by_name("sources").is_none()
-            && let Some(state) = &*imp.state.borrow()
-        {
-            // Create sources page with header setup callback
-            let header_ref = imp.content_header.clone();
-            let add_button_ref = imp.header_add_button.clone();
-            let sources_page =
-                pages::SourcesPage::new(state.clone(), move |title_label, add_button| {
-                    // Set the header title
-                    header_ref.set_title_widget(Some(title_label));
+        if content_stack.child_by_name("sources").is_none() {
+            if let Some(page_factory) = &*imp.page_factory.borrow() {
+                // Create sources page with header setup callback
+                let header_ref = imp.content_header.clone();
+                let add_button_ref = imp.header_add_button.clone();
+                let sources_page =
+                    page_factory.get_or_create_sources_page(move |title_label, add_button| {
+                        // Set the header title
+                        header_ref.set_title_widget(Some(title_label));
 
-                    // Add the button to header and store reference
-                    header_ref.pack_end(add_button);
-                    add_button_ref.replace(Some(add_button.clone()));
-                });
+                        // Add the button to header and store reference
+                        header_ref.pack_end(add_button);
+                        add_button_ref.replace(Some(add_button.clone()));
+                    });
 
-            content_stack.add_named(&sources_page, Some("sources"));
-            imp.sources_page.replace(Some(sources_page));
+                content_stack.add_named(&sources_page, Some("sources"));
+                imp.sources_page.replace(Some(sources_page));
+            }
         }
 
         // Use NavigationManager for reactive navigation
@@ -461,55 +471,45 @@ impl ReelMainWindow {
     pub fn show_home_page_for_source(&self, source_id: Option<String>) {
         let imp = self.imp();
 
-        // Get or create content stack first to ensure it exists
+        // Get content stack
         let content_stack = self.ensure_content_stack();
 
-        // Create home page if it doesn't exist
-        if content_stack.child_by_name("home").is_none() {
-            if let Some(state) = &*imp.state.borrow() {
-                // Create home page with header setup and navigation callbacks
-                let header_ref = imp.content_header.clone();
-                let window_weak = self.downgrade();
+        // Use PageFactory to get or create home page
+        if let Some(page_factory) = imp.page_factory.borrow().as_ref() {
+            let window_weak = self.downgrade();
+            let home_page =
+                page_factory.get_or_create_home_page(source_id.clone(), move |nav_request| {
+                    if let Some(window) = window_weak.upgrade() {
+                        glib::spawn_future_local(async move {
+                            window.navigate_to(nav_request).await;
+                        });
+                    }
+                });
 
-                let home_page = pages::HomePage::new(
-                    state.clone(),
-                    source_id.clone(), // Pass the source filter
-                    move |title_widget| {
-                        // Set the header title widget (can be label or more complex widget)
-                        header_ref.set_title_widget(Some(title_widget));
-                    },
-                    move |nav_request| {
-                        if let Some(window) = window_weak.upgrade() {
-                            glib::spawn_future_local(async move {
-                                window.navigate_to(nav_request).await;
-                            });
-                        }
-                    },
-                );
+            // Ensure page is in the stack
+            if content_stack.child_by_name("home").is_none() {
+                content_stack.add_named(&home_page.clone().upcast::<gtk4::Widget>(), Some("home"));
+            }
 
-                content_stack.add_named(&home_page, Some("home"));
-                imp.home_page.replace(Some(home_page));
+            // Store reference for compatibility
+            imp.home_page.replace(Some(home_page.clone()));
+
+            // Update the content page title
+            imp.content_page.set_title("Home");
+
+            // Set transition and show the home page
+            content_stack.set_transition_type(gtk4::StackTransitionType::SlideLeftRight);
+            content_stack.set_transition_duration(300);
+            content_stack.set_visible_child_name("home");
+
+            // Show content pane on mobile
+            if let Some(content) = self.content()
+                && let Some(split_view) = content.downcast_ref::<adw::NavigationSplitView>()
+            {
+                split_view.set_show_content(true);
             }
         } else {
-            // Refresh the home page if it already exists and restore its header
-            if let Some(home_page) = &*imp.home_page.borrow() {
-                // Re-setup the header with source selector since it was cleared during navigation
-                let header_ref = imp.content_header.clone();
-                home_page.setup_header_with_selector(move |title_widget| {
-                    header_ref.set_title_widget(Some(title_widget));
-                });
-                home_page.refresh();
-            }
-        }
-
-        // Use NavigationManager for reactive navigation
-        if let Some(nav_manager) = imp.navigation_manager.borrow().as_ref() {
-            let nav_manager = Arc::clone(nav_manager);
-            glib::spawn_future_local(async move {
-                nav_manager
-                    .navigate_to(super::navigation::NavigationPage::Home { source_id })
-                    .await;
-            });
+            tracing::error!("PageFactory not initialized");
         }
     }
 
@@ -649,46 +649,43 @@ impl ReelMainWindow {
         }
     }
 
-    pub fn navigate_to_library(&self, library_id: &str) {
+    pub async fn navigate_to_library(&self, library_id: &str) {
         info!("Navigating to library: {}", library_id);
 
+        // Parse the library_id format "source_id:library_id"
+        let parts: Vec<&str> = library_id.split(':').collect();
+        if parts.len() != 2 {
+            error!("Invalid library ID format: {}", library_id);
+            return;
+        }
+
+        let source_id = parts[0];
+        let lib_id = parts[1];
+
+        // Get the library metadata from the state
         let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        let library_id = library_id.to_string();
-        let window_weak = self.downgrade();
 
-        glib::spawn_future_local(async move {
-            if let Some(window) = window_weak.upgrade() {
-                // Check if library_id contains backend_id
-                let (backend_id, actual_library_id) = if library_id.contains(':') {
-                    let parts: Vec<&str> = library_id.splitn(2, ':').collect();
-                    (parts[0].to_string(), parts[1].to_string())
-                } else {
-                    // Library ID must include backend_id
-                    error!(
-                        "Library ID '{}' does not include backend_id separator ':'",
-                        library_id
-                    );
-                    return;
-                };
-
-                let sync_manager = state.sync_manager.clone();
-
-                // Get the library from cache
-                match sync_manager.get_cached_libraries(&backend_id).await {
-                    Ok(libraries) => {
-                        if let Some(library) = libraries.iter().find(|l| l.id == actual_library_id)
-                        {
-                            window.show_library_view(backend_id, library.clone()).await;
-                        } else {
-                            error!("Library not found: {}", actual_library_id);
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to get libraries: {}", e);
+        // Find the library in the source coordinator
+        if let Some(backend) = state.source_coordinator.get_backend(source_id).await {
+            // Get libraries from this backend
+            match backend.get_libraries().await {
+                Ok(libraries) => {
+                    // Find the specific library
+                    if let Some(library) = libraries.iter().find(|l| l.id == lib_id) {
+                        // Now show the library view
+                        self.show_library_view(source_id.to_string(), library.clone())
+                            .await;
+                    } else {
+                        error!("Library not found: {} in source {}", lib_id, source_id);
                     }
                 }
+                Err(e) => {
+                    error!("Failed to get libraries from backend {}: {}", source_id, e);
+                }
             }
-        });
+        } else {
+            error!("Backend not found: {}", source_id);
+        }
     }
 
     async fn refresh_all_libraries(&self) {
@@ -702,9 +699,12 @@ impl ReelMainWindow {
         }
     }
 
-    pub async fn show_movie_details(&self, movie: crate::models::Movie, state: Arc<AppState>) {
+    pub async fn show_movie_details(&self, movie: crate::models::Movie, _state: Arc<AppState>) {
         let imp = self.imp();
         let start_time = std::time::Instant::now();
+
+        // Cleanup current page if needed
+        self.cleanup_current_page().await;
 
         // Get content stack
         let content_stack = self.ensure_content_stack();
@@ -713,20 +713,18 @@ impl ReelMainWindow {
         content_stack.set_transition_type(gtk4::StackTransitionType::SlideLeftRight);
         content_stack.set_transition_duration(300);
 
-        // Create or get movie details page
-        let movie_details_page = if let Some(page) = imp.movie_details_page.borrow().as_ref() {
-            // Page exists, make sure it's in the stack
-            if content_stack.child_by_name("movie_details").is_none() {
-                content_stack.add_named(page, Some("movie_details"));
-            }
-            page.clone()
-        } else {
-            // Create new page
-            let page = crate::platforms::gtk::ui::pages::MovieDetailsPage::new(state.clone());
+        // Use PageFactory to get or create the movie details page
+        let _movie_details_page = if let Some(page_factory) = imp.page_factory.borrow().as_ref() {
+            let page = page_factory.get_or_create_movie_details_page();
 
-            // Set callback for when play is clicked
+            // Ensure page is in the stack
+            if content_stack.child_by_name("movie_details").is_none() {
+                content_stack.add_named(&page, Some("movie_details"));
+            }
+
+            // Set up the page with callbacks and data
             let window_weak = self.downgrade();
-            page.set_on_play_clicked(move |movie| {
+            page_factory.setup_movie_details_page(&page, &movie, move |movie| {
                 if let Some(window) = window_weak.upgrade() {
                     let movie_item = crate::models::MediaItem::Movie(movie.clone());
                     glib::spawn_future_local(async move {
@@ -738,17 +736,16 @@ impl ReelMainWindow {
                 }
             });
 
-            // Store and add to stack
+            // Store reference for compatibility (will be removed later)
             imp.movie_details_page.replace(Some(page.clone()));
-            content_stack.add_named(&page, Some("movie_details"));
             page
+        } else {
+            tracing::error!("PageFactory not initialized");
+            return;
         };
 
         // Update the content page title
         imp.content_page.set_title(&movie.title);
-
-        // Start loading the movie data
-        movie_details_page.load_movie(movie.clone());
 
         // Defer the transition until data starts loading (immediate transition for perceived performance)
         // This gives the best of both worlds: immediate response + smooth transition
@@ -769,9 +766,12 @@ impl ReelMainWindow {
         }
     }
 
-    pub async fn show_show_details(&self, show: crate::models::Show, state: Arc<AppState>) {
+    pub async fn show_show_details(&self, show: crate::models::Show, _state: Arc<AppState>) {
         let imp = self.imp();
         let start_time = std::time::Instant::now();
+
+        // Cleanup current page if needed
+        self.cleanup_current_page().await;
 
         // Get content stack
         let content_stack = self.ensure_content_stack();
@@ -780,20 +780,18 @@ impl ReelMainWindow {
         content_stack.set_transition_type(gtk4::StackTransitionType::SlideLeftRight);
         content_stack.set_transition_duration(300);
 
-        // Create or get show details page
-        let show_details_page = if let Some(page) = imp.show_details_page.borrow().as_ref() {
-            // Page exists, make sure it's in the stack
+        // Use PageFactory to get or create the show details page
+        let _show_details_page = if let Some(page_factory) = imp.page_factory.borrow().as_ref() {
+            let page = page_factory.get_or_create_show_details_page();
+
+            // Ensure page is in the stack
             if content_stack.child_by_name("show_details").is_none() {
                 content_stack.add_named(page.widget(), Some("show_details"));
             }
-            page.clone()
-        } else {
-            // Create new page
-            let page = crate::platforms::gtk::ui::pages::ShowDetailsPage::new(state.clone());
 
-            // Set callback for when episode is selected
+            // Set up the page with callbacks and data
             let window_weak = self.downgrade();
-            page.set_on_episode_selected(move |episode| {
+            page_factory.setup_show_details_page(&page, &show, move |episode| {
                 if let Some(window) = window_weak.upgrade() {
                     let episode_item = crate::models::MediaItem::Episode(episode.clone());
                     glib::spawn_future_local(async move {
@@ -805,17 +803,16 @@ impl ReelMainWindow {
                 }
             });
 
-            // Store and add to stack
+            // Store reference for compatibility (will be removed later)
             imp.show_details_page.replace(Some(page.clone()));
-            content_stack.add_named(page.widget(), Some("show_details"));
             page
+        } else {
+            tracing::error!("PageFactory not initialized");
+            return;
         };
 
         // Update the content page title
         imp.content_page.set_title(&show.title);
-
-        // Start loading the show data
-        show_details_page.load_show(show.clone());
 
         // Defer the transition until data starts loading (immediate transition for perceived performance)
         // This gives the best of both worlds: immediate response + smooth transition
@@ -833,6 +830,37 @@ impl ReelMainWindow {
                 "show_show_details took {:?} (exceeds frame budget)",
                 elapsed
             );
+        }
+    }
+
+    /// Cleanup the current page if it needs cleanup
+    async fn cleanup_current_page(&self) {
+        let content_stack = self.ensure_content_stack();
+
+        if let Some(current_name) = content_stack.visible_child_name() {
+            let current_name_str = current_name.as_str();
+
+            // Check if the current page needs cleanup
+            if let Some(page_factory) = self.imp().page_factory.borrow().as_ref() {
+                if page_factory.needs_cleanup(current_name_str) {
+                    if let Some(widget) = content_stack.child_by_name(current_name_str) {
+                        info!("Cleaning up page: {}", current_name_str);
+                        page_factory
+                            .cleanup_page_async(current_name_str, &widget)
+                            .await;
+                    }
+                }
+            }
+
+            // Special case: player page cleanup
+            if current_name_str == "player" {
+                if let Some(old_page) = self.imp().player_page.borrow().as_ref() {
+                    info!("Cleaning up existing PlayerPage");
+                    old_page.cleanup().await;
+                }
+                // Clear the stored reference to allow proper Drop cleanup
+                self.imp().player_page.replace(None);
+            }
         }
     }
 
@@ -862,24 +890,26 @@ impl ReelMainWindow {
             media_item.title()
         );
 
-        // Cleanup and remove any existing player page
-        if let Some(old_page) = self.imp().player_page.borrow().as_ref() {
-            info!("Cleaning up existing PlayerPage");
-            old_page.cleanup().await;
-        }
+        // Cleanup any existing page that needs cleanup
+        self.cleanup_current_page().await;
 
-        // Remove old player page widget from stack
+        // Remove old player page widget from stack if it exists
         if let Some(old_widget) = content_stack.child_by_name("player") {
             content_stack.remove(&old_widget);
         }
 
-        // Clear the stored reference to allow proper Drop cleanup
-        self.imp().player_page.replace(None);
-
-        // Create completely fresh PlayerPage instance
-        let player_page = crate::platforms::gtk::ui::pages::PlayerPage::new(state.clone());
-        self.imp().player_page.replace(Some(player_page.clone()));
-        content_stack.add_named(player_page.widget(), Some("player"));
+        // Use PageFactory to create a fresh PlayerPage instance
+        let player_page = if let Some(page_factory) = imp.page_factory.borrow().as_ref() {
+            let page = page_factory.create_player_page();
+            // PlayerPage is always new, no setup needed from factory
+            // Store reference for compatibility (will be removed later)
+            self.imp().player_page.replace(Some(page.clone()));
+            content_stack.add_named(page.widget(), Some("player"));
+            page
+        } else {
+            tracing::error!("PageFactory not initialized");
+            return;
+        };
 
         // Update the content page title first
         self.imp().content_page.set_title(media_item.title());
@@ -1052,6 +1082,9 @@ impl ReelMainWindow {
         let imp = self.imp();
         let start_time = std::time::Instant::now();
 
+        // Cleanup current page if needed
+        self.cleanup_current_page().await;
+
         // Get content stack
         let content_stack = self.ensure_content_stack();
 
@@ -1059,50 +1092,48 @@ impl ReelMainWindow {
         content_stack.set_transition_type(gtk4::StackTransitionType::SlideLeftRight);
         content_stack.set_transition_duration(300);
 
-        // Create or get library view
-        let library_view = {
-            // Check if we already have a library view
-            let existing_view = imp.library_view.borrow().as_ref().cloned();
+        // Use PageFactory to get or create library view
+        let library_view = if let Some(page_factory) = imp.page_factory.borrow().as_ref() {
+            let view = page_factory.get_or_create_library_page();
 
-            if let Some(view) = existing_view {
-                view
-            } else {
-                // Create new library view - always use standard reactive library view
-                let state = imp.state.borrow().as_ref().unwrap().clone();
-                let view = crate::platforms::gtk::ui::pages::LibraryView::new(state.clone());
-
-                // Set the media selected callback to handle different media types
-                let window_weak = self.downgrade();
-                view.set_on_media_selected(move |media_item| {
-                    info!("Library - Media selected: {}", media_item.title());
-                    if let Some(window) = window_weak.upgrade() {
-                        let media_item = media_item.clone();
-                        glib::spawn_future_local(async move {
-                            use super::navigation_request::NavigationRequest;
-                            use crate::models::MediaItem;
-                            let nav_request = match &media_item {
-                                MediaItem::Movie(movie) => {
-                                    NavigationRequest::ShowMovieDetails(movie.clone())
-                                }
-                                MediaItem::Show(show) => {
-                                    NavigationRequest::ShowShowDetails(show.clone())
-                                }
-                                MediaItem::Episode(_) => NavigationRequest::ShowPlayer(media_item),
-                                _ => {
-                                    info!("Library - Unsupported media type");
-                                    return;
-                                }
-                            };
-                            window.navigate_to(nav_request).await;
-                        });
-                    }
-                });
-
-                // Store the view and add to stack
-                imp.library_view.replace(Some(view.clone()));
+            // Ensure page is in the stack
+            if content_stack.child_by_name("library").is_none() {
                 content_stack.add_named(&view.clone().upcast::<gtk4::Widget>(), Some("library"));
-                view
             }
+
+            // Set up the page with callbacks
+            let window_weak = self.downgrade();
+            page_factory.setup_library_page(&view, move |media_item| {
+                info!("Library - Media selected: {}", media_item.title());
+                if let Some(window) = window_weak.upgrade() {
+                    let media_item = media_item.clone();
+                    glib::spawn_future_local(async move {
+                        use super::navigation_request::NavigationRequest;
+                        use crate::models::MediaItem;
+                        let nav_request = match &media_item {
+                            MediaItem::Movie(movie) => {
+                                NavigationRequest::ShowMovieDetails(movie.clone())
+                            }
+                            MediaItem::Show(show) => {
+                                NavigationRequest::ShowShowDetails(show.clone())
+                            }
+                            MediaItem::Episode(_) => NavigationRequest::ShowPlayer(media_item),
+                            _ => {
+                                info!("Library - Unsupported media type");
+                                return;
+                            }
+                        };
+                        window.navigate_to(nav_request).await;
+                    });
+                }
+            });
+
+            // Store reference for compatibility (will be removed later)
+            imp.library_view.replace(Some(view.clone()));
+            view
+        } else {
+            tracing::error!("PageFactory not initialized");
+            return;
         };
 
         // Update the content page title
@@ -1296,103 +1327,83 @@ impl ReelMainWindow {
         &self,
         request: crate::platforms::gtk::ui::navigation_request::NavigationRequest,
     ) {
+        use super::navigation::NavigationPage;
         use super::navigation_request::NavigationRequest;
+
+        tracing::info!("MainWindow: navigate_to called with request: {:?}", request);
 
         // Convert NavigationRequest to NavigationPage and use NavigationManager
         if let Some(nav_manager) = self.imp().navigation_manager.borrow().as_ref() {
             let nav_page = self.navigation_request_to_page(&request);
+            tracing::info!("MainWindow: Converted to NavigationPage: {:?}", nav_page);
 
-            // For NavigationPages, we need to ensure the page exists before navigating
-            self.ensure_page_exists_for_request(&request).await;
-
+            // Page creation is now handled by PageFactory within the navigation methods
             // Use NavigationManager for centralized navigation
             let nav_manager = Arc::clone(nav_manager);
-            match nav_page {
-                Some(page) => {
-                    nav_manager.navigate_to(page).await;
+            // NavigationManager should handle everything
+            match request {
+                NavigationRequest::GoBack => {
+                    nav_manager.go_back().await;
                 }
-                None => {
-                    // Handle GoBack separately as it's not a page navigation
-                    if matches!(request, NavigationRequest::GoBack) {
-                        nav_manager.go_back().await;
+                NavigationRequest::RefreshCurrentPage => {
+                    // TODO: Implement page refresh logic
+                    tracing::debug!("RefreshCurrentPage requested");
+                }
+                NavigationRequest::ClearHistory => {
+                    nav_manager
+                        .navigate_to_root(NavigationPage::Home { source_id: None })
+                        .await;
+                }
+                _ => {
+                    // For all other requests, convert to NavigationPage and navigate
+                    if let Some(page) = nav_page {
+                        tracing::info!("MainWindow: Calling NavigationManager.navigate_to");
+                        nav_manager.navigate_to(page).await;
+                    }
+
+                    // Now trigger the actual page loading
+                    // TODO: This should be moved into NavigationManager
+                    let state = self.imp().state.borrow().as_ref().unwrap().clone();
+                    match request {
+                        NavigationRequest::ShowHome(source_id) => {
+                            tracing::info!("MainWindow: Calling show_home_page_for_source");
+                            self.show_home_page_for_source(source_id);
+                        }
+                        NavigationRequest::ShowSources => {
+                            tracing::info!("MainWindow: Calling show_sources_page");
+                            self.show_sources_page();
+                        }
+                        NavigationRequest::ShowMovieDetails(movie) => {
+                            tracing::info!("MainWindow: Calling show_movie_details");
+                            self.show_movie_details(movie, state).await;
+                        }
+                        NavigationRequest::ShowShowDetails(show) => {
+                            tracing::info!("MainWindow: Calling show_show_details");
+                            self.show_show_details(show, state).await;
+                        }
+                        NavigationRequest::ShowPlayer(media_item) => {
+                            tracing::info!("MainWindow: Calling show_player");
+                            self.show_player(&media_item, state).await;
+                        }
+                        NavigationRequest::ShowLibrary(identifier, library) => {
+                            tracing::info!("MainWindow: Calling show_library_view");
+                            self.show_library_view(identifier.source_id.clone(), library)
+                                .await;
+                        }
+                        NavigationRequest::ShowLibraryByKey(library_key) => {
+                            tracing::info!(
+                                "MainWindow: Calling navigate_to_library with key: {}",
+                                library_key
+                            );
+                            self.navigate_to_library(&library_key).await;
+                        }
+                        _ => {}
                     }
                 }
             }
         } else {
-            // Fallback to old navigation system if NavigationManager isn't available
-            let state = self.imp().state.borrow().as_ref().unwrap().clone();
-
-            match request {
-                NavigationRequest::ShowHome(source_id) => {
-                    self.show_home_page_for_source(source_id);
-                }
-                NavigationRequest::ShowSources => {
-                    self.show_sources_page();
-                }
-                NavigationRequest::ShowMovieDetails(movie) => {
-                    self.show_movie_details(movie, state).await;
-                }
-                NavigationRequest::ShowShowDetails(show) => {
-                    self.show_show_details(show, state).await;
-                }
-                NavigationRequest::ShowPlayer(media_item) => {
-                    self.show_player(&media_item, state).await;
-                }
-                NavigationRequest::ShowLibrary(backend_id, library) => {
-                    self.show_library_view(backend_id, library).await;
-                }
-                NavigationRequest::GoBack => {
-                    // Navigate back in history
-                    if let Some(stack) = self.imp().content_stack.borrow().as_ref() {
-                        // Check if we're currently on the player page and clean it up
-                        if let Some(current_page) = stack.visible_child_name() {
-                            if current_page == "player" {
-                                // Stop the player before navigating away
-                                if let Some(player_page) = self.imp().player_page.borrow().as_ref()
-                                {
-                                    let player_page = player_page.clone();
-                                    let window_self = self.clone();
-                                    glib::spawn_future_local(async move {
-                                        player_page.stop().await;
-
-                                        // Restore UI state
-                                        window_self.imp().content_header.set_visible(true);
-                                        window_self
-                                            .imp()
-                                            .content_toolbar
-                                            .set_top_bar_style(adw::ToolbarStyle::Raised);
-
-                                        // Restore window size
-                                        let (width, height) =
-                                            *window_self.imp().saved_window_size.borrow();
-                                        window_self.set_default_size(width, height);
-
-                                        // Restore sidebar
-                                        if let Some(content) = window_self.content()
-                                            && let Some(split_view) =
-                                                content.downcast_ref::<adw::NavigationSplitView>()
-                                        {
-                                            split_view.set_collapsed(false);
-                                            split_view.set_show_content(true);
-                                        }
-                                    });
-                                }
-                            }
-                        }
-
-                        // Use NavigationManager to go back
-                        if let Some(nav_manager) = self.imp().navigation_manager.borrow().as_ref() {
-                            let nav_manager = Arc::clone(nav_manager);
-                            glib::spawn_future_local(async move {
-                                nav_manager.go_back().await;
-                            });
-                        } else {
-                            // Default to home
-                            self.show_home_page_for_source(None);
-                        }
-                    }
-                }
-            }
+            // NavigationManager should always be available
+            tracing::error!("NavigationManager not initialized! This should never happen.");
         }
     }
 
@@ -1402,7 +1413,7 @@ impl ReelMainWindow {
         request: &crate::platforms::gtk::ui::navigation_request::NavigationRequest,
     ) -> Option<super::navigation::NavigationPage> {
         use super::navigation::NavigationPage;
-        use super::navigation_request::NavigationRequest;
+        use super::navigation_request::{LibraryIdentifier, NavigationRequest};
 
         match request {
             NavigationRequest::ShowHome(source_id) => Some(NavigationPage::Home {
@@ -1421,54 +1432,27 @@ impl ReelMainWindow {
                 media_id: media_item.id().to_string(),
                 title: media_item.title().to_string(),
             }),
-            NavigationRequest::ShowLibrary(backend_id, library) => Some(NavigationPage::Library {
-                backend_id: backend_id.clone(),
-                library_id: library.id.clone(),
+            NavigationRequest::ShowLibrary(identifier, library) => Some(NavigationPage::Library {
+                backend_id: identifier.source_id.clone(),
+                library_id: identifier.library_id.clone(),
                 title: library.title.clone(),
             }),
+            NavigationRequest::ShowLibraryByKey(library_key) => {
+                // Parse the old format and convert to new format
+                if let Some(identifier) = LibraryIdentifier::from_string(library_key) {
+                    // We need to fetch the library title, for now use a placeholder
+                    Some(NavigationPage::Library {
+                        backend_id: identifier.source_id,
+                        library_id: identifier.library_id,
+                        title: "Library".to_string(), // TODO: Fetch actual library title
+                    })
+                } else {
+                    None
+                }
+            }
             NavigationRequest::GoBack => None, // Handle separately
-        }
-    }
-
-    // Helper to ensure the page widget exists before navigating
-    async fn ensure_page_exists_for_request(
-        &self,
-        request: &crate::platforms::gtk::ui::navigation_request::NavigationRequest,
-    ) {
-        use super::navigation_request::NavigationRequest;
-        let state = self.imp().state.borrow().as_ref().unwrap().clone();
-
-        match request {
-            NavigationRequest::ShowHome(_) => {
-                // Home page creation is handled in show_home_page_for_source
-                // We need to temporarily call it to ensure the page exists
-                // TODO: Refactor to separate page creation from navigation
-            }
-            NavigationRequest::ShowSources => {
-                // Sources page creation is handled in show_sources_page
-                // We need to temporarily call it to ensure the page exists
-                // TODO: Refactor to separate page creation from navigation
-            }
-            NavigationRequest::ShowMovieDetails(movie) => {
-                // Movie details page is created in show_movie_details
-                self.show_movie_details(movie.clone(), state).await;
-            }
-            NavigationRequest::ShowShowDetails(show) => {
-                // Show details page is created in show_show_details
-                self.show_show_details(show.clone(), state).await;
-            }
-            NavigationRequest::ShowPlayer(media_item) => {
-                // Player page is created in show_player
-                self.show_player(media_item, state).await;
-            }
-            NavigationRequest::ShowLibrary(backend_id, library) => {
-                // Library page is created in show_library_view
-                self.show_library_view(backend_id.clone(), library.clone())
-                    .await;
-            }
-            NavigationRequest::GoBack => {
-                // No page creation needed for GoBack
-            }
+            NavigationRequest::RefreshCurrentPage => None, // Handle separately
+            NavigationRequest::ClearHistory => None, // Handle separately
         }
     }
 

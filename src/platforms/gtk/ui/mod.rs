@@ -4,6 +4,7 @@ pub mod filters;
 pub mod main_window;
 pub mod navigation;
 pub mod navigation_request;
+pub mod page_factory;
 pub mod pages;
 pub mod preferences_window;
 pub mod reactive;

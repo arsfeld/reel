@@ -4,7 +4,10 @@
 
 This document outlines a comprehensive plan to transform Reel's app initialization from a blocking, synchronous process to a fully reactive, asynchronous system that provides instant UI responsiveness while sources connect in the background.
 
-**✅ IMPLEMENTATION STATUS**: **Phase 1 Complete** - Foundation layer implemented with backend registration and auto-sync.
+**✅ IMPLEMENTATION STATUS**: 
+- **Phase 1 Complete** - Foundation layer implemented with backend registration and auto-sync
+- **Phase 2 Complete** - Async pipeline with parallel source connections  
+- **Phase 3 70% Complete** - Progressive UI enhancement with reactive feature enablement
 
 ## Current State Analysis
 
@@ -381,17 +384,22 @@ impl MainWindow {
 - [x] Implement auto-sync for connected backends
 - [x] Rename initialization methods to be more descriptive
 
-### Phase 2: Async Pipeline (Week 2)
-- [ ] Implement `initialize_sources_reactive()` with parallel processing
-- [ ] Create staged initialization (instant UI, background discovery, network connections)
-- [ ] Fix remaining compilation errors
-- [ ] Remove deprecated blocking `initialize_all_sources()` method
-- [ ] Update MainWindow to use non-blocking initialization
+### Phase 2: Async Pipeline (Week 2) ✅ COMPLETE
+- [x] Implement `initialize_sources_reactive()` with parallel processing
+- [x] Create staged initialization (instant UI, background discovery, network connections)
+- [x] Fix remaining compilation errors
+- [x] Remove deprecated blocking `initialize_all_sources()` method
+- [x] Update MainWindow to use non-blocking initialization
 
-### Phase 3: Progressive Enhancement (Week 3)
-- [ ] Implement progressive feature enablement based on readiness states
+### Phase 3: Progressive Enhancement (Week 3) 🚧 IN PROGRESS
+- [x] Add UI feedback for connection progress - Status label shows "Connecting sources... X/Y"
+- [x] Reactive binding of AppInitializationState to Sidebar widget
+- [x] Implement progressive feature enablement based on readiness states
+  - [x] Added `bind_sensitivity_to_property` function for UI control enabling/disabling
+  - [x] Added `bind_tooltip_to_property` function for user feedback
+  - [x] Play buttons now disabled until `playback_ready` becomes true
+  - [x] Tooltips show "Connecting to media sources..." when features are disabled
 - [ ] Update ViewModels to handle partial initialization gracefully
-- [ ] Add UI feedback for connection progress
 - [ ] Implement fallback to cached content when sources offline
 
 ### Phase 4: Polish & Optimization (Week 4)
@@ -467,15 +475,18 @@ This reactive asynchronous initialization plan transforms Reel from a blocking s
 
 **🏗️ ARCHITECTURE PLAN**: The implementation will follow Reel's established reactive patterns, making it a natural evolution of the current architecture rather than a complete rewrite.
 
-## Phase 3: UI Integration
+## Phase 3: UI Integration 🚧 IN PROGRESS
 
-**Phase 3 TODO**: The reactive UI integration needs to be implemented:
-- [ ] Progressive UI feature enablement based on source readiness states
-- [ ] Reactive binding of AppInitializationState properties to UI elements  
-- [ ] Connection status indicators and loading progress feedback
+**Phase 3 STATUS**: The reactive UI integration is being implemented incrementally:
+- [x] Reactive binding of AppInitializationState properties to UI elements  
+- [x] Connection status indicators and loading progress feedback
+- [x] Progressive UI feature enablement based on source readiness states
+  - Play buttons disabled until playback_ready
+  - Tooltips provide feedback when features are unavailable
+  - Sensitivity bindings react to connection state changes
 - [ ] Graceful handling of offline/partial connectivity scenarios
 
-The blocking-to-reactive transformation is **not yet started**.
+The blocking-to-reactive transformation is **partially complete**.
 
 ## 🚀 Implementation Goals
 
@@ -492,14 +503,18 @@ The blocking-to-reactive transformation is **not yet started**.
 
 ## 📋 Implementation Plan
 
-**TODO TASKS**:
-1. **Fix compilation errors** - Resolve match exhaustiveness issues in source_coordinator.rs
-2. **Remove deprecated code** - Remove blocking `initialize_all_sources()` method
-3. **Update MainWindow integration** - Replace blocking calls with reactive `initialize_sources_reactive()`
-4. **Clean up unused imports** - Remove deprecated reactive implementation imports
-5. **Implement progressive UI** - Add `setup_progressive_initialization()` with reactive status binding
-6. **Add connection progress feedback** - Real-time status updates showing source connection state
-7. **Verify functionality** - Ensure application builds and compiles successfully
+**COMPLETED TASKS** ✅:
+1. **Fix compilation errors** - Resolved all compilation issues
+2. **Remove deprecated code** - Removed blocking `initialize_all_sources()` method
+3. **Update MainWindow integration** - Replaced blocking calls with reactive `initialize_sources_reactive()`
+4. **Clean up unused imports** - Cleaned up deprecated imports
+5. **Add connection progress feedback** - Real-time status updates showing source connection state via Sidebar
+6. **Verify functionality** - Application builds and compiles successfully
+
+**REMAINING TASKS** 📋:
+1. **Implement progressive UI** - Add full `setup_progressive_initialization()` with feature enablement
+2. **Add playback-ready distinction** - Differentiate between credentials-ready and fully-connected states
+3. **Test with multiple backends** - Verify parallel connection behavior with 2+ sources
 
 **🎯 TECHNICAL GOALS**:
 - **0ms UI Load Time**: Window should appear instantly instead of blocking for 3-10 seconds
@@ -614,24 +629,50 @@ PlexApi::get_home_sections() - Starting to fetch homepage data
 3. **⚡ Instant UI + Working Backends**: Best of both worlds - instant UI load AND working functionality
 4. **🛡️ Robust Architecture**: Should maintain reactive benefits while ensuring backend availability
 
-### Files Modified in Phase 1
+### Files Modified
 
-**`src/services/initialization.rs`**
-- Added `Syncing` variant to `SourceReadiness` enum (line 59-61)
-- Added `SyncProgress` struct for tracking sync state (line 93-98)
+**Phase 1 Changes:**
+- **`src/services/initialization.rs`**: Added `Syncing` variant to `SourceReadiness` enum, added `SyncProgress` struct, added `Debug` trait
+- **`src/events/types.rs`**: Added `Initialization` payload type for event system
+- **`src/services/source_coordinator.rs`**: Renamed methods for clarity, added backend registration, added auto-sync triggering
 
-**`src/events/types.rs`**
-- Added `Initialization` payload type for event system (line 188-193)
+**Phase 2 & 3 Changes:**
+- **`src/services/initialization.rs`**: Added `Debug` trait to `AppInitializationState`
+- **`src/services/source_coordinator.rs`**: 
+  - Added `initialization_state` field to store AppInitializationState
+  - Added `get_initialization_state()` method for global access
+  - State is stored when reactive initialization begins
+- **`src/platforms/gtk/ui/main_window.rs`**: Pass `AppInitializationState` to Sidebar widget for reactive UI updates
+- **`src/platforms/gtk/ui/widgets/sidebar.rs`**: 
+  - Added `set_initialization_state()` method
+  - Added reactive bindings to show connection progress in status label
+  - Added spinner control based on connection state
+  - Shows "Connecting sources... X/Y" during initialization
+- **`src/platforms/gtk/ui/reactive/bindings.rs`**:
+  - Added `bind_sensitivity_to_property` function for enabling/disabling UI elements
+  - Added `bind_tooltip_to_property` function for contextual user feedback
+- **`src/platforms/gtk/ui/pages/movie_details.rs`**:
+  - Play button now binds to `playback_ready` property
+  - Disabled with tooltip when sources are still connecting
+  - Automatically enables when sources become ready
 
-**`src/services/source_coordinator.rs`**
-- Renamed `stage1_instant_ui` → `enable_ui_immediately` (line 661)
-- Renamed `stage2_background_discovery` → `discover_cached_sources` (line 685)
-- Renamed `stage3_network_connections` → `connect_and_register_backends` (line 769)
-- Added backend registration in `connect_and_register_backends()` (lines 801-806, 867-872)
-- Added automatic sync triggering for connected backends (lines 809-818, 875-884)
-- Fixed backend registration to use `register_backend()` instead of non-existent `add_backend()`
+These changes enable real-time UI feedback and progressive feature enablement during the asynchronous initialization process.
 
-These changes resolve the gap between reactive initialization (instant UI) and functional backends (working video playback + sync).
+### Recent Progress (2025-09-11)
+
+**Progressive Feature Enablement Implemented:**
+1. **Reactive Sensitivity Bindings**: Added `bind_sensitivity_to_property` to enable/disable UI elements based on connection state
+2. **User Feedback via Tooltips**: Added `bind_tooltip_to_property` for contextual help when features are unavailable
+3. **Play Button Integration**: Movie details page now reacts to `playback_ready` state
+   - Button disabled during connection with "Connecting to media sources..." tooltip
+   - Automatically enables when sources become ready for playback
+4. **Global State Access**: AppInitializationState now stored in SourceCoordinator for app-wide access
+
+**Key Benefits Achieved:**
+- **Zero UI Blocking**: Play buttons and other controls no longer freeze the UI
+- **Clear User Communication**: Tooltips explain why features are temporarily unavailable
+- **Progressive Enhancement**: Features enable as soon as they're ready, not all-or-nothing
+- **Reactive Architecture**: All changes flow through Property system without manual state management
 
 ### Next Steps (Phase 4)
 
@@ -640,3 +681,4 @@ Future enhancements for production readiness:
 - Background connection monitoring and health checks
 - Performance metrics and telemetry
 - Comprehensive test coverage for async scenarios
+- Extend progressive enablement to other UI elements (refresh buttons, sync controls, etc.)

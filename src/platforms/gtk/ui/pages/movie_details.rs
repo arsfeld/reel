@@ -212,6 +212,30 @@ impl MovieDetailsPage {
 
         if let Some(viewmodel) = imp.viewmodel.borrow().as_ref() {
             let mut handles = Vec::new();
+
+            // Bind play button sensitivity to playback_ready state
+            if let Some(state) = imp.state.borrow().as_ref() {
+                if let Some(init_state) = state.source_coordinator.get_initialization_state() {
+                    handles.push(bind_sensitivity_to_property(
+                        &*imp.play_button,
+                        init_state.playback_ready.clone(),
+                        |ready| *ready,
+                    ));
+
+                    // Set tooltip when play button is disabled
+                    handles.push(bind_tooltip_to_property(
+                        &*imp.play_button,
+                        init_state.playback_ready.clone(),
+                        |ready| {
+                            if *ready {
+                                None
+                            } else {
+                                Some("Connecting to media sources...".to_string())
+                            }
+                        },
+                    ));
+                }
+            }
             // Bind title using reactive utilities - extracted from current_item
             handles.push(bind_label_to_property(
                 &*imp.movie_title,
