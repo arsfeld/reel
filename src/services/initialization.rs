@@ -56,6 +56,9 @@ pub enum SourceReadiness {
         credentials_valid: bool,
         last_successful_connection: Option<String>,
     },
+    Syncing {
+        progress: SyncProgress,
+    },
     Unavailable,
     Error(String),
 }
@@ -85,4 +88,11 @@ pub enum ConnectionStatus {
 pub enum ApiClientStatus {
     NotReady,
     Ready,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncProgress {
+    pub current_item: usize,
+    pub total_items: usize,
+    pub current_library: String,
 }
