@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::core::viewmodels::property::Property;
 
 /// Multi-stage reactive initialization state for non-blocking app startup
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AppInitializationState {
     // Stage 1: Instant (0ms) - UI can display immediately
     pub ui_ready: Property<bool>,

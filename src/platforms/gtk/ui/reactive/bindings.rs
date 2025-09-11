@@ -158,6 +158,39 @@ where
     BindingHandle::new(handle)
 }
 
+pub fn bind_sensitivity_to_property<T, F>(
+    widget: &impl WidgetExt,
+    property: Property<T>,
+    transform: F,
+) -> BindingHandle
+where
+    T: Clone + Send + Sync + 'static,
+    F: Fn(&T) -> bool + Send + 'static,
+{
+    let widget_weak = widget.downgrade();
+    let mut subscriber = property.subscribe();
+
+    // Set initial value
+    if let Some(widget) = widget_weak.upgrade() {
+        let initial_value = transform(&property.get_sync());
+        widget.set_sensitive(initial_value);
+    }
+
+    let handle = glib::spawn_future_local(async move {
+        while subscriber.wait_for_change().await {
+            if let Some(widget) = widget_weak.upgrade() {
+                let value = property.get().await;
+                let sensitive = transform(&value);
+                widget.set_sensitive(sensitive);
+            } else {
+                break; // Widget destroyed, exit loop
+            }
+        }
+    });
+
+    BindingHandle::new(handle)
+}
+
 pub fn bind_label_to_property<T, F>(
     widget: &gtk4::Label,
     property: Property<T>,
@@ -496,6 +529,40 @@ where
                 } else {
                     widget.remove_css_class(&css_class);
                 }
+            } else {
+                break; // Widget destroyed, exit loop
+            }
+        }
+    });
+
+    BindingHandle::new(handle)
+}
+
+/// Binds a widget's tooltip text to a property
+pub fn bind_tooltip_to_property<T, F>(
+    widget: &impl WidgetExt,
+    property: Property<T>,
+    transform: F,
+) -> BindingHandle
+where
+    T: Clone + Send + Sync + 'static,
+    F: Fn(&T) -> Option<String> + Send + 'static,
+{
+    let widget_weak = widget.downgrade();
+    let mut subscriber = property.subscribe();
+
+    // Set initial value
+    if let Some(widget) = widget_weak.upgrade() {
+        let initial_value = transform(&property.get_sync());
+        widget.set_tooltip_text(initial_value.as_deref());
+    }
+
+    let handle = glib::spawn_future_local(async move {
+        while subscriber.wait_for_change().await {
+            if let Some(widget) = widget_weak.upgrade() {
+                let value = property.get().await;
+                let tooltip = transform(&value);
+                widget.set_tooltip_text(tooltip.as_deref());
             } else {
                 break; // Widget destroyed, exit loop
             }

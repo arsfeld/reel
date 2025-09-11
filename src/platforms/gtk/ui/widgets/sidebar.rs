@@ -4,12 +4,14 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use super::super::main_window::ReelMainWindow;
+use super::super::navigation_request::NavigationRequest;
 use crate::core::viewmodels::property::Property;
 use crate::core::viewmodels::sidebar_view_model::{LibraryInfo, SidebarViewModel, SourceInfo};
 use crate::platforms::gtk::ui::reactive::bindings::{
     BindingHandle, bind_image_icon_to_property, bind_spinner_to_property, bind_text_to_property,
     bind_visibility_to_property,
 };
+use crate::services::initialization::{AppInitializationState, SourceReadiness};
 
 mod imp {
     use super::*;
@@ -41,12 +43,14 @@ mod imp {
 
         // Reactive properties
         pub sidebar_viewmodel: RefCell<Option<Arc<SidebarViewModel>>>,
+        pub initialization_state: RefCell<Option<AppInitializationState>>,
 
         // Main window reference for sidebar navigation
         pub main_window: RefCell<Option<glib::WeakRef<ReelMainWindow>>>,
 
         // Binding handles to manage reactive subscriptions
         pub binding_handles: RefCell<Vec<BindingHandle>>,
+        pub init_binding_handles: RefCell<Vec<BindingHandle>>,
     }
 
     #[glib::object_subclass]
@@ -133,11 +137,13 @@ impl Sidebar {
         ));
 
         // Bind text properties
-        handles.push(bind_text_to_property(
-            &imp.status_label,
-            viewmodel.status_text().clone(),
-            |text| text.clone(),
-        ));
+        // NOTE: Status label is now bound to AppInitializationState in set_initialization_state()
+        // to show connection progress. Commenting out the viewmodel binding to avoid conflicts.
+        // handles.push(bind_text_to_property(
+        //     &imp.status_label,
+        //     viewmodel.status_text().clone(),
+        //     |text| text.clone(),
+        // ));
 
         // Bind icon property
         handles.push(bind_image_icon_to_property(
@@ -147,18 +153,20 @@ impl Sidebar {
         ));
 
         // Bind spinner visibility and spinning
-        handles.push(bind_visibility_to_property(
-            &*imp.sync_spinner,
-            viewmodel.show_spinner().clone(),
-            |show| *show,
-        ));
+        // NOTE: Spinner is now controlled by AppInitializationState in set_initialization_state()
+        // to show connection progress. Commenting out the viewmodel binding to avoid conflicts.
+        // handles.push(bind_visibility_to_property(
+        //     &*imp.sync_spinner,
+        //     viewmodel.show_spinner().clone(),
+        //     |show| *show,
+        // ));
 
-        // Custom binding for spinner spinning state
-        handles.push(bind_spinner_to_property(
-            &imp.sync_spinner,
-            viewmodel.show_spinner().clone(),
-            |show| *show,
-        ));
+        // // Custom binding for spinner spinning state
+        // handles.push(bind_spinner_to_property(
+        //     &imp.sync_spinner,
+        //     viewmodel.show_spinner().clone(),
+        //     |show| *show,
+        // ));
 
         // Bind sources container to sources collection with navigation setup
         let sidebar_weak_for_sources = self.downgrade();
@@ -180,8 +188,76 @@ impl Sidebar {
         imp.binding_handles.replace(handles);
     }
 
+    /// Set the initialization state and bind to connection progress
+    pub fn set_initialization_state(&self, init_state: AppInitializationState) {
+        tracing::info!("Setting initialization state for sidebar");
+        let imp = self.imp();
+        imp.initialization_state.replace(Some(init_state.clone()));
+
+        // Clear any existing initialization bindings
+        imp.init_binding_handles.replace(Vec::new());
+
+        let mut handles = Vec::new();
+
+        // Bind sources_connected property to show real-time connection progress
+        let status_label = imp.status_label.clone();
+        let spinner = imp.sync_spinner.clone();
+
+        handles.push(bind_text_to_property(
+            &status_label,
+            init_state.sources_connected.clone(),
+            |sources| {
+                let connected_count = sources
+                    .values()
+                    .filter(|status| {
+                        matches!(
+                            status,
+                            SourceReadiness::Connected { .. }
+                                | SourceReadiness::PlaybackReady { .. }
+                        )
+                    })
+                    .count();
+                let total_count = sources.len();
+
+                let status_text = if total_count == 0 {
+                    "No sources configured".to_string()
+                } else if connected_count == total_count {
+                    format!("All {} sources connected", total_count)
+                } else {
+                    format!("Connecting sources... {}/{}", connected_count, total_count)
+                };
+
+                tracing::debug!(
+                    "Sidebar status update: {} (total: {}, connected: {})",
+                    status_text,
+                    total_count,
+                    connected_count
+                );
+                status_text
+            },
+        ));
+
+        // Show spinner while connecting
+        handles.push(bind_spinner_to_property(
+            &spinner,
+            init_state.sources_connected.clone(),
+            |sources| {
+                // Show spinner if any source is still connecting
+                sources
+                    .values()
+                    .any(|status| matches!(status, SourceReadiness::Discovering))
+            },
+        ));
+
+        // Store initialization binding handles
+        imp.init_binding_handles.replace(handles);
+    }
+
     /// Create a source group widget for a given SourceInfo
-    fn create_source_group_widget(source: &SourceInfo) -> adw::PreferencesGroup {
+    fn create_source_group_widget(
+        source: &SourceInfo,
+        sidebar_weak: &glib::WeakRef<Self>,
+    ) -> adw::PreferencesGroup {
         // Create a preferences group for this source
         let source_group = adw::PreferencesGroup::builder().title(&source.name).build();
 
@@ -228,7 +304,39 @@ impl Sidebar {
             libraries_list.append(&row);
         }
 
-        // Navigation callbacks will be set up after widget creation
+        // Connect navigation handler directly to the ListBox
+        let sidebar_weak_clone = sidebar_weak.clone();
+        libraries_list.connect_row_activated(move |_, row| {
+            tracing::info!("Library row activated!");
+            if let Some(action_row) = row.downcast_ref::<adw::ActionRow>()
+                && let Some(_sidebar) = sidebar_weak_clone.upgrade()
+            {
+                let widget_name = action_row.widget_name();
+                let parts: Vec<&str> = widget_name.split(':').collect();
+
+                if parts.len() == 2 {
+                    let source_id = parts[0].to_string();
+                    let library_id = parts[1].to_string();
+
+                    // Navigate to library using NavigationRequest
+                    tracing::info!("Sidebar: Library clicked - {}:{}", source_id, library_id);
+                    if let Some(main_window) = _sidebar.imp().main_window.borrow().as_ref()
+                        && let Some(window) = main_window.upgrade()
+                    {
+                        let nav_request = NavigationRequest::show_library_by_key(format!(
+                            "{}:{}",
+                            source_id, library_id
+                        ));
+                        tracing::info!("Sidebar: Sending navigation request for library");
+                        glib::spawn_future_local(async move {
+                            window.navigate_to(nav_request).await;
+                        });
+                    } else {
+                        tracing::error!("Sidebar: MainWindow reference lost!");
+                    }
+                }
+            }
+        });
 
         source_group.add(&libraries_list);
         source_group
@@ -334,65 +442,9 @@ impl Sidebar {
 
         // Add new source groups
         for source in sources {
-            let source_group = Self::create_source_group_widget(source);
+            let source_group = Self::create_source_group_widget(source, sidebar_weak);
             container.append(&source_group);
-
-            // Setup navigation for this source group
-            Self::setup_source_group_navigation(&source_group, sidebar_weak);
-        }
-    }
-
-    /// Setup navigation callbacks for a source group
-    fn setup_source_group_navigation(
-        source_group: &adw::PreferencesGroup,
-        sidebar_weak: &glib::WeakRef<Self>,
-    ) {
-        // Find all ListBox widgets in the source group
-        let mut current_widget = source_group.first_child();
-        while let Some(widget) = current_widget {
-            if let Some(list_box) = widget.downcast_ref::<gtk4::ListBox>() {
-                let sidebar_weak_clone = sidebar_weak.clone();
-                list_box.connect_row_activated(move |_, row| {
-                    if let Some(action_row) = row.downcast_ref::<adw::ActionRow>()
-                        && let Some(_sidebar) = sidebar_weak_clone.upgrade()
-                    {
-                        let widget_name = action_row.widget_name();
-                        let parts: Vec<&str> = widget_name.split(':').collect();
-
-                        if parts.len() == 2 {
-                            let source_id = parts[0].to_string();
-                            let library_id = parts[1].to_string();
-                            let _library_title = action_row.title().to_string();
-
-                            // Find the actual library_type from SidebarViewModel data
-                            let _library_type = if let Some(viewmodel) = _sidebar.get_viewmodel() {
-                                let sources = viewmodel.sources().get_sync();
-                                sources.iter()
-                                    .find(|source| source.id == source_id)
-                                    .and_then(|source| source.libraries.iter().find(|lib| lib.id == library_id))
-                                    .map(|lib| lib.library_type.clone())
-                                    .unwrap_or_else(|| {
-                                        eprintln!("Warning: Could not find library type for {}:{}, using 'movies' as fallback", source_id, library_id);
-                                        "movies".to_string()
-                                    })
-                            } else {
-                                eprintln!("Warning: SidebarViewModel not available, using 'movies' as fallback");
-                                "movies".to_string()
-                            };
-
-                            // Navigate to library using MainWindow
-                            if let Some(main_window) = _sidebar.imp().main_window.borrow().as_ref()
-                                && let Some(window) = main_window.upgrade()
-                            {
-                                let library_key = format!("{}:{}", source_id, library_id);
-                                window.navigate_to_library(&library_key);
-                            }
-                        }
-                    }
-                });
-                break; // Only need to setup navigation once per source group
-            }
-            current_widget = widget.next_sibling();
+            // Navigation is now set up during widget creation
         }
     }
 
@@ -423,20 +475,32 @@ impl Sidebar {
 
             home_row.set_widget_name("__home__");
 
-            // Setup navigation for home row
+            home_list.append(&home_row);
+
+            // Setup navigation for home list
             let sidebar_weak_clone = sidebar_weak.clone();
-            home_row.connect_activated(move |_| {
-                if let Some(sidebar) = sidebar_weak_clone.upgrade() {
-                    // Navigate to home using MainWindow
-                    if let Some(main_window) = sidebar.imp().main_window.borrow().as_ref()
-                        && let Some(window) = main_window.upgrade()
-                    {
-                        window.show_home_page_for_source(None);
+            home_list.connect_row_activated(move |_, row| {
+                if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
+                    let widget_name = action_row.widget_name();
+                    if widget_name == "__home__" {
+                        if let Some(sidebar) = sidebar_weak_clone.upgrade() {
+                            // Navigate to home using NavigationRequest
+                            tracing::info!("Sidebar: Home clicked");
+                            if let Some(main_window) = sidebar.imp().main_window.borrow().as_ref()
+                                && let Some(window) = main_window.upgrade()
+                            {
+                                let nav_request = NavigationRequest::show_home();
+                                tracing::info!("Sidebar: Sending navigation request for home");
+                                glib::spawn_future_local(async move {
+                                    window.navigate_to(nav_request).await;
+                                });
+                            } else {
+                                tracing::error!("Sidebar: MainWindow reference lost for home!");
+                            }
+                        }
                     }
                 }
             });
-
-            home_list.append(&home_row);
         }
     }
 
