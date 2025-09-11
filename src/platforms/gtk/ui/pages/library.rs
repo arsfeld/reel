@@ -2,21 +2,17 @@ use gtk4::{gdk, glib, prelude::*, subclass::prelude::*};
 use libadwaita as adw;
 use once_cell::sync::Lazy;
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{error, info, trace, warn};
 
-use crate::constants::*;
 use crate::core::viewmodels::{ComputedProperty, Property, ViewModel};
-use crate::models::{Episode, Library, MediaItem, Movie, Show};
+use crate::models::{Library, MediaItem};
 use crate::platforms::gtk::ui::filters::{FilterManager, WatchStatus};
-use crate::platforms::gtk::ui::reactive_bindings;
+use crate::platforms::gtk::ui::reactive::bindings;
 use crate::platforms::gtk::ui::viewmodels::library_view_model::LibraryViewModel;
 use crate::state::AppState;
 use crate::utils::{ImageLoader, ImageSize};
-use sea_orm::prelude::Json;
-use serde_json::Value;
 use std::time::Duration;
 
 // Global image loader instance
@@ -318,7 +314,7 @@ impl LibraryView {
             };
 
             // Setup reactive binding to replace manual display_media_items()
-            reactive_bindings::bind_flowbox_to_media_items(
+            let _binding_handle = bindings::bind_flowbox_to_media_items(
                 flow_box,
                 &filtered_items_property,
                 card_factory,
@@ -380,7 +376,8 @@ impl LibraryView {
             let search_query_property = &self.imp().search_query;
 
             // Use the two-way binding utility
-            reactive_bindings::bind_search_entry_two_way(search_entry, search_query_property);
+            let _binding_handle =
+                bindings::bind_search_entry_two_way(search_entry, search_query_property);
 
             info!("[REACTIVE] Setup two-way search entry binding");
         } else {
@@ -484,299 +481,6 @@ impl LibraryView {
         info!("[REACTIVE] Setup computed property for stack state");
     }
 
-    fn update_items_from_viewmodel(&self, items: Vec<crate::models::MediaItem>) {
-        let start = Instant::now();
-        info!(
-            "[PERF] update_items_from_viewmodel: Received {} items from ViewModel",
-            items.len()
-        );
-
-        // Store pending items and schedule batched update
-        self.imp().pending_items.replace(Some(items));
-
-        // Schedule UI update if not already scheduled
-        if !self.imp().update_scheduled.get() {
-            self.imp().update_scheduled.set(true);
-            info!("[PERF] Scheduling UI update via idle_add_local_once");
-
-            let weak_self = self.downgrade();
-            glib::idle_add_local_once(move || {
-                let idle_start = Instant::now();
-                if let Some(view) = weak_self.upgrade() {
-                    // Process pending items
-                    if let Some(items) = view.imp().pending_items.take() {
-                        info!(
-                            "[PERF] Processing {} pending items in idle callback",
-                            items.len()
-                        );
-                        // Note: display_media_items() disabled - using reactive bindings instead
-                        // view.display_media_items(items);
-                    }
-                    view.imp().update_scheduled.set(false);
-                }
-                let idle_elapsed = idle_start.elapsed();
-                if idle_elapsed.as_millis() > 16 {
-                    warn!("[PERF] Slow idle callback execution: {:?}", idle_elapsed);
-                }
-            });
-        } else {
-            info!("[PERF] UI update already scheduled, skipping");
-        }
-
-        let elapsed = start.elapsed();
-        if elapsed.as_millis() > 2 {
-            warn!("[PERF] Slow update scheduling: {:?}", elapsed);
-        }
-    }
-
-    fn convert_db_item_to_ui_model(
-        &self,
-        db_item: crate::db::entities::media_items::Model,
-    ) -> Option<MediaItem> {
-        match db_item.media_type.as_str() {
-            "movie" => {
-                let movie = Movie {
-                    id: db_item.id,
-                    backend_id: db_item.source_id,
-                    title: db_item.title,
-                    year: db_item.year.map(|y| y as u32),
-                    duration: Duration::from_millis(db_item.duration_ms.unwrap_or(0) as u64),
-                    rating: db_item.rating,
-                    poster_url: db_item.poster_url,
-                    backdrop_url: db_item.backdrop_url,
-                    overview: db_item.overview,
-                    genres: self.extract_genres_from_json(&db_item.genres),
-                    cast: self.extract_cast_from_metadata(&db_item.metadata),
-                    crew: self.extract_crew_from_metadata(&db_item.metadata),
-                    added_at: db_item.added_at.map(|dt| dt.and_utc()),
-                    updated_at: Some(db_item.updated_at.and_utc()),
-                    watched: self.extract_watched_status(&db_item.metadata),
-                    view_count: self
-                        .extract_number_from_metadata(&db_item.metadata, "view_count")
-                        .unwrap_or(0),
-                    last_watched_at: self
-                        .extract_datetime_from_metadata(&db_item.metadata, "last_watched_at"),
-                    playback_position: self.extract_playback_position(&db_item.metadata),
-                    intro_marker: None,
-                    credits_marker: None,
-                };
-                Some(MediaItem::Movie(movie))
-            }
-            "show" => {
-                let show = Show {
-                    id: db_item.id,
-                    backend_id: db_item.source_id,
-                    title: db_item.title,
-                    year: db_item.year.map(|y| y as u32),
-                    seasons: Vec::new(), // TODO: Load seasons separately
-                    rating: db_item.rating,
-                    poster_url: db_item.poster_url,
-                    backdrop_url: db_item.backdrop_url,
-                    overview: db_item.overview,
-                    genres: self.extract_genres_from_json(&db_item.genres),
-                    cast: self.extract_cast_from_metadata(&db_item.metadata),
-                    added_at: db_item.added_at.map(|dt| dt.and_utc()),
-                    updated_at: Some(db_item.updated_at.and_utc()),
-                    watched_episode_count: 0, // TODO: Get from progress tracking
-                    total_episode_count: 0,   // TODO: Calculate from episodes
-                    last_watched_at: None,    // TODO: Get from playback progress
-                };
-                Some(MediaItem::Show(show))
-            }
-            "episode" => {
-                let episode = Episode {
-                    id: db_item.id,
-                    backend_id: db_item.source_id,
-                    show_id: db_item.parent_id,
-                    title: db_item.title,
-                    season_number: self
-                        .extract_number_from_metadata(&db_item.metadata, "season_number")
-                        .unwrap_or(1),
-                    episode_number: self
-                        .extract_number_from_metadata(&db_item.metadata, "episode_number")
-                        .unwrap_or(1),
-                    duration: Duration::from_millis(db_item.duration_ms.unwrap_or(0) as u64),
-                    thumbnail_url: db_item.poster_url, // Episodes use poster_url for thumbnail
-                    overview: db_item.overview,
-                    air_date: db_item.added_at.map(|dt| dt.and_utc()),
-                    watched: self.extract_watched_status(&db_item.metadata),
-                    view_count: self
-                        .extract_number_from_metadata(&db_item.metadata, "view_count")
-                        .unwrap_or(0),
-                    last_watched_at: self
-                        .extract_datetime_from_metadata(&db_item.metadata, "last_watched_at"),
-                    playback_position: self.extract_playback_position(&db_item.metadata),
-                    show_title: self.extract_from_metadata(&db_item.metadata, "show_title"),
-                    show_poster_url: db_item.backdrop_url, // Use backdrop for show poster
-                    intro_marker: None,
-                    credits_marker: None,
-                };
-                Some(MediaItem::Episode(episode))
-            }
-            _ => {
-                trace!("Unsupported media type: {}", db_item.media_type);
-                None
-            }
-        }
-    }
-
-    fn extract_genres_from_json(&self, genres_json: &Option<Json>) -> Vec<String> {
-        genres_json
-            .as_ref()
-            .and_then(|json| serde_json::from_value(json.clone()).ok())
-            .unwrap_or_default()
-    }
-
-    fn extract_from_metadata(&self, metadata: &Option<Json>, key: &str) -> Option<String> {
-        metadata
-            .as_ref()
-            .and_then(|json| {
-                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
-                    .ok()
-            })
-            .and_then(|obj| obj.get(key).and_then(|v| v.as_str().map(String::from)))
-    }
-
-    fn extract_number_from_metadata(&self, metadata: &Option<Json>, key: &str) -> Option<u32> {
-        metadata
-            .as_ref()
-            .and_then(|json| {
-                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
-                    .ok()
-            })
-            .and_then(|obj| obj.get(key).cloned())
-            .and_then(|v| {
-                // Try as number first, then as string that can be parsed
-                v.as_u64()
-                    .map(|n| n as u32)
-                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-            })
-    }
-
-    fn extract_cast_from_metadata(&self, metadata: &Option<Json>) -> Vec<crate::models::Person> {
-        metadata
-            .as_ref()
-            .and_then(|json| {
-                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
-                    .ok()
-            })
-            .and_then(|obj| obj.get("cast").cloned())
-            .and_then(|cast_val| {
-                serde_json::from_value::<Vec<serde_json::Map<String, Value>>>(cast_val).ok()
-            })
-            .map(|cast_array| {
-                cast_array
-                    .into_iter()
-                    .filter_map(|member| {
-                        let name = member.get("name")?.as_str()?.to_string();
-                        let character = member
-                            .get("character")
-                            .and_then(|c| c.as_str())
-                            .map(String::from);
-                        let profile_url = member
-                            .get("profile_path")
-                            .and_then(|p| p.as_str())
-                            .map(String::from);
-
-                        Some(crate::models::Person {
-                            id: member
-                                .get("id")
-                                .and_then(|id| id.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            name,
-                            role: character,
-                            image_url: profile_url,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    fn extract_crew_from_metadata(&self, metadata: &Option<Json>) -> Vec<crate::models::Person> {
-        metadata
-            .as_ref()
-            .and_then(|json| {
-                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
-                    .ok()
-            })
-            .and_then(|obj| obj.get("crew").cloned())
-            .and_then(|crew_val| {
-                serde_json::from_value::<Vec<serde_json::Map<String, Value>>>(crew_val).ok()
-            })
-            .map(|crew_array| {
-                crew_array
-                    .into_iter()
-                    .filter_map(|member| {
-                        let name = member.get("name")?.as_str()?.to_string();
-                        let job = member.get("job")?.as_str()?.to_string();
-                        let _department = member
-                            .get("department")
-                            .and_then(|d| d.as_str())
-                            .map(String::from);
-                        let profile_url = member
-                            .get("profile_path")
-                            .and_then(|p| p.as_str())
-                            .map(String::from);
-
-                        Some(crate::models::Person {
-                            id: member
-                                .get("id")
-                                .and_then(|id| id.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            name,
-                            role: Some(job),
-                            image_url: profile_url,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    fn extract_watched_status(&self, metadata: &Option<Json>) -> bool {
-        metadata
-            .as_ref()
-            .and_then(|json| {
-                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
-                    .ok()
-            })
-            .and_then(|obj| obj.get("watched").cloned())
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-    }
-
-    fn extract_datetime_from_metadata(
-        &self,
-        metadata: &Option<Json>,
-        key: &str,
-    ) -> Option<chrono::DateTime<chrono::Utc>> {
-        metadata
-            .as_ref()
-            .and_then(|json| {
-                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
-                    .ok()
-            })
-            .and_then(|obj| obj.get(key).cloned())
-            .and_then(|v| v.as_str().map(String::from))
-            .and_then(|date_str| chrono::DateTime::parse_from_rfc3339(&date_str).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-    }
-
-    fn extract_playback_position(&self, metadata: &Option<Json>) -> Option<std::time::Duration> {
-        metadata
-            .as_ref()
-            .and_then(|json| {
-                serde_json::from_value::<std::collections::HashMap<String, Value>>(json.clone())
-                    .ok()
-            })
-            .and_then(|obj| obj.get("playback_position_ms").cloned())
-            .and_then(|v| v.as_u64())
-            .map(std::time::Duration::from_millis)
-    }
-
     pub async fn load_library(&self, backend_id: String, library: Library) {
         let start = Instant::now();
         info!("Loading library: {} ({})", library.title, library.id);
@@ -819,155 +523,6 @@ impl LibraryView {
             warn!(
                 "Slow library load: {:?} for library {}",
                 elapsed, library.title
-            );
-        }
-    }
-
-    async fn preload_initial_images(&self, items: &[MediaItem]) {
-        // Simplified: removed predictive preloading as it may cause issues
-        // Images will load on-demand through trigger_load() instead
-        trace!("Skipping predictive preload for {} items", items.len());
-    }
-
-    fn setup_progressive_loading(
-        &self,
-        scrolled_window: gtk4::ScrolledWindow,
-        flow_box: gtk4::FlowBox,
-    ) {
-        let adjustment = scrolled_window.vadjustment();
-        let update_counter: Rc<RefCell<u32>> = Rc::new(RefCell::new(0));
-        let scroll_end_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
-
-        adjustment.connect_value_changed(move |adj| {
-            // Set scrolling state immediately
-            IMAGE_LOADER.set_scrolling(true);
-            trace!(
-                "[PERF] Scroll event: scrolling set to true, viewport: {:.0}-{:.0}",
-                adj.value(),
-                adj.value() + adj.page_size()
-            );
-
-            let flow_box = flow_box.clone();
-            let counter = update_counter.clone();
-            let timer_ref = scroll_end_timer.clone();
-
-            let viewport_top = adj.value();
-            let viewport_height = adj.page_size();
-
-            let current_count = {
-                let mut c = counter.borrow_mut();
-                *c += 1;
-                *c
-            };
-
-            // Cancel previous timer
-            if let Some(timer_id) = timer_ref.borrow_mut().take() {
-                timer_id.remove();
-            }
-
-            // Set new timer to detect when scrolling stops
-            let timer_id =
-                glib::timeout_add_local(std::time::Duration::from_millis(150), move || {
-                    // Scrolling has stopped for 150ms
-                    info!("[PERF] Scroll stopped after 150ms, loading images in viewport");
-                    IMAGE_LOADER.set_scrolling(false);
-
-                    let viewport_bottom = viewport_top + viewport_height;
-
-                    // Load everything in a large buffer since images are small
-                    let load_margin = viewport_height * 3.0; // Load 3 screens in each direction
-
-                    let load_top = (viewport_top - load_margin).max(0.0);
-                    let load_bottom = viewport_bottom + load_margin;
-
-                    // Single pass loading - all at same quality
-                    info!(
-                        "[PERF] Loading cards in range: {:.0}-{:.0} (viewport: {:.0}-{:.0})",
-                        load_top, load_bottom, viewport_top, viewport_bottom
-                    );
-                    Self::load_cards_in_range(&flow_box, load_top, load_bottom, ImageSize::Medium);
-
-                    glib::ControlFlow::Break
-                });
-
-            *timer_ref.borrow_mut() = Some(timer_id);
-        });
-    }
-
-    fn load_visible_cards(flow_box: &gtk4::FlowBox, max_items: usize) {
-        let mut loaded = 0;
-        let mut child = flow_box.first_child();
-
-        while let Some(flow_child) = child {
-            if loaded >= max_items {
-                break;
-            }
-
-            if let Some(fc) = flow_child.downcast_ref::<gtk4::FlowBoxChild>()
-                && let Some(card) = fc.child().and_then(|w| w.downcast::<MediaCard>().ok())
-            {
-                card.trigger_load(ImageSize::Medium);
-                loaded += 1;
-            }
-
-            child = flow_child.next_sibling();
-        }
-    }
-
-    fn load_cards_in_range(
-        flow_box: &gtk4::FlowBox,
-        visible_top: f64,
-        visible_bottom: f64,
-        size: ImageSize,
-    ) {
-        let start = Instant::now();
-        let mut child = flow_box.first_child();
-        let mut cards_to_load = Vec::new();
-        let mut total_cards = 0;
-
-        while let Some(flow_child) = child {
-            if let Some(fc) = flow_child.downcast_ref::<gtk4::FlowBoxChild>() {
-                total_cards += 1;
-                // Use natural size for visibility calculations
-                let (_, natural) = fc.preferred_size();
-                let child_height = natural.height() as f64;
-
-                // Approximate position based on index
-                let index = fc.index() as f64;
-                let approx_row = (index / 6.0).floor(); // Estimate based on typical columns
-                let child_top = approx_row * (child_height + 20.0); // Include row spacing
-                let child_bottom = child_top + child_height;
-
-                if child_bottom >= visible_top
-                    && child_top <= visible_bottom
-                    && let Some(card) = fc.child().and_then(|w| w.downcast::<MediaCard>().ok())
-                {
-                    cards_to_load.push((card, size));
-                }
-            }
-
-            child = flow_child.next_sibling();
-        }
-
-        info!(
-            "[PERF] load_cards_in_range: Loading {} of {} cards in range {:.0}-{:.0}",
-            cards_to_load.len(),
-            total_cards,
-            visible_top,
-            visible_bottom
-        );
-
-        // Batch load for efficiency
-        for (card, size) in &cards_to_load {
-            card.trigger_load(*size);
-        }
-
-        let elapsed = start.elapsed();
-        if elapsed.as_millis() > 16 {
-            warn!(
-                "[PERF] load_cards_in_range took {:?} to trigger {} loads",
-                elapsed,
-                cards_to_load.len()
             );
         }
     }
@@ -1064,7 +619,7 @@ impl LibraryView {
         });
     }
 
-    pub fn get_filter_manager(&self) -> std::cell::Ref<FilterManager> {
+    pub fn get_filter_manager(&self) -> std::cell::Ref<'_, FilterManager> {
         self.imp().filter_manager.borrow()
     }
 
@@ -1116,78 +671,6 @@ impl LibraryView {
 
         trace!("Triggered load for cards {}-{}", start_idx, end_idx);
         */
-    }
-
-    fn setup_progressive_loading_with_batch(
-        &self,
-        scrolled_window: gtk4::ScrolledWindow,
-        flow_box: gtk4::FlowBox,
-        create_cards: Rc<dyn Fn(usize, usize)>,
-        cards_rc: Rc<RefCell<Vec<MediaCard>>>,
-        total_items: usize,
-    ) {
-        let adjustment = scrolled_window.vadjustment();
-        let update_counter: Rc<RefCell<u32>> = Rc::new(RefCell::new(0));
-        let weak_self = self.downgrade();
-
-        adjustment.connect_value_changed(move |adj| {
-            let flow_box = flow_box.clone();
-            let counter = update_counter.clone();
-            let cards_rc = cards_rc.clone();
-            let create_cards = create_cards.clone();
-            let weak_self = weak_self.clone();
-
-            let viewport_top = adj.value();
-            let viewport_height = adj.page_size();
-
-            let current_count = {
-                let mut c = counter.borrow_mut();
-                *c += 1;
-                *c
-            };
-
-            // Moderate delay to balance responsiveness and performance
-            let counter_inner = counter.clone();
-            glib::timeout_add_local(
-                std::time::Duration::from_millis(SCROLL_DEBOUNCE_MS),
-                move || {
-                    if *counter_inner.borrow() != current_count {
-                        return glib::ControlFlow::Break;
-                    }
-
-                    let viewport_bottom = viewport_top + viewport_height;
-
-                    // Calculate which cards should be visible
-                    let card_height = 270.0; // Approximate height for medium cards
-                    let cards_per_row = 6.0; // Approximate
-                    let row_height = card_height + 20.0; // Include spacing
-
-                    let start_row = ((viewport_top - IMAGE_VIEWPORT_BUFFER) / row_height)
-                        .floor()
-                        .max(0.0) as usize;
-                    let end_row =
-                        ((viewport_bottom + IMAGE_VIEWPORT_BUFFER) / row_height).ceil() as usize;
-
-                    let start_idx = start_row * cards_per_row as usize;
-                    let end_idx = ((end_row + 1) * cards_per_row as usize).min(total_items);
-
-                    // Create cards if needed - reasonable batch size
-                    let current_card_count = cards_rc.borrow().len();
-                    if end_idx > current_card_count {
-                        let batch_size = (end_idx - current_card_count).min(CARD_BATCH_SIZE);
-                        create_cards(current_card_count, current_card_count + batch_size);
-                    }
-
-                    // Batch load images for visible cards
-                    if let Some(view) = weak_self.upgrade() {
-                        // Note: batch_load_visible_cards() disabled - using reactive bindings instead
-                        // view.batch_load_visible_cards(start_idx, end_idx);
-                    }
-
-                    glib::ControlFlow::Break
-                },
-            );
-        });
     }
 }
 

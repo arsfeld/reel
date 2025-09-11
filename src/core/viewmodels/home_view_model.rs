@@ -589,8 +589,6 @@ impl ViewModel for HomeViewModel {
     async fn refresh(&self) {
         let _ = self.load_home_content_from_cache().await;
     }
-
-    fn dispose(&self) {}
 }
 
 impl Clone for HomeViewModel {

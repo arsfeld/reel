@@ -14,18 +14,6 @@ pub enum PlaybackState {
     Stopped,
     Playing,
     Paused,
-    Buffering,
-    Error(String),
-}
-
-#[derive(Debug, Clone)]
-pub struct PlaybackInfo {
-    pub media_item: MediaItem,
-    pub position: Duration,
-    pub duration: Duration,
-    pub volume: f64,
-    pub playback_rate: f64,
-    pub is_muted: bool,
 }
 
 #[derive(Debug)]
@@ -61,8 +49,6 @@ pub struct PlayerViewModel {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AutoPlayState {
     Idle,
-    Counting(u32),
-    Disabled,
 }
 
 impl PlayerViewModel {
@@ -304,103 +290,6 @@ impl PlayerViewModel {
         self.position.set(Duration::ZERO).await;
     }
 
-    pub async fn toggle_play_pause(&self) {
-        match self.playback_state.get().await {
-            PlaybackState::Playing => self.pause().await,
-            PlaybackState::Paused | PlaybackState::Stopped => self.play().await,
-            _ => {}
-        }
-    }
-
-    pub async fn seek(&self, position: Duration) {
-        self.position.set(position).await;
-        self.emit_playback_event(EventType::PlaybackPositionUpdated)
-            .await;
-    }
-
-    pub async fn set_volume(&self, volume: f64) {
-        let clamped = volume.clamp(0.0, 1.0);
-        self.volume.set(clamped).await;
-        if clamped == 0.0 {
-            self.is_muted.set(true).await;
-        } else if self.is_muted.get().await {
-            self.is_muted.set(false).await;
-        }
-    }
-
-    pub async fn toggle_mute(&self) {
-        let is_muted = !self.is_muted.get().await;
-        self.is_muted.set(is_muted).await;
-    }
-
-    pub async fn set_playback_rate(&self, rate: f64) {
-        let clamped = rate.clamp(0.25, 4.0);
-        self.playback_rate.set(clamped).await;
-    }
-
-    pub async fn toggle_fullscreen(&self) {
-        let fullscreen = !self.is_fullscreen.get().await;
-        self.is_fullscreen.set(fullscreen).await;
-    }
-
-    pub async fn next(&self) {
-        let playlist = self.playlist.get().await;
-        let current_index = self.playlist_index.get().await;
-
-        if current_index + 1 < playlist.len() {
-            let next_index = current_index + 1;
-            self.playlist_index.set(next_index).await;
-
-            if let Some(next_item) = playlist.get(next_index) {
-                let _ = self.load_media(next_item.id().to_string()).await;
-                self.play().await;
-            }
-        }
-    }
-
-    pub async fn previous(&self) {
-        let position = self.position.get().await;
-
-        if position > Duration::from_secs(3) {
-            self.seek(Duration::ZERO).await;
-        } else {
-            let current_index = self.playlist_index.get().await;
-
-            if current_index > 0 {
-                let prev_index = current_index - 1;
-                self.playlist_index.set(prev_index).await;
-
-                let playlist = self.playlist.get().await;
-                if let Some(prev_item) = playlist.get(prev_index) {
-                    let _ = self.load_media(prev_item.id().to_string()).await;
-                    self.play().await;
-                }
-            } else {
-                self.seek(Duration::ZERO).await;
-            }
-        }
-    }
-
-    pub async fn set_playlist(&self, items: Vec<MediaItem>, start_index: usize) {
-        self.playlist.set(items.clone()).await;
-        self.playlist_index.set(start_index).await;
-
-        if let Some(item) = items.get(start_index) {
-            let _ = self.load_media(item.id().to_string()).await;
-        }
-    }
-
-    pub async fn update_position(&self, position: Duration) {
-        self.position.set(position).await;
-
-        let duration = self.duration.get().await;
-        if duration > Duration::ZERO && position >= duration {
-            self.playback_state.set(PlaybackState::Stopped).await;
-            self.emit_playback_event(EventType::PlaybackCompleted).await;
-            self.next().await;
-        }
-    }
-
     async fn save_progress(&self) {
         if let Some(media) = self.current_media.get().await {
             let position = self.position.get().await;
@@ -511,14 +400,6 @@ impl PlayerViewModel {
         &self.is_muted
     }
 
-    pub fn is_fullscreen(&self) -> &Property<bool> {
-        &self.is_fullscreen
-    }
-
-    pub fn playlist(&self) -> &Property<Vec<MediaItem>> {
-        &self.playlist
-    }
-
     pub fn is_loading(&self) -> &Property<bool> {
         &self.is_loading
     }
@@ -537,46 +418,6 @@ impl PlayerViewModel {
 
     pub fn next_episode(&self) -> &Property<Option<Episode>> {
         &self.next_episode
-    }
-
-    // Check if media is currently playing
-    pub async fn is_playing(&self) -> bool {
-        matches!(self.playback_state.get().await, PlaybackState::Playing)
-    }
-
-    // Toggle between play and pause states
-    pub async fn toggle_playback(&self) {
-        match self.playback_state.get().await {
-            PlaybackState::Playing => self.pause().await,
-            PlaybackState::Paused | PlaybackState::Stopped => self.play().await,
-            _ => {}
-        }
-    }
-
-    // Load media from a URL (for direct playback)
-    pub async fn load_url(&self, url: String) -> Result<()> {
-        use crate::models::Resolution;
-
-        self.is_loading.set(true).await;
-        self.error.set(None).await;
-
-        // Create a StreamInfo directly from the URL
-        let stream_info = StreamInfo {
-            url: url.clone(),
-            direct_play: true,
-            video_codec: "unknown".to_string(),
-            audio_codec: "unknown".to_string(),
-            container: "unknown".to_string(),
-            bitrate: 0,
-            resolution: Resolution::default(),
-            quality_options: Vec::new(),
-        };
-
-        self.stream_info.set(Some(stream_info)).await;
-        self.playback_state.set(PlaybackState::Stopped).await;
-        self.is_loading.set(false).await;
-
-        Ok(())
     }
 }
 
@@ -625,8 +466,6 @@ impl ViewModel for PlayerViewModel {
             let _ = self.load_media(media.id().to_string()).await;
         }
     }
-
-    fn dispose(&self) {}
 }
 
 impl Clone for PlayerViewModel {
