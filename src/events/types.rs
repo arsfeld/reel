@@ -85,6 +85,18 @@ pub enum EventType {
     SyncCompleted,
     SyncFailed,
 
+    // Navigation events
+    NavigationRequested,
+    NavigationCompleted,
+    NavigationFailed,
+    NavigationHistoryChanged,
+    PageTitleChanged,
+    HeaderConfigChanged,
+
+    // Sidebar navigation events
+    LibraryNavigationRequested,
+    HomeNavigationRequested,
+
     // Playback events
     PlaybackStarted,
     PlaybackPaused,
@@ -140,6 +152,21 @@ pub enum EventPayload {
         progress: Option<f32>,
         items_synced: Option<usize>,
         error: Option<String>,
+    },
+    Navigation {
+        page_name: String,
+        page_title: Option<String>,
+        can_go_back: Option<bool>,
+        error: Option<String>,
+    },
+    LibraryNavigation {
+        source_id: String,
+        library_id: String,
+        library_title: String,
+        library_type: String,
+    },
+    HomeNavigation {
+        source_id: Option<String>,
     },
     Playback {
         media_id: String,
@@ -210,6 +237,14 @@ impl EventType {
             EventType::SyncProgress => "sync.progress",
             EventType::SyncCompleted => "sync.completed",
             EventType::SyncFailed => "sync.failed",
+            EventType::NavigationRequested => "navigation.requested",
+            EventType::NavigationCompleted => "navigation.completed",
+            EventType::NavigationFailed => "navigation.failed",
+            EventType::NavigationHistoryChanged => "navigation.history_changed",
+            EventType::PageTitleChanged => "navigation.page_title_changed",
+            EventType::HeaderConfigChanged => "navigation.header_config_changed",
+            EventType::LibraryNavigationRequested => "sidebar.library_navigation_requested",
+            EventType::HomeNavigationRequested => "sidebar.home_navigation_requested",
             EventType::PlaybackStarted => "playback.started",
             EventType::PlaybackPaused => "playback.paused",
             EventType::PlaybackResumed => "playback.resumed",

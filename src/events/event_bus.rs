@@ -129,9 +129,10 @@ pub struct EventBus {
 }
 
 #[derive(Debug, Default)]
-struct EventBusStats {
+pub struct EventBusStats {
     total_events: u64,
     events_by_type: HashMap<String, u64>,
+    #[allow(dead_code)]
     subscriber_count: usize,
     dropped_events: u64,
 }
