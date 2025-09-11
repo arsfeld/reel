@@ -11,13 +11,12 @@ use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 // MPV render update flags
-const MPV_RENDER_UPDATE_FRAME: u64 = 1;
 
 #[derive(Debug, Clone)]
 pub enum PlayerState {
@@ -26,7 +25,6 @@ pub enum PlayerState {
     Playing,
     Paused,
     Stopped,
-    Error(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -38,15 +36,6 @@ pub enum UpscalingMode {
 }
 
 impl UpscalingMode {
-    pub fn next(&self) -> Self {
-        match self {
-            UpscalingMode::None => UpscalingMode::HighQuality,
-            UpscalingMode::HighQuality => UpscalingMode::FSR,
-            UpscalingMode::FSR => UpscalingMode::Anime,
-            UpscalingMode::Anime => UpscalingMode::None,
-        }
-    }
-
     pub fn to_string(&self) -> &'static str {
         match self {
             UpscalingMode::None => "None",
@@ -64,7 +53,6 @@ struct MpvPlayerInner {
     gl_area: RefCell<Option<GLArea>>,
     update_callback_registered: Cell<bool>,
     pending_media_url: RefCell<Option<String>>,
-    frame_pending: Arc<AtomicBool>,
     last_render_time: RefCell<Instant>,
     render_count: Arc<AtomicU64>,
     cached_fbo: Cell<i32>,
@@ -107,7 +95,6 @@ impl MpvPlayer {
                 gl_area: RefCell::new(None),
                 update_callback_registered: Cell::new(false),
                 pending_media_url: RefCell::new(None),
-                frame_pending: Arc::new(AtomicBool::new(false)),
                 last_render_time: RefCell::new(Instant::now()),
                 render_count: Arc::new(AtomicU64::new(0)),
                 cached_fbo: Cell::new(-1),
@@ -236,15 +223,11 @@ impl MpvPlayer {
     unsafe extern "C" fn on_mpv_render_update(ctx: *mut c_void) {
         unsafe {
             // Use a simple struct that just marks frame as pending
-            struct UpdateContext {
-                frame_pending: Arc<AtomicBool>,
-            }
+            struct UpdateContext {}
 
-            let update_ctx = &*(ctx as *const UpdateContext);
-            let frame_pending = &update_ctx.frame_pending;
-
-            // Just mark that a frame is pending - the timer will handle the actual render
-            frame_pending.store(true, Ordering::Release);
+            let _update_ctx = &*(ctx as *const UpdateContext);
+            // Frame update handling removed
+            // frame_pending.store(true, Ordering::Release); // Removed unused field
         }
     }
 
@@ -356,13 +339,9 @@ impl MpvPlayer {
             // Set up the update callback with our custom context
             if !self.inner.update_callback_registered.get() {
                 // Create update context that just signals frame pending
-                struct UpdateContext {
-                    frame_pending: Arc<AtomicBool>,
-                }
+                struct UpdateContext {}
 
-                let update_ctx = Box::new(UpdateContext {
-                    frame_pending: self.inner.frame_pending.clone(),
-                });
+                let update_ctx = Box::new(UpdateContext {});
 
                 mpv_render_context_set_update_callback(
                     mpv_gl,
@@ -447,7 +426,7 @@ impl MpvPlayer {
         let inner_render = inner.clone();
         gl_area.connect_render(move |gl_area, _gl_context| {
             // Reset frame pending flag
-            inner_render.frame_pending.store(false, Ordering::Release);
+            // inner_render.frame_pending.store(false, Ordering::Release); // Removed unused field
 
             // Track render performance
             let now = Instant::now();
@@ -630,7 +609,8 @@ impl MpvPlayer {
                         && !paused
                     {
                         // Check if MPV wants a render or if we need a regular update
-                        if inner_timer.frame_pending.swap(false, Ordering::AcqRel) {
+                        // if inner_timer.frame_pending.swap(false, Ordering::AcqRel) { // Removed unused field
+                        {
                             // MPV signaled it needs a render
                             gl_area_timer.queue_render();
                         }
@@ -861,14 +841,6 @@ impl MpvPlayer {
         Ok(())
     }
 
-    pub fn get_video_widget(&self) -> Option<gtk4::Widget> {
-        self.inner
-            .gl_area
-            .borrow()
-            .as_ref()
-            .map(|area| area.clone().upcast())
-    }
-
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
         if let Some(ref mpv) = *self.inner.mpv.borrow()
             && let (Ok(width), Ok(height)) = (
@@ -1018,12 +990,6 @@ impl MpvPlayer {
         -1
     }
 
-    pub async fn get_buffer_percentage(&self) -> Option<f64> {
-        // MPV maintains a fixed ~10 second buffer, which isn't useful to display
-        // This method is kept for compatibility but returns None
-        None
-    }
-
     pub async fn set_upscaling_mode(&self, mode: UpscalingMode) -> Result<()> {
         let mut current_mode = self.inner.upscaling_mode.lock().unwrap();
         *current_mode = mode;
@@ -1033,39 +999,6 @@ impl MpvPlayer {
             self.apply_upscaling_settings(mpv, mode)?;
         }
         Ok(())
-    }
-
-    pub async fn get_upscaling_mode(&self) -> UpscalingMode {
-        *self.inner.upscaling_mode.lock().unwrap()
-    }
-
-    pub async fn cycle_upscaling_mode(&self) -> Result<UpscalingMode> {
-        let current = self.get_upscaling_mode().await;
-        let next = current.next();
-        self.set_upscaling_mode(next).await?;
-        Ok(next)
-    }
-
-    /// Clear internal GLArea reference and OpenGL context to prepare for widget recreation
-    pub fn clear_video_widget_state(&self) {
-        debug!("Clearing MPV internal GLArea state for widget recreation");
-
-        // Cancel the render timer first
-        if let Some(timer_id) = self.inner.timer_handle.borrow_mut().take() {
-            timer_id.remove();
-            debug!("Cancelled MPV render timer");
-        }
-
-        // Clear the GLArea reference - this will trigger cleanup when GLArea is destroyed
-        self.inner.gl_area.borrow_mut().take();
-
-        // Clear the render context reference - it will be recreated with new GLArea
-        self.inner.mpv_gl.borrow_mut().take();
-
-        // Reset callback registration flag
-        self.inner.update_callback_registered.set(false);
-
-        debug!("MPV internal state cleared for widget recreation");
     }
 
     fn apply_upscaling_settings(&self, mpv: &Mpv, mode: UpscalingMode) -> Result<()> {

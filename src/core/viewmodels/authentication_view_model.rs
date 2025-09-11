@@ -586,16 +586,6 @@ impl ViewModel for AuthenticationViewModel {
         // Reset authentication state on refresh
         self.reset().await;
     }
-
-    fn dispose(&self) {
-        // Cancel any ongoing authentication
-        let handle = self.cancellation_handle.clone();
-        tokio::spawn(async move {
-            if let Some(handle) = handle.lock().await.take() {
-                handle.abort();
-            }
-        });
-    }
 }
 
 impl AuthenticationViewModel {

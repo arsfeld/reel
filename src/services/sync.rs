@@ -14,14 +14,6 @@ use crate::services::data::DataService;
 use crate::utils::image_loader::{ImageLoader, ImageSize};
 
 #[derive(Debug, Clone)]
-pub enum SyncType {
-    Full,            // Full sync of all data
-    Incremental,     // Only changes since last sync
-    Library(String), // Specific library
-    Media(String),   // Specific media item
-}
-
-#[derive(Debug, Clone)]
 pub enum SyncStatus {
     Idle,
     Syncing {

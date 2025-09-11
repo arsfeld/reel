@@ -181,7 +181,7 @@ mod imp_item {
             }
         }
 
-        fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+        fn set_property(&self, _id: usize, _value: &glib::Value, pspec: &glib::ParamSpec) {
             match pspec.name() {
                 "title" | "id" | "watched" => {
                     // These are read-only in practice

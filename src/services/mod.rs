@@ -1,5 +1,4 @@
 pub mod auth_manager;
-pub mod background_loader;
 pub mod data;
 pub mod initialization;
 pub mod source_coordinator;

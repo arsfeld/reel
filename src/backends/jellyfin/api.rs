@@ -25,10 +25,6 @@ pub struct JellyfinApi {
 }
 
 impl JellyfinApi {
-    pub fn new(base_url: String, api_key: String, user_id: String) -> Self {
-        Self::with_backend_id(base_url, api_key, user_id, "jellyfin".to_string())
-    }
-
     pub fn with_backend_id(
         base_url: String,
         api_key: String,
@@ -1299,9 +1295,6 @@ impl JellyfinApi {
 #[serde(rename_all = "PascalCase")]
 pub struct ServerInfo {
     pub server_name: String,
-    pub version: String,
-    pub operating_system: String,
-    pub id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1316,7 +1309,6 @@ struct AuthRequest {
 pub struct AuthResponse {
     pub user: JellyfinUser,
     pub access_token: String,
-    pub server_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1346,12 +1338,11 @@ struct JellyfinView {
 #[serde(rename_all = "PascalCase")]
 struct ItemsResponse {
     items: Vec<JellyfinItem>,
-    total_record_count: u32,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-struct JellyfinItem {
+pub struct JellyfinItem {
     id: String,
     name: String,
     #[serde(rename = "Type")]
@@ -1372,7 +1363,6 @@ struct JellyfinItem {
     user_data: Option<UserData>,
     series_name: Option<String>,
     series_id: Option<String>,
-    season_id: Option<String>,
     child_count: Option<i32>,
     people: Option<Vec<BaseItemPerson>>,
 }
@@ -1410,8 +1400,6 @@ struct BaseItemPerson {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct MediaSegment {
-    pub id: String,
-    pub item_id: String,
     #[serde(rename = "Type")]
     pub segment_type: MediaSegmentType,
     pub start_ticks: u64,
@@ -1449,7 +1437,6 @@ struct MediaSource {
     bitrate: Option<u32>,
     supports_direct_play: bool,
     supports_direct_stream: bool,
-    supports_transcoding: bool,
     media_streams: Vec<MediaStream>,
 }
 

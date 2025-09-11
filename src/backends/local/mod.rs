@@ -20,30 +20,6 @@ pub struct LocalBackend {
 }
 
 impl LocalBackend {
-    pub fn new() -> Self {
-        Self {
-            media_directories: Arc::new(RwLock::new(Vec::new())),
-            backend_id: "local_media".to_string(),
-            last_scan_time: Arc::new(RwLock::new(None)),
-        }
-    }
-
-    pub fn with_id(id: String) -> Self {
-        Self {
-            media_directories: Arc::new(RwLock::new(Vec::new())),
-            backend_id: id,
-            last_scan_time: Arc::new(RwLock::new(None)),
-        }
-    }
-
-    pub async fn add_directory(&self, path: PathBuf) -> Result<()> {
-        let mut dirs = self.media_directories.write().await;
-        if !dirs.contains(&path) {
-            dirs.push(path);
-        }
-        Ok(())
-    }
-
     /// Create from AuthProvider and Source
     pub fn from_auth(
         _provider: AuthProvider,

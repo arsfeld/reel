@@ -431,11 +431,11 @@ impl LibraryViewModel {
         // For now, check if item has been watched based on type
         // In the future, this should come from playback_progress table
         match item {
-            MediaItem::Movie(m) => {
+            MediaItem::Movie(_m) => {
                 // Check if movie has been watched (would need playback progress)
                 false
             }
-            MediaItem::Episode(e) => {
+            MediaItem::Episode(_e) => {
                 // Check if episode has been watched
                 false
             }
@@ -443,7 +443,7 @@ impl LibraryViewModel {
         }
     }
 
-    fn extract_playback_position(item: &MediaItem) -> Option<std::time::Duration> {
+    fn extract_playback_position(_item: &MediaItem) -> Option<std::time::Duration> {
         // For now, return None
         // In the future, this should query the playback_progress table
         None
@@ -692,8 +692,6 @@ impl ViewModel for LibraryViewModel {
             let _ = self.set_library(library.id).await;
         }
     }
-
-    fn dispose(&self) {}
 }
 
 impl Clone for LibraryViewModel {

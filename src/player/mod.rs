@@ -5,8 +5,6 @@ pub mod gstreamer_player;
 #[cfg(feature = "gtk")]
 pub mod mpv_player;
 #[cfg(feature = "gtk")]
-pub mod traits;
-
 #[cfg(feature = "gtk")]
 pub use factory::{Player, PlayerState};
 #[cfg(feature = "gtk")]

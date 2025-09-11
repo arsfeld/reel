@@ -65,7 +65,7 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     /// Fetch intro and credits markers for an episode
     async fn fetch_episode_markers(
         &self,
-        episode_id: &str,
+        _episode_id: &str,
     ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
         // Default implementation returns no markers
         // Only Plex backend currently implements this
@@ -75,7 +75,7 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     /// Fetch intro and credits markers for any media (movie or episode)
     async fn fetch_media_markers(
         &self,
-        media_id: &str,
+        _media_id: &str,
     ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
         // Default implementation returns no markers
         // Backends should override this to provide marker functionality
@@ -83,7 +83,7 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     }
 
     /// Find the next episode after the given episode
-    async fn find_next_episode(&self, current_episode: &Episode) -> Result<Option<Episode>> {
+    async fn find_next_episode(&self, _current_episode: &Episode) -> Result<Option<Episode>> {
         // Default implementation returns None
         // Backends should override this to provide next episode functionality
         Ok(None)
@@ -184,61 +184,6 @@ pub struct SyncResult {
     pub items_synced: usize,
     pub duration: Duration,
     pub errors: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum SyncType {
-    Full,            // Full sync of all data
-    Incremental,     // Only changes since last sync
-    Library(String), // Specific library
-    Media(String),   // Specific media item
-}
-
-#[derive(Debug, Clone)]
-pub enum SyncPriority {
-    High,
-    Normal,
-    Low,
-}
-
-#[derive(Debug, Clone)]
-pub enum SyncStatus {
-    Idle,
-    Syncing {
-        progress: f32,
-        current_item: String,
-    },
-    Completed {
-        at: DateTime<Utc>,
-        items_synced: usize,
-    },
-    Failed {
-        error: String,
-        at: DateTime<Utc>,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct SyncTask {
-    pub backend_id: String,
-    pub sync_type: SyncType,
-    pub priority: SyncPriority,
-    pub scheduled_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct BackendOfflineInfo {
-    pub total_items: usize,
-    pub size_mb: u64,
-    pub last_sync: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct OfflineStatus {
-    pub total_size_mb: u64,
-    pub used_size_mb: u64,
-    pub items_count: usize,
-    pub backends: std::collections::HashMap<String, BackendOfflineInfo>,
 }
 
 #[derive(Debug, Clone)]

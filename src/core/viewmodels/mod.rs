@@ -24,6 +24,4 @@ pub trait ViewModel: Send + Sync {
     fn subscribe_to_property(&self, property_name: &str) -> Option<PropertySubscriber>;
 
     async fn refresh(&self);
-
-    fn dispose(&self);
 }

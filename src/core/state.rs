@@ -22,7 +22,6 @@ pub enum PlaybackState {
 }
 
 pub struct AppState {
-    backend_manager: Arc<RwLock<BackendManager>>,
     pub auth_manager: Arc<AuthManager>,
     pub source_coordinator: Arc<SourceCoordinator>,
     pub current_user: Arc<RwLock<Option<User>>>,
@@ -71,7 +70,6 @@ impl AppState {
         ));
 
         Ok(Self {
-            backend_manager,
             auth_manager,
             source_coordinator,
             current_user: Arc::new(RwLock::new(None)),

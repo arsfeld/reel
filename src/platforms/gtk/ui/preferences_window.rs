@@ -262,7 +262,7 @@ impl PreferencesWindow {
         // System theme handler
         if let Some(system_toggle) = imp.theme_system_toggle.borrow().as_ref() {
             system_toggle.connect_toggled(clone!(
-                #[weak(rename_to = window)]
+                #[weak(rename_to = _window)]
                 self,
                 #[strong]
                 view_model,
@@ -283,7 +283,7 @@ impl PreferencesWindow {
         // Light theme handler
         if let Some(light_toggle) = imp.theme_light_toggle.borrow().as_ref() {
             light_toggle.connect_toggled(clone!(
-                #[weak(rename_to = window)]
+                #[weak(rename_to = _window)]
                 self,
                 #[strong]
                 view_model,
@@ -304,7 +304,7 @@ impl PreferencesWindow {
         // Dark theme handler
         if let Some(dark_toggle) = imp.theme_dark_toggle.borrow().as_ref() {
             dark_toggle.connect_toggled(clone!(
-                #[weak(rename_to = window)]
+                #[weak(rename_to = _window)]
                 self,
                 #[strong]
                 view_model,

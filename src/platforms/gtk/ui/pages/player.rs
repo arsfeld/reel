@@ -34,18 +34,12 @@ pub struct PlayerPage {
     back_button: gtk4::Button,
     close_button: gtk4::Button,
     state: Arc<AppState>,
-    hover_controller: Rc<gtk4::EventControllerMotion>,
     inhibit_cookie: Arc<RwLock<Option<u32>>>,
     skip_intro_button: gtk4::Button,
     skip_credits_button: gtk4::Button,
     auto_play_overlay: gtk4::Box,
     pip_container: gtk4::Box,
     config: Config,
-    loading_overlay: gtk4::Box,
-    loading_spinner: gtk4::Spinner,
-    loading_label: gtk4::Label,
-    error_overlay: gtk4::Box,
-    error_label: gtk4::Label,
     view_model: Arc<PlayerViewModel>,
     // Store binding handles to prevent them from being dropped
     _binding_handles: Rc<RefCell<Vec<BindingHandle>>>,
@@ -182,8 +176,6 @@ impl PlayerPage {
 
         // Loading and error overlays from blueprint
         let loading_overlay = host.loading_overlay().clone();
-        let loading_spinner = host.loading_spinner().clone();
-        let loading_label = host.loading_label().clone();
 
         let error_overlay = host.error_overlay().clone();
         let error_label = host.error_label().clone();
@@ -405,7 +397,7 @@ impl PlayerPage {
         overlay.add_controller(hover_controller.clone());
 
         // Store the hover controller reference
-        let hover_controller_rc = Rc::new(hover_controller);
+        let _hover_controller_rc = Rc::new(hover_controller);
 
         // Add keyboard event controller for fullscreen and playback controls
         let key_controller = gtk4::EventControllerKey::new();
@@ -693,7 +685,7 @@ impl PlayerPage {
             move || format_duration(position_prop.get_sync()),
         );
 
-        let formatted_duration = ComputedProperty::new(
+        let _formatted_duration = ComputedProperty::new(
             "formatted_duration",
             vec![Arc::new(duration_prop.clone()) as Arc<dyn PropertyLike>],
             move || format_duration(duration_prop.get_sync()),
@@ -767,9 +759,9 @@ impl PlayerPage {
         );
 
         // Create reactive bindings for progress bar and time labels
-        let progress_percentage_arc = Arc::new(progress_percentage);
-        let formatted_position_arc = Arc::new(formatted_position);
-        let end_time_display_arc = Arc::new(end_time_display);
+        let _progress_percentage_arc = Arc::new(progress_percentage);
+        let _formatted_position_arc = Arc::new(formatted_position);
+        let _end_time_display_arc = Arc::new(end_time_display);
 
         // TODO: Re-enable reactive bindings for computed properties once they are implemented
         /*
@@ -826,18 +818,12 @@ impl PlayerPage {
             back_button,
             close_button,
             state,
-            hover_controller: hover_controller_rc,
             inhibit_cookie,
             skip_intro_button,
             skip_credits_button,
             auto_play_overlay,
             pip_container,
             config: config_clone,
-            loading_overlay,
-            loading_spinner,
-            loading_label,
-            error_overlay,
-            error_label,
             view_model,
             _binding_handles: binding_handles,
         }
@@ -1663,7 +1649,7 @@ impl PlayerPage {
                         }
                         break; // Exit monitoring loop
                     }
-                    crate::player::PlayerState::Error(_) => {
+                    crate::player::PlayerState::Error => {
                         // Playback error, exit monitoring
                         break;
                     }
@@ -1760,7 +1746,7 @@ impl PlayerPage {
                             }
                         }
                     }
-                    crate::player::PlayerState::Stopped | crate::player::PlayerState::Error(_) => {
+                    crate::player::PlayerState::Stopped | crate::player::PlayerState::Error => {
                         // Stop syncing if playback has stopped
                         break;
                     }
@@ -1815,8 +1801,6 @@ struct PlayerControls {
     quality_button: gtk4::MenuButton,
     upscaling_button: gtk4::MenuButton,
     title_label: gtk4::Label,
-    time_label: gtk4::Label,
-    end_time_label: gtk4::Label,
     time_display_mode: Arc<RwLock<TimeDisplayMode>>,
     player: Arc<RwLock<Player>>,
     is_seeking: Arc<RwLock<bool>>,
@@ -2090,8 +2074,6 @@ impl PlayerControls {
             quality_button: quality_button.clone(),
             upscaling_button: upscaling_button.clone(),
             title_label,
-            time_label: time_label.clone(),
-            end_time_label: end_time_label.clone(),
             time_display_mode: Arc::new(RwLock::new(TimeDisplayMode::TotalDuration)),
             player: player.clone(),
             is_seeking: Arc::new(RwLock::new(false)),
@@ -2137,7 +2119,7 @@ impl PlayerControls {
             let player = player.clone();
             let button = button.clone();
             let inhibit_cookie = inhibit_cookie.clone();
-            let backend = backend.clone();
+            let _backend = backend.clone();
             let current_media_item = current_media_item.clone();
             let widget = btn.clone().upcast::<gtk4::Widget>();
             glib::spawn_future_local(async move {
@@ -2231,7 +2213,7 @@ impl PlayerControls {
         let player = self.player.clone();
         let is_seeking = self.is_seeking.clone();
         self.progress_bar
-            .connect_change_value(move |scale, _, value| {
+            .connect_change_value(move |_scale, _, value| {
                 let player = player.clone();
                 let is_seeking = is_seeking.clone();
                 glib::spawn_future_local(async move {

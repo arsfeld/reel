@@ -8,100 +8,10 @@ use tracing::{debug, error, info};
 use super::filters::{SortOrder, WatchStatus};
 use super::navigation::NavigationManager;
 use super::pages;
+use super::widgets::sidebar::Sidebar;
 use crate::config::Config;
-use crate::services::initialization::AppInitializationState;
 use crate::state::AppState;
 use tokio::sync::RwLock;
-
-// Wrapper enum to handle both library view types
-#[derive(Clone, Debug)]
-enum LibraryViewWrapper {
-    Standard(crate::platforms::gtk::ui::pages::LibraryView),
-    Virtual(crate::platforms::gtk::ui::pages::LibraryVirtualView),
-}
-
-impl LibraryViewWrapper {
-    fn set_on_media_selected<F>(&self, callback: F)
-    where
-        F: Fn(&crate::models::MediaItem) + 'static,
-    {
-        match self {
-            LibraryViewWrapper::Standard(view) => view.set_on_media_selected(callback),
-            LibraryViewWrapper::Virtual(view) => view.set_on_media_selected(callback),
-        }
-    }
-
-    async fn load_library(&self, backend_id: String, library: crate::models::Library) {
-        match self {
-            LibraryViewWrapper::Standard(view) => view.load_library(backend_id, library).await,
-            LibraryViewWrapper::Virtual(view) => view.load_library(backend_id, library).await,
-        }
-    }
-
-    fn update_watch_status_filter(&self, status: WatchStatus) {
-        match self {
-            LibraryViewWrapper::Standard(view) => view.update_watch_status_filter(status),
-            LibraryViewWrapper::Virtual(view) => view.update_watch_status_filter(status),
-        }
-    }
-
-    fn update_sort_order(&self, order: SortOrder) {
-        match self {
-            LibraryViewWrapper::Standard(view) => view.update_sort_order(order),
-            LibraryViewWrapper::Virtual(view) => view.update_sort_order(order),
-        }
-    }
-
-    fn search(&self, query: String) {
-        match self {
-            LibraryViewWrapper::Standard(view) => view.search(query),
-            LibraryViewWrapper::Virtual(view) => view.search(query),
-        }
-    }
-
-    fn refresh(&self) {
-        match self {
-            LibraryViewWrapper::Standard(view) => view.refresh(),
-            LibraryViewWrapper::Virtual(view) => view.refresh(),
-        }
-    }
-
-    fn upcast(&self) -> gtk4::Widget {
-        match self {
-            LibraryViewWrapper::Standard(view) => view.clone().upcast(),
-            LibraryViewWrapper::Virtual(view) => view.clone().upcast(),
-        }
-    }
-
-    fn downgrade(&self) -> LibraryViewWrapperWeak {
-        match self {
-            LibraryViewWrapper::Standard(view) => {
-                LibraryViewWrapperWeak::Standard(view.downgrade())
-            }
-            LibraryViewWrapper::Virtual(view) => LibraryViewWrapperWeak::Virtual(view.downgrade()),
-        }
-    }
-}
-
-// Weak reference version of the wrapper
-#[derive(Clone, Debug)]
-enum LibraryViewWrapperWeak {
-    Standard(gtk4::glib::WeakRef<crate::platforms::gtk::ui::pages::LibraryView>),
-    Virtual(gtk4::glib::WeakRef<crate::platforms::gtk::ui::pages::LibraryVirtualView>),
-}
-
-impl LibraryViewWrapperWeak {
-    fn upgrade(&self) -> Option<LibraryViewWrapper> {
-        match self {
-            LibraryViewWrapperWeak::Standard(weak) => {
-                weak.upgrade().map(LibraryViewWrapper::Standard)
-            }
-            LibraryViewWrapperWeak::Virtual(weak) => {
-                weak.upgrade().map(LibraryViewWrapper::Virtual)
-            }
-        }
-    }
-}
 
 mod imp {
     use super::*;
@@ -112,26 +22,6 @@ mod imp {
     #[template(resource = "/dev/arsfeld/Reel/window.ui")]
     pub struct ReelMainWindow {
         #[template_child]
-        pub welcome_page: TemplateChild<adw::StatusPage>,
-        #[template_child]
-        pub connect_button: TemplateChild<gtk4::Button>,
-        #[template_child]
-        pub home_group: TemplateChild<adw::PreferencesGroup>,
-        #[template_child]
-        pub home_list: TemplateChild<gtk4::ListBox>,
-        #[template_child]
-        pub sources_button: TemplateChild<gtk4::Button>,
-        #[template_child]
-        pub sources_container: TemplateChild<gtk4::Box>,
-        #[template_child]
-        pub status_container: TemplateChild<gtk4::Box>,
-        #[template_child]
-        pub status_icon: TemplateChild<gtk4::Image>,
-        #[template_child]
-        pub status_label: TemplateChild<gtk4::Label>,
-        #[template_child]
-        pub sync_spinner: TemplateChild<gtk4::Spinner>,
-        #[template_child]
         pub empty_state: TemplateChild<adw::StatusPage>,
         #[template_child]
         pub content_page: TemplateChild<adw::NavigationPage>,
@@ -139,13 +29,15 @@ mod imp {
         pub content_toolbar: TemplateChild<adw::ToolbarView>,
         #[template_child]
         pub content_header: TemplateChild<adw::HeaderBar>,
+        #[template_child]
+        pub sidebar_placeholder: TemplateChild<gtk4::Box>,
 
         pub state: RefCell<Option<Arc<AppState>>>,
         pub config: RefCell<Option<Arc<RwLock<Config>>>>,
         pub content_stack: RefCell<Option<gtk4::Stack>>,
         pub home_page: RefCell<Option<crate::platforms::gtk::ui::pages::HomePage>>,
         pub sources_page: RefCell<Option<crate::platforms::gtk::ui::pages::SourcesPage>>,
-        pub library_view: RefCell<Option<LibraryViewWrapper>>,
+        pub library_view: RefCell<Option<crate::platforms::gtk::ui::pages::LibraryView>>,
         pub player_page: RefCell<Option<crate::platforms::gtk::ui::pages::PlayerPage>>,
         pub show_details_page: RefCell<Option<crate::platforms::gtk::ui::pages::ShowDetailsPage>>,
         pub movie_details_page: RefCell<Option<crate::platforms::gtk::ui::pages::MovieDetailsPage>>,
@@ -158,6 +50,7 @@ mod imp {
         pub header_add_button: RefCell<Option<gtk4::Button>>, // Track add button in header
         pub sidebar_viewmodel:
             RefCell<Option<Arc<crate::platforms::gtk::ui::viewmodels::SidebarViewModel>>>,
+        pub sidebar_widget: RefCell<Option<Sidebar>>,
     }
 
     #[glib::object_subclass]
@@ -196,43 +89,7 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
 
-            let obj = self.obj();
-
-            // Connect signals
-            self.connect_button.connect_clicked(clone!(
-                #[weak]
-                obj,
-                move |_| {
-                    obj.show_auth_dialog();
-                }
-            ));
-
-            // Status is now more subtle, no need for clickable row
-
-            // No longer need refresh_button and edit_libraries_button connections here
-            // They will be handled per-source group
-
-            // Connect to home list row activation
-            self.home_list.connect_row_activated(clone!(
-                #[weak]
-                obj,
-                move |_, row| {
-                    if let Some(_action_row) = row.downcast_ref::<adw::ActionRow>() {
-                        info!("Home selected");
-                        obj.show_home_page_for_source(None);
-                    }
-                }
-            ));
-
-            // Connect to sources button click
-            self.sources_button.connect_clicked(clone!(
-                #[weak]
-                obj,
-                move |_| {
-                    info!("Sources button clicked");
-                    obj.show_sources_page();
-                }
-            ));
+            // Signal connections are now handled by the Sidebar widget
 
             // Library list row activation is now handled per-source group
 
@@ -282,6 +139,22 @@ impl ReelMainWindow {
             .sidebar_viewmodel
             .replace(Some(sidebar_vm.clone()));
 
+        // Create and setup Sidebar widget
+        let sidebar_widget = Sidebar::new();
+        sidebar_widget.set_viewmodel(sidebar_vm.clone());
+        sidebar_widget.set_main_window(&window);
+        window
+            .imp()
+            .sidebar_widget
+            .replace(Some(sidebar_widget.clone()));
+
+        // Replace placeholder with actual sidebar widget
+        if let Some(parent) = window.imp().sidebar_placeholder.parent() {
+            if let Some(toolbar_view) = parent.downcast_ref::<adw::ToolbarView>() {
+                toolbar_view.set_content(Some(&sidebar_widget));
+            }
+        }
+
         // Initialize the ViewModel with the event bus
         let event_bus = state.event_bus.clone();
         let sidebar_vm_clone = sidebar_vm.clone();
@@ -291,8 +164,8 @@ impl ReelMainWindow {
             sidebar_vm_clone.initialize(event_bus).await;
 
             // Set up subscription to sources property
-            if let Some(window) = window_weak_for_vm.upgrade() {
-                window.setup_sidebar_subscriptions();
+            if let Some(_window) = window_weak_for_vm.upgrade() {
+                // Sidebar subscriptions are now handled by the Sidebar widget itself
 
                 // Initial load should happen after ViewModel is initialized and subscriptions are set up
                 tracing::info!("SidebarViewModel initialized, triggering initial data load");
@@ -384,13 +257,10 @@ impl ReelMainWindow {
             }
 
             // Start reactive initialization (returns immediately)
-            let init_state = source_coordinator.initialize_sources_reactive();
+            let _init_state = source_coordinator.initialize_sources_reactive();
             info!("Started reactive source initialization - UI ready immediately");
 
-            // Set up progressive UI enhancement
-            if let Some(window) = window_weak.upgrade() {
-                window.setup_progressive_initialization(&init_state);
-            }
+            // Progressive UI enhancement is now handled by the Sidebar widget's reactive bindings
 
             // Handle the results of backend initialization
             if let Some(window) = window_weak.upgrade() {
@@ -444,137 +314,6 @@ impl ReelMainWindow {
     fn setup_state_subscriptions(&self) {
         // Listen for state changes
         // For now, we'll handle updates manually when auth completes
-    }
-
-    fn setup_sidebar_subscriptions(&self) {
-        if let Some(sidebar_vm) = self.imp().sidebar_viewmodel.borrow().as_ref() {
-            // Subscribe to sources changes
-            let mut sources_subscriber = sidebar_vm.sources().subscribe();
-            let window_weak = self.downgrade();
-
-            glib::spawn_future_local(async move {
-                while sources_subscriber.wait_for_change().await {
-                    if let Some(window) = window_weak.upgrade() {
-                        window.update_sidebar_from_viewmodel();
-                    }
-                }
-            });
-
-            // Subscribe to status text changes
-            let mut status_subscriber = sidebar_vm.status_text().subscribe();
-            let window_weak = self.downgrade();
-
-            glib::spawn_future_local(async move {
-                while status_subscriber.wait_for_change().await {
-                    if let Some(window) = window_weak.upgrade()
-                        && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
-                    {
-                        let text = vm.status_text().get_sync();
-                        window.imp().status_label.set_text(&text);
-                    }
-                }
-            });
-
-            // Subscribe to status icon changes
-            let mut icon_subscriber = sidebar_vm.status_icon().subscribe();
-            let window_weak = self.downgrade();
-
-            glib::spawn_future_local(async move {
-                while icon_subscriber.wait_for_change().await {
-                    if let Some(window) = window_weak.upgrade()
-                        && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
-                    {
-                        let icon = vm.status_icon().get_sync();
-                        window.imp().status_icon.set_icon_name(Some(&icon));
-                    }
-                }
-            });
-
-            // Subscribe to spinner visibility
-            let mut spinner_subscriber = sidebar_vm.show_spinner().subscribe();
-            let window_weak = self.downgrade();
-
-            glib::spawn_future_local(async move {
-                while spinner_subscriber.wait_for_change().await {
-                    if let Some(window) = window_weak.upgrade()
-                        && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
-                    {
-                        let show = vm.show_spinner().get_sync();
-                        window.imp().sync_spinner.set_visible(show);
-                        window.imp().sync_spinner.set_spinning(show);
-                    }
-                }
-            });
-
-            // Subscribe to connection status
-            let mut connected_subscriber = sidebar_vm.is_connected().subscribe();
-            let window_weak = self.downgrade();
-
-            glib::spawn_future_local(async move {
-                while connected_subscriber.wait_for_change().await {
-                    if let Some(window) = window_weak.upgrade()
-                        && let Some(vm) = window.imp().sidebar_viewmodel.borrow().as_ref()
-                    {
-                        let connected = vm.is_connected().get_sync();
-                        let imp = window.imp();
-
-                        if connected {
-                            imp.welcome_page.set_visible(false);
-                            imp.home_group.set_visible(true);
-                            imp.sources_container.set_visible(true);
-                            imp.status_container.set_visible(true);
-                        } else {
-                            // Only show welcome if we truly have no data
-                            let sources = vm.sources().get_sync();
-                            if sources.is_empty() {
-                                imp.welcome_page.set_visible(true);
-                                imp.home_group.set_visible(false);
-                                imp.sources_container.set_visible(false);
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    fn update_sidebar_from_viewmodel(&self) {
-        if let Some(sidebar_vm) = self.imp().sidebar_viewmodel.borrow().as_ref() {
-            // Get sources synchronously - no need for async since it's already in memory
-            let sources = sidebar_vm.sources().get_sync();
-
-            // Convert ViewModel data to the format expected by update_all_backends_libraries
-            let mut backends_libraries = Vec::new();
-
-            for source in sources {
-                let libraries: Vec<(crate::models::Library, usize)> = source
-                    .libraries
-                    .iter()
-                    .map(|lib| {
-                        let library = crate::models::Library {
-                            id: lib.id.clone(),
-                            title: lib.title.clone(),
-                            library_type: match lib.library_type.as_str() {
-                                "movies" => crate::models::LibraryType::Movies,
-                                "shows" => crate::models::LibraryType::Shows,
-                                "music" => crate::models::LibraryType::Music,
-                                "photos" => crate::models::LibraryType::Photos,
-                                _ => crate::models::LibraryType::Mixed,
-                            },
-                            icon: lib.icon.clone(),
-                        };
-                        (library, lib.item_count as usize)
-                    })
-                    .collect();
-
-                if !libraries.is_empty() {
-                    backends_libraries.push((source.id.clone(), source.name.clone(), libraries));
-                }
-            }
-
-            // Update the UI directly - no async needed
-            self.update_all_backends_libraries_with_names(backends_libraries);
-        }
     }
 
     pub fn show_auth_dialog(&self) {
@@ -678,151 +417,7 @@ impl ReelMainWindow {
         about.present();
     }
 
-    pub fn update_all_backends_libraries_with_names(
-        &self,
-        backends_libraries: Vec<(String, String, Vec<(crate::models::Library, usize)>)>,
-    ) {
-        let imp = self.imp();
-
-        // Clear existing source containers
-        while let Some(child) = imp.sources_container.first_child() {
-            imp.sources_container.remove(&child);
-        }
-
-        // Clear existing home rows
-        while let Some(child) = imp.home_list.first_child() {
-            imp.home_list.remove(&child);
-        }
-
-        // Add unified Home row for all sources
-        let home_row = adw::ActionRow::builder()
-            .title("Home")
-            .subtitle("Recently added from all sources")
-            .activatable(true)
-            .build();
-
-        let home_icon = gtk4::Image::from_icon_name("user-home-symbolic");
-        home_row.add_prefix(&home_icon);
-
-        let home_arrow = gtk4::Image::from_icon_name("go-next-symbolic");
-        home_row.add_suffix(&home_arrow);
-
-        home_row.set_widget_name("__home__");
-        imp.home_list.append(&home_row);
-        imp.home_group.set_visible(true);
-
-        // Collect all libraries for edit mode
-        let mut all_libraries = Vec::new();
-
-        // Create a separate PreferencesGroup for each backend
-        for (backend_id, source_name, libraries) in backends_libraries.iter() {
-            if libraries.is_empty() {
-                continue;
-            }
-
-            // Create a preferences group for this source
-            let source_group = adw::PreferencesGroup::builder().title(source_name).build();
-
-            // Add edit/refresh buttons in the header suffix
-            let header_buttons = gtk4::Box::builder()
-                .orientation(gtk4::Orientation::Horizontal)
-                .spacing(6)
-                .build();
-
-            let edit_button = gtk4::Button::builder()
-                .icon_name("document-edit-symbolic")
-                .valign(gtk4::Align::Center)
-                .tooltip_text("Edit Libraries")
-                .css_classes(vec!["flat"])
-                .build();
-
-            let refresh_button = gtk4::Button::builder()
-                .icon_name("view-refresh-symbolic")
-                .valign(gtk4::Align::Center)
-                .tooltip_text("Refresh")
-                .css_classes(vec!["flat"])
-                .build();
-
-            header_buttons.append(&edit_button);
-            header_buttons.append(&refresh_button);
-            source_group.set_header_suffix(Some(&header_buttons));
-
-            // Connect refresh button for this specific backend
-            let backend_id_clone = backend_id.clone();
-            let window_weak = self.downgrade();
-            refresh_button.connect_clicked(move |_| {
-                if let Some(window) = window_weak.upgrade() {
-                    let backend_id = backend_id_clone.clone();
-                    glib::spawn_future_local(async move {
-                        window.sync_single_backend(&backend_id).await;
-                    });
-                }
-            });
-
-            // Create list box for libraries
-            let libraries_list = gtk4::ListBox::builder()
-                .selection_mode(gtk4::SelectionMode::None)
-                .css_classes(vec!["boxed-list"])
-                .build();
-
-            // Add libraries for this backend
-            for (library, item_count) in libraries {
-                all_libraries.push((library.clone(), *item_count));
-
-                let visibility_map = imp.library_visibility.borrow();
-                let is_visible = visibility_map.get(&library.id).copied().unwrap_or(true);
-
-                if is_visible {
-                    let row = adw::ActionRow::builder()
-                        .title(&library.title)
-                        .subtitle(format!("{} items", item_count))
-                        .activatable(true)
-                        .build();
-
-                    // Add icon based on library type
-                    let icon_name = match library.library_type {
-                        crate::models::LibraryType::Movies => "video-x-generic-symbolic",
-                        crate::models::LibraryType::Shows => "video-display-symbolic",
-                        crate::models::LibraryType::Music => "audio-x-generic-symbolic",
-                        crate::models::LibraryType::Photos => "image-x-generic-symbolic",
-                        _ => "folder-symbolic",
-                    };
-
-                    let prefix_icon = gtk4::Image::from_icon_name(icon_name);
-                    row.add_prefix(&prefix_icon);
-
-                    let arrow = gtk4::Image::from_icon_name("go-next-symbolic");
-                    row.add_suffix(&arrow);
-
-                    // Store backend_id:library_id in widget name for navigation
-                    row.set_widget_name(&format!("{}:{}", backend_id, library.id));
-
-                    libraries_list.append(&row);
-                }
-            }
-
-            // Connect row activation for this list
-            let window_weak = self.downgrade();
-            libraries_list.connect_row_activated(move |_, row| {
-                if let Some(action_row) = row.downcast_ref::<adw::ActionRow>()
-                    && let Some(window) = window_weak.upgrade()
-                {
-                    let library_id = action_row.widget_name().to_string();
-                    window.navigate_to_library(&library_id);
-                }
-            });
-
-            source_group.add(&libraries_list);
-            imp.sources_container.append(&source_group);
-        }
-
-        // Store all libraries for edit mode
-        imp.all_libraries.replace(all_libraries);
-
-        // Show sources container if we have any backends
-        imp.sources_container
-            .set_visible(!backends_libraries.is_empty());
-    }
+    // This method is now handled entirely by the Sidebar widget through reactive bindings
 
     fn show_sources_page(&self) {
         info!("show_sources_page called");
@@ -863,7 +458,7 @@ impl ReelMainWindow {
         }
     }
 
-    fn show_home_page_for_source(&self, source_id: Option<String>) {
+    pub fn show_home_page_for_source(&self, source_id: Option<String>) {
         let imp = self.imp();
 
         // Get or create content stack first to ensure it exists
@@ -1094,30 +689,6 @@ impl ReelMainWindow {
                 }
             }
         });
-    }
-
-    async fn move_backend_up(&self, backend_id: &str) {
-        let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        state
-            .source_coordinator
-            .move_backend_up(backend_id)
-            .await
-            .ok();
-
-        // Refresh the display
-        self.refresh_all_libraries().await;
-    }
-
-    async fn move_backend_down(&self, backend_id: &str) {
-        let state = self.imp().state.borrow().as_ref().unwrap().clone();
-        state
-            .source_coordinator
-            .move_backend_down(backend_id)
-            .await
-            .ok();
-
-        // Refresh the display
-        self.refresh_all_libraries().await;
     }
 
     async fn refresh_all_libraries(&self) {
@@ -1496,19 +1067,9 @@ impl ReelMainWindow {
             if let Some(view) = existing_view {
                 view
             } else {
-                // Create new library view - use virtual scrolling for production
+                // Create new library view - always use standard reactive library view
                 let state = imp.state.borrow().as_ref().unwrap().clone();
-
-                // Always use virtual scrolling for production-ready performance
-                let view = if crate::constants::USE_VIRTUAL_SCROLLING {
-                    LibraryViewWrapper::Virtual(
-                        crate::platforms::gtk::ui::pages::LibraryVirtualView::new(state.clone()),
-                    )
-                } else {
-                    LibraryViewWrapper::Standard(
-                        crate::platforms::gtk::ui::pages::LibraryView::new(state.clone()),
-                    )
-                };
+                let view = crate::platforms::gtk::ui::pages::LibraryView::new(state.clone());
 
                 // Set the media selected callback to handle different media types
                 let window_weak = self.downgrade();
@@ -1539,7 +1100,7 @@ impl ReelMainWindow {
 
                 // Store the view and add to stack
                 imp.library_view.replace(Some(view.clone()));
-                content_stack.add_named(&view.upcast(), Some("library"));
+                content_stack.add_named(&view.clone().upcast::<gtk4::Widget>(), Some("library"));
                 view
             }
         };
@@ -1618,7 +1179,10 @@ impl ReelMainWindow {
         }
     }
 
-    fn create_filter_controls(&self, library_view: &LibraryViewWrapper) -> gtk4::Box {
+    fn create_filter_controls(
+        &self,
+        library_view: &crate::platforms::gtk::ui::pages::LibraryView,
+    ) -> gtk4::Box {
         let controls_box = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Horizontal)
             .spacing(8)
@@ -1721,34 +1285,6 @@ impl ReelMainWindow {
         // controls_box.append(&filter_button);
 
         controls_box
-    }
-
-    fn toggle_edit_mode(&self, _button: &gtk4::Button) {
-        // Edit mode is now handled per-source group
-        // This method might be removed or repurposed
-    }
-
-    async fn load_library_visibility(&self) {
-        // Load from existing config
-        if let Some(config_arc) = self.imp().config.borrow().as_ref() {
-            let visibility = {
-                let config = config_arc.read().await;
-                config.get_all_library_visibility()
-            };
-            *self.imp().library_visibility.borrow_mut() = visibility;
-        }
-    }
-
-    async fn save_library_visibility(&self) {
-        // Save to config using proper methods
-        let visibility = self.imp().library_visibility.borrow().clone();
-
-        if let Some(config_arc) = self.imp().config.borrow().as_ref() {
-            let mut config = config_arc.write().await;
-            if let Err(e) = config.set_all_library_visibility(visibility) {
-                error!("Failed to save library visibility: {}", e);
-            }
-        }
     }
 
     pub async fn update_backend_selector(&self) {
@@ -1957,91 +1493,7 @@ impl ReelMainWindow {
         }
     }
 
-    /// Set up progressive UI enhancement based on initialization state
-    fn setup_progressive_initialization(&self, init_state: &AppInitializationState) {
-        info!("Setting up progressive UI enhancement");
-
-        // Phase 1: UI is ready immediately (already handled by SidebarViewModel)
-        // The UI loads from cache and shows instantly
-
-        // Phase 2: Show connection progress in status label
-        let window_weak = self.downgrade();
-        let sources_connected = init_state.sources_connected.clone();
-        glib::spawn_future_local(async move {
-            let mut subscriber = sources_connected.subscribe();
-            while subscriber.wait_for_change().await {
-                if let Some(window) = window_weak.upgrade() {
-                    let sources = sources_connected.get_sync();
-                    let connected_count = sources
-                        .values()
-                        .filter(|status| {
-                            matches!(
-                                status,
-                                crate::services::initialization::SourceReadiness::Connected { .. }
-                            )
-                        })
-                        .count();
-                    let playback_ready_count =
-                        sources
-                            .values()
-                            .filter(|status| {
-                                matches!(status, 
-                            crate::services::initialization::SourceReadiness::PlaybackReady { .. } |
-                            crate::services::initialization::SourceReadiness::Connected { .. }
-                        )
-                            })
-                            .count();
-                    let total = sources.len();
-
-                    if total == 0 {
-                        window.imp().status_label.set_text("No sources configured");
-                    } else if connected_count == total {
-                        window
-                            .imp()
-                            .status_label
-                            .set_text(&format!("All {} sources connected", total));
-                        window.imp().sync_spinner.set_visible(false);
-                    } else if playback_ready_count > 0 {
-                        window.imp().status_label.set_text(&format!(
-                            "Ready for playback - {}/{} sources fully connected",
-                            connected_count, total
-                        ));
-                        window
-                            .imp()
-                            .sync_spinner
-                            .set_visible(connected_count < total);
-                        window
-                            .imp()
-                            .sync_spinner
-                            .set_spinning(connected_count < total);
-                    } else {
-                        window.imp().status_label.set_text(&format!(
-                            "Connecting sources... {}/{}",
-                            connected_count, total
-                        ));
-                        window.imp().sync_spinner.set_visible(true);
-                        window.imp().sync_spinner.set_spinning(true);
-                    }
-                }
-            }
-        });
-
-        // Phase 3: Update sync readiness
-        let window_weak = self.downgrade();
-        let sync_ready = init_state.sync_ready.clone();
-        glib::spawn_future_local(async move {
-            let mut subscriber = sync_ready.subscribe();
-            while subscriber.wait_for_change().await {
-                if let Some(_window) = window_weak.upgrade() {
-                    let ready = sync_ready.get_sync();
-                    if ready {
-                        info!("All sources ready for full synchronization");
-                        // Sync spinner will be controlled by SidebarViewModel sync status
-                    }
-                }
-            }
-        });
-    }
+    // Progressive initialization is now handled by the Sidebar widget's reactive bindings
 
     // Backend switching removed - each view must track its own backend_id
     // The UI should be refactored to either:

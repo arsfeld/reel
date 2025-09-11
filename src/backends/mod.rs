@@ -1,7 +1,6 @@
 pub mod jellyfin;
 pub mod local;
 pub mod plex;
-pub mod sync_strategy;
 pub mod traits;
 
 // Re-export commonly used types
@@ -98,7 +97,7 @@ impl BackendManager {
     pub fn list_backends(&self) -> Vec<(String, traits::BackendInfo)> {
         self.backends
             .iter()
-            .map(|(id, backend)| {
+            .map(|(id, _backend)| {
                 let info = traits::BackendInfo {
                     name: id.clone(),
                     display_name: format!("{} Backend", id),

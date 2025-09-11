@@ -537,8 +537,6 @@ impl ViewModel for SourcesViewModel {
     async fn refresh(&self) {
         let _ = self.load_sources().await;
     }
-
-    fn dispose(&self) {}
 }
 
 impl Clone for SourcesViewModel {

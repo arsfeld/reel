@@ -173,7 +173,7 @@ impl ImageLoader {
         self.is_scrolling.store(scrolling, Ordering::Relaxed);
         if !scrolling {
             // Process queue when scrolling stops
-            let queue = self.download_queue.clone();
+            let _queue = self.download_queue.clone();
             let loader = self.clone();
             tokio::spawn(async move {
                 loader.process_download_queue().await;

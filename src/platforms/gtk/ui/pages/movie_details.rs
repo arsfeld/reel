@@ -9,12 +9,6 @@ use crate::models::Movie;
 use crate::platforms::gtk::ui::reactive::bindings::{BindingHandle, *};
 use crate::platforms::gtk::ui::viewmodels::DetailsViewModel;
 use crate::state::AppState;
-use crate::utils::ImageLoader;
-
-// Global image loader instance
-use once_cell::sync::Lazy;
-static IMAGE_LOADER: Lazy<ImageLoader> =
-    Lazy::new(|| ImageLoader::new().expect("Failed to create ImageLoader"));
 
 mod imp {
     use super::*;
@@ -622,7 +616,7 @@ impl MovieDetailsPage {
             // Phase 5: Error state declarative display
             // For now, we'll show stream info errors by hiding the stream info list and show a placeholder
             // This is a temporary approach until we add proper error UI elements
-            let combined_stream_visibility = viewmodel
+            let _combined_stream_visibility = viewmodel
                 .stream_info()
                 .map(|stream_info| stream_info.is_some());
 

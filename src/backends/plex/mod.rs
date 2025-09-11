@@ -8,7 +8,6 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dirs;
-use reqwest::Client;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +22,6 @@ use crate::models::{
 use crate::services::auth_manager::AuthManager;
 
 pub struct PlexBackend {
-    client: Client,
     base_url: Arc<RwLock<Option<String>>>,
     auth_token: Arc<RwLock<Option<String>>>,
     backend_id: String,
@@ -41,35 +39,9 @@ pub struct ServerInfo {
     pub name: String,
     pub is_local: bool,
     pub is_relay: bool,
-    pub uri: String,
 }
 
 impl PlexBackend {
-    pub fn new() -> Self {
-        Self::with_id("plex".to_string())
-    }
-
-    pub fn with_id(id: String) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
-
-        Self {
-            client,
-            base_url: Arc::new(RwLock::new(None)),
-            auth_token: Arc::new(RwLock::new(None)),
-            backend_id: id,
-            last_sync_time: Arc::new(RwLock::new(None)),
-            api: Arc::new(RwLock::new(None)),
-            server_name: Arc::new(RwLock::new(None)),
-            server_info: Arc::new(RwLock::new(None)),
-            auth_provider: None,
-            source: None,
-            auth_manager: None,
-        }
-    }
-
     /// Create a new PlexBackend from an AuthProvider and Source
     pub fn from_auth(
         auth_provider: AuthProvider,
@@ -86,13 +58,7 @@ impl PlexBackend {
             return Err(anyhow!("Invalid source type for Plex backend"));
         }
 
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
-
         Ok(Self {
-            client,
             base_url: Arc::new(RwLock::new(source.connection_info.primary_url.clone())),
             auth_token: Arc::new(RwLock::new(None)), // Will be loaded from AuthProvider
             backend_id: source.id.clone(),
@@ -104,14 +70,6 @@ impl PlexBackend {
             source: Some(source),
             auth_manager: Some(auth_manager),
         })
-    }
-
-    pub async fn get_server_info(&self) -> Option<ServerInfo> {
-        self.server_info.read().await.clone()
-    }
-
-    pub async fn get_api_client(&self) -> Option<PlexApi> {
-        self.api.read().await.clone()
     }
 
     /// Check if the server is reachable without blocking for too long
@@ -138,77 +96,6 @@ impl PlexBackend {
     }
 
     /// Save the authentication token to keyring with file fallback
-    pub async fn save_token(&self, token: &str) -> Result<()> {
-        // Try keyring first
-        let service = "dev.arsfeld.Reel";
-        let account = &self.backend_id;
-
-        tracing::info!(
-            "Attempting to save token to keyring - service: '{}', account: '{}'",
-            service,
-            account
-        );
-
-        match keyring::Entry::new(service, account) {
-            Ok(entry) => match entry.set_password(token) {
-                Ok(_) => {
-                    tracing::info!(
-                        "Token successfully saved to keyring for backend {}",
-                        self.backend_id
-                    );
-                    return Ok(());
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to save to keyring: {}, falling back to file storage",
-                        e
-                    );
-                }
-            },
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to create keyring entry: {}, falling back to file storage",
-                    e
-                );
-            }
-        }
-
-        // Fallback to file storage (encrypted with simple obfuscation)
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
-        let token_file = config_dir
-            .join("reel")
-            .join(format!(".{}.token", self.backend_id));
-
-        // Create directory if it doesn't exist
-        if let Some(parent) = token_file.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        // Simple obfuscation - not real encryption but better than plaintext
-        let obfuscated = token
-            .bytes()
-            .enumerate()
-            .map(|(i, b)| b ^ ((i as u8) + 42))
-            .collect::<Vec<u8>>();
-
-        std::fs::write(&token_file, obfuscated)?;
-
-        // Set restrictive permissions on Unix
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&token_file)?.permissions();
-            perms.set_mode(0o600); // Read/write for owner only
-            std::fs::set_permissions(&token_file, perms)?;
-        }
-
-        tracing::info!(
-            "Token saved to fallback file storage for backend {}",
-            self.backend_id
-        );
-        Ok(())
-    }
 
     /// Test all connections in parallel and return the fastest responding one
     async fn find_best_connection(
@@ -573,7 +460,6 @@ impl MediaBackend for PlexBackend {
                             || url.contains("172.")
                             || url.contains("localhost"),
                         is_relay: url.contains("plex.direct"),
-                        uri: url.clone(),
                     });
                 }
             }
@@ -609,7 +495,6 @@ impl MediaBackend for PlexBackend {
                                     name: server.name.clone(),
                                     is_local: best_conn.local,
                                     is_relay: best_conn.relay,
-                                    uri: best_conn.uri.clone(),
                                 });
 
                                 // Create and store the API client
@@ -806,7 +691,7 @@ impl MediaBackend for PlexBackend {
         api.mark_unwatched(rating_key).await
     }
 
-    async fn get_watch_status(&self, media_id: &str) -> Result<super::traits::WatchStatus> {
+    async fn get_watch_status(&self, _media_id: &str) -> Result<super::traits::WatchStatus> {
         // For now, return a default status - could fetch from API if needed
         // In practice, the watch status is already included in get_movies/shows/episodes
         Ok(super::traits::WatchStatus {
@@ -900,7 +785,7 @@ impl MediaBackend for PlexBackend {
     }
 
     async fn find_next_episode(&self, current_episode: &Episode) -> Result<Option<Episode>> {
-        let api = self.get_api().await?;
+        let _api = self.get_api().await?;
 
         // For now, return None as we need to implement the logic to find the show
         // and get the next episode. This is a placeholder implementation.

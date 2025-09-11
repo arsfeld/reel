@@ -23,7 +23,6 @@ use crate::models::{
 use crate::services::auth_manager::AuthManager;
 
 pub struct JellyfinBackend {
-    client: Client,
     base_url: Arc<RwLock<Option<String>>>,
     api_key: Arc<RwLock<Option<String>>>,
     user_id: Arc<RwLock<Option<String>>>,
@@ -32,7 +31,6 @@ pub struct JellyfinBackend {
     api: Arc<RwLock<Option<JellyfinApi>>>,
     server_name: Arc<RwLock<Option<String>>>,
     auth_provider: Option<AuthProvider>,
-    source: Option<Source>,
     auth_manager: Option<Arc<AuthManager>>,
 }
 
@@ -51,13 +49,12 @@ impl JellyfinBackend {
     }
 
     pub fn with_id(id: String) -> Self {
-        let client = Client::builder()
+        let _client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .expect("Failed to create HTTP client");
 
         Self {
-            client,
             base_url: Arc::new(RwLock::new(None)),
             api_key: Arc::new(RwLock::new(None)),
             user_id: Arc::new(RwLock::new(None)),
@@ -66,7 +63,6 @@ impl JellyfinBackend {
             api: Arc::new(RwLock::new(None)),
             server_name: Arc::new(RwLock::new(None)),
             auth_provider: None,
-            source: None,
             auth_manager: None,
         }
     }
@@ -87,7 +83,7 @@ impl JellyfinBackend {
             return Err(anyhow!("Invalid source type for Jellyfin backend"));
         }
 
-        let client = Client::builder()
+        let _client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .expect("Failed to create HTTP client");
@@ -100,7 +96,6 @@ impl JellyfinBackend {
         };
 
         Ok(Self {
-            client,
             base_url: Arc::new(RwLock::new(base_url)),
             api_key: Arc::new(RwLock::new(None)), // Will be loaded from AuthProvider
             user_id: Arc::new(RwLock::new(None)), // Will be loaded from AuthProvider
@@ -109,17 +104,8 @@ impl JellyfinBackend {
             api: Arc::new(RwLock::new(None)),
             server_name: Arc::new(RwLock::new(Some(source.name.clone()))),
             auth_provider: Some(auth_provider),
-            source: Some(source),
             auth_manager: Some(auth_manager),
         })
-    }
-
-    pub async fn set_base_url(&self, url: &str) {
-        *self.base_url.write().await = Some(url.to_string());
-    }
-
-    pub async fn get_api_client(&self) -> Option<JellyfinApi> {
-        self.api.read().await.clone()
     }
 
     async fn ensure_api_initialized(&self) -> Result<JellyfinApi> {
@@ -195,56 +181,6 @@ impl JellyfinBackend {
 
         info!("Credentials saved to file for {}", self.backend_id);
         Ok(())
-    }
-
-    pub async fn load_credentials(&self) -> Result<Option<(String, String, String)>> {
-        let service = "dev.arsfeld.Reel";
-        let account = &format!("{}_jellyfin", self.backend_id);
-
-        if let Ok(entry) = keyring::Entry::new(service, account)
-            && let Ok(creds) = entry.get_password()
-        {
-            let parts: Vec<&str> = creds.split('|').collect();
-            if parts.len() == 3 {
-                info!("Loaded credentials from keyring for {}", self.backend_id);
-                return Ok(Some((
-                    parts[0].to_string(),
-                    parts[1].to_string(),
-                    parts[2].to_string(),
-                )));
-            }
-        }
-
-        let config_dir =
-            dirs::config_dir().ok_or_else(|| anyhow!("Could not determine config directory"))?;
-        let cred_file = config_dir
-            .join("reel")
-            .join(format!(".{}_jellyfin.cred", self.backend_id));
-
-        if !cred_file.exists() {
-            return Ok(None);
-        }
-
-        let obfuscated = std::fs::read(&cred_file)?;
-        let credentials = obfuscated
-            .into_iter()
-            .enumerate()
-            .map(|(i, b)| b ^ ((i as u8) + 42))
-            .collect::<Vec<u8>>();
-
-        let creds = String::from_utf8(credentials)?;
-        let parts: Vec<&str> = creds.split('|').collect();
-
-        if parts.len() == 3 {
-            info!("Loaded credentials from file for {}", self.backend_id);
-            Ok(Some((
-                parts[0].to_string(),
-                parts[1].to_string(),
-                parts[2].to_string(),
-            )))
-        } else {
-            Ok(None)
-        }
     }
 
     pub async fn authenticate_with_credentials(
@@ -448,7 +384,7 @@ impl MediaBackend for JellyfinBackend {
                 self.authenticate_with_credentials(&base_url, &username, &password)
                     .await?;
             }
-            Credentials::ApiKey { key } => {
+            Credentials::ApiKey { key: _ } => {
                 return Err(anyhow!("API key authentication not supported for Jellyfin"));
             }
             Credentials::Token { token } => {
@@ -781,24 +717,6 @@ mod tests {
         assert!(result.is_ok());
         let backend = result.unwrap();
         assert_eq!(backend.backend_id, "source1");
-    }
-
-    #[tokio::test]
-    async fn test_set_base_url() {
-        let backend = JellyfinBackend::new();
-        assert!(backend.base_url.read().await.is_none());
-
-        backend.set_base_url("http://test.jellyfin.local").await;
-
-        let url = backend.base_url.read().await.clone();
-        assert_eq!(url, Some("http://test.jellyfin.local".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_get_api_client_none() {
-        let backend = JellyfinBackend::new();
-        let api = backend.get_api_client().await;
-        assert!(api.is_none());
     }
 
     #[tokio::test]

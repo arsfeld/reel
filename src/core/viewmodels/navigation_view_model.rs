@@ -515,9 +515,6 @@ impl ViewModel for NavigationViewModel {
         tracing::debug!("NavigationViewModel refresh requested (no-op)");
     }
 
-    fn dispose(&self) {
-        tracing::debug!("NavigationViewModel disposed");
-    }
 }
 
 impl Default for NavigationViewModel {

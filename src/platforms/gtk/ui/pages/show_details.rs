@@ -614,13 +614,6 @@ impl ShowDetailsPage {
         }
     }
 
-    async fn on_episodes_changed(&self) {
-        // Episodes have been updated, refresh the display
-        // This is called when episodes are loaded from the database
-        // The actual display update happens in load_episodes which reads from the ViewModel
-        debug!("Episodes changed in ViewModel");
-    }
-
     async fn on_episodes_list_changed(&self) {
         let imp = self.imp();
 
@@ -653,7 +646,7 @@ impl ShowDetailsPage {
         detailed_info: &crate::platforms::gtk::ui::viewmodels::details_view_model::DetailedMediaInfo,
     ) {
         let media = &detailed_info.media;
-        let metadata = &detailed_info.metadata;
+        let _metadata = &detailed_info.metadata;
         let imp = self.imp();
 
         // Extract show from MediaItem enum
@@ -721,10 +714,6 @@ impl ShowDetailsPage {
                 }
             }
         }
-    }
-
-    fn create_episode_card_widget(&self, episode: Episode) -> gtk4::Button {
-        self.create_episode_card_internal(episode, false)
     }
 
     fn create_episode_card_internal(
@@ -1080,81 +1069,6 @@ impl ShowDetailsPage {
         self.imp()
             .on_episode_selected
             .replace(Some(Box::new(callback)));
-    }
-
-    async fn convert_media_item_to_episode(
-        &self,
-        media_item: &crate::db::entities::MediaItemModel,
-    ) -> Option<Episode> {
-        use std::time::Duration;
-
-        // Only convert if this is actually an episode
-        if media_item.media_type != "episode" {
-            return None;
-        }
-
-        let imp = self.imp();
-
-        // Get playback information
-        let (watched, view_count, last_watched_at, playback_position) =
-            if let Some(state) = imp.state.borrow().as_ref() {
-                match state
-                    .data_service
-                    .get_playback_progress(&media_item.id)
-                    .await
-                {
-                    Ok(Some((position_ms, duration_ms))) => {
-                        let watched = position_ms as f64 / duration_ms as f64 > 0.9;
-                        let position = Duration::from_millis(position_ms);
-                        (watched, if watched { 1 } else { 0 }, None, Some(position))
-                    }
-                    _ => (false, 0, None, None),
-                }
-            } else {
-                (false, 0, None, None)
-            };
-
-        // Extract episode-specific metadata
-        let (air_date, show_title, show_poster_url) = if let Some(metadata) = &media_item.metadata {
-            let metadata_json: serde_json::Value = metadata.clone();
-            let air_date = metadata_json
-                .get("air_date")
-                .and_then(|v| v.as_str())
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&chrono::Utc));
-            let show_title = metadata_json
-                .get("show_title")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let show_poster_url = metadata_json
-                .get("show_poster_url")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            (air_date, show_title, show_poster_url)
-        } else {
-            (None, None, None)
-        };
-
-        Some(Episode {
-            id: media_item.id.clone(),
-            backend_id: media_item.source_id.clone(),
-            show_id: media_item.parent_id.clone(),
-            title: media_item.title.clone(),
-            season_number: media_item.season_number.unwrap_or(0) as u32,
-            episode_number: media_item.episode_number.unwrap_or(0) as u32,
-            duration: Duration::from_millis(media_item.duration_ms.unwrap_or(0) as u64),
-            thumbnail_url: media_item.poster_url.clone(),
-            overview: media_item.overview.clone(),
-            air_date,
-            watched,
-            view_count,
-            last_watched_at,
-            playback_position,
-            show_title,
-            show_poster_url,
-            intro_marker: None,
-            credits_marker: None,
-        })
     }
 
     pub fn widget(&self) -> &gtk4::Box {

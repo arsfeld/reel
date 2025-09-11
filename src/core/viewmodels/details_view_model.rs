@@ -842,8 +842,6 @@ impl ViewModel for DetailsViewModel {
             let _ = self.load_media(media_id).await;
         }
     }
-
-    fn dispose(&self) {}
 }
 
 impl Clone for DetailsViewModel {

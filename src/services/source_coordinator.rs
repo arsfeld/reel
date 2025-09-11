@@ -384,26 +384,6 @@ impl SourceCoordinator {
 
     // Private helper methods
 
-    async fn initialize_source(
-        &self,
-        provider: AuthProvider,
-        source: Source,
-    ) -> Result<SourceStatus> {
-        info!("Initializing source: {} ({})", source.name, source.id);
-        let status = self
-            .create_and_register_backend(provider, source.clone())
-            .await?;
-
-        let mut statuses = self.source_statuses.write().await;
-        info!(
-            "Adding source {} to statuses map with status: {:?}",
-            source.id, status.connection_status
-        );
-        statuses.insert(source.id.clone(), status.clone());
-
-        Ok(status)
-    }
-
     async fn create_and_register_backend(
         &self,
         provider: AuthProvider,
@@ -724,6 +704,8 @@ impl SourceCoordinator {
                                     let source_info = SourceInfo {
                                         id: source.id.clone(),
                                         name: source.name.clone(),
+                                        backend_type: "plex".to_string(),
+                                        status: crate::services::initialization::ConnectionStatus::Unknown,
                                         source_type: format!("{:?}", source.source_type),
                                         libraries: Vec::new(), // Will be populated later
                                         is_enabled: source.enabled,
@@ -740,6 +722,8 @@ impl SourceCoordinator {
                                     let source_info = SourceInfo {
                                         id: source.id.clone(),
                                         name: source.name.clone(),
+                                        backend_type: "jellyfin".to_string(),
+                                        status: crate::services::initialization::ConnectionStatus::Unknown,
                                         source_type: format!("{:?}", source.source_type),
                                         libraries: Vec::new(),
                                         is_enabled: source.enabled,
@@ -781,7 +765,7 @@ impl SourceCoordinator {
         });
     }
 
-    /// Stage 3: Network connections - test actual connectivity  
+    /// Stage 3: Network connections - test actual connectivity
     fn stage3_network_connections(&self, state: AppInitializationState) {
         let auth_manager = self.auth_manager.clone();
         let data_service = self.data_service.clone();
@@ -802,7 +786,7 @@ impl SourceCoordinator {
                             AuthProvider::PlexAccount { id, .. } => {
                                 if let Some(cached_sources) = auth_manager.get_cached_sources(id).await {
                                     let mut source_results = Vec::new();
-                                    
+
                                     for source in cached_sources {
                                         // Attempt to create and test backend connection
                                         let readiness = match Self::test_source_connection(&source, &provider, &auth_manager).await {
@@ -810,11 +794,13 @@ impl SourceCoordinator {
                                                 if backend.is_initialized().await {
                                                     let library_count = backend.get_libraries().await.map(|libs| libs.len()).unwrap_or(0);
                                                     SourceReadiness::Connected {
+                                                        server_name: "Unknown".to_string(),
                                                         api_client_status: crate::services::initialization::ApiClientStatus::Ready,
-                                                        library_count,
+                                                        library_count: library_count as u32,
                                                     }
                                                 } else if backend.is_playback_ready().await {
                                                     SourceReadiness::PlaybackReady {
+                                                        server_name: "Unknown".to_string(),
                                                         credentials_valid: true,
                                                         last_successful_connection: None,
                                                     }
@@ -825,15 +811,16 @@ impl SourceCoordinator {
                                             Err(_) => {
                                                 // Even if connection fails, check if we have valid credentials
                                                 SourceReadiness::PlaybackReady {
+                                                    server_name: "Unknown".to_string(),
                                                     credentials_valid: true,
                                                     last_successful_connection: None,
                                                 }
                                             }
                                         };
-                                        
+
                                         source_results.push((source.id.clone(), readiness));
                                     }
-                                    
+
                                     source_results
                                 } else {
                                     Vec::new()
@@ -842,18 +829,20 @@ impl SourceCoordinator {
                             AuthProvider::JellyfinAuth { id, .. } => {
                                 if let Some(cached_sources) = auth_manager.get_cached_sources(id).await {
                                     let mut source_results = Vec::new();
-                                    
+
                                     for source in cached_sources {
                                         let readiness = match Self::test_source_connection(&source, &provider, &auth_manager).await {
                                             Ok(backend) => {
                                                 if backend.is_initialized().await {
                                                     let library_count = backend.get_libraries().await.map(|libs| libs.len()).unwrap_or(0);
                                                     SourceReadiness::Connected {
+                                                        server_name: "Unknown".to_string(),
                                                         api_client_status: crate::services::initialization::ApiClientStatus::Ready,
-                                                        library_count,
+                                                        library_count: library_count as u32,
                                                     }
                                                 } else if backend.is_playback_ready().await {
                                                     SourceReadiness::PlaybackReady {
+                                                        server_name: "Unknown".to_string(),
                                                         credentials_valid: true,
                                                         last_successful_connection: None,
                                                     }
@@ -863,15 +852,16 @@ impl SourceCoordinator {
                                             }
                                             Err(_) => {
                                                 SourceReadiness::PlaybackReady {
+                                                    server_name: "Unknown".to_string(),
                                                     credentials_valid: true,
                                                     last_successful_connection: None,
                                                 }
                                             }
                                         };
-                                        
+
                                         source_results.push((source.id.clone(), readiness));
                                     }
-                                    
+
                                     source_results
                                 } else {
                                     Vec::new()

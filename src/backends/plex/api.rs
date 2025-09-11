@@ -11,14 +11,6 @@ use crate::models::{
     MediaItem, Movie, QualityOption, Resolution, Season, Show, StreamInfo,
 };
 
-const PLEX_HEADERS: &[(&str, &str)] = &[
-    ("X-Plex-Product", "Reel"),
-    ("X-Plex-Version", "0.1.0"),
-    ("X-Plex-Client-Identifier", "reel-media-player"),
-    ("X-Plex-Platform", "Linux"),
-    ("Accept", "application/json"),
-];
-
 #[derive(Clone)]
 pub struct PlexApi {
     client: reqwest::Client,
@@ -28,10 +20,6 @@ pub struct PlexApi {
 }
 
 impl PlexApi {
-    pub fn new(base_url: String, auth_token: String) -> Self {
-        Self::with_backend_id(base_url, auth_token, "plex".to_string())
-    }
-
     pub fn with_backend_id(base_url: String, auth_token: String, backend_id: String) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -755,150 +743,6 @@ impl PlexApi {
     }
 
     /// Get On Deck items (partially watched content)
-    async fn get_on_deck(&self) -> Result<Vec<MediaItem>> {
-        let url = format!("{}/library/onDeck", self.base_url);
-
-        let response = self
-            .client
-            .get(&url)
-            .header("X-Plex-Token", &self.auth_token)
-            .header("Accept", "application/json")
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(anyhow!("Failed to get on deck: {}", response.status()));
-        }
-
-        let plex_response: PlexOnDeckResponse = response.json().await?;
-        let mut items = Vec::new();
-
-        for meta in plex_response.media_container.metadata {
-            // Only add items we can successfully parse
-            match self.parse_media_item(meta) {
-                Ok(item) => items.push(item),
-                Err(e) => {
-                    debug!("Skipping item in on deck: {}", e);
-                }
-            }
-        }
-
-        info!(
-            "PlexApi::get_on_deck() - Successfully parsed {} items",
-            items.len()
-        );
-        Ok(items)
-    }
-
-    /// Get recently added items
-    async fn get_recently_added(&self) -> Result<Vec<MediaItem>> {
-        let url = format!("{}/library/recentlyAdded", self.base_url);
-
-        let response = self
-            .client
-            .get(&url)
-            .header("X-Plex-Token", &self.auth_token)
-            .header("Accept", "application/json")
-            .query(&[("limit", "30")]) // Get more items since we'll filter some out
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(anyhow!(
-                "Failed to get recently added: {}",
-                response.status()
-            ));
-        }
-
-        let plex_response: PlexRecentlyAddedResponse = response.json().await?;
-        let mut items = Vec::new();
-
-        for meta in plex_response.media_container.metadata {
-            // Only add items we can successfully parse
-            match self.parse_media_item(meta) {
-                Ok(item) => items.push(item),
-                Err(e) => {
-                    debug!("Skipping item in recently added: {}", e);
-                }
-            }
-        }
-
-        info!(
-            "PlexApi::get_recently_added() - Successfully parsed {} items",
-            items.len()
-        );
-        Ok(items)
-    }
-
-    /// Get hub sections for a specific library
-    async fn get_library_hubs(&self, library_id: &str) -> Result<Vec<HomeSection>> {
-        let url = format!("{}/hubs/sections/{}", self.base_url, library_id);
-
-        let response = self
-            .client
-            .get(&url)
-            .header("X-Plex-Token", &self.auth_token)
-            .header("Accept", "application/json")
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            // Hubs might not be available for all libraries
-            return Ok(Vec::new());
-        }
-
-        let plex_response: PlexHubsResponse = response.json().await?;
-        let mut sections = Vec::new();
-
-        for hub in plex_response.media_container.hub {
-            if hub.metadata.is_empty() {
-                continue;
-            }
-
-            let section_type = match hub.context.as_deref() {
-                Some("hub.movie.recentlyadded") | Some("hub.show.recentlyadded") => {
-                    HomeSectionType::RecentlyAdded
-                }
-                Some("hub.movie.toprated") | Some("hub.show.toprated") => HomeSectionType::TopRated,
-                Some("hub.movie.popular") | Some("hub.show.popular") => HomeSectionType::Trending,
-                Some("hub.movie.recentlyviewed") | Some("hub.show.recentlyviewed") => {
-                    HomeSectionType::RecentlyPlayed
-                }
-                _ => HomeSectionType::Custom(hub.title.clone()),
-            };
-
-            let mut items = Vec::new();
-            for meta in hub.metadata {
-                match self.parse_media_item(meta) {
-                    Ok(item) => items.push(item),
-                    Err(e) => {
-                        debug!("Skipping item in hub '{}': {}", hub.title, e);
-                    }
-                }
-            }
-
-            // Only add the section if it has items
-            if !items.is_empty() {
-                debug!(
-                    "PlexApi::get_library_hubs() - Hub '{}' has {} items",
-                    hub.title,
-                    items.len()
-                );
-                sections.push(HomeSection {
-                    id: format!(
-                        "{}_{}",
-                        library_id,
-                        hub.key.unwrap_or_else(|| hub.title.clone())
-                    ),
-                    title: hub.title,
-                    section_type,
-                    items,
-                });
-            }
-        }
-
-        Ok(sections)
-    }
 
     /// Parse a generic Plex metadata item into a MediaItem
     fn parse_media_item(&self, meta: PlexGenericMetadata) -> Result<MediaItem> {
@@ -1213,9 +1057,9 @@ struct PlexMovieMetadata {
     genre: Option<Vec<PlexTag>>,
     added_at: Option<i64>,
     updated_at: Option<i64>,
-    view_count: Option<u32>,
     view_offset: Option<u64>,
     last_viewed_at: Option<i64>,
+    view_count: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1249,7 +1093,6 @@ struct PlexShowMetadata {
     genre: Option<Vec<PlexTag>>,
     added_at: Option<i64>,
     updated_at: Option<i64>,
-    view_count: Option<u32>,
     viewed_leaf_count: Option<u32>,
     leaf_count: Option<u32>,
 }
@@ -1298,12 +1141,12 @@ struct PlexEpisodeMetadata {
     thumb: Option<String>,
     summary: Option<String>,
     originally_available_at: Option<String>,
-    view_count: Option<u32>,
     view_offset: Option<u64>,
     last_viewed_at: Option<i64>,
     grandparent_rating_key: Option<String>,
     grandparent_title: Option<String>,
     grandparent_thumb: Option<String>,
+    view_count: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1321,7 +1164,6 @@ struct PlexMediaContainer {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlexMediaMetadata {
-    rating_key: String,
     #[serde(rename = "Media", default)]
     media: Option<Vec<PlexMedia>>,
 }
@@ -1358,7 +1200,6 @@ struct PlexGenericMetadata {
     art: Option<String>,
     summary: Option<String>,
     duration: Option<u64>,
-    view_count: Option<u32>,
     view_offset: Option<u64>,
     last_viewed_at: Option<i64>,
     added_at: Option<i64>,
@@ -1372,6 +1213,7 @@ struct PlexGenericMetadata {
     grandparent_rating_key: Option<String>, // Show ID for episodes
     #[serde(rename = "Genre", default)]
     genre: Option<Vec<PlexTag>>,
+    view_count: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1388,15 +1230,10 @@ struct PlexOnDeckContainer {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-struct PlexRecentlyAddedResponse {
-    media_container: PlexRecentlyAddedContainer,
-}
+struct PlexRecentlyAddedResponse {}
 
 #[derive(Debug, Deserialize)]
-struct PlexRecentlyAddedContainer {
-    #[serde(rename = "Metadata", default)]
-    metadata: Vec<PlexGenericMetadata>,
-}
+struct PlexRecentlyAddedContainer {}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -1414,8 +1251,6 @@ struct PlexHubsContainer {
 #[serde(rename_all = "camelCase")]
 struct PlexHub {
     title: String,
-    key: Option<String>,
-    context: Option<String>,
     #[serde(rename = "Metadata", default)]
     metadata: Vec<PlexGenericMetadata>,
 }

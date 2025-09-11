@@ -86,6 +86,8 @@
 
           # Image processing
           librsvg
+
+          jj
         ] ++ linuxOnlyPackages ++ darwinOnlyPackages;
 
         pythonWithPkgs = pkgs.python3.withPackages (ps: with ps; [

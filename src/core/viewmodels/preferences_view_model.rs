@@ -409,8 +409,4 @@ impl ViewModel for PreferencesViewModel {
     async fn refresh(&self) {
         self.load_current_config().await;
     }
-
-    fn dispose(&self) {
-        // Clean up if needed
-    }
 }
