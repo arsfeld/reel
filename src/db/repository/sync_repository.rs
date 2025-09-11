@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 /// Repository trait for SyncStatus entities
 #[async_trait]
+#[allow(dead_code)]
 pub trait SyncRepository: Repository<SyncStatusModel> {
     /// Find sync status by source
     async fn find_by_source(&self, source_id: &str) -> Result<Vec<SyncStatusModel>>;
@@ -38,6 +39,7 @@ pub trait SyncRepository: Repository<SyncStatusModel> {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SyncStats {
     pub total_syncs: u64,
     pub successful_syncs: u64,
@@ -47,10 +49,12 @@ pub struct SyncStats {
     pub average_sync_duration_secs: Option<f64>,
 }
 
+#[allow(dead_code)]
 pub struct SyncRepositoryImpl {
     base: BaseRepository,
 }
 
+#[allow(dead_code)]
 impl SyncRepositoryImpl {
     pub fn new(db: Arc<DatabaseConnection>, event_bus: Arc<EventBus>) -> Self {
         Self {
