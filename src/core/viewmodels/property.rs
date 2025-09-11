@@ -50,8 +50,8 @@ fn detect_cycles(
     property_name: &str,
     dependencies: &[Arc<dyn PropertyLike>],
 ) -> Result<(), String> {
-    let mut visited: HashSet<String> = HashSet::new();
-    let mut rec_stack: HashSet<String> = HashSet::new();
+    let mut _visited: HashSet<String> = HashSet::new();
+    let mut _rec_stack: HashSet<String> = HashSet::new();
 
     // Build adjacency list representation (simplified for this case)
     let mut graph: HashMap<String, Vec<String>> = HashMap::new();
@@ -158,7 +158,7 @@ impl<T: Clone + Send + Sync> Property<T> {
     pub fn debug_has_lagged_subscribers(&self) -> bool {
         // We can't easily check for lagged subscribers with broadcast channel
         // This is a placeholder that could be enhanced with more detailed tracking
-        self.broadcast_sender.len() > 0
+        !self.broadcast_sender.is_empty()
     }
 }
 
@@ -239,7 +239,7 @@ impl<T: Clone + Send + Sync + 'static> ComputedProperty<T> {
             );
         }
         // Try to compute initial value, use fallback if it panics
-        let initial_value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compute()))
+        let initial_value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&compute))
             .unwrap_or_else(|_| {
                 if let Some(ref fallback) = fallback_value {
                     fallback.clone()
