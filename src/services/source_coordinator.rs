@@ -52,6 +52,7 @@ pub struct SourceCoordinator {
     sync_manager: Arc<SyncManager>,
     data_service: Arc<DataService>,
     source_statuses: Arc<RwLock<HashMap<String, SourceStatus>>>,
+    initialization_state: Arc<RwLock<Option<AppInitializationState>>>,
 }
 
 impl SourceCoordinator {
@@ -67,6 +68,7 @@ impl SourceCoordinator {
             sync_manager,
             data_service,
             source_statuses: Arc::new(RwLock::new(HashMap::new())),
+            initialization_state: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -645,6 +647,12 @@ impl SourceCoordinator {
     pub fn initialize_sources_reactive(&self) -> AppInitializationState {
         let init_state = AppInitializationState::new();
 
+        // Store the initialization state for later access
+        {
+            let mut state_lock = self.initialization_state.blocking_write();
+            *state_lock = Some(init_state.clone());
+        }
+
         // Enable UI immediately without blocking (0ms)
         self.enable_ui_immediately(&init_state);
 
@@ -655,6 +663,11 @@ impl SourceCoordinator {
         self.connect_and_register_backends(init_state.clone());
 
         init_state
+    }
+
+    /// Get the current initialization state
+    pub fn get_initialization_state(&self) -> Option<AppInitializationState> {
+        self.initialization_state.blocking_read().clone()
     }
 
     /// Enable UI immediately without any blocking operations
@@ -742,7 +755,17 @@ impl SourceCoordinator {
             }
 
             // Update the reactive state
-            state.sources_discovered.set(discovered_sources).await;
+            state
+                .sources_discovered
+                .set(discovered_sources.clone())
+                .await;
+
+            // Initialize sources_connected with Discovering state for each discovered source
+            let mut initial_states = HashMap::new();
+            for source in &discovered_sources {
+                initial_states.insert(source.id.clone(), SourceReadiness::Discovering);
+            }
+            state.sources_connected.set(initial_states).await;
 
             // Check if we have any cached credentials that indicate playback readiness
             let has_credentials = !auth_manager.get_all_providers().await.is_empty();
