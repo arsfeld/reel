@@ -144,6 +144,17 @@ impl NavigationManager {
         self.state.current_window_state()
     }
 
+    /// Set the back button visibility
+    pub fn set_back_button_visible(&self, visible: bool) {
+        if let Some(button) = self.back_button.borrow().as_ref() {
+            button.set_visible(visible);
+        } else if visible {
+            // Create the button if it doesn't exist and should be visible
+            let button = self.get_or_create_back_button();
+            button.set_visible(true);
+        }
+    }
+
     /// Set up reactive bindings between navigation state and UI
     fn setup_reactive_bindings(&self) {
         self.setup_back_button_bindings();

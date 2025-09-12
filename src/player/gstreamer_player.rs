@@ -1158,6 +1158,7 @@ impl GStreamerPlayer {
         tracks
     }
 
+    #[allow(dead_code)]
     pub async fn set_audio_track(&self, track_index: i32) -> Result<()> {
         if let Some(playbin) = self.playbin.borrow().as_ref() {
             let is_playbin3 = *self.is_playbin3.borrow();
@@ -1177,6 +1178,7 @@ impl GStreamerPlayer {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn set_subtitle_track(&self, track_index: i32) -> Result<()> {
         if let Some(playbin) = self.playbin.borrow().as_ref() {
             info!("Setting subtitle track to index: {}", track_index);
@@ -1217,6 +1219,7 @@ impl GStreamerPlayer {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn get_current_audio_track(&self) -> i32 {
         if let Some(playbin) = self.playbin.borrow().as_ref() {
             if playbin.has_property("current-audio-stream") {
@@ -1233,6 +1236,7 @@ impl GStreamerPlayer {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn get_current_subtitle_track(&self) -> i32 {
         if let Some(playbin) = self.playbin.borrow().as_ref() {
             // Check if we have any subtitle tracks available

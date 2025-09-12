@@ -946,6 +946,7 @@ impl MpvPlayer {
         tracks
     }
 
+    #[allow(dead_code)]
     pub async fn set_audio_track(&self, track_index: i32) -> Result<()> {
         if let Some(ref mpv) = *self.inner.mpv.borrow() {
             mpv.set_property("aid", track_index as i64)
@@ -955,6 +956,7 @@ impl MpvPlayer {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn set_subtitle_track(&self, track_index: i32) -> Result<()> {
         if let Some(ref mpv) = *self.inner.mpv.borrow() {
             if track_index < 0 {
@@ -972,6 +974,7 @@ impl MpvPlayer {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn get_current_audio_track(&self) -> i32 {
         if let Some(ref mpv) = *self.inner.mpv.borrow()
             && let Ok(aid) = mpv.get_property::<i64>("aid")
@@ -981,6 +984,7 @@ impl MpvPlayer {
         -1
     }
 
+    #[allow(dead_code)]
     pub async fn get_current_subtitle_track(&self) -> i32 {
         if let Some(ref mpv) = *self.inner.mpv.borrow()
             && let Ok(sid) = mpv.get_property::<i64>("sid")
