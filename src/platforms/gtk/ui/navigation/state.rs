@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::types::NavigationPage;
+use super::types::{NavigationPage, WindowState};
 use crate::core::viewmodels::property::{ComputedProperty, Property, PropertyLike};
 
 /// Reactive navigation state that manages all navigation-related properties
@@ -9,6 +9,10 @@ pub struct NavigationState {
     // Primary navigation state
     pub current_page: Property<NavigationPage>,
     pub navigation_history: Property<Vec<NavigationPage>>,
+
+    // Window state preservation
+    pub window_state_stack: Property<Vec<WindowState>>,
+    pub current_window_state: Property<WindowState>,
 
     // Header state (computed from navigation)
     pub header_title: ComputedProperty<Option<String>>,
@@ -28,6 +32,8 @@ impl NavigationState {
         // Create base properties
         let current_page = Property::new(NavigationPage::Empty, "current_page");
         let navigation_history = Property::new(vec![NavigationPage::Empty], "navigation_history");
+        let window_state_stack = Property::new(vec![WindowState::new()], "window_state_stack");
+        let current_window_state = Property::new(WindowState::new(), "current_window_state");
 
         // Create computed properties
         let current_page_arc: Arc<dyn PropertyLike> = Arc::new(current_page.clone());
@@ -75,6 +81,8 @@ impl NavigationState {
         Self {
             current_page,
             navigation_history,
+            window_state_stack,
+            current_window_state,
             header_title,
             show_back_button,
             back_button_tooltip,
@@ -116,6 +124,54 @@ impl NavigationState {
     /// Get the back button tooltip text
     pub fn back_button_tooltip_text(&self) -> String {
         self.back_button_tooltip.get_sync()
+    }
+
+    /// Get the current window state synchronously
+    pub fn current_window_state(&self) -> WindowState {
+        self.current_window_state.get_sync()
+    }
+
+    /// Get the window state stack synchronously
+    pub fn window_state_stack(&self) -> Vec<WindowState> {
+        self.window_state_stack.get_sync()
+    }
+
+    /// Save the current window state before navigation
+    pub async fn save_window_state(
+        &self,
+        size: Option<(i32, i32)>,
+        maximized: bool,
+        fullscreen: bool,
+    ) {
+        let state = WindowState {
+            saved_size: size,
+            was_maximized: maximized,
+            was_fullscreen: fullscreen,
+        };
+        self.current_window_state.set(state).await;
+    }
+
+    /// Push current window state to stack (for navigation)
+    pub async fn push_window_state(&self) {
+        let current = self.current_window_state.get_sync();
+        let mut stack = self.window_state_stack.get_sync();
+        stack.push(current);
+        self.window_state_stack.set(stack).await;
+    }
+
+    /// Pop window state from stack (for back navigation)
+    pub async fn pop_window_state(&self) -> Option<WindowState> {
+        let mut stack = self.window_state_stack.get_sync();
+        if stack.len() > 1 {
+            let state = stack.pop();
+            self.window_state_stack.set(stack).await;
+            if let Some(ref s) = state {
+                self.current_window_state.set(s.clone()).await;
+            }
+            state
+        } else {
+            None
+        }
     }
 }
 

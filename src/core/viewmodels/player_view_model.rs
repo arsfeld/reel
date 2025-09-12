@@ -16,6 +16,30 @@ pub enum PlaybackState {
     Paused,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioTrack {
+    pub id: i32,
+    pub name: String,
+    pub language: Option<String>,
+    pub codec: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubtitleTrack {
+    pub id: i32,
+    pub name: String,
+    pub language: Option<String>,
+    pub forced: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QualityOption {
+    pub id: String,
+    pub name: String,
+    pub bitrate: u32,
+    pub resolution: String,
+}
+
 #[derive(Debug)]
 pub struct PlayerViewModel {
     data_service: Arc<DataService>,
@@ -41,6 +65,13 @@ pub struct PlayerViewModel {
     subtitles_enabled: Property<bool>,
     audio_track: Property<i32>,
     subtitle_track: Property<i32>,
+    // Track management properties
+    audio_tracks: Property<Vec<AudioTrack>>,
+    subtitle_tracks: Property<Vec<SubtitleTrack>>,
+    selected_audio_track: Property<Option<usize>>,
+    selected_subtitle_track: Property<Option<usize>>,
+    quality_options: Property<Vec<QualityOption>>,
+    selected_quality: Property<Option<usize>>,
     event_bus: Arc<EventBus>,
     // Throttle state
     last_progress_save: Arc<Mutex<Option<Instant>>>,
@@ -81,6 +112,13 @@ impl PlayerViewModel {
             subtitles_enabled: Property::new(false, "subtitles_enabled"),
             audio_track: Property::new(0, "audio_track"),
             subtitle_track: Property::new(-1, "subtitle_track"),
+            // Track management properties
+            audio_tracks: Property::new(Vec::new(), "audio_tracks"),
+            subtitle_tracks: Property::new(Vec::new(), "subtitle_tracks"),
+            selected_audio_track: Property::new(None, "selected_audio_track"),
+            selected_subtitle_track: Property::new(None, "selected_subtitle_track"),
+            quality_options: Property::new(Vec::new(), "quality_options"),
+            selected_quality: Property::new(None, "selected_quality"),
             last_progress_save: Arc::new(Mutex::new(None)),
         }
     }
@@ -419,6 +457,172 @@ impl PlayerViewModel {
     pub fn next_episode(&self) -> &Property<Option<Episode>> {
         &self.next_episode
     }
+
+    pub fn audio_tracks(&self) -> &Property<Vec<AudioTrack>> {
+        &self.audio_tracks
+    }
+
+    pub fn subtitle_tracks(&self) -> &Property<Vec<SubtitleTrack>> {
+        &self.subtitle_tracks
+    }
+
+    pub fn selected_audio_track(&self) -> &Property<Option<usize>> {
+        &self.selected_audio_track
+    }
+
+    pub fn selected_subtitle_track(&self) -> &Property<Option<usize>> {
+        &self.selected_subtitle_track
+    }
+
+    pub fn quality_options(&self) -> &Property<Vec<QualityOption>> {
+        &self.quality_options
+    }
+
+    pub fn selected_quality(&self) -> &Property<Option<usize>> {
+        &self.selected_quality
+    }
+
+    pub fn show_controls(&self) -> &Property<bool> {
+        &self.show_controls
+    }
+
+    pub async fn show_controls_temporarily(&self, delay_secs: u64) {
+        // Show controls immediately
+        self.show_controls.set(true).await;
+
+        // Schedule auto-hide after delay
+        let show_controls = self.show_controls.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
+            show_controls.set(false).await;
+        });
+    }
+
+    pub async fn toggle_controls_visibility(&self) {
+        let visible = self.show_controls.get().await;
+        if visible {
+            self.show_controls.set(false).await;
+        } else {
+            // Show temporarily when toggling on
+            self.show_controls_temporarily(crate::constants::PLAYER_CONTROLS_HIDE_DELAY_SECS)
+                .await;
+        }
+    }
+
+    pub fn has_audio_tracks(&self) -> bool {
+        // Simple sync check for computed property
+        self.audio_tracks.get_sync().len() > 0
+    }
+
+    pub fn has_subtitle_tracks(&self) -> bool {
+        // Simple sync check for computed property
+        self.subtitle_tracks.get_sync().len() > 0
+    }
+
+    pub async fn discover_tracks(&self, player: &crate::player::Player) -> Result<()> {
+        // Get tracks from the player backend
+        let audio_track_tuples = player.get_audio_tracks().await;
+        let subtitle_track_tuples = player.get_subtitle_tracks().await;
+
+        // Convert to our AudioTrack type
+        let audio_tracks: Vec<AudioTrack> = audio_track_tuples
+            .into_iter()
+            .map(|(id, name)| {
+                // Try to parse language from name (e.g., "English (5.1 AC3)")
+                let (clean_name, language) = if name.contains('(') {
+                    let parts: Vec<&str> = name.splitn(2, '(').collect();
+                    (
+                        parts[0].trim().to_string(),
+                        Some(parts[0].trim().to_string()),
+                    )
+                } else {
+                    (name.clone(), None)
+                };
+                AudioTrack {
+                    id,
+                    name: clean_name,
+                    language,
+                    codec: None, // Could be extracted from name if needed
+                }
+            })
+            .collect();
+
+        // Convert to our SubtitleTrack type
+        let subtitle_tracks: Vec<SubtitleTrack> = subtitle_track_tuples
+            .into_iter()
+            .map(|(id, name)| {
+                let forced = name.to_lowercase().contains("forced");
+                let (clean_name, language) = if name.contains('(') {
+                    let parts: Vec<&str> = name.splitn(2, '(').collect();
+                    (
+                        parts[0].trim().to_string(),
+                        Some(parts[0].trim().to_string()),
+                    )
+                } else {
+                    (name.clone(), None)
+                };
+                SubtitleTrack {
+                    id,
+                    name: clean_name,
+                    language,
+                    forced,
+                }
+            })
+            .collect();
+
+        // Update properties
+        self.audio_tracks.set(audio_tracks).await;
+        self.subtitle_tracks.set(subtitle_tracks).await;
+
+        // Auto-select first audio track if available
+        if self.audio_tracks.get().await.len() > 0 {
+            self.selected_audio_track.set(Some(0)).await;
+        }
+
+        Ok(())
+    }
+
+    pub async fn select_audio_track(
+        &self,
+        track_index: usize,
+        player: &crate::player::Player,
+    ) -> Result<()> {
+        let tracks = self.audio_tracks.get().await;
+        if let Some(track) = tracks.get(track_index) {
+            // Update player backend
+            player.set_audio_track(track.id).await?;
+
+            // Update ViewModel state
+            self.selected_audio_track.set(Some(track_index)).await;
+
+            // Save preference (TODO: implement preference saving)
+        }
+        Ok(())
+    }
+
+    pub async fn select_subtitle_track(
+        &self,
+        track_index: Option<usize>,
+        player: &crate::player::Player,
+    ) -> Result<()> {
+        match track_index {
+            Some(idx) => {
+                let tracks = self.subtitle_tracks.get().await;
+                if let Some(track) = tracks.get(idx) {
+                    player.set_subtitle_track(track.id).await?;
+                    self.selected_subtitle_track.set(Some(idx)).await;
+                    self.subtitles_enabled.set(true).await;
+                }
+            }
+            None => {
+                // Disable subtitles
+                player.set_subtitle_track(-1).await?;
+                self.selected_subtitle_track.set(None).await;
+                self.subtitles_enabled.set(false).await;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -493,6 +697,12 @@ impl Clone for PlayerViewModel {
             subtitles_enabled: self.subtitles_enabled.clone(),
             audio_track: self.audio_track.clone(),
             subtitle_track: self.subtitle_track.clone(),
+            audio_tracks: self.audio_tracks.clone(),
+            subtitle_tracks: self.subtitle_tracks.clone(),
+            selected_audio_track: self.selected_audio_track.clone(),
+            selected_subtitle_track: self.selected_subtitle_track.clone(),
+            quality_options: self.quality_options.clone(),
+            selected_quality: self.selected_quality.clone(),
             event_bus: self.event_bus.clone(),
             last_progress_save: self.last_progress_save.clone(),
         }

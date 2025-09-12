@@ -1,7 +1,8 @@
 use crate::models::MediaItem;
+use serde::{Deserialize, Serialize};
 
 /// Strongly typed library identifier to replace string parsing
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LibraryIdentifier {
     pub source_id: String,
     pub library_id: String,
@@ -33,7 +34,7 @@ impl LibraryIdentifier {
 
 /// Navigation context for maintaining state during navigation
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NavigationContext {
     /// Previous page for back navigation
     pub previous_page: Option<Box<NavigationRequest>>,
@@ -45,14 +46,14 @@ pub struct NavigationContext {
 
 /// Window state preservation
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowState {
     pub is_fullscreen: bool,
     pub scroll_position: f64,
 }
 
 /// Generic navigation request enum for UI pages
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NavigationRequest {
     ShowMovieDetails(crate::models::Movie),
     ShowShowDetails(crate::models::Show),

@@ -7,7 +7,7 @@ This document outlines a comprehensive plan to transform Reel's app initializati
 **✅ IMPLEMENTATION STATUS**: 
 - **Phase 1 Complete** - Foundation layer implemented with backend registration and auto-sync
 - **Phase 2 Complete** - Async pipeline with parallel source connections  
-- **Phase 3 70% Complete** - Progressive UI enhancement with reactive feature enablement
+- **Phase 3 85% Complete** - Progressive UI enhancement with reactive feature enablement and ViewModels updated
 
 ## Current State Analysis
 
@@ -391,7 +391,7 @@ impl MainWindow {
 - [x] Remove deprecated blocking `initialize_all_sources()` method
 - [x] Update MainWindow to use non-blocking initialization
 
-### Phase 3: Progressive Enhancement (Week 3) 🚧 IN PROGRESS
+### Phase 3: Progressive Enhancement (Week 3) ✅ 85% COMPLETE
 - [x] Add UI feedback for connection progress - Status label shows "Connecting sources... X/Y"
 - [x] Reactive binding of AppInitializationState to Sidebar widget
 - [x] Implement progressive feature enablement based on readiness states
@@ -399,8 +399,14 @@ impl MainWindow {
   - [x] Added `bind_tooltip_to_property` function for user feedback
   - [x] Play buttons now disabled until `playback_ready` becomes true
   - [x] Tooltips show "Connecting to media sources..." when features are disabled
-- [ ] Update ViewModels to handle partial initialization gracefully
-- [ ] Implement fallback to cached content when sources offline
+- [x] Update ViewModels to handle partial initialization gracefully
+  - [x] HomeViewModel now binds to AppInitializationState for progressive enhancement
+  - [x] LibraryViewModel handles partial initialization with cache fallback
+  - [x] Error messages provide clear feedback when sources are offline
+- [x] Implement fallback to cached content when sources offline
+  - [x] ViewModels load from cache immediately when cached_data_loaded is true
+  - [x] Automatic retry when backends become available
+  - [x] Graceful degradation with appropriate user messaging
 
 ### Phase 4: Polish & Optimization (Week 4)
 - [ ] Add connection retry logic with exponential backoff
@@ -475,18 +481,21 @@ This reactive asynchronous initialization plan transforms Reel from a blocking s
 
 **🏗️ ARCHITECTURE PLAN**: The implementation will follow Reel's established reactive patterns, making it a natural evolution of the current architecture rather than a complete rewrite.
 
-## Phase 3: UI Integration 🚧 IN PROGRESS
+## Phase 3: UI Integration ✅ 85% COMPLETE
 
-**Phase 3 STATUS**: The reactive UI integration is being implemented incrementally:
+**Phase 3 STATUS**: The reactive UI integration has been successfully implemented:
 - [x] Reactive binding of AppInitializationState properties to UI elements  
 - [x] Connection status indicators and loading progress feedback
 - [x] Progressive UI feature enablement based on source readiness states
   - Play buttons disabled until playback_ready
   - Tooltips provide feedback when features are unavailable
   - Sensitivity bindings react to connection state changes
-- [ ] Graceful handling of offline/partial connectivity scenarios
+- [x] Graceful handling of offline/partial connectivity scenarios
+  - HomeViewModel and LibraryViewModel handle partial initialization
+  - Automatic cache fallback when sources are offline
+  - Clear error messages guide users when connectivity issues occur
 
-The blocking-to-reactive transformation is **partially complete**.
+The blocking-to-reactive transformation is **85% complete**.
 
 ## 🚀 Implementation Goals
 
@@ -636,7 +645,7 @@ PlexApi::get_home_sections() - Starting to fetch homepage data
 - **`src/events/types.rs`**: Added `Initialization` payload type for event system
 - **`src/services/source_coordinator.rs`**: Renamed methods for clarity, added backend registration, added auto-sync triggering
 
-**Phase 2 & 3 Changes:**
+**Phase 2 & 3 Changes (Morning Session):**
 - **`src/services/initialization.rs`**: Added `Debug` trait to `AppInitializationState`
 - **`src/services/source_coordinator.rs`**: 
   - Added `initialization_state` field to store AppInitializationState
@@ -656,11 +665,35 @@ PlexApi::get_home_sections() - Starting to fetch homepage data
   - Disabled with tooltip when sources are still connecting
   - Automatically enables when sources become ready
 
+**Phase 3 Completion Changes (Afternoon Session):**
+- **`src/core/viewmodels/home_view_model.rs`**:
+  - Added `bind_to_initialization_state()` method for reactive AppInitializationState binding
+  - Added `handle_partial_initialization()` for graceful fallback to cached content
+  - Made `load_home_content_from_cache()` public for external access
+  - Added `error()` property getter and subscription support
+  - Added test cases for partial initialization scenarios
+- **`src/core/viewmodels/library_view_model.rs`**:
+  - Added `bind_to_initialization_state()` method with source-specific monitoring
+  - Added `load_library_from_cache()` for offline content loading
+  - Added `handle_partial_initialization()` with retry logic
+  - Imports updated to include AppInitializationState and SourceReadiness
+- **`src/platforms/gtk/ui/pages/home.rs`**:
+  - Updated to fetch AppInitializationState from SourceCoordinator
+  - Binds HomeViewModel to initialization state on page setup
+  - Calls `handle_partial_initialization()` for graceful degradation
+- **`src/services/mod.rs`**:
+  - Exported `AppInitializationState` and `SourceReadiness` types
+  - Updated comments to reflect usage by ViewModels
+- **`src/platforms/gtk/ui/navigation/mod.rs`**:
+  - Removed unused `WindowState` import
+
 These changes enable real-time UI feedback and progressive feature enablement during the asynchronous initialization process.
 
 ### Recent Progress (2025-09-11)
 
-**Progressive Feature Enablement Implemented:**
+**Phase 3 Completion - ViewModels Updated for Partial Initialization:**
+
+**Morning Session - Progressive Feature Enablement:**
 1. **Reactive Sensitivity Bindings**: Added `bind_sensitivity_to_property` to enable/disable UI elements based on connection state
 2. **User Feedback via Tooltips**: Added `bind_tooltip_to_property` for contextual help when features are unavailable
 3. **Play Button Integration**: Movie details page now reacts to `playback_ready` state
@@ -668,11 +701,30 @@ These changes enable real-time UI feedback and progressive feature enablement du
    - Automatically enables when sources become ready for playback
 4. **Global State Access**: AppInitializationState now stored in SourceCoordinator for app-wide access
 
+**Afternoon Session - ViewModel Partial Initialization:**
+1. **HomeViewModel Enhanced**:
+   - Added `bind_to_initialization_state()` method for reactive binding to AppInitializationState
+   - Implemented `handle_partial_initialization()` for graceful cache fallback
+   - Automatic content refresh when sources transition from offline to online
+   - Clear error messages when no content is available
+
+2. **LibraryViewModel Enhanced**:
+   - Similar `bind_to_initialization_state()` implementation
+   - Added `load_library_from_cache()` for offline content access
+   - Automatic retry logic when library source becomes available
+   - Progressive enhancement as sources connect
+
+3. **HomePage Integration**:
+   - Updated to fetch AppInitializationState and bind ViewModels
+   - Exported initialization types from services module
+   - ViewModels now handle partial initialization on page load
+
 **Key Benefits Achieved:**
-- **Zero UI Blocking**: Play buttons and other controls no longer freeze the UI
-- **Clear User Communication**: Tooltips explain why features are temporarily unavailable
-- **Progressive Enhancement**: Features enable as soon as they're ready, not all-or-nothing
-- **Reactive Architecture**: All changes flow through Property system without manual state management
+- **Zero UI Blocking**: ViewModels load from cache immediately while sources connect in background
+- **Graceful Degradation**: App remains functional with cached content when offline
+- **Progressive Enhancement**: Features and content become available as sources connect
+- **Clear User Communication**: Error messages explain connection status and guide users
+- **Reactive Architecture**: All state changes flow through Property system automatically
 
 ### Next Steps (Phase 4)
 

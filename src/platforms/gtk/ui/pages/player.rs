@@ -14,7 +14,8 @@ use crate::constants::PLAYER_CONTROLS_HIDE_DELAY_SECS;
 use crate::core::viewmodels::property::ComputedProperty;
 use crate::models::{Episode, MediaItem, Movie};
 use crate::platforms::gtk::ui::reactive::bindings::{
-    BindingHandle, bind_icon_to_property, bind_value_to_property, bind_visibility_to_property,
+    BindingHandle, bind_icon_to_property, bind_text_to_computed_property, bind_text_to_property,
+    bind_value_to_computed_property, bind_value_to_property, bind_visibility_to_property,
 };
 use crate::platforms::gtk::ui::viewmodels::player_view_model::{PlaybackState, PlayerViewModel};
 use crate::platforms::gtk::ui::widgets::player_overlay::ReelPlayerOverlayHost;
@@ -28,8 +29,11 @@ pub struct PlayerPage {
     controls: PlayerControls,
     overlay: gtk4::Overlay,
     video_container: gtk4::Box,
+    #[allow(dead_code)] // Used for reactive bindings
     controls_container: gtk4::Box,
+    #[allow(dead_code)] // Used for reactive bindings
     top_left_osd: gtk4::Box,
+    #[allow(dead_code)] // Used for reactive bindings
     top_right_osd: gtk4::Box,
     back_button: gtk4::Button,
     close_button: gtk4::Button,
@@ -223,24 +227,43 @@ impl PlayerPage {
         // Inject controls widget into blueprint container
         controls_container.append(&controls.widget);
 
+        // Create binding handles container early for use throughout setup
+        let binding_handles = Rc::new(RefCell::new(Vec::new()));
+
+        // Set up reactive control visibility bindings
+        let controls_visibility_binding = bind_visibility_to_property(
+            &controls_container,
+            view_model.show_controls().clone(),
+            |show| *show,
+        );
+        binding_handles
+            .borrow_mut()
+            .push(controls_visibility_binding);
+
+        let top_left_visibility_binding = bind_visibility_to_property(
+            &top_left_osd,
+            view_model.show_controls().clone(),
+            |show| *show,
+        );
+        binding_handles
+            .borrow_mut()
+            .push(top_left_visibility_binding);
+
+        let top_right_visibility_binding = bind_visibility_to_property(
+            &top_right_osd,
+            view_model.show_controls().clone(),
+            |show| *show,
+        );
+        binding_handles
+            .borrow_mut()
+            .push(top_right_visibility_binding);
+
         // Set up hover detection for showing/hiding OSD (controls + corner buttons)
-        let controls_container_for_hover = controls_container.clone();
-        let top_left_osd_for_hover = top_left_osd.clone();
-        let top_right_osd_for_hover = top_right_osd.clone();
-        let hide_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
         let hover_controller = gtk4::EventControllerMotion::new();
         let widget_for_motion = widget.clone();
+        let view_model_for_motion = view_model.clone();
 
-        let hide_timer_clone = hide_timer.clone();
         hover_controller.connect_motion(move |_, _, _| {
-            // Fade in OSD quickly (200ms)
-            controls_container_for_hover.set_visible(true);
-            controls_container_for_hover.set_opacity(1.0);
-            top_left_osd_for_hover.set_visible(true);
-            top_left_osd_for_hover.set_opacity(1.0);
-            top_right_osd_for_hover.set_visible(true);
-            top_right_osd_for_hover.set_opacity(1.0);
-
             // Show cursor on movement while in fullscreen
             if let Some(window) = widget_for_motion
                 .root()
@@ -255,141 +278,49 @@ impl PlayerPage {
                 }
             }
 
-            // Cancel previous timer if exists
-            if let Some(timer_id) = hide_timer_clone.borrow_mut().take() {
-                timer_id.remove();
-            }
-
-            // Hide again after configured delay of no movement
-            let controls_container_inner = controls_container_for_hover.clone();
-            let top_left_osd_inner = top_left_osd_for_hover.clone();
-            let top_right_osd_inner = top_right_osd_for_hover.clone();
-            let hide_timer_inner = hide_timer_clone.clone();
-            // Clone widget reference for the timer closure to avoid moving outer capture
-            let widget_for_motion_for_timer = widget_for_motion.clone();
-            let timer_id = glib::timeout_add_local(
-                std::time::Duration::from_secs(PLAYER_CONTROLS_HIDE_DELAY_SECS),
-                move || {
-                    // Fade out animation
-                    let fade_start_time = std::time::Instant::now();
-                    let controls_for_fade = controls_container_inner.clone();
-                    let top_left_for_fade = top_left_osd_inner.clone();
-                    let top_right_for_fade = top_right_osd_inner.clone();
-                    let widget_for_fade = widget_for_motion_for_timer.clone();
-
-                    glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-                        let elapsed = fade_start_time.elapsed().as_millis() as f64;
-                        let fade_duration = 200.0; // 200ms fade out
-
-                        if elapsed >= fade_duration {
-                            controls_for_fade.set_opacity(0.0);
-                            controls_for_fade.set_visible(false);
-                            top_left_for_fade.set_opacity(0.0);
-                            top_left_for_fade.set_visible(false);
-                            top_right_for_fade.set_opacity(0.0);
-                            top_right_for_fade.set_visible(false);
-                            // Hide cursor when controls hidden and in fullscreen
-                            if let Some(window) = widget_for_fade
-                                .root()
-                                .and_then(|r| r.downcast::<gtk4::Window>().ok())
-                                && window.is_fullscreen()
-                            {
-                                if let Some(invisible_cursor) =
-                                    PlayerPage::create_invisible_cursor()
-                                {
-                                    widget_for_fade.set_cursor(Some(&invisible_cursor));
-                                }
-                            }
-                            glib::ControlFlow::Break
-                        } else {
-                            let opacity = 1.0 - (elapsed / fade_duration);
-                            controls_for_fade.set_opacity(opacity);
-                            top_left_for_fade.set_opacity(opacity);
-                            top_right_for_fade.set_opacity(opacity);
-                            glib::ControlFlow::Continue
-                        }
-                    });
-
-                    // Clear the timer reference since it's done
-                    hide_timer_inner.borrow_mut().take();
-                    glib::ControlFlow::Break
-                },
-            );
-            hide_timer_clone.borrow_mut().replace(timer_id);
+            // Show controls temporarily through ViewModel
+            let vm = view_model_for_motion.clone();
+            glib::spawn_future_local(async move {
+                vm.show_controls_temporarily(PLAYER_CONTROLS_HIDE_DELAY_SECS)
+                    .await;
+            });
         });
 
-        // Add separate hover controllers for controls to prevent hiding when mouse is over them
+        // Add separate hover controller for controls to keep them visible when hovering
         let controls_hover_controller = gtk4::EventControllerMotion::new();
-        let controls_mouse_over = Rc::new(RefCell::new(false));
+        let view_model_for_controls = view_model.clone();
 
-        let controls_mouse_over_enter = controls_mouse_over.clone();
         controls_hover_controller.connect_enter(move |_, _, _| {
-            *controls_mouse_over_enter.borrow_mut() = true;
-        });
-
-        let controls_mouse_over_leave = controls_mouse_over.clone();
-        controls_hover_controller.connect_leave(move |_| {
-            *controls_mouse_over_leave.borrow_mut() = false;
+            // Show controls when hovering over them
+            let vm = view_model_for_controls.clone();
+            glib::spawn_future_local(async move {
+                vm.show_controls_temporarily(PLAYER_CONTROLS_HIDE_DELAY_SECS)
+                    .await;
+            });
         });
 
         controls_container.add_controller(controls_hover_controller);
 
-        // Add leave event handler to hide controls, but only if mouse is not over controls
-        let controls_container_for_leave = controls_container.clone();
-        let top_left_osd_for_leave = top_left_osd.clone();
-        let top_right_osd_for_leave = top_right_osd.clone();
-        let hide_timer_for_leave = hide_timer.clone();
+        // Add leave event handler to hide controls when mouse leaves video area
         let widget_for_leave = widget.clone();
-        let controls_mouse_over_for_leave = controls_mouse_over.clone();
+        let view_model_for_leave = view_model.clone();
 
         hover_controller.connect_leave(move |_| {
-            // Don't hide if mouse is over controls
-            if *controls_mouse_over_for_leave.borrow() {
-                return;
-            }
-
-            // Cancel any pending timer
-            if let Some(timer_id) = hide_timer_for_leave.borrow_mut().take() {
-                timer_id.remove();
-            }
-
-            // Hide controls immediately with fade animation
-            let fade_start_time = std::time::Instant::now();
-            let controls_for_fade = controls_container_for_leave.clone();
-            let top_left_for_fade = top_left_osd_for_leave.clone();
-            let top_right_for_fade = top_right_osd_for_leave.clone();
-            let widget_for_fade = widget_for_leave.clone();
-
-            glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-                let elapsed = fade_start_time.elapsed().as_millis() as f64;
-                let fade_duration = 200.0; // 200ms fade out
-
-                if elapsed >= fade_duration {
-                    controls_for_fade.set_opacity(0.0);
-                    controls_for_fade.set_visible(false);
-                    top_left_for_fade.set_opacity(0.0);
-                    top_left_for_fade.set_visible(false);
-                    top_right_for_fade.set_opacity(0.0);
-                    top_right_for_fade.set_visible(false);
-
-                    // Hide cursor when controls hidden and in fullscreen
-                    if let Some(window) = widget_for_fade
-                        .root()
-                        .and_then(|r| r.downcast::<gtk4::Window>().ok())
-                        && window.is_fullscreen()
-                    {
-                        if let Some(invisible_cursor) = PlayerPage::create_invisible_cursor() {
-                            widget_for_fade.set_cursor(Some(&invisible_cursor));
-                        }
-                    }
-                    glib::ControlFlow::Break
-                } else {
-                    let opacity = 1.0 - (elapsed / fade_duration);
-                    controls_for_fade.set_opacity(opacity);
-                    top_left_for_fade.set_opacity(opacity);
-                    top_right_for_fade.set_opacity(opacity);
-                    glib::ControlFlow::Continue
+            // Hide cursor when leaving video area in fullscreen
+            if let Some(window) = widget_for_leave
+                .root()
+                .and_then(|r| r.downcast::<gtk4::Window>().ok())
+                && window.is_fullscreen()
+            {
+                if let Some(invisible_cursor) = PlayerPage::create_invisible_cursor() {
+                    widget_for_leave.set_cursor(Some(&invisible_cursor));
                 }
+            }
+
+            // Hide controls when mouse leaves video area
+            let vm = view_model_for_leave.clone();
+            glib::spawn_future_local(async move {
+                vm.show_controls().set(false).await;
             });
         });
 
@@ -577,73 +508,7 @@ impl PlayerPage {
         info!("PlayerPage::new() - Player page initialization complete");
 
         // Reactive UI bindings to ViewModel properties
-
-        // is_loading -> show/hide loading overlay
-        {
-            use crate::platforms::gtk::ui::viewmodels::ViewModel;
-            let mut sub = view_model
-                .subscribe_to_property("is_loading")
-                .unwrap_or_else(|| view_model.is_loading().subscribe());
-            let loading_overlay = loading_overlay.clone();
-            let error_overlay = error_overlay.clone();
-            let controls_container = controls_container.clone();
-            let vm = view_model.clone();
-            glib::spawn_future_local(async move {
-                while sub.wait_for_change().await {
-                    let is_loading = vm.is_loading().get().await;
-                    let has_error = vm.error().get().await.is_some();
-                    debug!(
-                        "PlayerPage reactive binding: is_loading = {}, has_error = {}",
-                        is_loading, has_error
-                    );
-                    if is_loading {
-                        debug!(
-                            "PlayerPage reactive binding: showing loading overlay, hiding controls and error"
-                        );
-                        loading_overlay.set_visible(true);
-                        error_overlay.set_visible(false);
-                        controls_container.set_visible(false);
-                    } else if has_error {
-                        debug!(
-                            "PlayerPage reactive binding: hiding loading overlay, keeping controls hidden due to error"
-                        );
-                        loading_overlay.set_visible(false);
-                        // Don't show controls when there's an error - error overlay will handle visibility
-                    } else {
-                        debug!(
-                            "PlayerPage reactive binding: hiding loading overlay, showing controls (no error)"
-                        );
-                        loading_overlay.set_visible(false);
-                        controls_container.set_visible(true);
-                    }
-                }
-            });
-        }
-
-        // error -> show error overlay
-        {
-            use crate::platforms::gtk::ui::viewmodels::ViewModel;
-            let mut sub = view_model
-                .subscribe_to_property("error")
-                .unwrap_or_else(|| view_model.error().subscribe());
-            let error_overlay = error_overlay.clone();
-            let error_label = error_label.clone();
-            let loading_overlay = loading_overlay.clone();
-            let controls_container = controls_container.clone();
-            let vm = view_model.clone();
-            glib::spawn_future_local(async move {
-                while sub.wait_for_change().await {
-                    if let Some(msg) = vm.error().get().await {
-                        error_label.set_text(&msg);
-                        error_overlay.set_visible(true);
-                        loading_overlay.set_visible(false);
-                        controls_container.set_visible(false);
-                    } else {
-                        error_overlay.set_visible(false);
-                    }
-                }
-            });
-        }
+        // Note: Loading and error overlays are now handled by reactive bindings declared above
 
         // Set up controls event handlers now that VM is available
         // Note: position timer will be started after media loads and playback begins
@@ -759,52 +624,113 @@ impl PlayerPage {
         );
 
         // Create reactive bindings for progress bar and time labels
-        let _progress_percentage_arc = Arc::new(progress_percentage);
-        let _formatted_position_arc = Arc::new(formatted_position);
-        let _end_time_display_arc = Arc::new(end_time_display);
-
-        // TODO: Re-enable reactive bindings for computed properties once they are implemented
-        /*
         let progress_binding = bind_value_to_computed_property(
             &controls.progress_bar,
-            progress_percentage_arc.clone() as Arc<dyn PropertyLike>,
-            {
-                let progress_clone = progress_percentage_arc.clone();
-                move || progress_clone.get_sync()
-            },
+            progress_percentage,
             |percentage| *percentage,
         );
 
         let time_label_binding = bind_text_to_computed_property(
             &controls.time_label,
-            formatted_position_arc.clone() as Arc<dyn PropertyLike>,
-            {
-                let formatted_position_clone = formatted_position_arc.clone();
-                move || formatted_position_clone.get_sync()
-            },
+            formatted_position,
             |text: &String| text.clone(),
         );
 
         let end_time_label_binding = bind_text_to_computed_property(
             &controls.end_time_label,
-            end_time_display_arc.clone() as Arc<dyn PropertyLike>,
-            {
-                let end_time_display_clone = end_time_display_arc.clone();
-                move || end_time_display_clone.get_sync()
-            },
+            end_time_display,
             |text: &String| text.clone(),
         );
-        */
 
-        let binding_handles = Rc::new(RefCell::new(vec![
+        // Loading overlay reactive binding
+        let loading_binding = bind_visibility_to_property(
+            &loading_overlay,
+            view_model.is_loading().clone(),
+            |is_loading| *is_loading,
+        );
+
+        // Error overlay reactive binding
+        let error_binding =
+            bind_visibility_to_property(&error_overlay, view_model.error().clone(), |error| {
+                error.is_some()
+            });
+
+        // Error label text binding
+        let error_label_binding =
+            bind_text_to_property(&error_label, view_model.error().clone(), |error| {
+                error.as_deref().unwrap_or("").to_string()
+            });
+
+        // Track button sensitivity bindings - create ComputedProperties for track availability
+        let has_audio_tracks = ComputedProperty::new(
+            "has_audio_tracks",
+            vec![Arc::new(view_model.audio_tracks().clone()) as Arc<dyn PropertyLike>],
+            {
+                let audio_tracks = view_model.audio_tracks().clone();
+                move || audio_tracks.get_sync().len() > 0
+            },
+        );
+
+        let has_subtitle_tracks = ComputedProperty::new(
+            "has_subtitle_tracks",
+            vec![Arc::new(view_model.subtitle_tracks().clone()) as Arc<dyn PropertyLike>],
+            {
+                let subtitle_tracks = view_model.subtitle_tracks().clone();
+                move || subtitle_tracks.get_sync().len() > 0
+            },
+        );
+
+        // Create sensitivity bindings using a custom binding function
+        let audio_button_sensitivity = {
+            let button = controls.audio_button.clone();
+            let prop = Arc::new(has_audio_tracks);
+            let prop_clone = prop.clone();
+            let mut subscriber = prop.subscribe();
+            let handle = glib::spawn_future_local(async move {
+                // Set initial value
+                button.set_sensitive(prop_clone.get_sync());
+
+                // Listen for changes
+                while subscriber.wait_for_change().await {
+                    button.set_sensitive(prop_clone.get_sync());
+                }
+            });
+            // Return the handle directly
+            BindingHandle::new(handle)
+        };
+
+        let subtitle_button_sensitivity = {
+            let button = controls.subtitle_button.clone();
+            let prop = Arc::new(has_subtitle_tracks);
+            let prop_clone = prop.clone();
+            let mut subscriber = prop.subscribe();
+            let handle = glib::spawn_future_local(async move {
+                // Set initial value
+                button.set_sensitive(prop_clone.get_sync());
+
+                // Listen for changes
+                while subscriber.wait_for_change().await {
+                    button.set_sensitive(prop_clone.get_sync());
+                }
+            });
+            // Return the handle directly
+            BindingHandle::new(handle)
+        };
+
+        // Add all the other bindings to the existing handles container
+        binding_handles.borrow_mut().extend(vec![
             play_button_binding,
             volume_binding,
             volume_visible_binding,
-            // TODO: Re-add when computed property bindings are implemented
-            // progress_binding,
-            // time_label_binding,
-            // end_time_label_binding,
-        ]));
+            progress_binding,
+            time_label_binding,
+            end_time_label_binding,
+            loading_binding,
+            error_binding,
+            error_label_binding,
+            audio_button_sensitivity,
+            subtitle_button_sensitivity,
+        ]);
 
         Self {
             widget,
@@ -1067,35 +993,12 @@ impl PlayerPage {
                 .play_button
                 .set_icon_name("media-playback-pause-symbolic");
 
-            // Schedule an initial auto-hide if user is idle after entering playback/fullscreen
-            let controls_for_idle_init = self.controls_container.clone();
-            let tl_for_idle_init = self.top_left_osd.clone();
-            let tr_for_idle_init = self.top_right_osd.clone();
-            let widget_for_idle_init = self.widget.clone();
-            glib::timeout_add_local(
-                std::time::Duration::from_secs(PLAYER_CONTROLS_HIDE_DELAY_SECS),
-                move || {
-                    // Only hide if currently fullscreen to avoid confusing windowed mode
-                    if let Some(window) = widget_for_idle_init
-                        .root()
-                        .and_then(|r| r.downcast::<gtk4::Window>().ok())
-                        && window.is_fullscreen()
-                    {
-                        controls_for_idle_init.set_opacity(0.0);
-                        controls_for_idle_init.set_visible(false);
-                        tl_for_idle_init.set_opacity(0.0);
-                        tl_for_idle_init.set_visible(false);
-                        tr_for_idle_init.set_opacity(0.0);
-                        tr_for_idle_init.set_visible(false);
-
-                        // Hide cursor on initial idle
-                        if let Some(invisible_cursor) = PlayerPage::create_invisible_cursor() {
-                            widget_for_idle_init.set_cursor(Some(&invisible_cursor));
-                        }
-                    }
-                    glib::ControlFlow::Break
-                },
-            );
+            // Schedule an initial auto-hide of controls using the reactive system
+            let vm = self.view_model.clone();
+            glib::spawn_future_local(async move {
+                vm.show_controls_temporarily(PLAYER_CONTROLS_HIDE_DELAY_SECS)
+                    .await;
+            });
 
             // Grab focus on the overlay to ensure keyboard shortcuts work
             self.overlay.grab_focus();
@@ -1103,20 +1006,27 @@ impl PlayerPage {
             // Inhibit suspend/screensaver while playing
             self.inhibit_suspend().await;
 
-            // Populate track menus after playback starts (requires Playing state)
+            // Discover tracks using ViewModel after playback starts (requires Playing state)
             // Add a delay to ensure the playbin has discovered all tracks
             // On macOS, GStreamer may need more time to initialize
-            let controls = self.controls.clone();
+            let view_model = self.view_model.clone();
+            let player = self.player.clone();
             let delay_ms = if cfg!(target_os = "macos") { 1500 } else { 500 };
             glib::spawn_future_local(async move {
                 debug!(
-                    "PlayerPage::load_media() - Waiting {}ms before populating track menus",
+                    "PlayerPage::load_media() - Waiting {}ms before discovering tracks",
                     delay_ms
                 );
                 glib::timeout_future(std::time::Duration::from_millis(delay_ms)).await;
-                debug!("PlayerPage::load_media() - Populating track menus after playback start");
-                controls.populate_track_menus().await;
-                info!("PlayerPage::load_media() - Track menus populated");
+                debug!("PlayerPage::load_media() - Discovering tracks via ViewModel");
+
+                let player_lock = player.read().await;
+                if let Err(e) = view_model.discover_tracks(&*player_lock).await {
+                    error!("Failed to discover tracks: {}", e);
+                }
+                drop(player_lock);
+
+                info!("PlayerPage::load_media() - Track discovery complete");
             });
 
             // Start monitoring for playback completion
@@ -1801,6 +1711,8 @@ struct PlayerControls {
     quality_button: gtk4::MenuButton,
     upscaling_button: gtk4::MenuButton,
     title_label: gtk4::Label,
+    time_label: gtk4::Label,
+    end_time_label: gtk4::Label,
     time_display_mode: Arc<RwLock<TimeDisplayMode>>,
     player: Arc<RwLock<Player>>,
     is_seeking: Arc<RwLock<bool>>,
@@ -2074,6 +1986,8 @@ impl PlayerControls {
             quality_button: quality_button.clone(),
             upscaling_button: upscaling_button.clone(),
             title_label,
+            time_label: time_label.clone(),
+            end_time_label: end_time_label.clone(),
             time_display_mode: Arc::new(RwLock::new(TimeDisplayMode::TotalDuration)),
             player: player.clone(),
             is_seeking: Arc::new(RwLock::new(false)),

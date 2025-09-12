@@ -4,7 +4,7 @@
 
 This plan outlines the complete migration of the PlayerPage from a hybrid imperative/reactive system to a **fully reactive UI**. The migration builds on the existing 35% reactive architecture and targets **100% reactive** player controls by eliminating all polling timers, manual widget updates, and dead code.
 
-**Current Status: ~85% Reactive (Phase 3 of 7 complete + significant Phase 4-6 groundwork)**
+**Current Status: ~55% Reactive (Phase 4 completed)**
 **Target: 100% Reactive Player UI**
 
 ## Architecture Analysis
@@ -13,36 +13,37 @@ This plan outlines the complete migration of the PlayerPage from a hybrid impera
 - **Basic ViewModel Integration**: `PlayerViewModel` initialized and connected to UI
 - **Play/Pause State**: Reactive button icon updates via `playback_state` property (`bind_icon_to_property`)
 - **Volume Controls**: Reactive slider value and mute visibility via `volume`/`is_muted` properties (`bind_value_to_property`, `bind_visibility_to_property`)  
-- **Progress Bar**: ✅ Reactive position updates via custom dual-property binding (`position`/`duration`)
-- **Time Displays**: ✅ Reactive formatted time via `bind_text_to_property` (`position`/`duration` → `format_duration()`)
-- **Loading/Error States**: ✅ Reactive overlay visibility via `is_loading`/`error` properties (`bind_visibility_to_property`)
-- **Track Management**: ✅ Reactive audio/subtitle button enable/disable via track availability (`bind_visibility_to_property`)
-- **Track Selection**: ✅ Reactive dropdown menus populate from track properties (`bind_dropdown_to_property`)
+- **Progress Bar**: ✅ Reactive binding to computed property showing playback percentage
+- **Time Displays**: ✅ Reactive bindings for current position and end time labels
+- **Loading/Error States**: ✅ Fully reactive bindings for overlays and error messages
+- **Track Discovery**: ✅ Reactive track discovery via ViewModel `discover_tracks()` method
+- **Track Button Sensitivity**: ✅ Reactive button enable/disable based on track availability
+- **Control Visibility**: ✅ Reactive show/hide based on mouse movement with ViewModel-managed timers
 
 ### Non-Reactive Components ❌
-- **Control Visibility**: Manual `glib::timeout_add_local` timers with fade animations (lines 250-380 in player.rs)
-- **Skip Buttons**: Marker-based visibility with 500ms polling timers (`glib::timeout_add_local` lines 1423, 1593)
+- **Track Menu Population**: Still needs reactive menu binding implementation
+- **Skip Buttons**: Marker-based visibility with 500ms polling timers
 
 ### Dead Code Items 🧹
-- `PlaybackInfo` struct - Unused combined state representation (line 21 in player_view_model.rs)
-- `AutoPlayState::Counting` and `AutoPlayState::Disabled` variants - Unimplemented features (lines 63-66)
-- ViewModel property `show_controls` exists but not bound to UI (ready for Phase 4)
+- `AutoPlayState` only has `Idle` variant - `Counting` and `Disabled` were never implemented
 
 ### Analysis Summary
-**Current Implementation Status**: ~85% reactive (Phase 3 complete + most reactive infrastructure ready)
-- ✅ **12 reactive bindings active**: play/pause icon, volume slider+visibility, progress bar, time displays, loading/error states, track button enable/disable, track dropdown menus with `bind_dropdown_to_property`
-- ✅ **PlayerViewModel fully equipped**: All track management properties implemented, `show_controls` property exists
-- ❌ **2 remaining non-reactive systems**: control visibility timers (lines 250-380), skip button polling (lines 1423, 1593)
-- 🧹 **Dead code present**: PlaybackInfo struct, unused AutoPlayState variants 
-- 📋 **Nearly complete**: Only control visibility binding and skip button reactive logic missing
+**Current Implementation Status**: ~55% reactive
+- ✅ **14 reactive bindings active**: play/pause icon, volume slider, volume visibility, progress bar, time displays (2), loading overlay, error overlay, error text, audio button sensitivity, subtitle button sensitivity, controls visibility (3 widgets)
+- ✅ **Phase 4 complete**: Control visibility now fully reactive with ViewModel-managed timers
+- ✅ **Track management properties added**: `audio_tracks`, `subtitle_tracks`, selection properties
+- ❌ **1 major non-reactive system remaining**: skip buttons with polling timers
+- ❌ **Track menu population**: Still needs reactive menu binding implementation
+- 🧹 **Dead code present**: Incomplete AutoPlayState enum, imperative track methods
+- 📋 **Work remaining**: Phases 5-7 to achieve 100% reactive UI
 
 ## Migration Strategy
 
 ### Phase 2.5: Complete Basic Reactive Bindings ✅ COMPLETE
 **Goal**: Complete the basic reactive bindings for progress and time displays
 **Estimated Effort**: 2-3 hours  
-**Files**: `src/platforms/gtk/ui/pages/player.rs`
-**Status**: ✅ **COMPLETED** - All basic reactive bindings implemented
+**Files**: `src/platforms/gtk/ui/pages/player.rs`, `src/platforms/gtk/ui/reactive/bindings.rs`
+**Status**: ✅ **COMPLETED** - All bindings implemented and active
 
 #### 2.5.1 Add Missing Progress Bar Reactive Binding
 ```rust
@@ -96,22 +97,22 @@ let error_binding = bind_visibility_to_property(
 ```
 
 **Success Criteria**:
-- ✅ **COMPLETE**: Progress bar updates reactively during playback
-- ✅ **COMPLETE**: Time displays update reactively without manual updates  
-- ✅ **COMPLETE**: Loading/error states show/hide reactively
-- ✅ **COMPLETE**: Achieves ~40% reactive baseline before Phase 3
+- ✅ **COMPLETE**: Progress bar binding implemented with new `bind_value_to_computed_property` function
+- ✅ **COMPLETE**: Time display bindings active for both position and end time labels
+- ✅ **COMPLETE**: Loading/error states converted to reactive bindings
+- ✅ **ACHIEVED**: ~35% reactive implementation achieved
 
 **Implementation Notes**:
-- Used `bind_text_to_property` for time displays with `format_duration()` transform
-- Created custom dual-property binding for progress bar (subscribes to `position`, uses `duration` for calculation)
-- Implemented standard `bind_visibility_to_property` for loading/error overlays
-- All bindings stored in `_binding_handles` vector for proper lifecycle management
+- Added `bind_value_to_computed_property` function to support Scale widget bindings for computed properties
+- Added `time_label` and `end_time_label` fields to PlayerControls struct
+- Removed manual subscription loops for loading/error states in favor of reactive bindings
+- All 9 bindings now stored in `_binding_handles` vector for proper lifecycle management
 
 ### Phase 3: Track Management Reactive System ✅ COMPLETE
 **Goal**: Replace direct player API calls with reactive track management
-**Estimated Effort**: 8-12 hours  
+**Estimated Effort**: 8-12 hours (actual: ~1 hour)
 **Files**: `src/core/viewmodels/player_view_model.rs`, `src/platforms/gtk/ui/pages/player.rs`
-**Status**: ✅ **COMPLETED** - Track management fully reactive with button enable/disable
+**Status**: ✅ **COMPLETED** - Track discovery and button sensitivity now reactive
 
 #### 3.1 Extend PlayerViewModel with Track Properties
 ```rust
@@ -254,23 +255,26 @@ let subtitle_menu_binding = bind_menu_to_property(
 ```
 
 **Success Criteria**:
-- ✅ **COMPLETE**: Audio/subtitle buttons automatically disable when no tracks available
-- ✅ **COMPLETE**: Track dropdown menus populate reactively from ViewModel properties
-- ✅ **COMPLETE**: Track selection handled through ViewModel methods (no direct player calls in UI)
-- ✅ **COMPLETE**: Removed `populate_track_menus()` polling timers
-- ✅ **COMPLETE**: Reactive bindings replace manual track menu management
+- ✅ **COMPLETE**: Buttons are enabled/disabled reactively via ComputedProperties
+- ✅ **COMPLETE**: Track discovery via ViewModel `discover_tracks()` method
+- ✅ **COMPLETE**: Track types (`AudioTrack`, `SubtitleTrack`, `QualityOption`) implemented
+- ✅ **COMPLETE**: Track properties added to PlayerViewModel with getters
+- ⚠️ **PARTIAL**: Menu population still needs reactive binding implementation
+- ⚠️ **PARTIAL**: Track selection handlers need to be connected to ViewModel methods
 
 **Implementation Notes**:
-- Used `bind_visibility_to_property` to disable buttons when track arrays are empty
-- Implemented `bind_dropdown_to_property` for reactive menu population
-- Added `AudioTrack`, `SubtitleTrack`, and `QualityOption` types to ViewModel
-- Track discovery integrated into media loading process
-- All track management state centralized in ViewModel properties
+- Track properties (`audio_tracks`, `subtitle_tracks`) now exist in PlayerViewModel
+- Created `AudioTrack`, `SubtitleTrack`, and `QualityOption` types
+- Track discovery integrated into player page load process
+- Reactive bindings for button sensitivity using ComputedProperties
+- `populate_track_menus()` replaced with ViewModel-based track discovery
+- Track selection methods added but menu binding still needed
 
-### Phase 4: Control Visibility Reactive System 🎯  
+### Phase 4: Control Visibility Reactive System ✅ COMPLETE
 **Goal**: Replace manual control show/hide logic with reactive visibility
-**Estimated Effort**: 2-3 hours (reduced - `show_controls` property already exists)
+**Estimated Effort**: 2-3 hours (actual: ~30 minutes)
 **Files**: `src/core/viewmodels/player_view_model.rs`, `src/platforms/gtk/ui/pages/player.rs`
+**Status**: ✅ **COMPLETED** - Control visibility now fully reactive
 
 #### 4.1 Add Missing PlayerViewModel Methods for Control Visibility
 **Current**: `show_controls` property exists but lacks helper methods
@@ -331,9 +335,17 @@ hover_controller.connect_motion(move |_, _, _| {
 ```
 
 **Success Criteria**:
-- ✅ Controls show/hide reactively based on mouse movement
-- ✅ Auto-hide timer managed by ViewModel, not UI layer
-- ✅ No manual timeout management in UI code
+- ✅ **COMPLETE**: Controls show/hide reactively based on mouse movement
+- ✅ **COMPLETE**: Auto-hide timer managed by ViewModel, not UI layer
+- ✅ **COMPLETE**: No manual timeout management in UI code
+- ✅ **ACHIEVED**: ~55% reactive implementation achieved
+
+**Implementation Notes**:
+- Added `show_controls_temporarily()` and `toggle_controls_visibility()` helper methods
+- Replaced ~100 lines of manual timer and fade animation logic
+- Created reactive bindings for controls_container, top_left_osd, and top_right_osd
+- Mouse movement triggers ViewModel's show_controls_temporarily method
+- Eliminated 2 manual timers (hide timer, fade animation timer)
 
 ### Phase 5: Skip Buttons and Markers Reactive System 🎯
 **Goal**: Replace polling-based skip button visibility with reactive markers
@@ -660,13 +672,14 @@ Measure memory usage and CPU performance before/after each phase to ensure impro
 
 ## Timeline Estimate
 
-- **Phase 3 (Track Management)**: ✅ **COMPLETED** - 8-12 hours 
-- **Phase 4 (Control Visibility)**: 2-3 hours (reduced - property exists, just needs binding)
+- **Phase 2.5 (Progress/Time Displays)**: ✅ **COMPLETED** - ~1 hour actual
+- **Phase 3 (Track Management)**: ✅ **COMPLETED** - ~1 hour actual (much faster than estimated)
+- **Phase 4 (Control Visibility)**: ✅ **COMPLETED** - ~30 minutes actual (much faster than estimated)
 - **Phase 5 (Skip Buttons)**: 4-6 hours (reduced - ViewModel integration simplified)  
 - **Phase 6 (Auto-Play)**: 6-8 hours (reduced - infrastructure exists)
 - **Phase 7 (Cleanup)**: 2-3 hours (reduced - less dead code than expected)
 
-**Total remaining: 14-20 hours** to complete 100% reactive migration.
+**Total remaining: 12-17 hours** to complete 100% reactive migration.
 
 ## Success Metrics
 
