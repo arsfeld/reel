@@ -338,6 +338,40 @@ where
     BindingHandle::new(handle)
 }
 
+/// Bind a Scale widget's value to a ComputedProperty
+pub fn bind_value_to_computed_property<T, F>(
+    widget: &gtk4::Scale,
+    computed_property: ComputedProperty<T>,
+    transform: F,
+) -> BindingHandle
+where
+    T: Clone + Send + Sync + 'static,
+    F: Fn(&T) -> f64 + Send + 'static,
+{
+    let widget_weak = widget.downgrade();
+    let mut subscriber = computed_property.subscribe();
+
+    // Set initial value
+    if let Some(widget) = widget_weak.upgrade() {
+        let initial_value = transform(&computed_property.get_sync());
+        widget.set_value(initial_value);
+    }
+
+    let handle = glib::spawn_future_local(async move {
+        while subscriber.wait_for_change().await {
+            if let Some(widget) = widget_weak.upgrade() {
+                let value = computed_property.get().await;
+                let scale_value = transform(&value);
+                widget.set_value(scale_value);
+            } else {
+                break; // Widget destroyed, exit loop
+            }
+        }
+    });
+
+    BindingHandle::new(handle)
+}
+
 pub fn bind_value_to_property<T, F>(
     widget: &gtk4::Scale,
     property: Property<T>,

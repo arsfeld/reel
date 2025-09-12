@@ -7,6 +7,8 @@ use super::super::main_window::ReelMainWindow;
 use super::super::navigation_request::NavigationRequest;
 use crate::core::viewmodels::property::Property;
 use crate::core::viewmodels::sidebar_view_model::{LibraryInfo, SidebarViewModel, SourceInfo};
+use crate::events::event_bus::EventBus;
+use crate::events::types::{DatabaseEvent, EventPayload, EventType};
 use crate::platforms::gtk::ui::reactive::bindings::{
     BindingHandle, bind_image_icon_to_property, bind_spinner_to_property, bind_text_to_property,
     bind_visibility_to_property,
@@ -44,8 +46,10 @@ mod imp {
         // Reactive properties
         pub sidebar_viewmodel: RefCell<Option<Arc<SidebarViewModel>>>,
         pub initialization_state: RefCell<Option<AppInitializationState>>,
+        pub event_bus: RefCell<Option<Arc<EventBus>>>,
 
-        // Main window reference for sidebar navigation
+        // Main window reference for sidebar navigation (deprecated - use EventBus instead)
+        // Will be removed after ensuring event-based navigation works
         pub main_window: RefCell<Option<glib::WeakRef<ReelMainWindow>>>,
 
         // Binding handles to manage reactive subscriptions
@@ -99,6 +103,11 @@ impl Sidebar {
 
         // Setup reactive bindings
         self.setup_reactive_bindings(viewmodel);
+    }
+
+    pub fn set_event_bus(&self, event_bus: Arc<EventBus>) {
+        let imp = self.imp();
+        imp.event_bus.replace(Some(event_bus));
     }
 
     pub fn set_main_window(&self, main_window: &ReelMainWindow) {
@@ -311,28 +320,58 @@ impl Sidebar {
             if let Some(action_row) = row.downcast_ref::<adw::ActionRow>()
                 && let Some(_sidebar) = sidebar_weak_clone.upgrade()
             {
-                let widget_name = action_row.widget_name();
-                let parts: Vec<&str> = widget_name.split(':').collect();
+                // Retrieve navigation data from GTK's data storage
+                let source_id = unsafe {
+                    action_row
+                        .data::<String>("source_id")
+                        .map(|ptr| ptr.as_ref().clone())
+                };
+                let library_id = unsafe {
+                    action_row
+                        .data::<String>("library_id")
+                        .map(|ptr| ptr.as_ref().clone())
+                };
 
-                if parts.len() == 2 {
-                    let source_id = parts[0].to_string();
-                    let library_id = parts[1].to_string();
-
-                    // Navigate to library using NavigationRequest
+                if let (Some(source_id), Some(library_id)) = (source_id, library_id) {
+                    // Emit navigation event via EventBus
                     tracing::info!("Sidebar: Library clicked - {}:{}", source_id, library_id);
-                    if let Some(main_window) = _sidebar.imp().main_window.borrow().as_ref()
-                        && let Some(window) = main_window.upgrade()
-                    {
+
+                    if let Some(event_bus) = _sidebar.imp().event_bus.borrow().as_ref() {
                         let nav_request = NavigationRequest::show_library_by_key(format!(
                             "{}:{}",
                             source_id, library_id
                         ));
-                        tracing::info!("Sidebar: Sending navigation request for library");
+                        let event = DatabaseEvent::new(
+                            EventType::NavigationRequested,
+                            EventPayload::NavigationRequest {
+                                request: Box::new(nav_request),
+                            },
+                        );
+                        tracing::info!("Sidebar: Emitting navigation event for library");
+                        let event_bus_clone = event_bus.clone();
                         glib::spawn_future_local(async move {
-                            window.navigate_to(nav_request).await;
+                            if let Err(e) = event_bus_clone.publish(event).await {
+                                tracing::error!("Failed to publish navigation event: {}", e);
+                            }
                         });
                     } else {
-                        tracing::error!("Sidebar: MainWindow reference lost!");
+                        // Fallback to direct navigation if EventBus not set
+                        if let Some(main_window) = _sidebar.imp().main_window.borrow().as_ref()
+                            && let Some(window) = main_window.upgrade()
+                        {
+                            let nav_request = NavigationRequest::show_library_by_key(format!(
+                                "{}:{}",
+                                source_id, library_id
+                            ));
+                            tracing::info!(
+                                "Sidebar: Fallback - sending navigation request directly"
+                            );
+                            glib::spawn_future_local(async move {
+                                window.navigate_to(nav_request).await;
+                            });
+                        } else {
+                            tracing::error!("Sidebar: No navigation method available!");
+                        }
                     }
                 }
             }
@@ -365,8 +404,11 @@ impl Sidebar {
         let arrow = gtk4::Image::from_icon_name("go-next-symbolic");
         row.add_suffix(&arrow);
 
-        // Store source_id:library_id in widget name for navigation
-        row.set_widget_name(&format!("{}:{}", source_id, library.id));
+        // Store navigation data properly using GTK's data API
+        unsafe {
+            row.set_data("source_id", source_id.to_string());
+            row.set_data("library_id", library.id.clone());
+        }
 
         row
     }
@@ -473,7 +515,10 @@ impl Sidebar {
             let home_arrow = gtk4::Image::from_icon_name("go-next-symbolic");
             home_row.add_suffix(&home_arrow);
 
-            home_row.set_widget_name("__home__");
+            // Mark this as the home navigation row
+            unsafe {
+                home_row.set_data("is_home", true);
+            }
 
             home_list.append(&home_row);
 
@@ -481,21 +526,53 @@ impl Sidebar {
             let sidebar_weak_clone = sidebar_weak.clone();
             home_list.connect_row_activated(move |_, row| {
                 if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
-                    let widget_name = action_row.widget_name();
-                    if widget_name == "__home__" {
+                    let is_home = unsafe {
+                        action_row
+                            .data::<bool>("is_home")
+                            .map(|ptr| *ptr.as_ref())
+                            .unwrap_or(false)
+                    };
+                    if is_home {
                         if let Some(sidebar) = sidebar_weak_clone.upgrade() {
-                            // Navigate to home using NavigationRequest
                             tracing::info!("Sidebar: Home clicked");
-                            if let Some(main_window) = sidebar.imp().main_window.borrow().as_ref()
-                                && let Some(window) = main_window.upgrade()
-                            {
+
+                            // Emit navigation event via EventBus
+                            if let Some(event_bus) = sidebar.imp().event_bus.borrow().as_ref() {
                                 let nav_request = NavigationRequest::show_home();
-                                tracing::info!("Sidebar: Sending navigation request for home");
+                                let event = DatabaseEvent::new(
+                                    EventType::NavigationRequested,
+                                    EventPayload::NavigationRequest {
+                                        request: Box::new(nav_request),
+                                    },
+                                );
+                                tracing::info!("Sidebar: Emitting navigation event for home");
+                                let event_bus_clone = event_bus.clone();
                                 glib::spawn_future_local(async move {
-                                    window.navigate_to(nav_request).await;
+                                    if let Err(e) = event_bus_clone.publish(event).await {
+                                        tracing::error!(
+                                            "Failed to publish navigation event: {}",
+                                            e
+                                        );
+                                    }
                                 });
                             } else {
-                                tracing::error!("Sidebar: MainWindow reference lost for home!");
+                                // Fallback to direct navigation if EventBus not set
+                                if let Some(main_window) =
+                                    sidebar.imp().main_window.borrow().as_ref()
+                                    && let Some(window) = main_window.upgrade()
+                                {
+                                    let nav_request = NavigationRequest::show_home();
+                                    tracing::info!(
+                                        "Sidebar: Fallback - sending navigation request directly"
+                                    );
+                                    glib::spawn_future_local(async move {
+                                        window.navigate_to(nav_request).await;
+                                    });
+                                } else {
+                                    tracing::error!(
+                                        "Sidebar: No navigation method available for home!"
+                                    );
+                                }
                             }
                         }
                     }

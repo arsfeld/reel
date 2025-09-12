@@ -2,11 +2,11 @@ use super::{Property, PropertySubscriber, ViewModel};
 use crate::db::entities::libraries::Model as Library;
 use crate::events::{DatabaseEvent, EventBus, EventFilter, EventType};
 use crate::models::MediaItem;
-use crate::services::DataService;
+use crate::services::{AppInitializationState, DataService, SourceReadiness};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::error;
+use tracing::{error, info};
 
 #[derive(Debug, Clone)]
 pub struct MediaSection {
@@ -112,7 +112,7 @@ impl HomeViewModel {
         Ok(())
     }
 
-    async fn load_home_content_from_cache(&self) -> Result<()> {
+    pub async fn load_home_content_from_cache(&self) -> Result<()> {
         use tracing::{debug, info, warn};
 
         self.is_loading.set(true).await;
@@ -519,6 +519,10 @@ impl HomeViewModel {
         &self.backends_ready
     }
 
+    pub fn error(&self) -> &Property<Option<String>> {
+        &self.error
+    }
+
     pub async fn set_source_filter(&self, source_id: Option<String>) -> Result<()> {
         use tracing::info;
 
@@ -542,6 +546,123 @@ impl HomeViewModel {
     pub async fn refresh(&self) -> Result<()> {
         // Use the existing load_home_content method which properly loads all sections
         self.load_home_content().await
+    }
+
+    /// Bind this ViewModel to the application initialization state for progressive enhancement
+    pub async fn bind_to_initialization_state(&self, init_state: &AppInitializationState) {
+        // Update backends_ready based on any source being connected or playback ready
+        let sources_connected = init_state.sources_connected.clone();
+        let backends_ready = self.backends_ready.clone();
+
+        tokio::spawn(async move {
+            let mut subscriber = sources_connected.subscribe();
+            while subscriber.wait_for_change().await {
+                let sources = sources_connected.get().await;
+
+                // Check if any source is ready (connected or playback ready)
+                let any_ready = sources.values().any(|status| match status {
+                    SourceReadiness::Connected { .. }
+                    | SourceReadiness::PlaybackReady { .. }
+                    | SourceReadiness::Syncing { .. } => true,
+                    _ => false,
+                });
+
+                backends_ready.set(any_ready).await;
+
+                if any_ready {
+                    info!("At least one backend is ready - HomeViewModel can load content");
+                }
+            }
+        });
+
+        // When cached data is loaded, trigger initial content load
+        let cached_data_loaded = init_state.cached_data_loaded.clone();
+        let self_clone = self.clone();
+
+        tokio::spawn(async move {
+            let mut subscriber = cached_data_loaded.subscribe();
+            while subscriber.wait_for_change().await {
+                if cached_data_loaded.get().await {
+                    info!("Cached data loaded - loading home content from cache");
+                    let _ = self_clone.load_home_content_from_cache().await;
+                }
+            }
+        });
+
+        // When sync becomes ready, refresh content to get latest data
+        let sync_ready = init_state.sync_ready.clone();
+        let self_clone = self.clone();
+
+        tokio::spawn(async move {
+            let mut subscriber = sync_ready.subscribe();
+            while subscriber.wait_for_change().await {
+                if sync_ready.get().await {
+                    info!("Sync ready - refreshing home content with latest data");
+                    // Small delay to let sync complete
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    let _ = self_clone.load_home_content().await;
+                }
+            }
+        });
+    }
+
+    /// Handle partial initialization gracefully - load what's available
+    pub async fn handle_partial_initialization(&self) -> Result<()> {
+        info!("Handling partial initialization - loading available content");
+
+        // First, always try to load from cache
+        self.is_loading.set(true).await;
+
+        // Load cached content immediately (this is non-blocking)
+        match self.load_home_content_from_cache().await {
+            Ok(_) => {
+                info!("Successfully loaded content from cache");
+
+                // Check if we have any content
+                let sections = self.sections.get().await;
+                if sections.is_empty() {
+                    info!("No cached content available - showing empty state");
+                    self.error
+                        .set(Some(
+                            "No content available. Please check your media sources.".to_string(),
+                        ))
+                        .await;
+                } else {
+                    info!("Loaded {} sections from cache", sections.len());
+                    self.error.set(None).await;
+                }
+            }
+            Err(e) => {
+                error!("Failed to load cached content: {}", e);
+                self.error
+                    .set(Some(format!("Failed to load content: {}", e)))
+                    .await;
+            }
+        }
+
+        self.is_loading.set(false).await;
+
+        // Check if any backends are ready
+        if !self.backends_ready.get().await {
+            info!("No backends ready - will retry when backends become available");
+
+            // Set up a one-time listener for when backends become ready
+            let backends_ready = self.backends_ready.clone();
+            let self_clone = self.clone();
+
+            tokio::spawn(async move {
+                let mut subscriber = backends_ready.subscribe();
+                // Wait for backends to become ready
+                while !backends_ready.get().await {
+                    subscriber.wait_for_change().await;
+                }
+
+                info!("Backends now ready - loading content");
+                let _ = self_clone.load_home_content().await;
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -582,6 +703,7 @@ impl ViewModel for HomeViewModel {
             "is_loading" => Some(self.is_loading.subscribe()),
             "current_source_id" => Some(self.current_source_id.subscribe()),
             "backends_ready" => Some(self.backends_ready.subscribe()),
+            "error" => Some(self.error.subscribe()),
             _ => None,
         }
     }
@@ -606,6 +728,81 @@ impl Clone for HomeViewModel {
             current_source_id: self.current_source_id.clone(),
             backends_ready: self.backends_ready.clone(),
             event_bus: self.event_bus.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::initialization::{ApiClientStatus, ConnectionStatus, SourceInfo};
+    use std::time::Duration;
+    use tokio::time::sleep;
+
+    #[tokio::test]
+    async fn test_partial_initialization_with_no_backends() {
+        // Create a mock DataService (would need proper mocking in production)
+        let data_service = Arc::new(DataService::new(None, None));
+        let home_vm = HomeViewModel::new(data_service);
+
+        // Create initialization state with no backends ready
+        let init_state = AppInitializationState::new();
+        init_state.ui_ready.set(true).await;
+        init_state.cached_data_loaded.set(true).await;
+
+        // Bind to initialization state
+        home_vm.bind_to_initialization_state(&init_state).await;
+
+        // Handle partial initialization
+        let result = home_vm.handle_partial_initialization().await;
+        assert!(result.is_ok());
+
+        // Should be loading initially
+        assert!(!home_vm.backends_ready.get().await);
+
+        // Simulate a backend becoming ready
+        let mut sources = HashMap::new();
+        sources.insert(
+            "test_source".to_string(),
+            SourceReadiness::PlaybackReady {
+                server_name: "Test Server".to_string(),
+                credentials_valid: true,
+                last_successful_connection: None,
+            },
+        );
+        init_state.sources_connected.set(sources).await;
+
+        // Wait a bit for the reactive update
+        sleep(Duration::from_millis(100)).await;
+
+        // Now backends should be ready
+        assert!(home_vm.backends_ready.get().await);
+    }
+
+    #[tokio::test]
+    async fn test_graceful_fallback_to_cache() {
+        let data_service = Arc::new(DataService::new(None, None));
+        let home_vm = HomeViewModel::new(data_service);
+
+        // Create initialization state with cached data available
+        let init_state = AppInitializationState::new();
+        init_state.ui_ready.set(true).await;
+        init_state.cached_data_loaded.set(true).await;
+
+        // Bind and handle partial initialization
+        home_vm.bind_to_initialization_state(&init_state).await;
+        let _ = home_vm.handle_partial_initialization().await;
+
+        // Should have attempted to load from cache
+        // In a real test, we'd verify the cache was queried
+        assert!(!home_vm.is_loading.get().await);
+
+        // If no content, should show appropriate error message
+        let sections = home_vm.sections.get().await;
+        if sections.is_empty() {
+            let error = home_vm.error.get().await;
+            assert!(error.is_some());
+            assert!(error.unwrap().contains("No content available"));
         }
     }
 }

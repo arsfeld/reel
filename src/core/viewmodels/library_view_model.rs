@@ -2,7 +2,7 @@ use super::{Property, PropertySubscriber, ViewModel};
 use crate::db::entities::libraries::Model as Library;
 use crate::events::{DatabaseEvent, EventBus, EventFilter, EventType};
 use crate::models::MediaItem;
-use crate::services::DataService;
+use crate::services::{AppInitializationState, DataService, SourceReadiness};
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -645,6 +645,136 @@ impl LibraryViewModel {
             selected.push(item_id);
             self.selected_items.set(selected).await;
         }
+    }
+
+    /// Bind this ViewModel to the application initialization state for progressive enhancement
+    pub async fn bind_to_initialization_state(&self, init_state: &AppInitializationState) {
+        // When cached data is loaded, try loading library content from cache
+        let cached_data_loaded = init_state.cached_data_loaded.clone();
+        let self_clone = self.clone();
+
+        tokio::spawn(async move {
+            let mut subscriber = cached_data_loaded.subscribe();
+            while subscriber.wait_for_change().await {
+                if cached_data_loaded.get().await {
+                    info!("Cached data loaded - LibraryViewModel can load from cache");
+                    // If a library is already selected, reload its content from cache
+                    if let Some(library) = self_clone.current_library.get().await {
+                        let _ = self_clone.load_library_from_cache(&library.id).await;
+                    }
+                }
+            }
+        });
+
+        // React to source connection changes - refresh when sources become available
+        let sources_connected = init_state.sources_connected.clone();
+        let self_clone = self.clone();
+
+        tokio::spawn(async move {
+            let mut subscriber = sources_connected.subscribe();
+            while subscriber.wait_for_change().await {
+                let sources = sources_connected.get().await;
+
+                // Check if the current library's source is now connected
+                if let Some(library) = self_clone.current_library.get().await {
+                    if let Some(status) = sources.get(&library.source_id) {
+                        match status {
+                            SourceReadiness::Connected { .. } | SourceReadiness::Syncing { .. } => {
+                                info!(
+                                    "Library source {} is now connected - refreshing",
+                                    library.source_id
+                                );
+                                // Small delay to let sync complete
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                                // Reload the library with fresh data (set_library will sync if needed)
+                                let _ = self_clone.set_library(library.id.clone()).await;
+                            }
+                            SourceReadiness::PlaybackReady { .. } => {
+                                info!("Library source {} is playback ready", library.source_id);
+                                // Just load from cache, don't try to sync
+                                let _ = self_clone.load_library_from_cache(&library.id).await;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Load library content from cache without attempting to sync
+    async fn load_library_from_cache(&self, library_id: &str) -> Result<()> {
+        info!("Loading library {} from cache only", library_id);
+        self.is_loading.set(true).await;
+        self.error.set(None).await;
+
+        // Get library metadata
+        match self.data_service.get_library(library_id).await? {
+            Some(library) => {
+                self.current_library.set(Some(library.clone())).await;
+
+                // Load items from cache
+                match self.data_service.get_media_items(library_id).await {
+                    Ok(items) => {
+                        info!(
+                            "Loaded {} items from cache for library {}",
+                            items.len(),
+                            library_id
+                        );
+                        self.items.set(items.clone()).await;
+                        self.apply_filters_and_sort().await;
+
+                        if items.is_empty() {
+                            self.error.set(Some("No items in library cache. Content will load when source connects.".to_string())).await;
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to load library items from cache: {}", e);
+                        self.error
+                            .set(Some(format!("Failed to load items: {}", e)))
+                            .await;
+                    }
+                }
+            }
+            None => {
+                warn!("Library {} not found in cache", library_id);
+                self.error
+                    .set(Some(
+                        "Library not found. It may become available when sources connect."
+                            .to_string(),
+                    ))
+                    .await;
+            }
+        }
+
+        self.is_loading.set(false).await;
+        Ok(())
+    }
+
+    /// Handle partial initialization - load library with graceful fallback
+    pub async fn handle_partial_initialization(&self, library_id: &str) -> Result<()> {
+        info!("Handling partial initialization for library {}", library_id);
+
+        // First try to load from cache
+        let cache_result = self.load_library_from_cache(library_id).await;
+
+        // If cache load failed or resulted in empty content, set up retry when source connects
+        if cache_result.is_err() || self.items.get().await.is_empty() {
+            info!(
+                "Library {} has no cached content - will retry when source connects",
+                library_id
+            );
+
+            // The bind_to_initialization_state method already sets up the retry logic
+            // Just ensure we show appropriate feedback to the user
+            if self.error.get().await.is_none() {
+                self.error
+                    .set(Some("Waiting for media source to connect...".to_string()))
+                    .await;
+            }
+        }
+
+        Ok(())
     }
 }
 

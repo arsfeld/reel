@@ -6,7 +6,7 @@ pub mod sync;
 
 pub use auth_manager::AuthManager;
 pub use data::DataService;
-// Reactive initialization types - currently used internally only
-// pub use initialization::{AppInitializationState, SourceReadiness};
+// Reactive initialization types - now used by ViewModels for partial initialization handling
+pub use initialization::{AppInitializationState, SourceReadiness};
 pub use source_coordinator::SourceCoordinator;
 pub use sync::SyncManager;

@@ -1,5 +1,32 @@
 use std::fmt::{self, Display};
 
+/// Window state that should be preserved during navigation
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowState {
+    /// Window size to restore when returning from player
+    pub saved_size: Option<(i32, i32)>,
+    /// Whether the window was maximized
+    pub was_maximized: bool,
+    /// Whether the window was fullscreen
+    pub was_fullscreen: bool,
+}
+
+impl WindowState {
+    pub fn new() -> Self {
+        Self {
+            saved_size: None,
+            was_maximized: false,
+            was_fullscreen: false,
+        }
+    }
+}
+
+impl Default for WindowState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Represents different pages in the application navigation
 #[derive(Clone, Debug, PartialEq)]
 pub enum NavigationPage {

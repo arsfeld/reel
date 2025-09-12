@@ -53,6 +53,9 @@ impl NavigationManager {
 
     /// Navigate to a new page, adding it to history
     pub async fn navigate_to(&self, page: NavigationPage) {
+        // Save current window state before navigation
+        self.state.push_window_state().await;
+
         let mut history = self.state.navigation_history.get_sync();
         history.push(page.clone());
         self.state.navigation_history.set(history).await;
@@ -70,6 +73,9 @@ impl NavigationManager {
             let previous_page = history.last().cloned().unwrap();
             self.state.navigation_history.set(history).await;
             self.state.current_page.set(previous_page.clone()).await;
+
+            // Restore previous window state
+            self.state.pop_window_state().await;
 
             // Temporary manual UI updates until reactive bindings are implemented
             self.update_ui_for_current_state();
@@ -119,6 +125,23 @@ impl NavigationManager {
     /// Get access to the navigation state for advanced use cases
     pub fn state(&self) -> &NavigationState {
         &self.state
+    }
+
+    /// Save current window state (called by MainWindow before player navigation)
+    pub async fn save_current_window_state(
+        &self,
+        size: Option<(i32, i32)>,
+        maximized: bool,
+        fullscreen: bool,
+    ) {
+        self.state
+            .save_window_state(size, maximized, fullscreen)
+            .await;
+    }
+
+    /// Get the saved window state (for restoring after player)
+    pub fn get_saved_window_state(&self) -> super::types::WindowState {
+        self.state.current_window_state()
     }
 
     /// Set up reactive bindings between navigation state and UI
