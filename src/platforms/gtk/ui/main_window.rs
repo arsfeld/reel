@@ -9,6 +9,7 @@ use super::filters::{SortOrder, WatchStatus};
 use super::navigation::NavigationManager;
 use super::widgets::sidebar::Sidebar;
 use crate::config::Config;
+use crate::models::MediaItem;
 use crate::platforms::gtk::ui::page_factory::PageFactory;
 use crate::state::AppState;
 use tokio::sync::RwLock;
@@ -41,7 +42,7 @@ mod imp {
         pub player_page: RefCell<Option<crate::platforms::gtk::ui::pages::PlayerPage>>,
         pub show_details_page: RefCell<Option<crate::platforms::gtk::ui::pages::ShowDetailsPage>>,
         pub movie_details_page: RefCell<Option<crate::platforms::gtk::ui::pages::MovieDetailsPage>>,
-        pub saved_window_size: RefCell<(i32, i32)>,
+        // Window state is now managed by NavigationManager
         pub filter_controls: RefCell<Option<gtk4::Box>>,
         pub edit_mode: RefCell<bool>,
         pub library_visibility: RefCell<std::collections::HashMap<String, bool>>,
@@ -147,7 +148,8 @@ impl ReelMainWindow {
         // Create and setup Sidebar widget
         let sidebar_widget = Sidebar::new();
         sidebar_widget.set_viewmodel(sidebar_vm.clone());
-        sidebar_widget.set_main_window(&window);
+        sidebar_widget.set_event_bus(state.event_bus.clone());
+        sidebar_widget.set_main_window(&window); // Still needed for fallback
         window
             .imp()
             .sidebar_widget
@@ -159,6 +161,25 @@ impl ReelMainWindow {
                 toolbar_view.set_content(Some(&sidebar_widget));
             }
         }
+
+        // Subscribe to navigation events from the EventBus
+        let event_bus_clone = state.event_bus.clone();
+        let window_weak_for_nav = window.downgrade();
+        glib::spawn_future_local(async move {
+            use crate::events::types::{EventPayload, EventType};
+
+            let mut subscriber = event_bus_clone.subscribe();
+            while let Ok(event) = subscriber.recv().await {
+                if event.event_type == EventType::NavigationRequested {
+                    if let EventPayload::NavigationRequest { request } = event.payload {
+                        tracing::info!("MainWindow: Received navigation event");
+                        if let Some(window) = window_weak_for_nav.upgrade() {
+                            window.navigate_to(*request).await;
+                        }
+                    }
+                }
+            }
+        });
 
         // Initialize the ViewModel with the event bus
         let event_bus = state.event_bus.clone();
@@ -951,9 +972,20 @@ impl ReelMainWindow {
                                 .content_toolbar
                                 .set_top_bar_style(adw::ToolbarStyle::Raised);
 
-                            // Restore window size
-                            let (width, height) = *window_clone.imp().saved_window_size.borrow();
-                            window_clone.set_default_size(width, height);
+                            // Restore window size from NavigationManager
+                            if let Some(nav_manager) =
+                                window_clone.imp().navigation_manager.borrow().as_ref()
+                            {
+                                let state = nav_manager.get_saved_window_state();
+                                if let Some((width, height)) = state.saved_size {
+                                    window_clone.set_default_size(width, height);
+                                }
+                                if state.was_maximized {
+                                    window_clone.maximize();
+                                } else if state.was_fullscreen {
+                                    window_clone.fullscreen();
+                                }
+                            }
 
                             // Restore sidebar
                             if let Some(content) = window_clone.content()
@@ -990,10 +1022,25 @@ impl ReelMainWindow {
             }
         });
 
-        // Save current window size before changing it
+        // Save current window size to NavigationManager before changing it
         let (current_width, current_height) = self.default_size();
-        imp.saved_window_size
-            .replace((current_width, current_height));
+        if let Some(nav_manager) = imp.navigation_manager.borrow().as_ref() {
+            let nav_manager = Arc::clone(nav_manager);
+            let window_weak = self.downgrade();
+            glib::spawn_future_local(async move {
+                if let Some(window) = window_weak.upgrade() {
+                    let is_maximized = window.is_maximized();
+                    let is_fullscreen = window.is_fullscreen();
+                    nav_manager
+                        .save_current_window_state(
+                            Some((current_width, current_height)),
+                            is_maximized,
+                            is_fullscreen,
+                        )
+                        .await;
+                }
+            });
+        }
 
         // Navigation stack management is now handled by NavigationManager
         // The NavigationManager will track this navigation automatically when we call navigate_to
@@ -1337,73 +1384,170 @@ impl ReelMainWindow {
             let nav_page = self.navigation_request_to_page(&request);
             tracing::info!("MainWindow: Converted to NavigationPage: {:?}", nav_page);
 
-            // Page creation is now handled by PageFactory within the navigation methods
-            // Use NavigationManager for centralized navigation
             let nav_manager = Arc::clone(nav_manager);
-            // NavigationManager should handle everything
+
+            // Update navigation state first
             match request {
                 NavigationRequest::GoBack => {
                     nav_manager.go_back().await;
+                    // Load the page we went back to
+                    let current_page = nav_manager.current_page();
+                    self.load_page_for_navigation_page(current_page).await;
                 }
                 NavigationRequest::RefreshCurrentPage => {
-                    // TODO: Implement page refresh logic
-                    tracing::debug!("RefreshCurrentPage requested");
+                    // Reload the current page without changing navigation state
+                    let current_page = nav_manager.current_page();
+                    self.load_page_for_navigation_page(current_page).await;
                 }
                 NavigationRequest::ClearHistory => {
                     nav_manager
                         .navigate_to_root(NavigationPage::Home { source_id: None })
                         .await;
+                    self.show_home_page_for_source(None);
                 }
                 _ => {
-                    // For all other requests, convert to NavigationPage and navigate
+                    // For all other requests, update navigation state then load the page
                     if let Some(page) = nav_page {
-                        tracing::info!("MainWindow: Calling NavigationManager.navigate_to");
+                        tracing::info!("MainWindow: Updating navigation state to {:?}", page);
                         nav_manager.navigate_to(page).await;
                     }
 
-                    // Now trigger the actual page loading
-                    // TODO: This should be moved into NavigationManager
-                    let state = self.imp().state.borrow().as_ref().unwrap().clone();
-                    match request {
-                        NavigationRequest::ShowHome(source_id) => {
-                            tracing::info!("MainWindow: Calling show_home_page_for_source");
-                            self.show_home_page_for_source(source_id);
-                        }
-                        NavigationRequest::ShowSources => {
-                            tracing::info!("MainWindow: Calling show_sources_page");
-                            self.show_sources_page();
-                        }
-                        NavigationRequest::ShowMovieDetails(movie) => {
-                            tracing::info!("MainWindow: Calling show_movie_details");
-                            self.show_movie_details(movie, state).await;
-                        }
-                        NavigationRequest::ShowShowDetails(show) => {
-                            tracing::info!("MainWindow: Calling show_show_details");
-                            self.show_show_details(show, state).await;
-                        }
-                        NavigationRequest::ShowPlayer(media_item) => {
-                            tracing::info!("MainWindow: Calling show_player");
-                            self.show_player(&media_item, state).await;
-                        }
-                        NavigationRequest::ShowLibrary(identifier, library) => {
-                            tracing::info!("MainWindow: Calling show_library_view");
-                            self.show_library_view(identifier.source_id.clone(), library)
-                                .await;
-                        }
-                        NavigationRequest::ShowLibraryByKey(library_key) => {
-                            tracing::info!(
-                                "MainWindow: Calling navigate_to_library with key: {}",
-                                library_key
-                            );
-                            self.navigate_to_library(&library_key).await;
-                        }
-                        _ => {}
-                    }
+                    // Now load the actual page
+                    self.load_page_for_request(request).await;
                 }
             }
         } else {
             // NavigationManager should always be available
             tracing::error!("NavigationManager not initialized! This should never happen.");
+        }
+    }
+
+    // Helper method to load a page based on NavigationRequest
+    async fn load_page_for_request(
+        &self,
+        request: crate::platforms::gtk::ui::navigation_request::NavigationRequest,
+    ) {
+        use super::navigation_request::NavigationRequest;
+
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+
+        match request {
+            NavigationRequest::ShowHome(source_id) => {
+                tracing::info!("Loading home page");
+                self.show_home_page_for_source(source_id);
+            }
+            NavigationRequest::ShowSources => {
+                tracing::info!("Loading sources page");
+                self.show_sources_page();
+            }
+            NavigationRequest::ShowMovieDetails(movie) => {
+                tracing::info!("Loading movie details");
+                self.show_movie_details(movie, state).await;
+            }
+            NavigationRequest::ShowShowDetails(show) => {
+                tracing::info!("Loading show details");
+                self.show_show_details(show, state).await;
+            }
+            NavigationRequest::ShowPlayer(media_item) => {
+                tracing::info!("Loading player");
+                self.show_player(&media_item, state).await;
+            }
+            NavigationRequest::ShowLibrary(identifier, library) => {
+                tracing::info!("Loading library view");
+                self.show_library_view(identifier.source_id.clone(), library)
+                    .await;
+            }
+            NavigationRequest::ShowLibraryByKey(library_key) => {
+                tracing::info!("Loading library by key: {}", library_key);
+                self.navigate_to_library(&library_key).await;
+            }
+            _ => {
+                // GoBack, RefreshCurrentPage, ClearHistory are handled above
+            }
+        }
+    }
+
+    // Helper method to load a page based on NavigationPage
+    async fn load_page_for_navigation_page(&self, page: super::navigation::NavigationPage) {
+        use super::navigation::NavigationPage;
+
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+
+        match page {
+            NavigationPage::Home { source_id } => {
+                self.show_home_page_for_source(source_id);
+            }
+            NavigationPage::Sources => {
+                self.show_sources_page();
+            }
+            NavigationPage::Library {
+                backend_id,
+                library_id,
+                title: _,
+            } => {
+                // Need to fetch the library object
+                if let Some(backend) = state.source_coordinator.get_backend(&backend_id).await {
+                    if let Ok(libraries) = backend.get_libraries().await {
+                        if let Some(library) = libraries.iter().find(|l| l.id == library_id) {
+                            self.show_library_view(backend_id, library.clone()).await;
+                        }
+                    }
+                }
+            }
+            NavigationPage::MovieDetails { movie_id, title: _ } => {
+                // Fetch movie from database and show details
+                if let Some(media_item) = state
+                    .data_service
+                    .get_media_item(&movie_id)
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    if let MediaItem::Movie(movie) = media_item {
+                        self.show_movie_details(movie, state).await;
+                    } else {
+                        tracing::error!("Media item {} is not a movie", movie_id);
+                    }
+                } else {
+                    tracing::error!("Failed to fetch movie with ID: {}", movie_id);
+                }
+            }
+            NavigationPage::ShowDetails { show_id, title: _ } => {
+                // Fetch show from database and show details
+                if let Some(media_item) = state
+                    .data_service
+                    .get_media_item(&show_id)
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    if let MediaItem::Show(show) = media_item {
+                        self.show_show_details(show, state).await;
+                    } else {
+                        tracing::error!("Media item {} is not a show", show_id);
+                    }
+                } else {
+                    tracing::error!("Failed to fetch show with ID: {}", show_id);
+                }
+            }
+            NavigationPage::Player { media_id, title: _ } => {
+                // Fetch media from database and show player
+                if let Some(media_item) = state
+                    .data_service
+                    .get_media_item(&media_id)
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    self.show_player(&media_item, state).await;
+                } else {
+                    tracing::error!("Failed to fetch media item with ID: {}", media_id);
+                }
+            }
+            NavigationPage::Empty => {
+                // No page to load for Empty
+                tracing::debug!("Empty navigation page - nothing to load");
+            }
         }
     }
 

@@ -177,13 +177,25 @@ impl HomePage {
             });
         }
 
-        // Initialize ViewModel with EventBus
+        // Initialize ViewModel with EventBus and bind to initialization state
         glib::spawn_future_local({
             let vm = view_model.clone();
             let event_bus = state.event_bus.clone();
+            let source_coordinator = state.source_coordinator.clone();
             async move {
                 use crate::platforms::gtk::ui::viewmodels::ViewModel;
                 vm.initialize(event_bus).await;
+
+                // Bind to initialization state for progressive enhancement
+                if let Some(init_state) = source_coordinator.get_initialization_state() {
+                    vm.bind_to_initialization_state(&init_state).await;
+
+                    // Handle partial initialization gracefully
+                    let _ = vm.handle_partial_initialization().await;
+                } else {
+                    // No initialization state yet, just load from cache
+                    let _ = vm.load_home_content_from_cache().await;
+                }
             }
         });
 
