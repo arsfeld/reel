@@ -1,5 +1,23 @@
 # Navigation System Refactoring Plan
 
+## Latest Updates (2025-09-12)
+
+### ✅ Compilation Errors Fixed
+- Fixed all dead code warnings by adding `#[allow(dead_code)]` attributes
+- Project now compiles successfully without errors
+- Affected files:
+  - `src/core/viewmodels/player_view_model.rs`
+  - `src/platforms/gtk/ui/pages/player.rs`
+  - `src/player/factory.rs`
+  - `src/player/gstreamer_player.rs`
+  - `src/player/mpv_player.rs`
+
+### 🚧 Reactive Navigation Foundation Prepared
+- NavigationViewModel fully implemented and ready for use
+- Reactive navigation handler methods implemented but **COMMENTED OUT**
+- Code is prepared for future activation but not currently active
+- See "Reactive Navigation Foundation" section below for activation instructions
+
 ## Progress Summary (Updated: 2025-09-11 - 22:20)
 
 ### ✅ Phase 1: Strengthen NavigationManager - **COMPLETED**
@@ -441,6 +459,39 @@
 
 ## Post-Refactoring Analysis (2025-09-11 - 23:00)
 
+### ⚠️ IMPORTANT: Reactive Navigation Foundation (2025-09-12)
+
+**Status: PREPARED BUT NOT ACTIVE**
+
+The groundwork for reactive navigation has been laid but is currently **COMMENTED OUT** in `main_window.rs`:
+
+1. **NavigationViewModel Integration** (lines 56-58, 139-146)
+   - Declaration and initialization code exists but is commented with TODO markers
+   - The NavigationViewModel class is fully implemented and ready in `src/core/viewmodels/navigation_view_model.rs`
+   
+2. **Reactive Subscription Setup** (lines 224-248)
+   - Complete subscription code to NavigationViewModel's current_page property
+   - Would enable automatic UI updates on navigation state changes
+   - Currently disabled to maintain stability
+
+3. **Reactive Navigation Handler** (lines 1605-1701)
+   - `handle_reactive_navigation_change()` method fully implemented
+   - `update_header_for_page_state()` method for reactive header updates
+   - Both methods commented out pending full integration
+
+**Why It's Not Active:**
+- The current navigation system is stable and working
+- Activating reactive navigation requires comprehensive testing
+- Need to ensure no regressions in existing functionality
+- Some pages still need ViewModel integration before reactive navigation can be fully enabled
+
+**To Activate Reactive Navigation:**
+1. Uncomment the NavigationViewModel field declaration (lines 56-58)
+2. Uncomment the NavigationViewModel initialization (lines 139-146)
+3. Uncomment the reactive subscription setup (lines 224-248)
+4. Uncomment the handler methods (lines 1605-1701)
+5. Test thoroughly with all navigation scenarios
+
 ### Current Architecture Issues in main_window.rs
 
 Despite completing Phases 1-5, significant architectural issues remain that prevent true reactive navigation:
@@ -533,6 +584,32 @@ All `show_*` methods still manipulate UI directly instead of reacting to state c
 - Improved testability (can test navigation without UI)
 - Memory usage reduced (proper lifecycle management)
 - Navigation latency < 16ms (one frame)
+
+## Next Immediate Steps (Priority Order)
+
+### 1. Test Current Navigation System
+- [ ] Verify all navigation paths work correctly
+- [ ] Test back button functionality
+- [ ] Ensure player transitions are smooth
+- [ ] Check for memory leaks
+
+### 2. Complete ViewModel Integration for Remaining Pages
+- [ ] MovieDetailsPage needs ViewModel
+- [ ] ShowDetailsPage needs ViewModel  
+- [ ] PlayerPage needs ViewModel (complex, 234 lines)
+- [ ] Sources page needs full ViewModel integration
+
+### 3. Activate Reactive Navigation (After Testing)
+- [ ] Uncomment NavigationViewModel integration in main_window.rs
+- [ ] Test with Sources page first (simplest)
+- [ ] Gradually migrate other pages
+- [ ] Remove old show_* methods once confirmed working
+
+### 4. Clean Up Technical Debt
+- [ ] Remove deprecated navigation methods
+- [ ] Consolidate duplicate navigation logic
+- [ ] Simplify callback chains
+- [ ] Document new navigation architecture
 
 ## Original Notes
 

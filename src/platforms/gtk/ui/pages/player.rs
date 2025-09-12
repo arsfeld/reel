@@ -1720,6 +1720,7 @@ struct PlayerControls {
     backend: Arc<RwLock<Option<Arc<dyn MediaBackend>>>>,
     current_media_item: Arc<RwLock<Option<MediaItem>>>,
     action_group: gio::SimpleActionGroup,
+    #[allow(dead_code)]
     track_menu_retry_count: Arc<RwLock<u8>>,
 }
 
@@ -2221,6 +2222,7 @@ impl PlayerControls {
         info!("PlayerControls::set_media_info() - Media info set successfully");
     }
 
+    #[allow(dead_code)]
     pub async fn populate_track_menus(&self) {
         // Create audio tracks menu
         // Log backend + state for context
@@ -2340,6 +2342,7 @@ impl PlayerControls {
         }
     }
 
+    #[allow(dead_code)]
     async fn setup_track_actions(&self) {
         // Use the shared action group from the struct
         let action_group = &self.action_group;
