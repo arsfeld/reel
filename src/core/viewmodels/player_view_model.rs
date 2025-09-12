@@ -72,14 +72,44 @@ pub struct PlayerViewModel {
     selected_subtitle_track: Property<Option<usize>>,
     quality_options: Property<Vec<QualityOption>>,
     selected_quality: Property<Option<usize>>,
+    // Enhanced next episode properties
+    next_episode_thumbnail: Property<Option<Vec<u8>>>, // Raw image data
+    auto_play_enabled: Property<bool>,
+    auto_play_countdown_duration: Property<u32>, // Configurable countdown (5-30 seconds)
+    next_episode_load_state: Property<LoadState>,
     event_bus: Arc<EventBus>,
     // Throttle state
     last_progress_save: Arc<Mutex<Option<Instant>>>,
+    // Countdown timer handle
+    countdown_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum AutoPlayState {
     Idle,
+    Counting(u32), // Seconds remaining
+    Disabled,
+    Loading,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+pub enum LoadState {
+    Idle,
+    Loading,
+    Ready,
+    Error(String),
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+#[allow(dead_code)]
+pub struct NextEpisodeInfo {
+    pub title: String,
+    pub show_title: String,
+    pub season_episode: String,
+    pub duration: String,
+    pub summary: String,
 }
 
 impl PlayerViewModel {
@@ -119,7 +149,13 @@ impl PlayerViewModel {
             selected_subtitle_track: Property::new(None, "selected_subtitle_track"),
             quality_options: Property::new(Vec::new(), "quality_options"),
             selected_quality: Property::new(None, "selected_quality"),
+            // Enhanced next episode properties
+            next_episode_thumbnail: Property::new(None, "next_episode_thumbnail"),
+            auto_play_enabled: Property::new(true, "auto_play_enabled"), // Default to enabled
+            auto_play_countdown_duration: Property::new(10, "auto_play_countdown_duration"), // Default 10 seconds
+            next_episode_load_state: Property::new(LoadState::Idle, "next_episode_load_state"),
             last_progress_save: Arc::new(Mutex::new(None)),
+            countdown_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -222,6 +258,149 @@ impl PlayerViewModel {
                 warn!("Failed to resolve next episode for {}: {}", ep.id, e);
                 Ok(None)
             }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn load_next_episode_metadata(&self) -> Result<()> {
+        self.next_episode_load_state.set(LoadState::Loading).await;
+
+        // Get next episode from current media context
+        if let Some(MediaItem::Episode(ref _current)) = self.current_media.get().await {
+            match self.find_next_episode().await {
+                Ok(Some(next)) => {
+                    // Pre-load thumbnail if available
+                    if let Some(thumb_url) = &next.thumbnail_url {
+                        if let Err(e) = self.load_episode_thumbnail(thumb_url).await {
+                            warn!("Failed to load next episode thumbnail: {}", e);
+                        }
+                    }
+
+                    self.next_episode_load_state.set(LoadState::Ready).await;
+                }
+                Ok(None) => {
+                    self.next_episode_load_state.set(LoadState::Idle).await;
+                }
+                Err(e) => {
+                    self.next_episode_load_state
+                        .set(LoadState::Error(e.to_string()))
+                        .await;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn load_episode_thumbnail(&self, url: &str) -> Result<()> {
+        // Fetch thumbnail using reqwest
+        let response = reqwest::get(url).await?;
+        let bytes = response.bytes().await?;
+        self.next_episode_thumbnail.set(Some(bytes.to_vec())).await;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn play_next_episode_now(&self) {
+        // Cancel any active countdown
+        if let Some(handle) = self.countdown_handle.lock().await.take() {
+            handle.abort();
+        }
+        self.auto_play_state.set(AutoPlayState::Idle).await;
+
+        // Navigate to next episode
+        if let Some(next) = self.next_episode.get().await {
+            // Convert Episode to MediaItem::Episode
+            let media_item = MediaItem::Episode(next);
+            self.set_media_item(media_item).await;
+            // The player page should handle reloading the stream
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn cancel_auto_play(&self) {
+        // Cancel countdown timer
+        if let Some(handle) = self.countdown_handle.lock().await.take() {
+            handle.abort();
+        }
+        self.auto_play_state.set(AutoPlayState::Idle).await;
+    }
+
+    #[allow(dead_code)]
+    pub async fn toggle_auto_play(&self) {
+        let enabled = !self.auto_play_enabled.get().await;
+        self.auto_play_enabled.set(enabled).await;
+
+        // TODO: Save preference to settings
+
+        // Cancel current countdown if disabling
+        if !enabled && matches!(self.auto_play_state.get().await, AutoPlayState::Counting(_)) {
+            self.cancel_auto_play().await;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn start_auto_play_countdown(&self, duration_seconds: u32) {
+        // Cancel any existing countdown
+        if let Some(handle) = self.countdown_handle.lock().await.take() {
+            handle.abort();
+        }
+
+        // Start countdown
+        self.auto_play_state
+            .set(AutoPlayState::Counting(duration_seconds))
+            .await;
+
+        let auto_play_state = self.auto_play_state.clone();
+        let next_episode = self.next_episode.clone();
+        let current_media = self.current_media.clone();
+
+        let handle = tokio::spawn(async move {
+            for remaining in (1..=duration_seconds).rev() {
+                auto_play_state
+                    .set(AutoPlayState::Counting(remaining))
+                    .await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+
+            // Countdown complete - play next episode
+            if let Some(next) = next_episode.get().await {
+                let media_item = MediaItem::Episode(next);
+                current_media.set(Some(media_item)).await;
+                auto_play_state.set(AutoPlayState::Idle).await;
+            }
+        });
+
+        *self.countdown_handle.lock().await = Some(handle);
+    }
+
+    #[allow(dead_code)]
+    pub async fn handle_playback_near_end(&self) {
+        // Check if we're within last 30 seconds
+        let position = self.position.get().await;
+        let duration = self.duration.get().await;
+
+        if duration > Duration::ZERO {
+            let remaining = duration - position;
+
+            if remaining <= Duration::from_secs(30)
+                && self.auto_play_enabled.get().await
+                && self.next_episode.get().await.is_some()
+            {
+                // Start showing overlay with countdown
+                let countdown_duration = self.auto_play_countdown_duration.get().await;
+                self.start_auto_play_countdown(countdown_duration).await;
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn handle_playback_completed(&self) {
+        self.playback_state.set(PlaybackState::Stopped).await;
+
+        // If auto-play is disabled but there's a next episode, show overlay without countdown
+        if !self.auto_play_enabled.get().await && self.next_episode.get().await.is_some() {
+            self.auto_play_state.set(AutoPlayState::Disabled).await;
         }
     }
 
@@ -466,24 +645,53 @@ impl PlayerViewModel {
         &self.subtitle_tracks
     }
 
+    #[allow(dead_code)]
     pub fn selected_audio_track(&self) -> &Property<Option<usize>> {
         &self.selected_audio_track
     }
 
+    #[allow(dead_code)]
     pub fn selected_subtitle_track(&self) -> &Property<Option<usize>> {
         &self.selected_subtitle_track
     }
 
+    #[allow(dead_code)]
     pub fn quality_options(&self) -> &Property<Vec<QualityOption>> {
         &self.quality_options
     }
 
+    #[allow(dead_code)]
     pub fn selected_quality(&self) -> &Property<Option<usize>> {
         &self.selected_quality
     }
 
     pub fn show_controls(&self) -> &Property<bool> {
         &self.show_controls
+    }
+
+    #[allow(dead_code)]
+    pub fn auto_play_enabled(&self) -> &Property<bool> {
+        &self.auto_play_enabled
+    }
+
+    #[allow(dead_code)]
+    pub fn auto_play_state(&self) -> &Property<AutoPlayState> {
+        &self.auto_play_state
+    }
+
+    #[allow(dead_code)]
+    pub fn next_episode_thumbnail(&self) -> &Property<Option<Vec<u8>>> {
+        &self.next_episode_thumbnail
+    }
+
+    #[allow(dead_code)]
+    pub fn auto_play_countdown_duration(&self) -> &Property<u32> {
+        &self.auto_play_countdown_duration
+    }
+
+    #[allow(dead_code)]
+    pub fn next_episode_load_state(&self) -> &Property<LoadState> {
+        &self.next_episode_load_state
     }
 
     pub async fn show_controls_temporarily(&self, delay_secs: u64) {
@@ -498,6 +706,7 @@ impl PlayerViewModel {
         });
     }
 
+    #[allow(dead_code)]
     pub async fn toggle_controls_visibility(&self) {
         let visible = self.show_controls.get().await;
         if visible {
@@ -509,11 +718,13 @@ impl PlayerViewModel {
         }
     }
 
+    #[allow(dead_code)]
     pub fn has_audio_tracks(&self) -> bool {
         // Simple sync check for computed property
         self.audio_tracks.get_sync().len() > 0
     }
 
+    #[allow(dead_code)]
     pub fn has_subtitle_tracks(&self) -> bool {
         // Simple sync check for computed property
         self.subtitle_tracks.get_sync().len() > 0
@@ -582,6 +793,7 @@ impl PlayerViewModel {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn select_audio_track(
         &self,
         track_index: usize,
@@ -600,6 +812,7 @@ impl PlayerViewModel {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn select_subtitle_track(
         &self,
         track_index: Option<usize>,
@@ -703,8 +916,14 @@ impl Clone for PlayerViewModel {
             selected_subtitle_track: self.selected_subtitle_track.clone(),
             quality_options: self.quality_options.clone(),
             selected_quality: self.selected_quality.clone(),
+            // Enhanced next episode properties
+            next_episode_thumbnail: self.next_episode_thumbnail.clone(),
+            auto_play_enabled: self.auto_play_enabled.clone(),
+            auto_play_countdown_duration: self.auto_play_countdown_duration.clone(),
+            next_episode_load_state: self.next_episode_load_state.clone(),
             event_bus: self.event_bus.clone(),
             last_progress_save: self.last_progress_save.clone(),
+            countdown_handle: self.countdown_handle.clone(),
         }
     }
 }

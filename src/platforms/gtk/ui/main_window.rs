@@ -53,6 +53,9 @@ mod imp {
             RefCell<Option<Arc<crate::platforms::gtk::ui::viewmodels::SidebarViewModel>>>,
         pub sidebar_widget: RefCell<Option<Sidebar>>,
         pub page_factory: RefCell<Option<crate::platforms::gtk::ui::page_factory::PageFactory>>,
+        // TODO: Add navigation_viewmodel when NavigationViewModel is implemented
+        // pub navigation_viewmodel:
+        //     RefCell<Option<Arc<crate::core::viewmodels::navigation_view_model::NavigationViewModel>>>,
     }
 
     #[glib::object_subclass]
@@ -134,6 +137,15 @@ impl ReelMainWindow {
         let page_factory = PageFactory::new(state.clone());
         window.imp().page_factory.replace(Some(page_factory));
 
+        // TODO: Initialize NavigationViewModel when implemented
+        // let navigation_vm = Arc::new(
+        //     crate::core::viewmodels::navigation_view_model::NavigationViewModel::new(),
+        // );
+        // window
+        //     .imp()
+        //     .navigation_viewmodel
+        //     .replace(Some(navigation_vm.clone()));
+
         // Initialize SidebarViewModel
         let sidebar_vm = Arc::new(
             crate::platforms::gtk::ui::viewmodels::SidebarViewModel::new(
@@ -181,12 +193,22 @@ impl ReelMainWindow {
             }
         });
 
-        // Initialize the ViewModel with the event bus
+        // Initialize the ViewModels with the event bus
         let event_bus = state.event_bus.clone();
         let sidebar_vm_clone = sidebar_vm.clone();
+        // TODO: Add when NavigationViewModel is implemented
+        // let navigation_vm_clone = navigation_vm.clone();
         let window_weak_for_vm = window.downgrade();
         glib::spawn_future_local(async move {
             use super::viewmodels::ViewModel;
+            // TODO: Uncomment when NavigationViewModel is implemented
+            // use crate::core::viewmodels::ViewModel as CoreViewModel;
+
+            // TODO: Initialize NavigationViewModel when implemented
+            // navigation_vm_clone.initialize(event_bus.clone()).await;
+            // tracing::info!("NavigationViewModel initialized");
+
+            // Initialize SidebarViewModel
             sidebar_vm_clone.initialize(event_bus).await;
 
             // Set up subscription to sources property
@@ -198,6 +220,32 @@ impl ReelMainWindow {
                 sidebar_vm_clone.refresh().await;
             }
         });
+
+        // TODO: Set up reactive subscription to NavigationViewModel when implemented
+        // let navigation_vm_for_subscription = navigation_vm.clone();
+        // let window_weak_for_navigation = window.downgrade();
+        // glib::spawn_future_local(async move {
+        //     use crate::core::viewmodels::ViewModel as CoreViewModel;
+        //
+        //     // Subscribe to current_page changes
+        //     if let Some(subscriber) = navigation_vm_for_subscription.subscribe_to_property("current_page") {
+        //         tracing::info!("MainWindow: Subscribed to NavigationViewModel current_page changes");
+        //
+        //         // Listen for changes
+        //         let mut rx = subscriber.subscribe();
+        //         while rx.changed().await.is_ok() {
+        //             let current_page = navigation_vm_for_subscription.current_page().get_sync();
+        //             tracing::info!("MainWindow: Navigation page changed to: {:?}", current_page);
+        //
+        //             if let Some(window) = window_weak_for_navigation.upgrade() {
+        //                 if let Some(page_state) = current_page {
+        //                     // Handle the page change reactively
+        //                     window.handle_reactive_navigation_change(page_state).await;
+        //                 }
+        //             }
+        //         }
+        //     }
+        // });
 
         // Setup actions
         window.setup_actions(app);
@@ -1550,6 +1598,104 @@ impl ReelMainWindow {
             }
         }
     }
+
+    // TODO: Implement when NavigationViewModel is available
+    /*
+    async fn handle_reactive_navigation_change(
+        &self,
+        page_state: crate::core::viewmodels::navigation_view_model::PageState,
+    ) {
+        use crate::models::MediaItem;
+
+        let state = self.imp().state.borrow().as_ref().unwrap().clone();
+
+        tracing::info!("MainWindow: Handling reactive navigation to page: {}", page_state.name);
+
+        // Parse the page name to determine what to show
+        if page_state.name == "home" {
+            self.show_home_page_for_source(None);
+        } else if page_state.name == "sources" {
+            self.show_sources_page();
+        } else if page_state.name.starts_with("library:") {
+            // Parse library navigation: "library:source_id:library_id"
+            let parts: Vec<&str> = page_state.name.split(':').collect();
+            if parts.len() >= 3 {
+                let source_id = parts[1];
+                let library_id = parts[2];
+
+                // Fetch the library and show it
+                if let Some(backend) = state.source_coordinator.get_backend(source_id).await {
+                    if let Ok(libraries) = backend.get_libraries().await {
+                        if let Some(library) = libraries.iter().find(|l| l.id == library_id) {
+                            self.show_library_view(source_id.to_string(), library.clone()).await;
+                        }
+                    }
+                }
+            }
+        } else if page_state.name.starts_with("movie:") {
+            // Parse movie navigation: "movie:movie_id"
+            if let Some(movie_id) = page_state.name.strip_prefix("movie:") {
+                if let Some(media_item) = state
+                    .data_service
+                    .get_media_item(movie_id)
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    if let MediaItem::Movie(movie) = media_item {
+                        self.show_movie_details(movie, state).await;
+                    }
+                }
+            }
+        } else if page_state.name.starts_with("show:") {
+            // Parse show navigation: "show:show_id"
+            if let Some(show_id) = page_state.name.strip_prefix("show:") {
+                if let Some(media_item) = state
+                    .data_service
+                    .get_media_item(show_id)
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    if let MediaItem::Show(show) = media_item {
+                        self.show_show_details(show, state).await;
+                    }
+                }
+            }
+        } else if page_state.name.starts_with("player:") {
+            // Parse player navigation: "player:media_id"
+            if let Some(media_id) = page_state.name.strip_prefix("player:") {
+                if let Some(media_item) = state
+                    .data_service
+                    .get_media_item(media_id)
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    self.show_player(&media_item, state).await;
+                }
+            }
+        }
+
+        // Update header configuration based on page state
+        self.update_header_for_page_state(&page_state);
+    }
+    */
+
+    /*
+    fn update_header_for_page_state(
+        &self,
+        page_state: &crate::core::viewmodels::navigation_view_model::PageState,
+    ) {
+        // Update title
+        self.imp().content_header.set_title_widget(Some(&gtk4::Label::new(Some(&page_state.title))));
+
+        // Update back button visibility
+        if let Some(nav_manager) = self.imp().navigation_manager.borrow().as_ref() {
+            nav_manager.set_back_button_visible(page_state.header_config.show_back_button);
+        }
+    }
+    */
 
     // Helper to convert NavigationRequest to NavigationPage
     fn navigation_request_to_page(

@@ -4,7 +4,7 @@
 
 This plan outlines the complete migration of the PlayerPage from a hybrid imperative/reactive system to a **fully reactive UI**. The migration builds on the existing 35% reactive architecture and targets **100% reactive** player controls by eliminating all polling timers, manual widget updates, and dead code.
 
-**Current Status: ~55% Reactive (Phase 4 completed)**
+**Current Status: ~65% Reactive (Phase 6 ViewModel implementation completed)**
 **Target: 100% Reactive Player UI**
 
 ## Architecture Analysis
@@ -25,17 +25,19 @@ This plan outlines the complete migration of the PlayerPage from a hybrid impera
 - **Skip Buttons**: Marker-based visibility with 500ms polling timers
 
 ### Dead Code Items 🧹
-- `AutoPlayState` only has `Idle` variant - `Counting` and `Disabled` were never implemented
+- ~~`AutoPlayState` only has `Idle` variant~~ ✅ **FIXED** - All variants now implemented
 
 ### Analysis Summary
-**Current Implementation Status**: ~55% reactive
+**Current Implementation Status**: ~65% reactive
 - ✅ **14 reactive bindings active**: play/pause icon, volume slider, volume visibility, progress bar, time displays (2), loading overlay, error overlay, error text, audio button sensitivity, subtitle button sensitivity, controls visibility (3 widgets)
 - ✅ **Phase 4 complete**: Control visibility now fully reactive with ViewModel-managed timers
+- ✅ **Phase 6 ViewModel complete**: Auto-play state machine and next episode management implemented
 - ✅ **Track management properties added**: `audio_tracks`, `subtitle_tracks`, selection properties
+- ✅ **Next episode properties added**: `next_episode_thumbnail`, `auto_play_enabled`, `auto_play_countdown_duration`, `next_episode_load_state`
 - ❌ **1 major non-reactive system remaining**: skip buttons with polling timers
 - ❌ **Track menu population**: Still needs reactive menu binding implementation
-- 🧹 **Dead code present**: Incomplete AutoPlayState enum, imperative track methods
-- 📋 **Work remaining**: Phases 5-7 to achieve 100% reactive UI
+- ⚠️ **UI integration pending**: Next episode overlay needs to be created and connected
+- 📋 **Work remaining**: Complete Phase 6 UI, then Phases 5 & 7 to achieve 100% reactive UI
 
 ## Migration Strategy
 
@@ -447,14 +449,16 @@ skip_intro_button.connect_clicked({
 - ✅ No polling timers for marker checking
 - ✅ Skip logic handled by ViewModel, not UI layer
 
-### Phase 6: Auto-Play and Episode Transition Reactive System 🎯
+### Phase 6: Auto-Play and Episode Transition Reactive System 🚧 IN PROGRESS
 **Goal**: Implement fully reactive auto-play countdown and episode transitions
-**Estimated Effort**: 10-14 hours
+**Estimated Effort**: 10-14 hours (actual: ~2 hours for ViewModel implementation)
 **Files**: `src/core/viewmodels/player_view_model.rs`, `src/platforms/gtk/ui/pages/player.rs`
+**Status**: ⚠️ **PARTIAL** - ViewModel implementation complete, UI integration pending
 
-#### 6.1 Implement Auto-Play State Machine
+#### 6.1 Implement Auto-Play State Machine ✅ COMPLETE
 **Current**: `AutoPlayState::Counting` and `AutoPlayState::Disabled` are dead code
 **New**: Fully implemented auto-play countdown with reactive UI
+**Status**: ✅ **COMPLETED** - All AutoPlayState variants and methods implemented
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
@@ -538,11 +542,22 @@ let next_episode_binding = bind_text_to_property(
 );
 ```
 
+**Implementation Notes**:
+- Added `LoadState` enum for tracking next episode load status
+- Added `NextEpisodeInfo` struct for episode metadata display
+- Enhanced `AutoPlayState` enum with `Counting(u32)`, `Disabled`, and `Loading` variants
+- Added properties: `next_episode_thumbnail`, `auto_play_enabled`, `auto_play_countdown_duration`, `next_episode_load_state`
+- Implemented methods: `load_next_episode_metadata()`, `play_next_episode_now()`, `cancel_auto_play()`, `toggle_auto_play()`, `start_auto_play_countdown()`, `handle_playback_near_end()`, `handle_playback_completed()`
+- Countdown timer uses tokio task handle stored in `countdown_handle` for proper cancellation
+
 **Success Criteria**:
-- ✅ Auto-play countdown displays reactively when episode ends
-- ✅ Countdown updates in real-time without polling
-- ✅ User can cancel countdown with reactive UI feedback
-- ✅ Next episode plays automatically when countdown expires
+- ✅ **COMPLETE**: AutoPlayState enum fully implemented with all variants
+- ✅ **COMPLETE**: Countdown timer logic with tokio task management
+- ✅ **COMPLETE**: Next episode metadata loading with thumbnail support
+- ✅ **COMPLETE**: Auto-play preference toggling
+- ⚠️ **PENDING**: UI overlay implementation (see next-episode.md)
+- ⚠️ **PENDING**: Reactive bindings for countdown display
+- ⚠️ **PENDING**: Integration with player page
 
 ### Phase 7: Eliminate Polling and Complete Migration 🧹
 **Goal**: Remove all remaining polling timers and manual widget updates
@@ -676,10 +691,11 @@ Measure memory usage and CPU performance before/after each phase to ensure impro
 - **Phase 3 (Track Management)**: ✅ **COMPLETED** - ~1 hour actual (much faster than estimated)
 - **Phase 4 (Control Visibility)**: ✅ **COMPLETED** - ~30 minutes actual (much faster than estimated)
 - **Phase 5 (Skip Buttons)**: 4-6 hours (reduced - ViewModel integration simplified)  
-- **Phase 6 (Auto-Play)**: 6-8 hours (reduced - infrastructure exists)
+- **Phase 6 (Auto-Play)**: 🚧 **IN PROGRESS** - ViewModel complete (~2 hours), UI pending (~4-6 hours)
 - **Phase 7 (Cleanup)**: 2-3 hours (reduced - less dead code than expected)
 
-**Total remaining: 12-17 hours** to complete 100% reactive migration.
+**Total remaining: 10-15 hours** to complete 100% reactive migration.
+**Next Episode UI (from next-episode.md): 16-20 hours** for full overlay implementation.
 
 ## Success Metrics
 
