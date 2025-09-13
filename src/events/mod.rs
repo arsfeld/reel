@@ -6,7 +6,7 @@ pub use types::{DatabaseEvent, EventPayload, EventType};
 
 /// Event handler trait for processing events
 #[async_trait::async_trait]
-#[allow(dead_code)]
+
 pub trait EventHandler: Send + Sync {
     /// Handle an event
     async fn handle(&self, event: DatabaseEvent) -> anyhow::Result<()>;

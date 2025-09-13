@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 /// Repository trait for Library entities
 #[async_trait]
-#[allow(dead_code)]
+
 pub trait LibraryRepository: Repository<LibraryModel> {
     /// Find libraries by source
     async fn find_by_source(&self, source_id: &str) -> Result<Vec<LibraryModel>>;

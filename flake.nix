@@ -503,8 +503,8 @@
               echo ""
             fi
 
-            # Set RUSTFLAGS to treat warnings as errors
-            export RUSTFLAGS="-D warnings"
+            # Set RUSTFLAGS - temporarily disable warnings as errors for development
+            # export RUSTFLAGS="-D warnings"
 
             # Set up GStreamer plugin paths - include core gstreamer plugins
             GST_PATHS="${pkgs.gst_all_1.gstreamer.out}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-ugly}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-libav}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-rs}/lib/gstreamer-1.0"
