@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 use crate::models::{
-    ChapterMarker, Credentials, Episode, HomeSection, Library, MediaItem, Movie, MusicAlbum,
-    MusicTrack, Photo, Show, StreamInfo, User,
+    BackendId, ChapterMarker, Credentials, Episode, HomeSection, Library, LibraryId, MediaItem,
+    MediaItemId, Movie, MusicAlbum, MusicTrack, Photo, Show, ShowId, StreamInfo, User,
 };
 
 #[async_trait]
@@ -32,26 +32,26 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
 
     async fn get_libraries(&self) -> Result<Vec<Library>>;
 
-    async fn get_movies(&self, library_id: &str) -> Result<Vec<Movie>>;
+    async fn get_movies(&self, library_id: &LibraryId) -> Result<Vec<Movie>>;
 
-    async fn get_shows(&self, library_id: &str) -> Result<Vec<Show>>;
+    async fn get_shows(&self, library_id: &LibraryId) -> Result<Vec<Show>>;
 
-    async fn get_episodes(&self, show_id: &str, season: u32) -> Result<Vec<Episode>>;
+    async fn get_episodes(&self, show_id: &ShowId, season: u32) -> Result<Vec<Episode>>;
 
-    async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo>;
+    async fn get_stream_url(&self, media_id: &MediaItemId) -> Result<StreamInfo>;
 
     async fn update_progress(
         &self,
-        media_id: &str,
+        media_id: &MediaItemId,
         position: Duration,
         duration: Duration,
     ) -> Result<()>;
 
-    async fn mark_watched(&self, media_id: &str) -> Result<()>;
+    async fn mark_watched(&self, media_id: &MediaItemId) -> Result<()>;
 
-    async fn mark_unwatched(&self, media_id: &str) -> Result<()>;
+    async fn mark_unwatched(&self, media_id: &MediaItemId) -> Result<()>;
 
-    async fn get_watch_status(&self, media_id: &str) -> Result<WatchStatus>;
+    async fn get_watch_status(&self, media_id: &MediaItemId) -> Result<WatchStatus>;
 
     async fn search(&self, query: &str) -> Result<SearchResults>;
 
@@ -65,7 +65,7 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     /// Fetch intro and credits markers for an episode
     async fn fetch_episode_markers(
         &self,
-        _episode_id: &str,
+        _episode_id: &MediaItemId,
     ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
         // Default implementation returns no markers
         // Only Plex backend currently implements this
@@ -75,7 +75,7 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     /// Fetch intro and credits markers for any media (movie or episode)
     async fn fetch_media_markers(
         &self,
-        _media_id: &str,
+        _media_id: &MediaItemId,
     ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
         // Default implementation returns no markers
         // Backends should override this to provide marker functionality
@@ -90,14 +90,14 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     }
 
     // Generic media item fetching for all library types
-    async fn get_library_items(&self, library_id: &str) -> Result<Vec<MediaItem>> {
+    async fn get_library_items(&self, library_id: &LibraryId) -> Result<Vec<MediaItem>> {
         // Default implementation that only handles movies and shows
         // Backends can override this to support all types
         let library = self
             .get_libraries()
             .await?
             .into_iter()
-            .find(|l| l.id == library_id)
+            .find(|l| l.id == library_id.as_str())
             .ok_or_else(|| anyhow::anyhow!("Library not found"))?;
 
         use crate::models::LibraryType;
@@ -126,25 +126,26 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     }
 
     // Optional: Get music albums for music libraries
-    async fn get_music_albums(&self, _library_id: &str) -> Result<Vec<MusicAlbum>> {
+    async fn get_music_albums(&self, _library_id: &LibraryId) -> Result<Vec<MusicAlbum>> {
         Ok(Vec::new())
     }
 
     // Optional: Get music tracks for an album
-    async fn get_music_tracks(&self, _album_id: &str) -> Result<Vec<MusicTrack>> {
+    async fn get_music_tracks(&self, _album_id: &MediaItemId) -> Result<Vec<MusicTrack>> {
         Ok(Vec::new())
     }
 
     // Optional: Get photos for photo libraries
-    async fn get_photos(&self, _library_id: &str) -> Result<Vec<Photo>> {
+    async fn get_photos(&self, _library_id: &LibraryId) -> Result<Vec<Photo>> {
         Ok(Vec::new())
     }
 
     // Backend information
     async fn get_backend_info(&self) -> BackendInfo {
+        let backend_id = self.get_backend_id().await;
         BackendInfo {
-            name: self.get_backend_id().await,
-            display_name: self.get_backend_id().await,
+            name: backend_id.to_string(),
+            display_name: backend_id.to_string(),
             backend_type: BackendType::Generic,
             server_name: None,
             server_version: None,
@@ -155,7 +156,7 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     }
 
     // Sync support methods
-    async fn get_backend_id(&self) -> String;
+    async fn get_backend_id(&self) -> BackendId;
 
     async fn get_last_sync_time(&self) -> Option<DateTime<Utc>>;
 
@@ -179,7 +180,7 @@ pub struct WatchStatus {
 
 #[derive(Debug, Clone)]
 pub struct SyncResult {
-    pub backend_id: String,
+    pub backend_id: BackendId,
     pub success: bool,
     pub items_synced: usize,
     pub duration: Duration,
@@ -233,11 +234,19 @@ pub struct BackendInfo {
     pub is_relay: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct OfflineStatus {
+    pub total_size_mb: usize,
+    pub used_size_mb: usize,
+    pub items_count: usize,
+    pub backends: std::collections::HashMap<String, BackendOfflineInfo>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::entities::sync_status::SyncType;
-    use crate::services::sync::SyncStatus;
+    use crate::services::core::sync::SyncStatus;
     use chrono::Utc;
     use std::collections::HashMap;
     use std::time::Duration;
@@ -306,14 +315,14 @@ mod tests {
     #[test]
     fn test_sync_result() {
         let result = SyncResult {
-            backend_id: "test_backend".to_string(),
+            backend_id: BackendId::from("test_backend"),
             success: true,
             items_synced: 42,
             duration: Duration::from_secs(10),
             errors: vec!["warning1".to_string()],
         };
 
-        assert_eq!(result.backend_id, "test_backend");
+        assert_eq!(result.backend_id.as_str(), "test_backend");
         assert!(result.success);
         assert_eq!(result.items_synced, 42);
         assert_eq!(result.duration, Duration::from_secs(10));
@@ -382,36 +391,24 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_status_syncing() {
-        let status = SyncStatus::Syncing {
-            progress: 0.75,
-            current_item: "Movie XYZ".to_string(),
-        };
+    fn test_sync_status_in_progress() {
+        let status = SyncStatus::InProgress;
 
         match status {
-            SyncStatus::Syncing {
-                progress,
-                current_item,
-            } => {
-                assert_eq!(progress, 0.75);
-                assert_eq!(current_item, "Movie XYZ");
+            SyncStatus::InProgress => {
+                // Test passed - InProgress status created correctly
             }
-            _ => panic!("Expected Syncing status"),
+            _ => panic!("Expected InProgress status"),
         }
     }
 
     #[test]
     fn test_sync_status_completed() {
-        let now = Utc::now();
-        let status = SyncStatus::Completed {
-            at: now,
-            items_synced: 100,
-        };
+        let status = SyncStatus::Completed;
 
         match status {
-            SyncStatus::Completed { at, items_synced } => {
-                assert_eq!(at, now);
-                assert_eq!(items_synced, 100);
+            SyncStatus::Completed => {
+                // Test passed - Completed status created correctly
             }
             _ => panic!("Expected Completed status"),
         }
@@ -419,16 +416,11 @@ mod tests {
 
     #[test]
     fn test_sync_status_failed() {
-        let now = Utc::now();
-        let status = SyncStatus::Failed {
-            error: "Network error".to_string(),
-            at: now,
-        };
+        let status = SyncStatus::Failed;
 
         match status {
-            SyncStatus::Failed { error, at } => {
-                assert_eq!(error, "Network error");
-                assert_eq!(at, now);
+            SyncStatus::Failed => {
+                // Test passed - Failed status created correctly
             }
             _ => panic!("Expected Failed status"),
         }

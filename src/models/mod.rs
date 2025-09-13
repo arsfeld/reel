@@ -1,7 +1,9 @@
-mod auth_provider;
+pub mod auth_provider;
 mod identifiers;
 
-pub use auth_provider::{AuthProvider, NetworkAuthType, NetworkCredentialData, Source, SourceType};
+pub use auth_provider::{
+    AuthProvider, ConnectionInfo, NetworkAuthType, NetworkCredentialData, Source, SourceType,
+};
 pub use identifiers::{BackendId, LibraryId, MediaItemId, ProviderId, ShowId, SourceId, UserId};
 
 use chrono::{DateTime, Utc};
@@ -31,6 +33,14 @@ pub enum LibraryType {
     Music,
     Photos,
     Mixed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum MediaType {
+    Movie,
+    Show,
+    Music,
+    Photo,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +229,17 @@ pub enum HomeSectionType {
     Trending,
     RecentlyPlayed,
     Custom(String),
+}
+
+impl MediaType {
+    pub fn from_media_item(item: &MediaItem) -> Self {
+        match item {
+            MediaItem::Movie(_) => MediaType::Movie,
+            MediaItem::Show(_) | MediaItem::Episode(_) => MediaType::Show,
+            MediaItem::MusicAlbum(_) | MediaItem::MusicTrack(_) => MediaType::Music,
+            MediaItem::Photo(_) => MediaType::Photo,
+        }
+    }
 }
 
 impl MediaItem {

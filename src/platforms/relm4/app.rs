@@ -1,6 +1,7 @@
+use super::components::MainWindow;
 use super::components::shared::{AppCommand, AppInput, AppOutput, CommandResult, NavigationTarget};
-use crate::core::state::AppState;
-use crate::services::DataService;
+// MessageBrokers are now static and accessed directly from broker modules
+use crate::db::{Database, DatabaseConnection};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use relm4::gtk;
@@ -51,9 +52,8 @@ impl ReelApp {
 }
 
 pub struct AppModel {
-    app_state: Arc<AppState>,
+    db: DatabaseConnection,
     runtime: Arc<Runtime>,
-    data_service: Arc<DataService>,
     loading: bool,
     current_page: NavigationTarget,
 }
@@ -180,17 +180,17 @@ impl AsyncComponent for AppModel {
                 .clone()
         });
 
-        let config = Arc::new(RwLock::new(Config::default()));
-        let app_state = AppState::new_async(config.clone())
-            .await
-            .expect("Failed to initialize AppState");
+        let config = Config::default();
 
-        let data_service = app_state.data_service.clone();
+        // Initialize database directly
+        let database = Database::new()
+            .await
+            .expect("Failed to initialize database");
+        let db = database.get_connection();
 
         let model = AppModel {
-            app_state: Arc::new(app_state),
+            db,
             runtime,
-            data_service: data_service.clone(),
             loading: true,
             current_page: NavigationTarget::Home,
         };
@@ -220,13 +220,10 @@ impl AsyncComponent for AppModel {
         match msg {
             AppInput::Initialize => {
                 self.loading = true;
-                let data_service = self.data_service.clone();
+                let db = self.db.clone();
                 sender.oneshot_command(async move {
-                    super::components::shared::execute_command(
-                        AppCommand::LoadInitialData,
-                        data_service,
-                    )
-                    .await
+                    super::components::shared::execute_command(AppCommand::LoadInitialData, &db)
+                        .await
                 });
             }
             AppInput::Navigate(target) => {

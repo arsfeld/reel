@@ -68,6 +68,12 @@ impl PlaybackRepositoryImpl {
             base: BaseRepository::new(db, event_bus),
         }
     }
+
+    pub fn new_without_events(db: Arc<DatabaseConnection>) -> Self {
+        Self {
+            base: BaseRepository::new_without_events(db),
+        }
+    }
 }
 
 #[async_trait]

@@ -79,3 +79,26 @@ impl Model {
         LibraryType::from_str(&self.library_type)
     }
 }
+
+/// Convert database Model to domain Library
+impl TryFrom<Model> for crate::models::Library {
+    type Error = anyhow::Error;
+
+    fn try_from(model: Model) -> Result<Self, Self::Error> {
+        let library_type = match model.library_type.as_str() {
+            "movies" => crate::models::LibraryType::Movies,
+            "shows" => crate::models::LibraryType::Shows,
+            "music" => crate::models::LibraryType::Music,
+            "photos" => crate::models::LibraryType::Photos,
+            "mixed" => crate::models::LibraryType::Mixed,
+            _ => crate::models::LibraryType::Mixed,
+        };
+
+        Ok(crate::models::Library {
+            id: model.id,
+            title: model.title,
+            library_type,
+            icon: model.icon,
+        })
+    }
+}

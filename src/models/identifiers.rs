@@ -144,11 +144,11 @@ mod tests {
         };
     }
 
-    test_id_type!(source_id);
-    test_id_type!(backend_id);
-    test_id_type!(provider_id);
-    test_id_type!(library_id);
-    test_id_type!(media_item_id);
-    test_id_type!(show_id);
-    test_id_type!(user_id);
+    test_id_type!(SourceId);
+    test_id_type!(BackendId);
+    test_id_type!(ProviderId);
+    test_id_type!(LibraryId);
+    test_id_type!(MediaItemId);
+    test_id_type!(ShowId);
+    test_id_type!(UserId);
 }

@@ -1,6 +1,6 @@
 pub mod frontend;
 pub mod player_traits;
-pub mod state;
-pub mod viewmodels;
-
-pub use state::AppState;
+// State management disabled during Relm4 migration - components manage their own state
+// pub mod state;
+// ViewModels disabled during Relm4 migration
+// pub mod viewmodels;
