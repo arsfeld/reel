@@ -170,9 +170,10 @@ impl SearchWorker {
         // Remove existing document if it exists
         self.remove_document_internal(&doc.id)?;
 
-        let mut tantivy_doc = Document::default();
-        tantivy_doc.add_text(self.id_field, &doc.id.to_string());
-        tantivy_doc.add_text(self.title_field, &doc.title);
+        let mut tantivy_doc = doc!(
+            self.id_field => doc.id.to_string(),
+            self.title_field => doc.title.clone()
+        );
 
         if let Some(overview) = &doc.overview {
             tantivy_doc.add_text(self.overview_field, overview);
@@ -218,12 +219,12 @@ impl SearchWorker {
 
         let mut results = Vec::new();
         for (_score, doc_address) in &top_docs {
-            let retrieved_doc = searcher
+            let retrieved_doc: tantivy::TantivyDocument = searcher
                 .doc(*doc_address)
                 .map_err(|e| format!("Failed to retrieve document: {}", e))?;
 
             if let Some(id_value) = retrieved_doc.get_first(self.id_field) {
-                if let Some(id_str) = id_value.as_text() {
+                if let tantivy::schema::OwnedValue::Str(id_str) = id_value {
                     if let Ok(id) = id_str.parse::<MediaItemId>() {
                         results.push(id);
                     }
@@ -368,11 +369,7 @@ impl Worker for SearchWorker {
     }
 }
 
-// Helper function to create a shared search worker instance
-static SEARCH_WORKER: std::sync::OnceLock<WorkerHandle<SearchWorker>> = std::sync::OnceLock::new();
-
+// Helper function to create a search worker instance
 pub fn get_search_worker() -> WorkerHandle<SearchWorker> {
-    SEARCH_WORKER
-        .get_or_init(|| SearchWorker::builder().detach_worker(()))
-        .clone()
+    SearchWorker::builder().detach_worker(())
 }
