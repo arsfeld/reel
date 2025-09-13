@@ -170,7 +170,6 @@ impl AsyncComponent for AppModel {
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
         use crate::config::Config;
-        use tokio::sync::RwLock;
 
         // Get runtime from thread-local
         let runtime = RUNTIME.with(|r| {
@@ -189,7 +188,7 @@ impl AsyncComponent for AppModel {
         let db = database.get_connection();
 
         let model = AppModel {
-            db,
+            db: db.clone(),
             runtime,
             loading: true,
             current_page: NavigationTarget::Home,
@@ -201,6 +200,7 @@ impl AsyncComponent for AppModel {
         root.set_visible(true);
         root.present();
 
+        // Simple initialization - no backend management needed
         sender.oneshot_command(async move {
             CommandResult::InitialDataLoaded {
                 sources: vec![],

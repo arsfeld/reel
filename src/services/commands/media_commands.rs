@@ -3,7 +3,7 @@ use async_trait::async_trait;
 
 use crate::db::connection::DatabaseConnection;
 use crate::models::{
-    Episode, Library, LibraryId, MediaItem, MediaItemId, MediaType, ShowId, SourceId,
+    Episode, Library, LibraryId, MediaItem, MediaItemId, MediaType, ShowId, SourceId, StreamInfo,
 };
 use crate::services::commands::Command;
 use crate::services::core::media::MediaService;
@@ -271,16 +271,14 @@ impl Command<()> for ClearSourceCommand {
 
 /// Get stream URL for a media item
 pub struct GetStreamUrlCommand {
+    pub db: DatabaseConnection,
     pub media_item_id: MediaItemId,
 }
 
-impl GetStreamUrlCommand {
-    pub async fn execute(&self, db: &DatabaseConnection) -> Result<String> {
-        // For now, return a placeholder URL
-        // In production, this would fetch the actual stream URL from the backend
-        Ok(format!(
-            "https://example.com/stream/{}",
-            self.media_item_id.as_str()
-        ))
+#[async_trait]
+impl Command<StreamInfo> for GetStreamUrlCommand {
+    async fn execute(&self) -> Result<StreamInfo> {
+        // Use the stateless BackendService - pure function approach
+        crate::services::core::BackendService::get_stream_url(&self.db, &self.media_item_id).await
     }
 }

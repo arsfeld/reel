@@ -22,6 +22,18 @@ pub struct PlayerPage {
     video_container: gtk::Box,
 }
 
+impl std::fmt::Debug for PlayerPage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlayerPage")
+            .field("media_item_id", &self.media_item_id)
+            .field("player_state", &self.player_state)
+            .field("position", &self.position)
+            .field("duration", &self.duration)
+            .field("volume", &self.volume)
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 pub enum PlayerInput {
     LoadMedia(MediaItemId),
@@ -39,7 +51,6 @@ pub enum PlayerOutput {
     Error(String),
 }
 
-#[derive(Debug)]
 pub enum PlayerCommandOutput {
     PlayerInitialized(Option<Arc<RwLock<Player>>>),
     StateChanged(PlayerState),
@@ -48,6 +59,28 @@ pub enum PlayerCommandOutput {
         duration: Option<Duration>,
         state: PlayerState,
     },
+}
+
+impl std::fmt::Debug for PlayerCommandOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PlayerInitialized(player) => {
+                write!(f, "PlayerInitialized({})", player.is_some())
+            }
+            Self::StateChanged(state) => write!(f, "StateChanged({:?})", state),
+            Self::PositionUpdate {
+                position,
+                duration,
+                state,
+            } => {
+                write!(
+                    f,
+                    "PositionUpdate {{ position: {:?}, duration: {:?}, state: {:?} }}",
+                    position, duration, state
+                )
+            }
+        }
+    }
 }
 
 #[relm4::component(pub async)]
@@ -80,21 +113,13 @@ impl AsyncComponent for PlayerPage {
                 },
             },
 
-            // Video area - placeholder for now, will add GLArea integration later
-            gtk::Box {
+            // Video area with GLArea from player backend
+            model.video_container.clone() {
                 set_vexpand: true,
                 set_hexpand: true,
                 set_valign: gtk::Align::Fill,
                 set_halign: gtk::Align::Fill,
                 add_css_class: "video-area",
-
-                gtk::Label {
-                    #[watch]
-                    set_label: &format!("🎬 Player Backend: {:?}", model.player_state),
-                    add_css_class: "title-1",
-                    set_valign: gtk::Align::Center,
-                    set_halign: gtk::Align::Center,
-                },
             },
 
             // Simple controls
@@ -147,6 +172,18 @@ impl AsyncComponent for PlayerPage {
     ) -> AsyncComponentParts<Self> {
         let (media_item_id, db) = init;
 
+        // Create a container for the video widget that will be populated when player initializes
+        let video_container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
+
+        // Add a placeholder initially
+        let placeholder = gtk::Label::new(Some("Initializing player..."));
+        placeholder.add_css_class("title-1");
+        placeholder.set_valign(gtk::Align::Center);
+        placeholder.set_halign(gtk::Align::Center);
+        video_container.append(&placeholder);
+
         let model = Self {
             media_item_id,
             player: None,
@@ -155,6 +192,7 @@ impl AsyncComponent for PlayerPage {
             duration: Duration::from_secs(0),
             volume: 1.0,
             db,
+            video_container: video_container.clone(),
         };
 
         // Initialize the player
@@ -194,15 +232,36 @@ impl AsyncComponent for PlayerPage {
                 self.media_item_id = Some(id.clone());
                 self.player_state = PlayerState::Loading;
 
-                // TODO: Get actual media URL from backend
-                // For now, use a placeholder
-                let media_url = format!("https://example.com/media/{}", id.0);
+                // Get actual media URL from backend using GetStreamUrlCommand
+                let db_clone = self.db.clone();
+                let media_id = id.clone();
 
                 if let Some(player) = &self.player {
                     let player_clone = Arc::clone(player);
                     sender.oneshot_command(async move {
+                        use crate::services::commands::Command;
+                        use crate::services::commands::media_commands::GetStreamUrlCommand;
+
+                        // Get the stream info from the backend using stateless command
+                        let stream_info = match (GetStreamUrlCommand {
+                            db: db_clone.as_ref().clone(),
+                            media_item_id: media_id,
+                        })
+                        .execute()
+                        .await
+                        {
+                            Ok(info) => info,
+                            Err(e) => {
+                                error!("Failed to get stream URL: {}", e);
+                                return PlayerCommandOutput::StateChanged(PlayerState::Error);
+                            }
+                        };
+
+                        info!("Got stream URL: {}", stream_info.url);
+
+                        // Load the media into the player
                         let player = player_clone.read().unwrap();
-                        match player.load_media(&media_url).await {
+                        match player.load_media(&stream_info.url).await {
                             Ok(_) => {
                                 info!("Media loaded successfully");
                                 PlayerCommandOutput::StateChanged(PlayerState::Idle)
@@ -297,10 +356,24 @@ impl AsyncComponent for PlayerPage {
     ) {
         match message {
             PlayerCommandOutput::PlayerInitialized(player_opt) => {
-                self.player = player_opt;
-                if self.player.is_some() {
+                self.player = player_opt.clone();
+                if let Some(ref player) = player_opt {
                     self.player_state = PlayerState::Idle;
                     info!("Player backend initialized and ready");
+
+                    // Clear the container and add the actual video widget
+                    while let Some(child) = self.video_container.first_child() {
+                        self.video_container.remove(&child);
+                    }
+
+                    // Get the video widget from the player backend (GLArea for MPV)
+                    let video_widget = {
+                        let player_guard = player.read().unwrap();
+                        player_guard.create_video_widget()
+                    };
+
+                    self.video_container.append(&video_widget);
+                    info!("Video widget (GLArea) added to player");
                 } else {
                     self.player_state = PlayerState::Error;
                     error!("Failed to initialize player backend");
