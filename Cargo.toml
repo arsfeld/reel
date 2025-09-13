@@ -80,6 +80,7 @@ sha2 = "0.10"
 md5 = "0.7"
 lru = "0.16"
 lazy_static = "1.5"
+tantivy = "0.22"
 
 # Localization
 gettext-rs = { version = "0.7", features = ["gettext-system"] }

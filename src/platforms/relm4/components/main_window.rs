@@ -19,6 +19,13 @@ pub struct MainWindow {
     show_details_page: Option<AsyncController<ShowDetailsPage>>,
     player_page: Option<AsyncController<PlayerPage>>,
     navigation_view: adw::NavigationView,
+    // Window chrome management
+    header_bar: adw::HeaderBar,
+    toolbar_view: adw::ToolbarView,
+    // Window state for restoration
+    saved_window_size: Option<(i32, i32)>,
+    was_maximized: bool,
+    was_fullscreen: bool,
 }
 
 #[derive(Debug)]
@@ -29,6 +36,8 @@ pub enum MainWindowInput {
     NavigateToMediaItem(MediaItemId),
     NavigateToPlayer(MediaItemId),
     ToggleSidebar,
+    RestoreWindowChrome,
+    ResizeWindow(i32, i32),
 }
 
 #[derive(Debug)]
@@ -44,13 +53,16 @@ impl AsyncComponent for MainWindow {
     type CommandOutput = ();
 
     view! {
+        #[root]
         adw::ApplicationWindow {
             set_title: Some("Reel"),
             set_default_width: 1200,
             set_default_height: 800,
 
             #[wrap(Some)]
+            #[name(toolbar_view)]
             set_content = &adw::ToolbarView {
+                #[name(header_bar)]
                 add_top_bar = &adw::HeaderBar {
                     pack_start = &gtk::Button {
                         set_icon_name: "sidebar-show-symbolic",
@@ -121,6 +133,11 @@ impl AsyncComponent for MainWindow {
             show_details_page: None,
             player_page: None,
             navigation_view: adw::NavigationView::new(),
+            header_bar: adw::HeaderBar::new(),
+            toolbar_view: adw::ToolbarView::new(),
+            saved_window_size: None,
+            was_maximized: false,
+            was_fullscreen: false,
         };
 
         let widgets = view_output!();
@@ -128,8 +145,10 @@ impl AsyncComponent for MainWindow {
         // Set the sidebar widget
         widgets.sidebar_page.set_child(Some(model.sidebar.widget()));
 
-        // Store reference to navigation view for later use
+        // Store references to widgets for later use
         model.navigation_view.clone_from(&widgets.navigation_view);
+        model.header_bar.clone_from(&widgets.header_bar);
+        model.toolbar_view.clone_from(&widgets.toolbar_view);
 
         // Add the home page as the initial page
         let home_nav_page = adw::NavigationPage::builder()
@@ -228,14 +247,27 @@ impl AsyncComponent for MainWindow {
             MainWindowInput::NavigateToPlayer(media_id) => {
                 tracing::info!("Navigating to player for media: {}", media_id);
 
+                // Save current window state before entering player
+                let (width, height) = root.default_size();
+                self.saved_window_size = Some((width, height));
+                self.was_maximized = root.is_maximized();
+                self.was_fullscreen = root.is_fullscreen();
+
+                // Hide window chrome for immersive viewing
+                self.header_bar.set_visible(false);
+                self.toolbar_view.set_top_bar_style(adw::ToolbarStyle::Flat);
+
                 // Create player page if not exists
                 if self.player_page.is_none() {
                     let db = std::sync::Arc::new(self.db.clone());
+                    let sender_clone = sender.clone();
                     self.player_page = Some(
                         PlayerPage::builder()
-                            .launch((Some(media_id.clone()), db))
-                            .forward(sender.input_sender(), |output| match output {
+                            .launch((Some(media_id.clone()), db, root.clone()))
+                            .forward(sender.input_sender(), move |output| match output {
                                 crate::platforms::relm4::components::pages::player::PlayerOutput::NavigateBack => {
+                                    // Restore window chrome when leaving player
+                                    sender_clone.input(MainWindowInput::RestoreWindowChrome);
                                     MainWindowInput::Navigate("back".to_string())
                                 }
                                 crate::platforms::relm4::components::pages::player::PlayerOutput::MediaLoaded => {
@@ -244,7 +276,13 @@ impl AsyncComponent for MainWindow {
                                 }
                                 crate::platforms::relm4::components::pages::player::PlayerOutput::Error(msg) => {
                                     tracing::error!("Player error: {}", msg);
+                                    // Restore window chrome on error
+                                    sender_clone.input(MainWindowInput::RestoreWindowChrome);
                                     MainWindowInput::Navigate("player_error".to_string())
+                                }
+                                crate::platforms::relm4::components::pages::player::PlayerOutput::WindowStateChanged { width, height } => {
+                                    // Player is requesting window size change for aspect ratio
+                                    MainWindowInput::ResizeWindow(width, height)
                                 }
                             }),
                     );
@@ -265,6 +303,43 @@ impl AsyncComponent for MainWindow {
             MainWindowInput::ToggleSidebar => {
                 tracing::info!("Toggling sidebar");
                 // TODO: Implement sidebar toggle
+            }
+            MainWindowInput::RestoreWindowChrome => {
+                tracing::info!("Restoring window chrome after player");
+
+                // Show window chrome again
+                self.header_bar.set_visible(true);
+                self.toolbar_view
+                    .set_top_bar_style(adw::ToolbarStyle::Raised);
+
+                // Restore window size and state
+                if let Some((width, height)) = self.saved_window_size {
+                    root.set_default_size(width, height);
+                }
+
+                if self.was_maximized {
+                    root.maximize();
+                } else if self.was_fullscreen {
+                    root.fullscreen();
+                } else {
+                    root.unmaximize();
+                    root.unfullscreen();
+                }
+
+                // Pop the player page from navigation
+                self.navigation_view.pop();
+            }
+            MainWindowInput::ResizeWindow(width, height) => {
+                tracing::info!(
+                    "Resizing window to {}x{} for video aspect ratio",
+                    width,
+                    height
+                );
+                root.set_default_size(width, height);
+
+                // Center the window on screen after resize
+                // Note: GTK4 doesn't have a direct center method, but setting default size
+                // and letting the window manager handle it usually works well
             }
         }
     }

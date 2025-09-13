@@ -43,6 +43,22 @@ impl ReelApp {
                 font-size: 24pt;
                 font-weight: bold;
             }
+            /* Player fullscreen styles */
+            .video-area {
+                background-color: black;
+            }
+            .fullscreen .video-area {
+                background-color: black;
+            }
+            /* OSD controls styling */
+            .player-controls {
+                background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
+                border-radius: 8px;
+                padding: 20px;
+            }
+            .seek-bar {
+                min-height: 8px;
+            }
             ",
         );
         app.run_async::<AppModel>(());
