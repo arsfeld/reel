@@ -57,6 +57,12 @@ pub trait MediaRepository: Repository<MediaItemModel> {
         source_id: &str,
         backend_item_id: &str,
     ) -> Result<Option<MediaItemModel>>;
+
+    /// Delete all media items for a library
+    async fn delete_by_library(&self, library_id: &str) -> Result<()>;
+
+    /// Delete all media items for a source
+    async fn delete_by_source(&self, source_id: &str) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -68,6 +74,12 @@ impl MediaRepositoryImpl {
     pub fn new(db: Arc<DatabaseConnection>, event_bus: Arc<EventBus>) -> Self {
         Self {
             base: BaseRepository::new(db, event_bus),
+        }
+    }
+
+    pub fn new_without_events(db: Arc<DatabaseConnection>) -> Self {
+        Self {
+            base: BaseRepository::new_without_events(db),
         }
     }
 
@@ -177,8 +189,10 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
             },
         );
 
-        if let Err(e) = self.base.event_bus.publish(event).await {
-            tracing::warn!("Failed to publish MediaCreated event: {}", e);
+        if let Some(event_bus) = &self.base.event_bus {
+            if let Err(e) = event_bus.publish(event).await {
+                tracing::warn!("Failed to publish MediaCreated event: {}", e);
+            }
         }
 
         Ok(result)
@@ -201,8 +215,10 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
             },
         );
 
-        if let Err(e) = self.base.event_bus.publish(event).await {
-            tracing::warn!("Failed to publish MediaUpdated event: {}", e);
+        if let Some(event_bus) = &self.base.event_bus {
+            if let Err(e) = event_bus.publish(event).await {
+                tracing::warn!("Failed to publish MediaUpdated event: {}", e);
+            }
         }
 
         Ok(result)
@@ -228,8 +244,10 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
                 },
             );
 
-            if let Err(e) = self.base.event_bus.publish(event).await {
-                tracing::warn!("Failed to publish MediaDeleted event: {}", e);
+            if let Some(event_bus) = &self.base.event_bus {
+                if let Err(e) = event_bus.publish(event).await {
+                    tracing::warn!("Failed to publish MediaDeleted event: {}", e);
+                }
             }
         }
 
@@ -363,8 +381,10 @@ impl MediaRepository for MediaRepositoryImpl {
             },
         );
 
-        if let Err(e) = self.base.event_bus.publish(event).await {
-            tracing::warn!("Failed to publish MediaBatchCreated event: {}", e);
+        if let Some(event_bus) = &self.base.event_bus {
+            if let Err(e) = event_bus.publish(event).await {
+                tracing::warn!("Failed to publish MediaBatchCreated event: {}", e);
+            }
         }
 
         Ok(())
@@ -420,6 +440,38 @@ impl MediaRepository for MediaRepositoryImpl {
             .filter(media_items::Column::Id.like(&pattern))
             .one(self.base.db.as_ref())
             .await?)
+    }
+
+    async fn delete_by_library(&self, library_id: &str) -> Result<()> {
+        use sea_orm::DeleteResult;
+
+        let delete_result: DeleteResult = MediaItem::delete_many()
+            .filter(media_items::Column::LibraryId.eq(library_id))
+            .exec(self.base.db.as_ref())
+            .await?;
+
+        tracing::info!(
+            "Deleted {} media items from library {}",
+            delete_result.rows_affected,
+            library_id
+        );
+        Ok(())
+    }
+
+    async fn delete_by_source(&self, source_id: &str) -> Result<()> {
+        use sea_orm::DeleteResult;
+
+        let delete_result: DeleteResult = MediaItem::delete_many()
+            .filter(media_items::Column::SourceId.eq(source_id))
+            .exec(self.base.db.as_ref())
+            .await?;
+
+        tracing::info!(
+            "Deleted {} media items from source {}",
+            delete_result.rows_affected,
+            source_id
+        );
+        Ok(())
     }
 }
 

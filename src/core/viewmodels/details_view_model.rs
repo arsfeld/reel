@@ -1,6 +1,6 @@
 use super::{ComputedProperty, Property, PropertySubscriber, ViewModel};
 use crate::events::{DatabaseEvent, EventBus, EventFilter, EventPayload, EventType};
-use crate::models::{MediaItem, StreamInfo};
+use crate::models::{MediaItem, StreamInfo, MediaItemId, LibraryId};
 use crate::services::DataService;
 use crate::state::AppState;
 use anyhow::Result;
@@ -122,7 +122,7 @@ impl DetailsViewModel {
 
         let playback_progress = self
             .data_service
-            .get_playback_progress(&media.id())
+            .get_playback_progress(crate::models::MediaItemId::from(media.id()))
             .await
             .ok()
             .flatten();
@@ -180,13 +180,13 @@ impl DetailsViewModel {
         self.error.set(None).await;
         self.media_id.set(Some(media_id.clone())).await;
 
-        match self.data_service.get_media_item(&media_id).await {
+        match self.data_service.get_media_item(MediaItemId::from(media_id.as_str())).await {
             Ok(Some(media)) => {
                 let metadata = self.extract_metadata(&media).await;
 
                 let playback_progress = self
                     .data_service
-                    .get_playback_progress(&media_id)
+                    .get_playback_progress(crate::models::MediaItemId::from(media_id.clone()))
                     .await
                     .ok()
                     .flatten();
@@ -292,7 +292,7 @@ impl DetailsViewModel {
         // Extract library_id from the media item's ID (format: "backend_id:library_id:type:item_id")
         let library_id = media.id().split(':').nth(1).unwrap_or_default().to_string();
 
-        if let Ok(library_items) = self.data_service.get_media_items(&library_id).await {
+        if let Ok(library_items) = self.data_service.get_media_items(LibraryId::from(library_id.as_str())).await {
             let media_genres = match media {
                 MediaItem::Movie(m) => &m.genres,
                 MediaItem::Show(s) => &s.genres,

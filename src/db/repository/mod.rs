@@ -39,12 +39,22 @@ pub trait Repository<T> {
 #[derive(Debug)]
 pub struct BaseRepository {
     pub db: Arc<DatabaseConnection>,
-    pub event_bus: Arc<EventBus>,
+    pub event_bus: Option<Arc<EventBus>>,
 }
 
 impl BaseRepository {
     pub fn new(db: Arc<DatabaseConnection>, event_bus: Arc<EventBus>) -> Self {
-        Self { db, event_bus }
+        Self {
+            db,
+            event_bus: Some(event_bus),
+        }
+    }
+
+    pub fn new_without_events(db: Arc<DatabaseConnection>) -> Self {
+        Self {
+            db,
+            event_bus: None,
+        }
     }
 }
 

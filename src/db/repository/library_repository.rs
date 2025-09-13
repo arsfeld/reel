@@ -27,6 +27,9 @@ pub trait LibraryRepository: Repository<LibraryModel> {
 
     /// Get total item count across all libraries
     async fn get_total_item_count(&self) -> Result<i64>;
+
+    /// Delete all libraries for a source
+    async fn delete_by_source(&self, source_id: &str) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -38,6 +41,12 @@ impl LibraryRepositoryImpl {
     pub fn new(db: Arc<DatabaseConnection>, event_bus: Arc<EventBus>) -> Self {
         Self {
             base: BaseRepository::new(db, event_bus),
+        }
+    }
+
+    pub fn new_without_events(db: Arc<DatabaseConnection>) -> Self {
+        Self {
+            base: BaseRepository::new_without_events(db),
         }
     }
 }
@@ -95,8 +104,10 @@ impl Repository<LibraryModel> for LibraryRepositoryImpl {
                 },
             );
 
-            if let Err(e) = self.base.event_bus.publish(event).await {
-                tracing::warn!("Failed to publish LibraryDeleted event: {}", e);
+            if let Some(event_bus) = &self.base.event_bus {
+                if let Err(e) = event_bus.publish(event).await {
+                    tracing::warn!("Failed to publish LibraryDeleted event: {}", e);
+                }
             }
         }
 
@@ -141,8 +152,10 @@ impl LibraryRepository for LibraryRepositoryImpl {
                 },
             );
 
-            if let Err(e) = self.base.event_bus.publish(event).await {
-                tracing::warn!("Failed to publish LibraryItemCountChanged event: {}", e);
+            if let Some(event_bus) = &self.base.event_bus {
+                if let Err(e) = event_bus.publish(event).await {
+                    tracing::warn!("Failed to publish LibraryItemCountChanged event: {}", e);
+                }
             }
         }
         Ok(())
@@ -160,5 +173,21 @@ impl LibraryRepository for LibraryRepositoryImpl {
             .await?;
 
         Ok(result.flatten().unwrap_or(0))
+    }
+
+    async fn delete_by_source(&self, source_id: &str) -> Result<()> {
+        use sea_orm::DeleteResult;
+
+        let delete_result: DeleteResult = Library::delete_many()
+            .filter(libraries::Column::SourceId.eq(source_id))
+            .exec(self.base.db.as_ref())
+            .await?;
+
+        tracing::info!(
+            "Deleted {} libraries from source {}",
+            delete_result.rows_affected,
+            source_id
+        );
+        Ok(())
     }
 }

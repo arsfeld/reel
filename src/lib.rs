@@ -13,5 +13,6 @@ mod models;
 mod platforms;
 mod player;
 mod services;
-mod state;
+// State module removed in Relm4 migration - components manage their own state
+// mod state;
 mod utils;

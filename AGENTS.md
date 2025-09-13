@@ -13,7 +13,7 @@ Reel is a native, cross-platform media player application written in Rust that b
 - **Dual playback engines**: MPV (default, recommended) and GStreamer for maximum compatibility
 - **Modern Rust architecture**: Type-safe database layer with SeaORM, async/await with Tokio, repository pattern
 
-The project is currently undergoing a 75% complete migration from a basic cache system to a production-ready reactive architecture with SeaORM/SQLite and event-driven ViewModels.
+The project is transitioning to a fully Relm4-based UI implementation that leverages AsyncComponents, Tracker patterns, Factory patterns for collections, Worker components for background tasks, and Command patterns for structured async operations - abandoning ViewModels in favor of Relm4's native reactive architecture.
 
 ## Development Environment
 
@@ -68,13 +68,21 @@ cargo test -- --nocapture
 
 ### Module Structure
 - `src/main.rs` - Entry point with platform detection
-- `src/platforms/gtk/` - GTK4 platform implementation
+- `src/platforms/relm4/` - Relm4 platform implementation (target architecture)
+  - `app.rs` - Relm4 application root AsyncComponent
+  - `components/` - Pure Relm4 components with native patterns
+    - `main_window.rs` - Root window AsyncComponent
+    - `pages/` - Page AsyncComponents (home, library, player, sources, movie_details, show_details)
+    - `factories/` - Factory components for collections (media cards, episode lists)
+    - `workers/` - Background worker components (sync, search, image loading)
+    - `shared/` - Common messages, commands, navigation
+- `src/platforms/gtk/` - Legacy GTK4 platform implementation
   - `app.rs` - GTK application initialization
   - `ui/` - GTK4/libadwaita UI components
     - `main_window.rs` - Main application window
-    - `pages/` - Different application views (home, library, player, sources, movie_details, show_details)
+    - `pages/` - Different application views
     - `widgets/` - Reusable UI components
-    - `viewmodels/` - Reactive ViewModels for UI state management
+    - `viewmodels/` - Reactive ViewModels (being phased out)
 - `src/core/` - Platform-agnostic core logic
   - `state.rs` - Application state management
   - `viewmodels/` - Core ViewModels (library, player, sources, sidebar, details, home)
@@ -108,11 +116,13 @@ cargo test -- --nocapture
 
 ### Key Design Patterns
 
-1. **Reactive Architecture**: Event-driven updates with ViewModels and Properties
-   - Database → Repository → Service → Event → ViewModel → UI
-   - Properties provide observable data with change notifications
-   - EventBus enables system-wide event broadcasting
-   - 75% migration complete from old cache system to reactive ViewModels
+1. **Relm4 Reactive Architecture**: Pure component-based reactive system
+   - **AsyncComponents**: Data-heavy pages with built-in loading states and command patterns
+   - **Tracker Pattern**: Efficient change tracking for minimal re-renders (`#[tracker::track]`)
+   - **Factory Pattern**: Dynamic collections with FactoryVecDeque for lists and grids
+   - **Worker Pattern**: Background tasks isolated in worker components
+   - **MessageBroker**: Inter-component communication replacing custom event bus
+   - **Command Pattern**: Structured async operations with proper lifecycle management
 
 2. **Backend Abstraction**: All media sources implement the `MediaBackend` trait, allowing uniform handling of different server types.
 
@@ -190,7 +200,8 @@ Current migration status (75% complete):
 ## Dependencies
 
 Key dependencies managed through Cargo.toml:
-- GTK4/libadwaita for UI
+- **Relm4 Stack**: `relm4`, `relm4-components`, `relm4-icons`, `tracker` for reactive UI
+- GTK4/libadwaita for UI foundation
 - MPV (libmpv2) for primary video playback
 - GStreamer for secondary playback option
 - Tokio for async runtime

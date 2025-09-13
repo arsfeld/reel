@@ -601,7 +601,10 @@ impl ReelMainWindow {
         let sync_manager = state.sync_manager.clone();
 
         // Perform sync
-        match sync_manager.sync_backend(backend_id, backend).await {
+        match sync_manager
+            .sync_backend(crate::models::SourceId::from(backend_id), backend)
+            .await
+        {
             Ok(result) => {
                 info!(
                     "Sync completed for {}: {} items synced",
@@ -652,7 +655,10 @@ impl ReelMainWindow {
             info!("Syncing backend: {}", backend_id);
 
             let sync_manager = state.sync_manager.clone();
-            match sync_manager.sync_backend(&backend_id, backend).await {
+            match sync_manager
+                .sync_backend(crate::models::SourceId::from(backend_id.clone()), backend)
+                .await
+            {
                 Ok(result) => {
                     info!(
                         "Backend {} synced: {} items",
@@ -697,7 +703,10 @@ impl ReelMainWindow {
             // Sync progress is now managed by SidebarViewModel
 
             let sync_manager = state.sync_manager.clone();
-            match sync_manager.sync_backend(backend_id, backend).await {
+            match sync_manager
+                .sync_backend(crate::models::SourceId::from(backend_id), backend)
+                .await
+            {
                 Ok(result) => {
                     info!(
                         "Backend {} synced: {} items",

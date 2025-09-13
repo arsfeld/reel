@@ -16,10 +16,10 @@ use tracing::info;
 
 use super::traits::{MediaBackend, SearchResults};
 use crate::models::{
-    AuthProvider, ChapterMarker, Credentials, Episode, Library, Movie, Show, Source, SourceType,
-    StreamInfo, User,
+    AuthProvider, BackendId, ChapterMarker, Credentials, Episode, Library, LibraryId, MediaItemId,
+    Movie, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
 };
-use crate::services::auth_manager::AuthManager;
+use crate::services::core::auth::AuthService;
 
 pub struct PlexBackend {
     base_url: Arc<RwLock<Option<String>>>,
@@ -31,7 +31,6 @@ pub struct PlexBackend {
     server_info: Arc<RwLock<Option<ServerInfo>>>,
     auth_provider: Option<AuthProvider>,
     source: Option<Source>,
-    auth_manager: Option<Arc<AuthManager>>,
 }
 
 #[derive(Debug, Clone)]
@@ -43,11 +42,7 @@ pub struct ServerInfo {
 
 impl PlexBackend {
     /// Create a new PlexBackend from an AuthProvider and Source
-    pub fn from_auth(
-        auth_provider: AuthProvider,
-        source: Source,
-        auth_manager: Arc<AuthManager>,
-    ) -> Result<Self> {
+    pub fn from_auth(auth_provider: AuthProvider, source: Source) -> Result<Self> {
         // Validate that this is a Plex auth provider
         if !matches!(auth_provider, AuthProvider::PlexAccount { .. }) {
             return Err(anyhow!("Invalid auth provider type for Plex backend"));
@@ -68,7 +63,6 @@ impl PlexBackend {
             server_info: Arc::new(RwLock::new(None)),
             auth_provider: Some(auth_provider),
             source: Some(source),
-            auth_manager: Some(auth_manager),
         })
     }
 
@@ -238,18 +232,17 @@ impl MediaBackend for PlexBackend {
                 AuthProvider::PlexAccount { token, .. } => {
                     if !token.is_empty() {
                         token.clone()
-                    } else if let Some(auth_manager) = &self.auth_manager {
-                        // Try to get token from keyring via AuthManager
-                        match auth_manager.get_credentials(auth_provider.id(), "token") {
-                            Ok(t) => t,
-                            Err(_) => {
+                    } else {
+                        // Try to get token from keyring via AuthService
+                        match AuthService::load_credentials(&SourceId::new(auth_provider.id()))
+                            .await
+                        {
+                            Ok(Some(Credentials::Token { token, .. })) => token,
+                            _ => {
                                 tracing::warn!("No token found in AuthProvider or keyring");
                                 return Ok(None);
                             }
                         }
-                    } else {
-                        tracing::warn!("No token in AuthProvider and no AuthManager available");
-                        return Ok(None);
                     }
                 }
                 _ => {
@@ -518,21 +511,13 @@ impl MediaBackend for PlexBackend {
                                     }
                                 );
 
-                                // Update the source with the working URL if we have access to auth_manager
-                                if let Some(ref auth_manager) = self.auth_manager
-                                    && let Some(ref source) = self.source
-                                {
-                                    tracing::info!(
-                                        "Updating source with working URL: {}",
-                                        best_conn.uri
-                                    );
-                                    if let Err(e) = auth_manager
-                                        .update_source_url(&source.id, &best_conn.uri)
-                                        .await
-                                    {
-                                        tracing::warn!("Failed to update source URL: {}", e);
-                                    }
-                                }
+                                // TODO: Update the source with the working URL using DatabaseConnection
+                                // This functionality needs to be moved to stateless service
+                                tracing::info!(
+                                    "Found working connection URL: {} ({})",
+                                    best_conn.uri,
+                                    if best_conn.local { "local" } else { "remote" }
+                                );
                             }
                             Err(e) => {
                                 tracing::warn!("Failed to connect to any server endpoint: {}", e);
@@ -591,21 +576,21 @@ impl MediaBackend for PlexBackend {
         api.get_libraries().await
     }
 
-    async fn get_movies(&self, library_id: &str) -> Result<Vec<Movie>> {
+    async fn get_movies(&self, library_id: &LibraryId) -> Result<Vec<Movie>> {
         let api = self.get_api().await?;
-        api.get_movies(library_id).await
+        api.get_movies(&library_id.to_string()).await
     }
 
-    async fn get_shows(&self, library_id: &str) -> Result<Vec<Show>> {
+    async fn get_shows(&self, library_id: &LibraryId) -> Result<Vec<Show>> {
         let api = self.get_api().await?;
-        api.get_shows(library_id).await
+        api.get_shows(&library_id.to_string()).await
     }
 
-    async fn get_episodes(&self, show_id: &str, season_number: u32) -> Result<Vec<Episode>> {
+    async fn get_episodes(&self, show_id: &ShowId, season_number: u32) -> Result<Vec<Episode>> {
         let api = self.get_api().await?;
 
         // First, get the seasons for this show to find the correct season ID
-        let seasons = api.get_seasons(show_id).await?;
+        let seasons = api.get_seasons(&show_id.to_string()).await?;
 
         // Find the season with the matching season number
         let season = seasons
@@ -617,7 +602,7 @@ impl MediaBackend for PlexBackend {
         api.get_episodes(&season.id).await
     }
 
-    async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo> {
+    async fn get_stream_url(&self, media_id: &MediaItemId) -> Result<StreamInfo> {
         tracing::info!(
             "get_stream_url() called for media_id: {} on backend: {}",
             media_id,
@@ -626,12 +611,13 @@ impl MediaBackend for PlexBackend {
 
         // Extract the actual Plex rating key from the composite ID
         // Format: "backend_id:library_id:type:rating_key" or variations
-        let rating_key = if media_id.contains(':') {
+        let media_id_str = media_id.as_str();
+        let rating_key = if media_id_str.contains(':') {
             // Split and get the last part which should be the rating key
-            media_id.split(':').next_back().unwrap_or(media_id)
+            media_id_str.split(':').next_back().unwrap_or(media_id_str)
         } else {
             // If no separator, assume it's already just the rating key
-            media_id
+            media_id_str
         };
 
         tracing::info!(
@@ -652,46 +638,52 @@ impl MediaBackend for PlexBackend {
 
     async fn update_progress(
         &self,
-        media_id: &str,
+        media_id: &MediaItemId,
         position: Duration,
         duration: Duration,
     ) -> Result<()> {
         // Extract the actual Plex rating key from the composite ID
-        let rating_key = if media_id.contains(':') {
-            media_id.split(':').next_back().unwrap_or(media_id)
+        let media_id_str = media_id.as_str();
+        let rating_key = if media_id_str.contains(':') {
+            media_id_str.split(':').next_back().unwrap_or(media_id_str)
         } else {
-            media_id
+            media_id_str
         };
 
         let api = self.get_api().await?;
         api.update_progress(rating_key, position, duration).await
     }
 
-    async fn mark_watched(&self, media_id: &str) -> Result<()> {
+    async fn mark_watched(&self, media_id: &MediaItemId) -> Result<()> {
         // Extract the actual Plex rating key from the composite ID
-        let rating_key = if media_id.contains(':') {
-            media_id.split(':').next_back().unwrap_or(media_id)
+        let media_id_str = media_id.as_str();
+        let rating_key = if media_id_str.contains(':') {
+            media_id_str.split(':').next_back().unwrap_or(media_id_str)
         } else {
-            media_id
+            media_id_str
         };
 
         let api = self.get_api().await?;
         api.mark_watched(rating_key).await
     }
 
-    async fn mark_unwatched(&self, media_id: &str) -> Result<()> {
+    async fn mark_unwatched(&self, media_id: &MediaItemId) -> Result<()> {
         // Extract the actual Plex rating key from the composite ID
-        let rating_key = if media_id.contains(':') {
-            media_id.split(':').next_back().unwrap_or(media_id)
+        let media_id_str = media_id.as_str();
+        let rating_key = if media_id_str.contains(':') {
+            media_id_str.split(':').next_back().unwrap_or(media_id_str)
         } else {
-            media_id
+            media_id_str
         };
 
         let api = self.get_api().await?;
         api.mark_unwatched(rating_key).await
     }
 
-    async fn get_watch_status(&self, _media_id: &str) -> Result<super::traits::WatchStatus> {
+    async fn get_watch_status(
+        &self,
+        _media_id: &MediaItemId,
+    ) -> Result<super::traits::WatchStatus> {
         // For now, return a default status - could fetch from API if needed
         // In practice, the watch status is already included in get_movies/shows/episodes
         Ok(super::traits::WatchStatus {
@@ -755,8 +747,8 @@ impl MediaBackend for PlexBackend {
         }
     }
 
-    async fn get_backend_id(&self) -> String {
-        self.backend_id.clone()
+    async fn get_backend_id(&self) -> BackendId {
+        BackendId::new(&self.backend_id)
     }
 
     async fn get_last_sync_time(&self) -> Option<DateTime<Utc>> {
@@ -769,19 +761,19 @@ impl MediaBackend for PlexBackend {
 
     async fn fetch_episode_markers(
         &self,
-        episode_id: &str,
+        episode_id: &MediaItemId,
     ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
         let api = self.get_api().await?;
-        api.fetch_episode_markers(episode_id).await
+        api.fetch_episode_markers(episode_id.as_str()).await
     }
 
     async fn fetch_media_markers(
         &self,
-        media_id: &str,
+        media_id: &MediaItemId,
     ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
         // Plex uses the same API endpoint for both movies and episodes
         let api = self.get_api().await?;
-        api.fetch_episode_markers(media_id).await
+        api.fetch_episode_markers(media_id.as_str()).await
     }
 
     async fn find_next_episode(&self, current_episode: &Episode) -> Result<Option<Episode>> {

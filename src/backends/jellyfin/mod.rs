@@ -17,10 +17,10 @@ use super::traits::{
     BackendInfo, BackendType, ConnectionType, MediaBackend, SearchResults, WatchStatus,
 };
 use crate::models::{
-    AuthProvider, Credentials, Episode, HomeSection, Library, MediaItem, Movie, Show, Source,
-    SourceType, StreamInfo, User,
+    AuthProvider, BackendId, Credentials, Episode, HomeSection, Library, LibraryId, MediaItem,
+    MediaItemId, Movie, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
 };
-use crate::services::auth_manager::AuthManager;
+use crate::services::core::auth::AuthService;
 
 pub struct JellyfinBackend {
     base_url: Arc<RwLock<Option<String>>>,
@@ -31,7 +31,6 @@ pub struct JellyfinBackend {
     api: Arc<RwLock<Option<JellyfinApi>>>,
     server_name: Arc<RwLock<Option<String>>>,
     auth_provider: Option<AuthProvider>,
-    auth_manager: Option<Arc<AuthManager>>,
 }
 
 impl fmt::Debug for JellyfinBackend {
@@ -63,16 +62,11 @@ impl JellyfinBackend {
             api: Arc::new(RwLock::new(None)),
             server_name: Arc::new(RwLock::new(None)),
             auth_provider: None,
-            auth_manager: None,
         }
     }
 
     /// Create a new JellyfinBackend from an AuthProvider and Source
-    pub fn from_auth(
-        auth_provider: AuthProvider,
-        source: Source,
-        auth_manager: Arc<AuthManager>,
-    ) -> Result<Self> {
+    pub fn from_auth(auth_provider: AuthProvider, source: Source) -> Result<Self> {
         // Validate that this is a Jellyfin auth provider
         if !matches!(auth_provider, AuthProvider::JellyfinAuth { .. }) {
             return Err(anyhow!("Invalid auth provider type for Jellyfin backend"));
@@ -104,7 +98,6 @@ impl JellyfinBackend {
             api: Arc::new(RwLock::new(None)),
             server_name: Arc::new(RwLock::new(Some(source.name.clone()))),
             auth_provider: Some(auth_provider),
-            auth_manager: Some(auth_manager),
         })
     }
 
@@ -227,17 +220,18 @@ impl JellyfinBackend {
 
     /// Extract the actual Jellyfin item ID from a composite media ID
     /// Format: "backend_id:library_id:type:item_id" or variations
-    fn extract_jellyfin_item_id(&self, media_id: &str) -> String {
-        if media_id.contains(':') {
+    fn extract_jellyfin_item_id(&self, media_id: &MediaItemId) -> String {
+        let media_id_str = media_id.as_str();
+        if media_id_str.contains(':') {
             // Split and get the last part which should be the item ID
-            media_id
+            media_id_str
                 .split(':')
                 .next_back()
-                .unwrap_or(media_id)
+                .unwrap_or(media_id_str)
                 .to_string()
         } else {
             // If no separator, assume it's already just the item ID
-            media_id.to_string()
+            media_id_str.to_string()
         }
     }
 }
@@ -260,78 +254,62 @@ impl MediaBackend for JellyfinBackend {
                     ..
                 } => {
                     tracing::info!(
-                        "JellyfinBackend::initialize - provider_id: {}, has_token: {}, has_auth_manager: {}",
+                        "JellyfinBackend::initialize - provider_id: {}, has_token: {}",
                         auth_provider.id(),
-                        !access_token.is_empty(),
-                        self.auth_manager.is_some()
+                        !access_token.is_empty()
                     );
 
                     if !access_token.is_empty() {
                         (server_url.clone(), access_token.clone(), user_id.clone())
-                    } else if let Some(auth_manager) = &self.auth_manager {
-                        // Try to get token from keyring via AuthManager
-                        match auth_manager.get_credentials(auth_provider.id(), "token") {
-                            Ok(token) => {
+                    } else {
+                        // Try to get credentials from keyring via AuthService
+                        match AuthService::load_credentials(&SourceId::new(auth_provider.id()))
+                            .await
+                        {
+                            Ok(Some(Credentials::Token { token, .. })) => {
                                 tracing::info!(
                                     "Successfully retrieved token from keyring for {}",
                                     auth_provider.id()
                                 );
                                 (server_url.clone(), token, user_id.clone())
                             }
-                            Err(e) => {
-                                tracing::warn!("Failed to get token from keyring: {}", e);
-                                // Try to get password and re-authenticate
-                                match auth_manager.get_credentials(auth_provider.id(), "password") {
-                                    Ok(password) => {
+                            Ok(Some(Credentials::UsernamePassword { ref password, .. })) => {
+                                tracing::info!("Got password from keyring, re-authenticating...");
+                                // Re-authenticate with username/password
+                                match JellyfinApi::authenticate(server_url, username, &password)
+                                    .await
+                                {
+                                    Ok(auth_response) => {
+                                        // Save the new token
                                         tracing::info!(
-                                            "Got password from keyring, re-authenticating..."
+                                            "Re-authentication successful, saving new token"
                                         );
-                                        // Re-authenticate with username/password
-                                        match JellyfinApi::authenticate(
-                                            server_url, username, &password,
+                                        let token_creds = Credentials::Token {
+                                            token: auth_response.access_token.clone(),
+                                        };
+                                        AuthService::save_credentials(
+                                            &SourceId::new(auth_provider.id()),
+                                            &token_creds,
                                         )
                                         .await
-                                        {
-                                            Ok(auth_response) => {
-                                                // Save the new token
-                                                tracing::info!(
-                                                    "Re-authentication successful, saving new token"
-                                                );
-                                                auth_manager
-                                                    .store_credentials(
-                                                        auth_provider.id(),
-                                                        "token",
-                                                        &auth_response.access_token,
-                                                    )
-                                                    .ok();
-                                                (
-                                                    server_url.clone(),
-                                                    auth_response.access_token,
-                                                    auth_response.user.id,
-                                                )
-                                            }
-                                            Err(e) => {
-                                                error!(
-                                                    "Failed to re-authenticate with Jellyfin: {}",
-                                                    e
-                                                );
-                                                return Ok(None);
-                                            }
-                                        }
+                                        .ok();
+                                        (
+                                            server_url.clone(),
+                                            auth_response.access_token,
+                                            auth_response.user.id,
+                                        )
                                     }
                                     Err(e) => {
-                                        tracing::warn!(
-                                            "No credentials found in AuthProvider or keyring: {}",
-                                            e
-                                        );
+                                        error!("Failed to re-authenticate with Jellyfin: {}", e);
                                         return Ok(None);
                                     }
                                 }
                             }
+                            _ => {
+                                tracing::warn!("No credentials found in keyring");
+                                return Ok(None);
+                            }
                         }
-                    } else {
-                        tracing::warn!("No token in AuthProvider and no AuthManager available");
-                        return Ok(None);
                     }
                 }
                 _ => {
@@ -422,20 +400,20 @@ impl MediaBackend for JellyfinBackend {
         api.get_libraries().await
     }
 
-    async fn get_movies(&self, library_id: &str) -> Result<Vec<Movie>> {
+    async fn get_movies(&self, library_id: &LibraryId) -> Result<Vec<Movie>> {
         let api = self.ensure_api_initialized().await?;
-        api.get_movies(library_id).await
+        api.get_movies(&library_id.to_string()).await
     }
 
-    async fn get_shows(&self, library_id: &str) -> Result<Vec<Show>> {
+    async fn get_shows(&self, library_id: &LibraryId) -> Result<Vec<Show>> {
         let api = self.ensure_api_initialized().await?;
-        api.get_shows(library_id).await
+        api.get_shows(&library_id.to_string()).await
     }
 
-    async fn get_episodes(&self, show_id: &str, season: u32) -> Result<Vec<Episode>> {
+    async fn get_episodes(&self, show_id: &ShowId, season: u32) -> Result<Vec<Episode>> {
         let api = self.ensure_api_initialized().await?;
 
-        let seasons = api.get_seasons(show_id).await?;
+        let seasons = api.get_seasons(&show_id.to_string()).await?;
         if let Some(season_info) = seasons.iter().find(|s| s.season_number == season) {
             return api.get_episodes(&season_info.id).await;
         }
@@ -443,7 +421,7 @@ impl MediaBackend for JellyfinBackend {
         Err(anyhow!("Failed to get seasons"))
     }
 
-    async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo> {
+    async fn get_stream_url(&self, media_id: &MediaItemId) -> Result<StreamInfo> {
         let api = self.ensure_api_initialized().await?;
         let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
 
@@ -463,7 +441,7 @@ impl MediaBackend for JellyfinBackend {
 
     async fn update_progress(
         &self,
-        media_id: &str,
+        media_id: &MediaItemId,
         position: Duration,
         duration: Duration,
     ) -> Result<()> {
@@ -481,19 +459,19 @@ impl MediaBackend for JellyfinBackend {
         Ok(())
     }
 
-    async fn mark_watched(&self, media_id: &str) -> Result<()> {
+    async fn mark_watched(&self, media_id: &MediaItemId) -> Result<()> {
         let api = self.ensure_api_initialized().await?;
         let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
         api.mark_as_watched(&jellyfin_item_id).await
     }
 
-    async fn mark_unwatched(&self, media_id: &str) -> Result<()> {
+    async fn mark_unwatched(&self, media_id: &MediaItemId) -> Result<()> {
         let api = self.ensure_api_initialized().await?;
         let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
         api.mark_as_unwatched(&jellyfin_item_id).await
     }
 
-    async fn get_watch_status(&self, media_id: &str) -> Result<WatchStatus> {
+    async fn get_watch_status(&self, media_id: &MediaItemId) -> Result<WatchStatus> {
         let api = self.ensure_api_initialized().await?;
         let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
 
@@ -531,8 +509,8 @@ impl MediaBackend for JellyfinBackend {
         api.find_next_episode(current_episode).await
     }
 
-    async fn get_backend_id(&self) -> String {
-        self.backend_id.clone()
+    async fn get_backend_id(&self) -> BackendId {
+        BackendId::new(&self.backend_id)
     }
 
     async fn get_last_sync_time(&self) -> Option<DateTime<Utc>> {
@@ -550,7 +528,7 @@ impl MediaBackend for JellyfinBackend {
 
     async fn fetch_media_markers(
         &self,
-        media_id: &str,
+        media_id: &MediaItemId,
     ) -> Result<(
         Option<crate::models::ChapterMarker>,
         Option<crate::models::ChapterMarker>,
