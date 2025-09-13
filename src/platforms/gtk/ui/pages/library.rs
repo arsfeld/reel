@@ -655,7 +655,7 @@ impl LibraryView {
     }
 
     /// LEGACY METHOD: Simplified: Just trigger load on visible cards
-    #[allow(dead_code)]
+
     fn _batch_load_visible_cards_legacy(&self, _start_idx: usize, _end_idx: usize) {
         // Commented out - using reactive bindings instead
         /*

@@ -1,5 +1,3 @@
-use std::path::Path;
-
 fn main() {
     // Only compile GTK resources when GTK feature is enabled
     #[cfg(feature = "gtk")]
@@ -10,6 +8,8 @@ fn main() {
 
 #[cfg(feature = "gtk")]
 fn compile_gtk_resources() {
+    use std::path::Path;
+
     // Compile Blueprint files
     println!("cargo:rerun-if-changed=src/platforms/gtk/ui/blueprints/");
     println!("cargo:rerun-if-changed=src/platforms/gtk/ui/resources.gresource.xml");

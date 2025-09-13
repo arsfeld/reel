@@ -332,7 +332,6 @@ impl Player {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn set_audio_track(&self, track_index: i32) -> Result<()> {
         match self {
             Player::GStreamer(p) => p.set_audio_track(track_index).await,
@@ -340,7 +339,6 @@ impl Player {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn set_subtitle_track(&self, track_index: i32) -> Result<()> {
         match self {
             Player::GStreamer(p) => p.set_subtitle_track(track_index).await,
@@ -348,7 +346,6 @@ impl Player {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn get_current_audio_track(&self) -> i32 {
         match self {
             Player::GStreamer(p) => p.get_current_audio_track().await,
@@ -356,7 +353,6 @@ impl Player {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn get_current_subtitle_track(&self) -> i32 {
         match self {
             Player::GStreamer(p) => p.get_current_subtitle_track().await,

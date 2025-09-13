@@ -29,11 +29,11 @@ pub struct PlayerPage {
     controls: PlayerControls,
     overlay: gtk4::Overlay,
     video_container: gtk4::Box,
-    #[allow(dead_code)] // Used for reactive bindings
+    // Used for reactive bindings
     controls_container: gtk4::Box,
-    #[allow(dead_code)] // Used for reactive bindings
+    // Used for reactive bindings
     top_left_osd: gtk4::Box,
-    #[allow(dead_code)] // Used for reactive bindings
+    // Used for reactive bindings
     top_right_osd: gtk4::Box,
     back_button: gtk4::Button,
     close_button: gtk4::Button,
@@ -1720,7 +1720,7 @@ struct PlayerControls {
     backend: Arc<RwLock<Option<Arc<dyn MediaBackend>>>>,
     current_media_item: Arc<RwLock<Option<MediaItem>>>,
     action_group: gio::SimpleActionGroup,
-    #[allow(dead_code)]
+
     track_menu_retry_count: Arc<RwLock<u8>>,
 }
 
@@ -1762,24 +1762,24 @@ impl PlayerControls {
                 padding: 12px 16px;
                 box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
             }
-            
+
             /* Single progress bar with clean styling */
             .player-controls .progress-bar {
                 min-height: 6px;
             }
-            
+
             .player-controls .progress-bar trough {
                 background-color: rgba(255, 255, 255, 0.15);
                 border-radius: 3px;
                 min-height: 6px;
             }
-            
+
             .player-controls .progress-bar highlight {
                 background-color: rgba(255, 255, 255, 0.9);
                 border-radius: 3px;
                 min-height: 6px;
             }
-            
+
             .player-controls .progress-bar slider {
                 min-width: 12px;
                 min-height: 12px;
@@ -1788,18 +1788,18 @@ impl PlayerControls {
                 margin: -3px 0;
                 box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
             }
-            
+
             .player-controls .progress-bar:hover slider {
                 min-width: 14px;
                 min-height: 14px;
                 margin: -4px 0;
             }
-            
+
             .player-controls .dim-label {
                 font-size: 0.85em;
                 color: rgba(255, 255, 255, 0.8);
             }
-            
+
             .player-controls button.flat {
                 min-width: 32px;
                 min-height: 32px;
@@ -1807,24 +1807,24 @@ impl PlayerControls {
                 margin: 0;
                 color: rgba(255, 255, 255, 0.9);
             }
-            
+
             .player-controls button.flat:hover {
                 background-color: rgba(255, 255, 255, 0.1);
             }
-            
+
             .player-controls button.circular {
                 border-radius: 50%;
             }
-            
+
             /* Fullscreen styling */
             .fullscreen {
                 background-color: black;
             }
-            
+
             .fullscreen .video-container {
                 background-color: black;
             }
-            
+
             .fullscreen .player-controls {
                 margin-bottom: 40px;
                 width: 80%;
@@ -2222,7 +2222,6 @@ impl PlayerControls {
         info!("PlayerControls::set_media_info() - Media info set successfully");
     }
 
-    #[allow(dead_code)]
     pub async fn populate_track_menus(&self) {
         // Create audio tracks menu
         // Log backend + state for context
@@ -2342,7 +2341,6 @@ impl PlayerControls {
         }
     }
 
-    #[allow(dead_code)]
     async fn setup_track_actions(&self) {
         // Use the shared action group from the struct
         let action_group = &self.action_group;

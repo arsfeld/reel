@@ -1,13 +1,18 @@
-#[cfg(feature = "gtk")]
+#[cfg(any(feature = "gtk", feature = "relm4"))]
 pub mod factory;
-#[cfg(feature = "gtk")]
+#[cfg(any(feature = "gtk", feature = "relm4"))]
 pub mod gstreamer_player;
-#[cfg(feature = "gtk")]
+#[cfg(any(feature = "gtk", feature = "relm4"))]
 pub mod mpv_player;
-#[cfg(feature = "gtk")]
-#[cfg(feature = "gtk")]
-pub use factory::{Player, PlayerState};
-#[cfg(feature = "gtk")]
+#[cfg(any(feature = "gtk", feature = "relm4"))]
+pub use factory::Player;
+#[cfg(any(feature = "gtk", feature = "relm4"))]
+#[allow(unused_imports)]
+pub use factory::PlayerState;
+#[cfg(any(feature = "gtk", feature = "relm4"))]
 pub use gstreamer_player::GStreamerPlayer;
-#[cfg(feature = "gtk")]
-pub use mpv_player::{MpvPlayer, UpscalingMode};
+#[cfg(any(feature = "gtk", feature = "relm4"))]
+pub use mpv_player::MpvPlayer;
+#[cfg(any(feature = "gtk", feature = "relm4"))]
+#[allow(unused_imports)]
+pub use mpv_player::UpscalingMode;

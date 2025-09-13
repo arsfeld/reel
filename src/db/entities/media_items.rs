@@ -96,7 +96,7 @@ impl Related<Entity> for Entity {
 impl ActiveModelBehavior for ActiveModel {}
 
 // Media type enum for type safety
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MediaType {
     Movie,
     Show,

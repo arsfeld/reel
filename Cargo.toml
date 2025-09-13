@@ -10,8 +10,9 @@ keywords = ["media", "player", "plex", "jellyfin", "gnome"]
 categories = ["multimedia", "gui"]
 
 [features]
-default = ["gtk"]
+default = ["relm4"]
 gtk = ["dep:gtk4", "dep:gdk4", "dep:gdk-pixbuf", "dep:libadwaita", "dep:glib-build-tools"]
+relm4 = ["dep:relm4", "dep:relm4-components", "dep:relm4-icons", "dep:gtk4", "dep:gdk4", "dep:libadwaita", "dep:tracker"]
 
 [dependencies]
 # GTK and UI (optional for GTK feature)
@@ -19,6 +20,12 @@ gtk4 = { version = "0.10", features = ["v4_14"], optional = true }
 gdk4 = { version = "0.10", features = ["v4_14"], optional = true }
 gdk-pixbuf = { version = "0.21", optional = true }
 libadwaita = { version = "0.8", features = ["v1_5"], optional = true }
+
+# Relm4 (optional for relm4 feature)
+relm4 = { version = "0.10", optional = true }
+relm4-components = { version = "0.10", optional = true }
+relm4-icons = { version = "0.10", optional = true }
+tracker = { version = "0.2", optional = true }
 
 # Media playback
 gstreamer = "0.24"
@@ -70,7 +77,7 @@ webp = "0.3"
 base64 = "0.22"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 sha2 = "0.10"
-lru = "0.12"
+lru = "0.16"
 lazy_static = "1.5"
 
 # Localization
@@ -78,7 +85,7 @@ gettext-rs = { version = "0.7", features = ["gettext-system"] }
 
 [dev-dependencies]
 mockito = "1.7"
-tempfile = "3.21"
+tempfile = "3.22"
 criterion = "0.7"
 
 [build-dependencies]
