@@ -4,8 +4,7 @@ use gstreamer as gst;
 use gstreamer::glib;
 use gstreamer::prelude::*;
 use gtk4::{self, prelude::*};
-use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -21,11 +20,10 @@ pub enum PlayerState {
 }
 
 pub struct GStreamerPlayer {
-    playbin: RefCell<Option<gst::Element>>,
+    playbin: Arc<Mutex<Option<gst::Element>>>,
     state: Arc<RwLock<PlayerState>>,
-    video_widget: RefCell<Option<gtk4::Widget>>,
-    video_sink: RefCell<Option<gst::Element>>,
-    is_playbin3: RefCell<bool>,
+    video_sink: Arc<Mutex<Option<gst::Element>>>,
+    is_playbin3: Arc<Mutex<bool>>,
 }
 
 impl GStreamerPlayer {
@@ -48,11 +46,10 @@ impl GStreamerPlayer {
         Self::check_gstreamer_plugins();
 
         Ok(Self {
-            playbin: RefCell::new(None),
+            playbin: Arc::new(Mutex::new(None)),
             state: Arc::new(RwLock::new(PlayerState::Idle)),
-            video_widget: RefCell::new(None),
-            video_sink: RefCell::new(None),
-            is_playbin3: RefCell::new(false),
+            video_sink: Arc::new(Mutex::new(None)),
+            is_playbin3: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -128,12 +125,10 @@ impl GStreamerPlayer {
         }
 
         // Store the video sink
-        self.video_sink.replace(video_sink);
+        *self.video_sink.lock().unwrap() = video_sink;
 
-        // Store and return the widget
+        // Return the widget
         let widget = picture.upcast::<gtk4::Widget>();
-        self.video_widget.replace(Some(widget.clone()));
-
         info!("GStreamerPlayer::create_video_widget() - Video widget creation complete");
         widget
     }
@@ -513,7 +508,7 @@ impl GStreamerPlayer {
         }
 
         // Clear existing playbin if any
-        if let Some(old_playbin) = self.playbin.borrow().as_ref() {
+        if let Some(old_playbin) = self.playbin.lock().unwrap().as_ref() {
             debug!("GStreamerPlayer::load_media() - Clearing existing playbin");
             old_playbin
                 .set_state(gst::State::Null)
@@ -592,10 +587,10 @@ impl GStreamerPlayer {
         };
 
         // Store whether we're using playbin3
-        self.is_playbin3.replace(is_playbin3);
+        *self.is_playbin3.lock().unwrap() = is_playbin3;
 
         // Use our stored video sink if available
-        if let Some(sink) = self.video_sink.borrow().as_ref() {
+        if let Some(sink) = self.video_sink.lock().unwrap().as_ref() {
             debug!("GStreamerPlayer::load_media() - Setting video sink on playbin");
             playbin.set_property("video-sink", sink);
             info!("GStreamerPlayer::load_media() - Video sink configured");
@@ -612,7 +607,7 @@ impl GStreamerPlayer {
         }
 
         // Store the playbin
-        self.playbin.replace(Some(playbin.clone()));
+        *self.playbin.lock().unwrap() = Some(playbin.clone());
         debug!("GStreamerPlayer::load_media() - Playbin stored");
 
         // Print the pipeline in gst-launch format
@@ -666,7 +661,7 @@ impl GStreamerPlayer {
     pub async fn play(&self) -> Result<()> {
         info!("GStreamerPlayer::play() - Starting playback");
 
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             debug!("GStreamerPlayer::play() - Setting playbin to Playing state");
             match playbin.set_state(gst::State::Playing) {
                 Ok(gst::StateChangeSuccess::Success) => {
@@ -813,7 +808,7 @@ impl GStreamerPlayer {
     pub async fn pause(&self) -> Result<()> {
         debug!("Pausing playback");
 
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             playbin
                 .set_state(gst::State::Paused)
                 .context("Failed to set playbin to paused state")?;
@@ -827,7 +822,7 @@ impl GStreamerPlayer {
     pub async fn stop(&self) -> Result<()> {
         debug!("Stopping playback");
 
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             playbin
                 .set_state(gst::State::Null)
                 .context("Failed to set playbin to null state")?;
@@ -843,7 +838,7 @@ impl GStreamerPlayer {
 
         let position_ns = position.as_nanos() as i64;
 
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             playbin
                 .seek_simple(
                     gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
@@ -855,7 +850,7 @@ impl GStreamerPlayer {
     }
 
     pub async fn get_position(&self) -> Option<Duration> {
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             playbin
                 .query_position::<gst::ClockTime>()
                 .map(|pos| Duration::from_nanos(pos.nseconds()))
@@ -865,7 +860,7 @@ impl GStreamerPlayer {
     }
 
     pub async fn get_duration(&self) -> Option<Duration> {
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             playbin
                 .query_duration::<gst::ClockTime>()
                 .map(|dur| Duration::from_nanos(dur.nseconds()))
@@ -875,14 +870,14 @@ impl GStreamerPlayer {
     }
 
     pub async fn set_volume(&self, volume: f64) -> Result<()> {
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             playbin.set_property("volume", volume);
         }
         Ok(())
     }
 
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             // Get video sink's pad
             if let Some(video_sink) = playbin.property::<Option<gst::Element>>("video-sink")
                 && let Some(sink_pad) = video_sink.static_pad("sink")
@@ -982,7 +977,7 @@ impl GStreamerPlayer {
     pub async fn get_audio_tracks(&self) -> Vec<(i32, String)> {
         let mut tracks = Vec::new();
 
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             // Check playbin state - tracks might not be available until PLAYING
             // On macOS, we need to wait a bit for state to settle
             let timeout = if cfg!(target_os = "macos") {
@@ -994,7 +989,7 @@ impl GStreamerPlayer {
             debug!("Getting audio tracks, playbin state: {:?}", current);
 
             // Check if this is playbin3 (doesn't have n-audio property)
-            let is_playbin3 = *self.is_playbin3.borrow();
+            let is_playbin3 = *self.is_playbin3.lock().unwrap();
 
             let n_audio = if is_playbin3 {
                 // playbin3 doesn't expose track count directly
@@ -1069,7 +1064,7 @@ impl GStreamerPlayer {
     pub async fn get_subtitle_tracks(&self) -> Vec<(i32, String)> {
         let mut tracks = Vec::new();
 
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             // Check playbin state - tracks might not be available until PLAYING
             // On macOS, we need to wait a bit for state to settle
             let timeout = if cfg!(target_os = "macos") {
@@ -1081,7 +1076,7 @@ impl GStreamerPlayer {
             debug!("Getting subtitle tracks, playbin state: {:?}", current);
 
             // Check if this is playbin3
-            let is_playbin3 = *self.is_playbin3.borrow();
+            let is_playbin3 = *self.is_playbin3.lock().unwrap();
 
             let n_text = if is_playbin3 {
                 // playbin3 doesn't expose track count directly
@@ -1159,8 +1154,8 @@ impl GStreamerPlayer {
     }
 
     pub async fn set_audio_track(&self, track_index: i32) -> Result<()> {
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
-            let is_playbin3 = *self.is_playbin3.borrow();
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            let is_playbin3 = *self.is_playbin3.lock().unwrap();
 
             if is_playbin3 {
                 // playbin3 uses signals for track selection
@@ -1178,7 +1173,7 @@ impl GStreamerPlayer {
     }
 
     pub async fn set_subtitle_track(&self, track_index: i32) -> Result<()> {
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             info!("Setting subtitle track to index: {}", track_index);
 
             if track_index < 0 {
@@ -1196,7 +1191,7 @@ impl GStreamerPlayer {
                 );
                 info!("Enabled subtitles - flags set to audio+video+text");
 
-                let is_playbin3 = *self.is_playbin3.borrow();
+                let is_playbin3 = *self.is_playbin3.lock().unwrap();
 
                 if is_playbin3 {
                     // playbin3 uses different approach for subtitle selection
@@ -1218,7 +1213,7 @@ impl GStreamerPlayer {
     }
 
     pub async fn get_current_audio_track(&self) -> i32 {
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             if playbin.has_property("current-audio-stream") {
                 // playbin3 property
                 playbin.property::<i32>("current-audio-stream")
@@ -1234,7 +1229,7 @@ impl GStreamerPlayer {
     }
 
     pub async fn get_current_subtitle_track(&self) -> i32 {
-        if let Some(playbin) = self.playbin.borrow().as_ref() {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             // Check if we have any subtitle tracks available
             let n_text = if playbin.has_property("n-text-streams") {
                 playbin.property::<i32>("n-text-streams")
