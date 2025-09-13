@@ -1,19 +1,19 @@
 use crate::config::Config;
 use crate::models::MediaItemId;
-use crate::player::factory::{Player, PlayerState};
+use crate::player::{PlayerController, PlayerHandle, PlayerState};
 use adw::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
 use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
 pub struct PlayerPage {
     media_item_id: Option<MediaItemId>,
-    player: Option<Arc<RwLock<Player>>>,
+    player: Option<PlayerHandle>,
     player_state: PlayerState,
     position: Duration,
     duration: Duration,
@@ -52,7 +52,6 @@ pub enum PlayerOutput {
 }
 
 pub enum PlayerCommandOutput {
-    PlayerInitialized(Option<Arc<RwLock<Player>>>),
     StateChanged(PlayerState),
     PositionUpdate {
         position: Option<Duration>,
@@ -64,9 +63,6 @@ pub enum PlayerCommandOutput {
 impl std::fmt::Debug for PlayerCommandOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PlayerInitialized(player) => {
-                write!(f, "PlayerInitialized({})", player.is_some())
-            }
             Self::StateChanged(state) => write!(f, "StateChanged({:?})", state),
             Self::PositionUpdate {
                 position,
@@ -184,7 +180,7 @@ impl AsyncComponent for PlayerPage {
         placeholder.set_halign(gtk::Align::Center);
         video_container.append(&placeholder);
 
-        let model = Self {
+        let mut model = Self {
             media_item_id,
             player: None,
             player_state: PlayerState::Idle,
@@ -195,21 +191,40 @@ impl AsyncComponent for PlayerPage {
             video_container: video_container.clone(),
         };
 
-        // Initialize the player
-        sender.oneshot_command(async move {
-            // Create a default config - in real app this would come from settings
-            let config = Config::default();
-            match Player::new(&config) {
-                Ok(player) => {
-                    info!("Player initialized successfully");
-                    PlayerCommandOutput::PlayerInitialized(Some(Arc::new(RwLock::new(player))))
-                }
-                Err(e) => {
-                    error!("Failed to initialize player: {}", e);
-                    PlayerCommandOutput::PlayerInitialized(None)
-                }
+        // Initialize the player controller
+        let config = Config::default();
+        match PlayerController::new(&config) {
+            Ok((handle, controller)) => {
+                info!("Player controller initialized successfully");
+
+                // Spawn the controller task on the main thread's executor
+                // This is needed because Player contains raw pointers that are not Send
+                glib::spawn_future_local(async move {
+                    controller.run().await;
+                });
+
+                // Create video widget synchronously on main thread
+                // Note: We need to spawn this as a local future too
+                let handle_clone = handle.clone();
+                let video_container_clone = model.video_container.clone();
+                glib::spawn_future_local(async move {
+                    if let Ok(video_widget) = handle_clone.create_video_widget().await {
+                        video_container_clone.append(&video_widget);
+                    }
+                });
+
+                model.player = Some(handle);
             }
-        });
+            Err(e) => {
+                error!("Failed to initialize player controller: {}", e);
+                sender
+                    .output(PlayerOutput::Error(format!(
+                        "Failed to initialize player: {}",
+                        e
+                    )))
+                    .unwrap();
+            }
+        }
 
         // Load media if provided
         if let Some(id) = &model.media_item_id {
@@ -237,7 +252,7 @@ impl AsyncComponent for PlayerPage {
                 let media_id = id.clone();
 
                 if let Some(player) = &self.player {
-                    let player_clone = Arc::clone(player);
+                    let player_handle = player.clone();
                     sender.oneshot_command(async move {
                         use crate::services::commands::Command;
                         use crate::services::commands::media_commands::GetStreamUrlCommand;
@@ -259,9 +274,8 @@ impl AsyncComponent for PlayerPage {
 
                         info!("Got stream URL: {}", stream_info.url);
 
-                        // Load the media into the player
-                        let player = player_clone.read().unwrap();
-                        match player.load_media(&stream_info.url).await {
+                        // Load the media into the player using channel-based API
+                        match player_handle.load_media(&stream_info.url).await {
                             Ok(_) => {
                                 info!("Media loaded successfully");
                                 PlayerCommandOutput::StateChanged(PlayerState::Idle)
@@ -276,42 +290,43 @@ impl AsyncComponent for PlayerPage {
             }
             PlayerInput::PlayPause => {
                 if let Some(player) = &self.player {
-                    let player_clone = Arc::clone(player);
+                    let player_handle = player.clone();
                     let current_state = self.player_state.clone();
 
                     sender.oneshot_command(async move {
-                        let player = player_clone.read().unwrap();
-                        match current_state {
+                        let result = match current_state {
                             PlayerState::Playing => {
-                                player.pause().await.ok();
+                                player_handle.pause().await.ok();
                                 PlayerCommandOutput::StateChanged(PlayerState::Paused)
                             }
                             _ => {
-                                player.play().await.ok();
+                                player_handle.play().await.ok();
                                 PlayerCommandOutput::StateChanged(PlayerState::Playing)
                             }
-                        }
+                        };
+                        result
                     });
                 }
             }
             PlayerInput::Stop => {
                 if let Some(player) = &self.player {
-                    let player_clone = Arc::clone(player);
+                    let player_handle = player.clone();
                     sender.oneshot_command(async move {
-                        let player = player_clone.read().unwrap();
-                        player.stop().await.ok();
+                        player_handle.stop().await.ok();
                         PlayerCommandOutput::StateChanged(PlayerState::Stopped)
                     });
                 }
             }
             PlayerInput::Seek(position) => {
                 if let Some(player) = &self.player {
-                    let player_clone = Arc::clone(player);
+                    let player_handle = player.clone();
                     sender.oneshot_command(async move {
-                        let player = player_clone.read().unwrap();
-                        player.seek(position).await.ok();
+                        player_handle.seek(position).await.ok();
                         // Return current state after seek
-                        let state = player.get_state().await;
+                        let state = player_handle
+                            .get_state()
+                            .await
+                            .unwrap_or(PlayerState::Error);
                         PlayerCommandOutput::StateChanged(state)
                     });
                 }
@@ -319,24 +334,28 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::SetVolume(volume) => {
                 self.volume = volume;
                 if let Some(player) = &self.player {
-                    let player_clone = Arc::clone(player);
+                    let player_handle = player.clone();
                     sender.oneshot_command(async move {
-                        let player = player_clone.read().unwrap();
-                        player.set_volume(volume).await.ok();
+                        player_handle.set_volume(volume).await.ok();
                         // Return current state after volume change
-                        let state = player.get_state().await;
+                        let state = player_handle
+                            .get_state()
+                            .await
+                            .unwrap_or(PlayerState::Error);
                         PlayerCommandOutput::StateChanged(state)
                     });
                 }
             }
             PlayerInput::UpdatePosition => {
                 if let Some(player) = &self.player {
-                    let player_clone = Arc::clone(player);
+                    let player_handle = player.clone();
                     sender.oneshot_command(async move {
-                        let player = player_clone.read().unwrap();
-                        let position = player.get_position().await;
-                        let duration = player.get_duration().await;
-                        let state = player.get_state().await;
+                        let position = player_handle.get_position().await.unwrap_or(None);
+                        let duration = player_handle.get_duration().await.unwrap_or(None);
+                        let state = player_handle
+                            .get_state()
+                            .await
+                            .unwrap_or(PlayerState::Error);
                         PlayerCommandOutput::PositionUpdate {
                             position,
                             duration,
@@ -355,30 +374,6 @@ impl AsyncComponent for PlayerPage {
         _root: &Self::Root,
     ) {
         match message {
-            PlayerCommandOutput::PlayerInitialized(player_opt) => {
-                self.player = player_opt.clone();
-                if let Some(ref player) = player_opt {
-                    self.player_state = PlayerState::Idle;
-                    info!("Player backend initialized and ready");
-
-                    // Clear the container and add the actual video widget
-                    while let Some(child) = self.video_container.first_child() {
-                        self.video_container.remove(&child);
-                    }
-
-                    // Get the video widget from the player backend (GLArea for MPV)
-                    let video_widget = {
-                        let player_guard = player.read().unwrap();
-                        player_guard.create_video_widget()
-                    };
-
-                    self.video_container.append(&video_widget);
-                    info!("Video widget (GLArea) added to player");
-                } else {
-                    self.player_state = PlayerState::Error;
-                    error!("Failed to initialize player backend");
-                }
-            }
             PlayerCommandOutput::StateChanged(state) => {
                 self.player_state = state;
             }

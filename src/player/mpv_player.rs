@@ -4,11 +4,10 @@ use gtk4::GLArea;
 use gtk4::{self, glib, prelude::*};
 use libmpv2::Mpv;
 use libmpv2_sys::*;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_void};
 use std::ptr;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,6 +16,20 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 // MPV render update flags
+
+// Wrapper for mpv_render_context pointer to make it Send/Sync
+// Safety: MPV render context is thread-safe when properly synchronized
+struct MpvRenderContextPtr(*mut mpv_render_context);
+unsafe impl Send for MpvRenderContextPtr {}
+unsafe impl Sync for MpvRenderContextPtr {}
+
+// Cached OpenGL function pointers for thread-safe access
+struct OpenGLFunctions {
+    get_proc_address: unsafe extern "C" fn(*const i8) -> *mut c_void,
+}
+
+unsafe impl Send for OpenGLFunctions {}
+unsafe impl Sync for OpenGLFunctions {}
 
 #[derive(Debug, Clone)]
 pub enum PlayerState {
@@ -47,33 +60,32 @@ impl UpscalingMode {
 }
 
 struct MpvPlayerInner {
-    mpv: RefCell<Option<Mpv>>,
-    mpv_gl: RefCell<Option<*mut mpv_render_context>>,
+    mpv: Arc<Mutex<Option<Mpv>>>,
+    mpv_gl: Arc<Mutex<Option<MpvRenderContextPtr>>>,
+    gl_functions: Arc<Mutex<Option<OpenGLFunctions>>>,
     state: Arc<RwLock<PlayerState>>,
-    gl_area: RefCell<Option<GLArea>>,
-    update_callback_registered: Cell<bool>,
-    pending_media_url: RefCell<Option<String>>,
-    last_render_time: RefCell<Instant>,
+    update_callback_registered: Arc<Mutex<bool>>,
+    pending_media_url: Arc<Mutex<Option<String>>>,
+    last_render_time: Arc<Mutex<Instant>>,
     render_count: Arc<AtomicU64>,
-    cached_fbo: Cell<i32>,
-    timer_handle: RefCell<Option<glib::SourceId>>,
+    cached_fbo: Arc<Mutex<i32>>,
+    timer_handle: Arc<Mutex<Option<glib::SourceId>>>,
     verbose_logging: bool,
     cache_size_mb: u32,
     cache_backbuffer_mb: u32,
     cache_secs: u32,
     seek_pending: Arc<Mutex<Option<(f64, Instant)>>>,
-    seek_timer: RefCell<Option<glib::SourceId>>,
+    seek_timer: Arc<Mutex<Option<glib::SourceId>>>,
     last_seek_target: Arc<Mutex<Option<f64>>>,
     upscaling_mode: Arc<Mutex<UpscalingMode>>,
 }
 
 #[derive(Clone)]
 pub struct MpvPlayer {
-    inner: Rc<MpvPlayerInner>,
+    inner: Arc<MpvPlayerInner>,
 }
 
-unsafe impl Send for MpvPlayer {}
-unsafe impl Sync for MpvPlayer {}
+// MpvPlayer is now automatically Send + Sync because all its fields are
 
 impl MpvPlayer {
     pub fn new(config: &Config) -> Result<Self> {
@@ -88,30 +100,34 @@ impl MpvPlayer {
         );
 
         Ok(Self {
-            inner: Rc::new(MpvPlayerInner {
-                mpv: RefCell::new(None),
-                mpv_gl: RefCell::new(None),
+            inner: Arc::new(MpvPlayerInner {
+                mpv: Arc::new(Mutex::new(None)),
+                mpv_gl: Arc::new(Mutex::new(None)),
+                gl_functions: Arc::new(Mutex::new(None)),
                 state: Arc::new(RwLock::new(PlayerState::Idle)),
-                gl_area: RefCell::new(None),
-                update_callback_registered: Cell::new(false),
-                pending_media_url: RefCell::new(None),
-                last_render_time: RefCell::new(Instant::now()),
+                update_callback_registered: Arc::new(Mutex::new(false)),
+                pending_media_url: Arc::new(Mutex::new(None)),
+                last_render_time: Arc::new(Mutex::new(Instant::now())),
                 render_count: Arc::new(AtomicU64::new(0)),
-                cached_fbo: Cell::new(-1),
-                timer_handle: RefCell::new(None),
+                cached_fbo: Arc::new(Mutex::new(-1)),
+                timer_handle: Arc::new(Mutex::new(None)),
                 verbose_logging,
                 cache_size_mb,
                 cache_backbuffer_mb,
                 cache_secs,
                 seek_pending: Arc::new(Mutex::new(None)),
-                seek_timer: RefCell::new(None),
+                seek_timer: Arc::new(Mutex::new(None)),
                 last_seek_target: Arc::new(Mutex::new(None)),
                 upscaling_mode: Arc::new(Mutex::new(UpscalingMode::None)),
             }),
         })
     }
 
-    unsafe extern "C" fn get_proc_address(ctx: *mut c_void, name: *const i8) -> *mut c_void {
+    // Thread-safe proc address function that doesn't access GLArea
+    unsafe extern "C" fn get_proc_address_cached(
+        _ctx: *mut c_void,
+        name: *const i8,
+    ) -> *mut c_void {
         unsafe {
             // Static cache for proc lookups - they never change once resolved
             static mut PROC_CACHE: Option<HashMap<String, *mut c_void>> = None;
@@ -151,11 +167,8 @@ impl MpvPlayer {
                 return cached_proc;
             }
 
-            // Get the GLArea and make context current only if not cached
-            let gl_area = &*(ctx as *const GLArea);
-            if let Some(gl_context) = gl_area.context() {
-                gl_context.make_current();
-            }
+            // NOTE: We don't access GLArea here for thread safety.
+            // The GL context should already be current when this is called from MPV render thread
 
             let mut func = ptr::null_mut();
 
@@ -256,7 +269,7 @@ impl MpvPlayer {
         let is_legacy = gl_context.is_legacy();
         debug!("GL context available - Legacy: {}", is_legacy);
 
-        let mpv = self.inner.mpv.borrow();
+        let mpv = self.inner.mpv.lock().unwrap();
         let mpv = mpv
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("MPV not initialized"))?;
@@ -270,14 +283,14 @@ impl MpvPlayer {
 
             // Create render params
             let api_type = CString::new("opengl").unwrap();
-            let gl_area_ptr = gl_area as *const GLArea as *mut c_void;
 
             // Log API version first
             debug!("Setting up MPV render API with type: opengl");
 
+            // Use the cached proc address function that doesn't need GLArea
             let opengl_params = mpv_opengl_init_params {
-                get_proc_address: Some(Self::get_proc_address),
-                get_proc_address_ctx: gl_area_ptr,
+                get_proc_address: Some(Self::get_proc_address_cached),
+                get_proc_address_ctx: ptr::null_mut(), // No context needed for cached version
             };
 
             let mut params = vec![
@@ -334,10 +347,10 @@ impl MpvPlayer {
             }
 
             // Store the render context
-            self.inner.mpv_gl.replace(Some(mpv_gl));
+            *self.inner.mpv_gl.lock().unwrap() = Some(MpvRenderContextPtr(mpv_gl));
 
             // Set up the update callback with our custom context
-            if !self.inner.update_callback_registered.get() {
+            if !*self.inner.update_callback_registered.lock().unwrap() {
                 // Create update context that just signals frame pending
                 struct UpdateContext {}
 
@@ -348,18 +361,18 @@ impl MpvPlayer {
                     Some(Self::on_mpv_render_update),
                     Box::into_raw(update_ctx) as *mut c_void,
                 );
-                self.inner.update_callback_registered.set(true);
+                *self.inner.update_callback_registered.lock().unwrap() = true;
             }
 
             info!("OpenGL render context initialized");
 
             // Load pending media if any - do this after a small delay to ensure context is ready
-            if let Some(url) = self.inner.pending_media_url.borrow_mut().take() {
+            if let Some(url) = self.inner.pending_media_url.lock().unwrap().take() {
                 debug!("Loading pending media: {}", url);
                 let inner_clone = self.inner.clone();
                 let url_clone = url.clone();
                 glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
-                    if let Some(ref mpv) = *inner_clone.mpv.borrow() {
+                    if let Some(ref mpv) = *inner_clone.mpv.lock().unwrap() {
                         debug!("Actually loading media now: {}", url_clone);
                         if let Err(e) = mpv.command("loadfile", &[&url_clone, "replace"]) {
                             error!("Failed to load pending media: {:?}", e);
@@ -398,7 +411,7 @@ impl MpvPlayer {
             gl_area.make_current();
 
             // Initialize MPV if not done
-            if inner_realize.mpv.borrow().is_none() {
+            if inner_realize.mpv.lock().unwrap().is_none() {
                 match MpvPlayerInner::init_mpv(&inner_realize) {
                     Ok(mpv) => {
                         // Apply initial upscaling mode
@@ -407,7 +420,7 @@ impl MpvPlayer {
                             .apply_upscaling_settings(&mpv, initial_mode)
                             .unwrap_or(());
 
-                        inner_realize.mpv.replace(Some(mpv));
+                        *inner_realize.mpv.lock().unwrap() = Some(mpv);
                     }
                     Err(e) => {
                         error!("Failed to initialize MPV: {}", e);
@@ -430,8 +443,8 @@ impl MpvPlayer {
 
             // Track render performance
             let now = Instant::now();
-            let elapsed = now.duration_since(*inner_render.last_render_time.borrow());
-            inner_render.last_render_time.replace(now);
+            let elapsed = now.duration_since(*inner_render.last_render_time.lock().unwrap());
+            *inner_render.last_render_time.lock().unwrap() = now;
 
             // Only log render performance in verbose mode
             if inner_render.verbose_logging {
@@ -453,7 +466,7 @@ impl MpvPlayer {
             }
 
             // Render the current frame
-            if let Some(mpv_gl) = &*inner_render.mpv_gl.borrow() {
+            if let Some(MpvRenderContextPtr(mpv_gl)) = &*inner_render.mpv_gl.lock().unwrap() {
                 unsafe {
                     let (width, height) = (gl_area.width(), gl_area.height());
 
@@ -473,7 +486,7 @@ impl MpvPlayer {
                     gl_area.attach_buffers();
 
                     // Get or cache the FBO
-                    let fbo = if inner_render.cached_fbo.get() < 0 {
+                    let fbo = if *inner_render.cached_fbo.lock().unwrap() < 0 {
                         // Query FBO only once and cache it
                         static mut GL_GET_INTEGERV: Option<unsafe extern "C" fn(u32, *mut i32)> =
                             None;
@@ -518,10 +531,10 @@ impl MpvPlayer {
                             get_integerv(GL_FRAMEBUFFER_BINDING, &mut current_fbo);
                         }
 
-                        inner_render.cached_fbo.set(current_fbo);
+                        *inner_render.cached_fbo.lock().unwrap() = current_fbo;
                         current_fbo
                     } else {
-                        inner_render.cached_fbo.get()
+                        *inner_render.cached_fbo.lock().unwrap()
                     };
 
                     let flip_y = 1i32; // GTK4 needs Y-flipping
@@ -584,24 +597,24 @@ impl MpvPlayer {
             debug!("GLArea unrealized - cleaning up MPV render context");
 
             // Clean up render context
-            if let Some(mpv_gl) = inner_unrealize.mpv_gl.borrow_mut().take() {
+            if let Some(MpvRenderContextPtr(mpv_gl)) = inner_unrealize.mpv_gl.lock().unwrap().take()
+            {
                 unsafe {
                     mpv_render_context_free(mpv_gl);
                 }
             }
         });
 
-        // Store the GLArea
-        self.inner.gl_area.replace(Some(gl_area.clone()));
+        // Note: We don't store the GLArea to keep the player Send+Sync
 
         // Adaptive timer - only runs when playing and adjusts frequency based on content
         let gl_area_timer = gl_area.clone();
         let inner_timer = inner.clone();
         let timer_id = glib::timeout_add_local(Duration::from_millis(16), move || {
             // Only render if we have a context and video is playing
-            if inner_timer.mpv_gl.borrow().is_some() {
+            if inner_timer.mpv_gl.lock().unwrap().is_some() {
                 // Check if we're actually playing and not seeking
-                if let Some(ref mpv) = *inner_timer.mpv.borrow() {
+                if let Some(ref mpv) = *inner_timer.mpv.lock().unwrap() {
                     // Check if we're seeking - if so, skip automatic render
                     let is_seeking = inner_timer.seek_pending.lock().unwrap().is_some();
                     if !is_seeking
@@ -621,7 +634,7 @@ impl MpvPlayer {
         });
 
         // Store timer handle so we can cancel it on cleanup
-        self.inner.timer_handle.replace(Some(timer_id));
+        *self.inner.timer_handle.lock().unwrap() = Some(timer_id);
 
         debug!("GLArea created with adaptive rendering");
         gl_area.upcast::<gtk4::Widget>()
@@ -637,23 +650,23 @@ impl MpvPlayer {
         }
 
         // Check if render context is initialized
-        if self.inner.mpv_gl.borrow().is_none() {
+        if self.inner.mpv_gl.lock().unwrap().is_none() {
             warn!(
                 "MpvPlayer::load_media() - Render context not initialized yet, deferring media load"
             );
             // Store the URL to load later when render context is ready
-            self.inner.pending_media_url.replace(Some(url.to_string()));
+            *self.inner.pending_media_url.lock().unwrap() = Some(url.to_string());
             return Ok(());
         }
 
         // Initialize MPV if not already done
-        if self.inner.mpv.borrow().is_none() {
+        if self.inner.mpv.lock().unwrap().is_none() {
             let mpv = MpvPlayerInner::init_mpv(&self.inner)?;
-            self.inner.mpv.replace(Some(mpv));
+            *self.inner.mpv.lock().unwrap() = Some(mpv);
         }
 
         // Load the media file
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             mpv.command("loadfile", &[url, "replace"])
                 .map_err(|e| anyhow::anyhow!("Failed to load media: {:?}", e))?;
             debug!("Media loaded successfully");
@@ -667,7 +680,7 @@ impl MpvPlayer {
     pub async fn play(&self) -> Result<()> {
         debug!("Starting playback");
 
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             mpv.set_property("pause", false)
                 .map_err(|e| anyhow::anyhow!("Failed to set pause=false: {:?}", e))?;
 
@@ -687,7 +700,7 @@ impl MpvPlayer {
     pub async fn pause(&self) -> Result<()> {
         debug!("MpvPlayer::pause() - Pausing playback");
 
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             mpv.set_property("pause", true)
                 .map_err(|e| anyhow::anyhow!("Failed to set pause=true: {:?}", e))?;
 
@@ -700,7 +713,7 @@ impl MpvPlayer {
     pub async fn stop(&self) -> Result<()> {
         debug!("MpvPlayer::stop() - Stopping playback with immediate audio cut");
 
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             // IMMEDIATE: Mute volume for instant silence
             if let Err(e) = mpv.command("set", &["volume", "0"]) {
                 warn!("Failed to mute volume during stop: {:?}", e);
@@ -754,7 +767,7 @@ impl MpvPlayer {
         }
 
         // Cancel any existing seek timer
-        if let Some(timer) = self.inner.seek_timer.borrow_mut().take() {
+        if let Some(timer) = self.inner.seek_timer.lock().unwrap().take() {
             timer.remove();
         }
 
@@ -772,7 +785,7 @@ impl MpvPlayer {
             };
 
             if let Some((pos, _timestamp)) = seek_pos
-                && let Some(ref mpv) = *inner.mpv.borrow()
+                && let Some(ref mpv) = *inner.mpv.lock().unwrap()
             {
                 // Use keyframe seeking for speed
                 if let Err(e) = mpv.command("seek", &[&pos.to_string(), "absolute"]) {
@@ -780,19 +793,15 @@ impl MpvPlayer {
                     // Clear last seek target on error
                     let mut last_target = last_seek_target.lock().unwrap();
                     *last_target = None;
-                } else {
-                    // Force a frame update after seeking
-                    if let Some(gl_area) = &*inner.gl_area.borrow() {
-                        gl_area.queue_render();
-                    }
                 }
+                // Note: Frame update will happen on next render cycle
             }
 
             // Clear the timer reference
-            inner.seek_timer.replace(None);
+            *inner.seek_timer.lock().unwrap() = None;
         });
 
-        self.inner.seek_timer.replace(Some(timer_id));
+        *self.inner.seek_timer.lock().unwrap() = Some(timer_id);
         Ok(())
     }
 
@@ -811,7 +820,7 @@ impl MpvPlayer {
         }
 
         // Otherwise return the actual position
-        if let Some(ref mpv) = *self.inner.mpv.borrow()
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
             && let Ok(pos) = mpv.get_property::<f64>("time-pos")
         {
             // Clear the last seek target since we're at the actual position now
@@ -823,7 +832,7 @@ impl MpvPlayer {
     }
 
     pub async fn get_duration(&self) -> Option<Duration> {
-        if let Some(ref mpv) = *self.inner.mpv.borrow()
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
             && let Ok(dur) = mpv.get_property::<f64>("duration")
         {
             return Some(Duration::from_secs_f64(dur));
@@ -832,7 +841,7 @@ impl MpvPlayer {
     }
 
     pub async fn set_volume(&self, volume: f64) -> Result<()> {
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             // MPV expects volume in 0-100 range
             let mpv_volume = (volume * 100.0).clamp(0.0, 100.0);
             mpv.set_property("volume", mpv_volume)
@@ -842,7 +851,7 @@ impl MpvPlayer {
     }
 
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
-        if let Some(ref mpv) = *self.inner.mpv.borrow()
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
             && let (Ok(width), Ok(height)) = (
                 mpv.get_property::<i64>("width"),
                 mpv.get_property::<i64>("height"),
@@ -860,7 +869,7 @@ impl MpvPlayer {
     pub async fn get_audio_tracks(&self) -> Vec<(i32, String)> {
         let mut tracks = Vec::new();
 
-        if let Some(ref mpv) = *self.inner.mpv.borrow()
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
             && let Ok(count) = mpv.get_property::<i64>("track-list/count")
         {
             debug!("mpv: track-list/count={}", count);
@@ -906,7 +915,7 @@ impl MpvPlayer {
         // Add "None" option
         tracks.push((-1, "None".to_string()));
 
-        if let Some(ref mpv) = *self.inner.mpv.borrow()
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
             && let Ok(count) = mpv.get_property::<i64>("track-list/count")
         {
             debug!("mpv: track-list/count={}", count);
@@ -947,7 +956,7 @@ impl MpvPlayer {
     }
 
     pub async fn set_audio_track(&self, track_index: i32) -> Result<()> {
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             mpv.set_property("aid", track_index as i64)
                 .map_err(|e| anyhow::anyhow!("Failed to set audio track: {:?}", e))?;
             debug!("Set audio track to {}", track_index);
@@ -956,7 +965,7 @@ impl MpvPlayer {
     }
 
     pub async fn set_subtitle_track(&self, track_index: i32) -> Result<()> {
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             if track_index < 0 {
                 // Disable subtitles
                 mpv.set_property("sid", "no")
@@ -973,7 +982,7 @@ impl MpvPlayer {
     }
 
     pub async fn get_current_audio_track(&self) -> i32 {
-        if let Some(ref mpv) = *self.inner.mpv.borrow()
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
             && let Ok(aid) = mpv.get_property::<i64>("aid")
         {
             return aid as i32;
@@ -982,7 +991,7 @@ impl MpvPlayer {
     }
 
     pub async fn get_current_subtitle_track(&self) -> i32 {
-        if let Some(ref mpv) = *self.inner.mpv.borrow()
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
             && let Ok(sid) = mpv.get_property::<i64>("sid")
         {
             return sid as i32;
@@ -995,7 +1004,7 @@ impl MpvPlayer {
         *current_mode = mode;
         drop(current_mode);
 
-        if let Some(ref mpv) = *self.inner.mpv.borrow() {
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             self.apply_upscaling_settings(mpv, mode)?;
         }
         Ok(())
@@ -1251,17 +1260,17 @@ impl MpvPlayerInner {
 impl Drop for MpvPlayerInner {
     fn drop(&mut self) {
         // Cancel the timer if it's running
-        if let Some(timer_id) = self.timer_handle.borrow_mut().take() {
+        if let Some(timer_id) = self.timer_handle.lock().unwrap().take() {
             timer_id.remove();
         }
 
         // Cancel the seek timer if it's running
-        if let Some(seek_timer) = self.seek_timer.borrow_mut().take() {
+        if let Some(seek_timer) = self.seek_timer.lock().unwrap().take() {
             seek_timer.remove();
         }
 
         // Clean up render context
-        if let Some(mpv_gl) = self.mpv_gl.borrow_mut().take() {
+        if let Some(MpvRenderContextPtr(mpv_gl)) = self.mpv_gl.lock().unwrap().take() {
             unsafe {
                 mpv_render_context_free(mpv_gl);
             }

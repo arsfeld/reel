@@ -122,7 +122,7 @@ impl BackendService {
                 },
                 "jellyfin" | "JellyfinServer" => SourceType::JellyfinServer,
                 _ => SourceType::LocalFolder {
-                    path: String::new(),
+                    path: std::path::PathBuf::new(),
                 },
             },
             auth_provider_id: entity.auth_provider_id.clone(),
