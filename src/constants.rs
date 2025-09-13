@@ -3,11 +3,11 @@
 
 // === UI Performance ===
 // Library view performance constants
-#[allow(dead_code)]
+
 pub const SCROLL_DEBOUNCE_MS: u64 = 100; // Debounce scroll events to reduce image loading
-#[allow(dead_code)]
+
 pub const IMAGE_VIEWPORT_BUFFER: f64 = 200.0; // Buffer area around viewport for image loading
-#[allow(dead_code)]
+
 pub const CARD_BATCH_SIZE: usize = 20; // Number of cards to load in each batch
 
 // Player UI constants

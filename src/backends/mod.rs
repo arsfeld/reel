@@ -1,9 +1,12 @@
 pub mod jellyfin;
+
 pub mod local;
+
 pub mod plex;
 pub mod traits;
 
 // Re-export commonly used types
+#[allow(unused_imports)]
 pub use traits::MediaBackend;
 
 use anyhow::Result;

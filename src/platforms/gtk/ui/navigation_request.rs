@@ -33,7 +33,7 @@ impl LibraryIdentifier {
 }
 
 /// Navigation context for maintaining state during navigation
-#[allow(dead_code)]
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NavigationContext {
     /// Previous page for back navigation
@@ -45,7 +45,7 @@ pub struct NavigationContext {
 }
 
 /// Window state preservation
-#[allow(dead_code)]
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowState {
     pub is_fullscreen: bool,

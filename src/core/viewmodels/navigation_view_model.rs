@@ -3,7 +3,6 @@ use crate::events::{DatabaseEvent, EventBus, EventPayload, EventType};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageState {
     pub name: String,
@@ -12,7 +11,6 @@ pub struct PageState {
     pub can_go_back: bool,
 }
 
-#[allow(dead_code)]
 impl PageState {
     pub fn new(name: String, title: String) -> Self {
         Self {
@@ -34,7 +32,6 @@ impl PageState {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct HeaderConfig {
     pub title: String,
@@ -44,7 +41,6 @@ pub struct HeaderConfig {
     pub additional_actions: Vec<HeaderAction>,
 }
 
-#[allow(dead_code)]
 impl HeaderConfig {
     pub fn default_with_title(title: String) -> Self {
         Self {
@@ -77,7 +73,6 @@ impl HeaderConfig {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct HeaderAction {
     pub id: String,
@@ -86,7 +81,6 @@ pub struct HeaderAction {
     pub enabled: bool,
 }
 
-#[allow(dead_code)]
 impl HeaderAction {
     pub fn new(id: String, icon: String, tooltip: String) -> Self {
         Self {
@@ -103,7 +97,6 @@ impl HeaderAction {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum NavigationRequest {
     NavigateToPage(PageState),
@@ -113,7 +106,6 @@ pub enum NavigationRequest {
     UpdateHeaderConfig(HeaderConfig),
 }
 
-#[allow(dead_code)]
 pub struct NavigationViewModel {
     // Core navigation state
     current_page: Property<Option<PageState>>,
@@ -143,7 +135,6 @@ impl std::fmt::Debug for NavigationViewModel {
     }
 }
 
-#[allow(dead_code)]
 impl NavigationViewModel {
     pub fn new() -> Self {
         let default_config = HeaderConfig::default_with_title("Reel".to_string());
@@ -514,7 +505,6 @@ impl ViewModel for NavigationViewModel {
         // It's purely UI state management
         tracing::debug!("NavigationViewModel refresh requested (no-op)");
     }
-
 }
 
 impl Default for NavigationViewModel {

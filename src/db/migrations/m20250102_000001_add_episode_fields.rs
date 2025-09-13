@@ -167,7 +167,7 @@ impl MigrationTrait for Migration {
 #[derive(Iden)]
 enum MediaItems {
     Table,
-    #[allow(dead_code)]
+
     Id,
     ParentId,
     SeasonNumber,

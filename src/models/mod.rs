@@ -1,6 +1,8 @@
 mod auth_provider;
+mod identifiers;
 
 pub use auth_provider::{AuthProvider, NetworkAuthType, NetworkCredentialData, Source, SourceType};
+pub use identifiers::{BackendId, LibraryId, MediaItemId, ProviderId, ShowId, SourceId, UserId};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

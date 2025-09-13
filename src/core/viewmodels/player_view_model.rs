@@ -1,4 +1,4 @@
-use super::{Property, PropertySubscriber, ViewModel};
+use super::{ComputedProperty, Property, PropertyLike, PropertySubscriber, ViewModel};
 use crate::core::AppState;
 use crate::events::{DatabaseEvent, EventBus, EventFilter, EventPayload, EventType};
 use crate::models::{ChapterMarker, Episode, MediaItem, StreamInfo};
@@ -8,6 +8,20 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::{error, warn};
+
+// Helper function to format duration into HH:MM:SS or MM:SS
+fn format_duration(duration: Duration) -> String {
+    let total_seconds = duration.as_secs();
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+    } else {
+        format!("{:02}:{:02}", minutes, seconds)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlaybackState {
@@ -85,7 +99,7 @@ pub struct PlayerViewModel {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
+
 pub enum AutoPlayState {
     Idle,
     Counting(u32), // Seconds remaining
@@ -94,7 +108,7 @@ pub enum AutoPlayState {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
+
 pub enum LoadState {
     Idle,
     Loading,
@@ -103,7 +117,7 @@ pub enum LoadState {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-#[allow(dead_code)]
+
 pub struct NextEpisodeInfo {
     pub title: String,
     pub show_title: String,
@@ -261,7 +275,6 @@ impl PlayerViewModel {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn load_next_episode_metadata(&self) -> Result<()> {
         self.next_episode_load_state.set(LoadState::Loading).await;
 
@@ -300,7 +313,6 @@ impl PlayerViewModel {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn play_next_episode_now(&self) {
         // Cancel any active countdown
         if let Some(handle) = self.countdown_handle.lock().await.take() {
@@ -317,7 +329,6 @@ impl PlayerViewModel {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn cancel_auto_play(&self) {
         // Cancel countdown timer
         if let Some(handle) = self.countdown_handle.lock().await.take() {
@@ -326,7 +337,6 @@ impl PlayerViewModel {
         self.auto_play_state.set(AutoPlayState::Idle).await;
     }
 
-    #[allow(dead_code)]
     pub async fn toggle_auto_play(&self) {
         let enabled = !self.auto_play_enabled.get().await;
         self.auto_play_enabled.set(enabled).await;
@@ -339,7 +349,6 @@ impl PlayerViewModel {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn start_auto_play_countdown(&self, duration_seconds: u32) {
         // Cancel any existing countdown
         if let Some(handle) = self.countdown_handle.lock().await.take() {
@@ -374,7 +383,6 @@ impl PlayerViewModel {
         *self.countdown_handle.lock().await = Some(handle);
     }
 
-    #[allow(dead_code)]
     pub async fn handle_playback_near_end(&self) {
         // Check if we're within last 30 seconds
         let position = self.position.get().await;
@@ -394,7 +402,6 @@ impl PlayerViewModel {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn handle_playback_completed(&self) {
         self.playback_state.set(PlaybackState::Stopped).await;
 
@@ -645,22 +652,18 @@ impl PlayerViewModel {
         &self.subtitle_tracks
     }
 
-    #[allow(dead_code)]
     pub fn selected_audio_track(&self) -> &Property<Option<usize>> {
         &self.selected_audio_track
     }
 
-    #[allow(dead_code)]
     pub fn selected_subtitle_track(&self) -> &Property<Option<usize>> {
         &self.selected_subtitle_track
     }
 
-    #[allow(dead_code)]
     pub fn quality_options(&self) -> &Property<Vec<QualityOption>> {
         &self.quality_options
     }
 
-    #[allow(dead_code)]
     pub fn selected_quality(&self) -> &Property<Option<usize>> {
         &self.selected_quality
     }
@@ -669,29 +672,93 @@ impl PlayerViewModel {
         &self.show_controls
     }
 
-    #[allow(dead_code)]
     pub fn auto_play_enabled(&self) -> &Property<bool> {
         &self.auto_play_enabled
     }
 
-    #[allow(dead_code)]
     pub fn auto_play_state(&self) -> &Property<AutoPlayState> {
         &self.auto_play_state
     }
 
-    #[allow(dead_code)]
     pub fn next_episode_thumbnail(&self) -> &Property<Option<Vec<u8>>> {
         &self.next_episode_thumbnail
     }
 
-    #[allow(dead_code)]
     pub fn auto_play_countdown_duration(&self) -> &Property<u32> {
         &self.auto_play_countdown_duration
     }
 
-    #[allow(dead_code)]
     pub fn next_episode_load_state(&self) -> &Property<LoadState> {
         &self.next_episode_load_state
+    }
+
+    // Computed properties for UI
+
+    pub fn countdown_progress(&self) -> ComputedProperty<f64> {
+        ComputedProperty::new(
+            "countdown_progress",
+            vec![
+                Arc::new(self.auto_play_state.clone()) as Arc<dyn PropertyLike>,
+                Arc::new(self.auto_play_countdown_duration.clone()) as Arc<dyn PropertyLike>,
+            ],
+            {
+                let auto_play_state = self.auto_play_state.clone();
+                let countdown_duration = self.auto_play_countdown_duration.clone();
+                move || {
+                    let state = auto_play_state.get_sync();
+                    let total = countdown_duration.get_sync();
+
+                    match state {
+                        AutoPlayState::Counting(remaining) => (remaining as f64) / (total as f64),
+                        _ => 0.0,
+                    }
+                }
+            },
+        )
+    }
+
+    pub fn should_show_next_episode_overlay(&self) -> ComputedProperty<bool> {
+        ComputedProperty::new(
+            "should_show_next_episode_overlay",
+            vec![
+                Arc::new(self.auto_play_state.clone()) as Arc<dyn PropertyLike>,
+                Arc::new(self.next_episode.clone()) as Arc<dyn PropertyLike>,
+            ],
+            {
+                let auto_play_state = self.auto_play_state.clone();
+                let next_episode = self.next_episode.clone();
+                move || {
+                    let state = auto_play_state.get_sync();
+                    let next = next_episode.get_sync();
+
+                    next.is_some() && !matches!(state, AutoPlayState::Idle)
+                }
+            },
+        )
+    }
+
+    pub fn next_episode_info(&self) -> ComputedProperty<NextEpisodeInfo> {
+        ComputedProperty::new(
+            "next_episode_info",
+            vec![Arc::new(self.next_episode.clone()) as Arc<dyn PropertyLike>],
+            {
+                let next_episode = self.next_episode.clone();
+                move || {
+                    let episode = next_episode.get_sync();
+
+                    episode
+                        .as_ref()
+                        .map(|ep| NextEpisodeInfo {
+                            title: ep.title.clone(),
+                            show_title: ep.show_title.clone().unwrap_or_default(),
+                            season_episode: format!("S{}E{}", ep.season_number, ep.episode_number),
+                            duration: format_duration(ep.duration),
+                            summary: ep.overview.clone().unwrap_or_default(),
+                        })
+                        .unwrap_or_default()
+                }
+            },
+        )
     }
 
     pub async fn show_controls_temporarily(&self, delay_secs: u64) {
@@ -706,7 +773,6 @@ impl PlayerViewModel {
         });
     }
 
-    #[allow(dead_code)]
     pub async fn toggle_controls_visibility(&self) {
         let visible = self.show_controls.get().await;
         if visible {
@@ -718,13 +784,11 @@ impl PlayerViewModel {
         }
     }
 
-    #[allow(dead_code)]
     pub fn has_audio_tracks(&self) -> bool {
         // Simple sync check for computed property
         self.audio_tracks.get_sync().len() > 0
     }
 
-    #[allow(dead_code)]
     pub fn has_subtitle_tracks(&self) -> bool {
         // Simple sync check for computed property
         self.subtitle_tracks.get_sync().len() > 0
@@ -793,7 +857,6 @@ impl PlayerViewModel {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn select_audio_track(
         &self,
         track_index: usize,
@@ -812,7 +875,6 @@ impl PlayerViewModel {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn select_subtitle_track(
         &self,
         track_index: Option<usize>,

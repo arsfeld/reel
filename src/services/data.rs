@@ -13,6 +13,7 @@ use crate::db::{
 };
 use crate::events::{DatabaseEvent, EventBus, EventPayload, EventType};
 use crate::models::{Library, MediaItem};
+use crate::services::cache_keys::CacheKey;
 use sea_orm::TransactionTrait;
 
 /// Trait for converting domain models into database entities
@@ -253,8 +254,9 @@ impl DataService {
         // Check memory cache first
         // LRU cache.get() mutates the cache (updates recency), so we need a write lock
         {
+            let cache_key = CacheKey::Media(id.to_string()).to_string();
             let mut cache = self.memory_cache.write().await;
-            if let Some(cached) = cache.get(&format!("media:{}", id))
+            if let Some(cached) = cache.get(&cache_key)
                 && let Ok(item) = serde_json::from_value::<T>(cached.clone())
             {
                 debug!("Media {} found in memory cache", id);
@@ -270,8 +272,9 @@ impl DataService {
                 if let Ok(item) = serde_json::from_value::<T>(value.clone()) {
                     // Update memory cache
                     {
+                        let cache_key = CacheKey::Media(id.to_string()).to_string();
                         let mut cache = self.memory_cache.write().await;
-                        cache.put(format!("media:{}", id), value);
+                        cache.put(cache_key, value);
                     }
                     return Ok(Some(item));
                 }
@@ -451,9 +454,10 @@ impl DataService {
     ) -> Result<()> {
         // Store library list in memory cache for get_cached_libraries to work
         let json_data = serde_json::to_value(libraries)?;
+        let cache_key_str = CacheKey::Media(cache_key.to_string()).to_string();
         {
             let mut cache = self.memory_cache.write().await;
-            cache.put(format!("media:{}", cache_key), json_data);
+            cache.put(cache_key_str.clone(), json_data);
         }
 
         // Emit cache updated event
@@ -462,7 +466,7 @@ impl DataService {
             .publish(DatabaseEvent::new(
                 EventType::CacheUpdated,
                 EventPayload::Cache {
-                    cache_key: Some(format!("media:{}", cache_key)),
+                    cache_key: Some(cache_key_str),
                     cache_type: "memory".to_string(),
                 },
             ))

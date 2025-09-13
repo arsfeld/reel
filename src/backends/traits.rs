@@ -215,6 +215,13 @@ pub enum ConnectionType {
 }
 
 #[derive(Debug, Clone)]
+pub struct BackendOfflineInfo {
+    pub total_items: usize,
+    pub size_mb: usize,
+    pub last_sync: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
 pub struct BackendInfo {
     pub name: String,
     pub display_name: String,
@@ -229,9 +236,26 @@ pub struct BackendInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::entities::sync_status::SyncType;
+    use crate::services::sync::SyncStatus;
     use chrono::Utc;
     use std::collections::HashMap;
     use std::time::Duration;
+
+    #[derive(Debug, Clone)]
+    enum SyncPriority {
+        High,
+        Normal,
+        Low,
+    }
+
+    #[derive(Debug)]
+    struct SyncTask {
+        backend_id: String,
+        sync_type: SyncType,
+        priority: SyncPriority,
+        scheduled_at: DateTime<Utc>,
+    }
 
     #[test]
     fn test_search_results_creation() {

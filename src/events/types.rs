@@ -159,6 +159,7 @@ pub enum EventPayload {
         can_go_back: Option<bool>,
         error: Option<String>,
     },
+    #[cfg(feature = "gtk")]
     NavigationRequest {
         request: Box<crate::platforms::gtk::ui::navigation_request::NavigationRequest>,
     },
