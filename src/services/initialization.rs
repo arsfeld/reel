@@ -1,32 +1,34 @@
 use std::collections::HashMap;
 
-use crate::core::viewmodels::property::Property;
+// ViewModels disabled during Relm4 migration
+// use crate::core::viewmodels::property::Property;
 
 /// Multi-stage reactive initialization state for non-blocking app startup
+/// Note: Simplified during Relm4 migration - Properties replaced with plain values
 #[derive(Clone, Debug)]
 pub struct AppInitializationState {
     // Stage 1: Instant (0ms) - UI can display immediately
-    pub ui_ready: Property<bool>,
-    pub cached_data_loaded: Property<bool>,
+    pub ui_ready: bool,
+    pub cached_data_loaded: bool,
 
     // Stage 2: Background (100-500ms) - Configuration and credentials
-    pub sources_discovered: Property<Vec<SourceInfo>>,
-    pub playback_ready: Property<bool>,
+    pub sources_discovered: Vec<SourceInfo>,
+    pub playback_ready: bool,
 
     // Stage 3: Network-dependent (1-10s) - Active connections
-    pub sources_connected: Property<HashMap<String, SourceReadiness>>,
-    pub sync_ready: Property<bool>,
+    pub sources_connected: HashMap<String, SourceReadiness>,
+    pub sync_ready: bool,
 }
 
 impl AppInitializationState {
     pub fn new() -> Self {
         Self {
-            ui_ready: Property::new(false, "ui_ready"),
-            cached_data_loaded: Property::new(false, "cached_data_loaded"),
-            sources_discovered: Property::new(Vec::new(), "sources_discovered"),
-            playback_ready: Property::new(false, "playback_ready"),
-            sources_connected: Property::new(HashMap::new(), "sources_connected"),
-            sync_ready: Property::new(false, "sync_ready"),
+            ui_ready: false,
+            cached_data_loaded: false,
+            sources_discovered: Vec::new(),
+            playback_ready: false,
+            sources_connected: HashMap::new(),
+            sync_ready: false,
         }
     }
 }

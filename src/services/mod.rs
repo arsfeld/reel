@@ -1,14 +1,15 @@
-pub mod auth_manager;
 pub mod cache_keys;
-pub mod data;
 pub mod initialization;
-pub mod source_coordinator;
-pub mod sync;
 
-pub use auth_manager::AuthManager;
+// Relm4 architecture modules
+pub mod brokers;
+pub mod commands;
+pub mod core;
+pub mod workers;
+
 pub use cache_keys::CacheKey;
-pub use data::DataService;
-// Reactive initialization types - now used by ViewModels for partial initialization handling
+// Reactive initialization types - simplified for Relm4
 pub use initialization::{AppInitializationState, SourceReadiness};
-pub use source_coordinator::SourceCoordinator;
-pub use sync::SyncManager;
+
+// Re-export commonly used service types
+pub use core::sync;

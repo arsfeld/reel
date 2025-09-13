@@ -8,9 +8,11 @@ use tokio::sync::RwLock;
 
 use super::traits::{MediaBackend, SearchResults};
 use crate::models::{
-    AuthProvider, Credentials, Episode, Library, Movie, Show, Source, StreamInfo, User,
+    AuthProvider, BackendId, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Show,
+    ShowId, Source, StreamInfo, User,
 };
-use crate::services::{AuthManager, DataService};
+// Stateful services removed during Relm4 migration
+// use crate::services::{AuthManager, DataService};
 
 #[derive(Debug)]
 pub struct LocalBackend {
@@ -21,12 +23,7 @@ pub struct LocalBackend {
 
 impl LocalBackend {
     /// Create from AuthProvider and Source
-    pub fn from_auth(
-        _provider: AuthProvider,
-        source: Source,
-        _auth_manager: Arc<AuthManager>,
-        _cache: Option<Arc<DataService>>,
-    ) -> Result<Self> {
+    pub fn from_auth(_provider: AuthProvider, source: Source) -> Result<Self> {
         // Extract path from source
         let path = match source.source_type {
             crate::models::SourceType::LocalFolder { path } => path,
@@ -86,22 +83,22 @@ impl MediaBackend for LocalBackend {
         todo!("Local library scanning not yet implemented")
     }
 
-    async fn get_movies(&self, _library_id: &str) -> Result<Vec<Movie>> {
+    async fn get_movies(&self, _library_id: &LibraryId) -> Result<Vec<Movie>> {
         // TODO: Scan local directory for movies
         todo!("Local movie scanning not yet implemented")
     }
 
-    async fn get_shows(&self, _library_id: &str) -> Result<Vec<Show>> {
+    async fn get_shows(&self, _library_id: &LibraryId) -> Result<Vec<Show>> {
         // TODO: Scan local directory for TV shows
         todo!("Local show scanning not yet implemented")
     }
 
-    async fn get_episodes(&self, _show_id: &str, _season: u32) -> Result<Vec<Episode>> {
+    async fn get_episodes(&self, _show_id: &ShowId, _season: u32) -> Result<Vec<Episode>> {
         // TODO: Scan local directory for episodes
         todo!("Local episode scanning not yet implemented")
     }
 
-    async fn get_stream_url(&self, media_id: &str) -> Result<StreamInfo> {
+    async fn get_stream_url(&self, media_id: &MediaItemId) -> Result<StreamInfo> {
         // For local files, the stream URL is just the file path
         Ok(StreamInfo {
             url: format!("file://{}", media_id),
@@ -120,7 +117,7 @@ impl MediaBackend for LocalBackend {
 
     async fn update_progress(
         &self,
-        _media_id: &str,
+        _media_id: &MediaItemId,
         _position: Duration,
         _duration: Duration,
     ) -> Result<()> {
@@ -128,17 +125,20 @@ impl MediaBackend for LocalBackend {
         todo!("Local progress tracking not yet implemented")
     }
 
-    async fn mark_watched(&self, _media_id: &str) -> Result<()> {
+    async fn mark_watched(&self, _media_id: &MediaItemId) -> Result<()> {
         // TODO: Store watched status locally
         todo!("Local mark watched not yet implemented")
     }
 
-    async fn mark_unwatched(&self, _media_id: &str) -> Result<()> {
+    async fn mark_unwatched(&self, _media_id: &MediaItemId) -> Result<()> {
         // TODO: Store unwatched status locally
         todo!("Local mark unwatched not yet implemented")
     }
 
-    async fn get_watch_status(&self, _media_id: &str) -> Result<super::traits::WatchStatus> {
+    async fn get_watch_status(
+        &self,
+        _media_id: &MediaItemId,
+    ) -> Result<super::traits::WatchStatus> {
         // TODO: Get watch status from local storage
         todo!("Local get watch status not yet implemented")
     }
@@ -148,8 +148,8 @@ impl MediaBackend for LocalBackend {
         todo!("Local search not yet implemented")
     }
 
-    async fn get_backend_id(&self) -> String {
-        self.backend_id.clone()
+    async fn get_backend_id(&self) -> BackendId {
+        BackendId::new(&self.backend_id)
     }
 
     async fn get_last_sync_time(&self) -> Option<DateTime<Utc>> {

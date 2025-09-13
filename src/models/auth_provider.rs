@@ -190,3 +190,39 @@ impl Source {
         }
     }
 }
+
+// Convert database SourceModel to domain Source
+impl From<crate::db::entities::SourceModel> for Source {
+    fn from(model: crate::db::entities::SourceModel) -> Self {
+        let source_type = match model.source_type.as_str() {
+            "plex" => SourceType::PlexServer {
+                machine_id: model.id.clone(), // Using id as machine_id for now
+                owned: true,
+            },
+            "jellyfin" => SourceType::JellyfinServer,
+            "local" => SourceType::LocalFolder {
+                path: PathBuf::from(model.connection_url.as_deref().unwrap_or("/")),
+            },
+            _ => SourceType::JellyfinServer, // Default fallback
+        };
+
+        Self {
+            id: model.id,
+            name: model.name,
+            source_type,
+            auth_provider_id: model.auth_provider_id,
+            connection_info: ConnectionInfo {
+                primary_url: model.connection_url,
+                is_online: model.is_online,
+                last_check: model
+                    .last_sync
+                    .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
+            },
+            enabled: true, // Database doesn't have this field, default to true
+            last_sync: model
+                .last_sync
+                .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
+            library_count: 0, // Will be loaded separately
+        }
+    }
+}

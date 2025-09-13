@@ -65,6 +65,12 @@ impl SourceRepositoryImpl {
             base: BaseRepository::new(db, event_bus),
         }
     }
+
+    pub fn new_without_events(db: Arc<DatabaseConnection>) -> Self {
+        Self {
+            base: BaseRepository::new_without_events(db),
+        }
+    }
 }
 
 #[async_trait]
@@ -104,8 +110,10 @@ impl Repository<SourceModel> for SourceRepositoryImpl {
             },
         );
 
-        if let Err(e) = self.base.event_bus.publish(event).await {
-            tracing::warn!("Failed to publish SourceAdded event: {}", e);
+        if let Some(event_bus) = &self.base.event_bus {
+            if let Err(e) = event_bus.publish(event).await {
+                tracing::warn!("Failed to publish SourceAdded event: {}", e);
+            }
         }
 
         Ok(result)
@@ -127,8 +135,10 @@ impl Repository<SourceModel> for SourceRepositoryImpl {
             },
         );
 
-        if let Err(e) = self.base.event_bus.publish(event).await {
-            tracing::warn!("Failed to publish SourceUpdated event: {}", e);
+        if let Some(event_bus) = &self.base.event_bus {
+            if let Err(e) = event_bus.publish(event).await {
+                tracing::warn!("Failed to publish SourceUpdated event: {}", e);
+            }
         }
 
         Ok(result)
@@ -151,8 +161,10 @@ impl Repository<SourceModel> for SourceRepositoryImpl {
                 },
             );
 
-            if let Err(e) = self.base.event_bus.publish(event).await {
-                tracing::warn!("Failed to publish SourceRemoved event: {}", e);
+            if let Some(event_bus) = &self.base.event_bus {
+                if let Err(e) = event_bus.publish(event).await {
+                    tracing::warn!("Failed to publish SourceRemoved event: {}", e);
+                }
             }
         }
 
@@ -197,8 +209,10 @@ impl SourceRepository for SourceRepositoryImpl {
                 },
             );
 
-            if let Err(e) = self.base.event_bus.publish(event).await {
-                tracing::warn!("Failed to publish SourceOnlineStatusChanged event: {}", e);
+            if let Some(event_bus) = &self.base.event_bus {
+                if let Err(e) = event_bus.publish(event).await {
+                    tracing::warn!("Failed to publish SourceOnlineStatusChanged event: {}", e);
+                }
             }
         }
         Ok(())
