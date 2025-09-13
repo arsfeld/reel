@@ -1,4 +1,5 @@
 use gtk::prelude::*;
+use libadwaita as adw;
 use relm4::factory::{DynamicIndex, FactoryComponent, FactorySender, FactoryVecDeque};
 use relm4::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender, gtk};
@@ -6,7 +7,7 @@ use tracing::{debug, error};
 
 use crate::db::connection::DatabaseConnection;
 use crate::models::auth_provider::Source;
-use crate::models::{LibraryId, SourceId};
+use crate::models::{Library, LibraryId, LibraryType, SourceId};
 use crate::services::commands::{Command, auth_commands::LoadSourcesCommand};
 
 // Messages for the sidebar component
@@ -16,140 +17,220 @@ pub enum SidebarInput {
     RefreshSources,
     /// Sources loaded from database
     SourcesLoaded(Vec<Source>),
-    /// Source selected
-    SourceSelected(SourceId),
-    /// Library selected
-    LibrarySelected(LibraryId),
-    /// Toggle source expanded/collapsed
-    ToggleSource(SourceId),
+    /// Libraries loaded for a source
+    LibrariesLoaded(SourceId, Vec<Library>),
+    /// Navigate to home
+    NavigateHome,
+    /// Navigate to library
+    NavigateToLibrary(LibraryId),
+    /// Navigate to source management
+    ManageSources,
+    /// Update connection status
+    UpdateConnectionStatus(String),
 }
 
 #[derive(Debug)]
 pub enum SidebarOutput {
-    /// Navigate to source
-    NavigateToSource(SourceId),
+    /// Navigate to home
+    NavigateToHome,
+    /// Navigate to library
+    NavigateToLibrary(LibraryId),
+    /// Navigate to source management
+    NavigateToSources,
+}
+
+// Source group factory component
+#[derive(Debug)]
+pub struct SourceGroup {
+    source: Source,
+    libraries: Vec<Library>,
+    is_loading: bool,
+}
+
+#[derive(Debug)]
+pub enum SourceGroupInput {
+    /// Load libraries for this source
+    LoadLibraries,
+    /// Libraries loaded
+    LibrariesLoaded(Vec<Library>),
+    /// Refresh this source
+    Refresh,
+}
+
+#[derive(Debug)]
+pub enum SourceGroupOutput {
     /// Navigate to library
     NavigateToLibrary(LibraryId),
 }
 
-// Source factory component for the sidebar
-#[derive(Debug)]
-pub struct SourceItem {
-    source: Source,
-    library_count: usize,
-    is_expanded: bool,
-    is_online: bool,
-}
-
-#[derive(Debug)]
-pub enum SourceItemInput {
-    /// Toggle expanded state
-    Toggle,
-    /// Update online status
-    UpdateStatus(bool),
-    /// Update library count
-    UpdateLibraryCount(usize),
-}
-
-#[derive(Debug)]
-pub enum SourceItemOutput {
-    /// Source was selected
-    SourceSelected(SourceId),
-    /// Source expand state toggled
-    ToggleExpanded(SourceId),
-}
-
 #[relm4::factory(pub)]
-impl FactoryComponent for SourceItem {
+impl FactoryComponent for SourceGroup {
     type Init = Source;
-    type Input = SourceItemInput;
-    type Output = SourceItemOutput;
+    type Input = SourceGroupInput;
+    type Output = SourceGroupOutput;
     type CommandOutput = ();
-    type ParentWidget = gtk::ListBox;
+    type ParentWidget = gtk::Box;
 
     view! {
-        root = gtk::ListBoxRow {
-            set_activatable: true,
-            set_selectable: true,
-            add_css_class: "source-row",
+        root = gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            set_spacing: 18,
 
-            gtk::Box {
-                set_orientation: gtk::Orientation::Horizontal,
-                set_spacing: 12,
-                set_margin_all: 8,
-
-                // Online indicator
-                gtk::Box {
-                    set_width_request: 8,
-                    set_height_request: 8,
-                    set_halign: gtk::Align::Center,
-                    set_valign: gtk::Align::Center,
-                    add_css_class: if self.is_online { "online-indicator" } else { "offline-indicator" },
-                },
-
-                // Source icon (placeholder for now)
-                gtk::Image {
-                    set_icon_name: Some("folder-symbolic"),
-                    set_pixel_size: 16,
-                    add_css_class: "dim-label",
-                },
-
-                // Source info
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    set_spacing: 2,
-                    set_hexpand: true,
-
-                    gtk::Label {
-                        set_text: &self.source.name,
-                        set_halign: gtk::Align::Start,
-                        add_css_class: "heading",
-                    },
-
-                    gtk::Label {
-                        set_text: &format!("{} libraries", self.library_count),
-                        set_halign: gtk::Align::Start,
-                        add_css_class: "dim-label",
-                        add_css_class: "caption",
-                    },
-                },
-
-                // Expand indicator
-                gtk::Image {
-                    set_icon_name: Some(if self.is_expanded { "go-down-symbolic" } else { "go-next-symbolic" }),
-                    set_pixel_size: 12,
-                    add_css_class: "dim-label",
-                },
+            gtk::Label {
+                set_text: &self.source.name,
+                set_halign: gtk::Align::Start,
+                add_css_class: "heading",
+                set_margin_start: 12,
             },
 
-            connect_activate[sender, source_id = self.source.id.clone()] => move |_| {
-                sender.output(SourceItemOutput::SourceSelected(SourceId::new(source_id.clone())));
-            },
+            gtk::ListBox {
+                set_selection_mode: gtk::SelectionMode::None,
+                add_css_class: "boxed-list",
+                set_margin_start: 12,
+                set_margin_end: 12,
+
+                // Movies library
+                gtk::ListBoxRow {
+                    set_activatable: true,
+                    connect_activate => move |_| {
+                        // Will be handled by row activation
+                    },
+
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 12,
+                        set_margin_all: 12,
+
+                        gtk::Image {
+                            set_icon_name: Some("video-x-generic-symbolic"),
+                        },
+
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 2,
+                            set_hexpand: true,
+
+                            gtk::Label {
+                                set_text: "Movies",
+                                set_halign: gtk::Align::Start,
+                                add_css_class: "heading",
+                            },
+
+                            gtk::Label {
+                                set_text: "1,250 items",
+                                set_halign: gtk::Align::Start,
+                                add_css_class: "dim-label",
+                                add_css_class: "caption",
+                            }
+                        },
+
+                        gtk::Image {
+                            set_icon_name: Some("go-next-symbolic"),
+                            add_css_class: "dim-label",
+                        }
+                    }
+                },
+
+                // TV Shows library
+                gtk::ListBoxRow {
+                    set_activatable: true,
+
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 12,
+                        set_margin_all: 12,
+
+                        gtk::Image {
+                            set_icon_name: Some("video-display-symbolic"),
+                        },
+
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 2,
+                            set_hexpand: true,
+
+                            gtk::Label {
+                                set_text: "TV Shows",
+                                set_halign: gtk::Align::Start,
+                                add_css_class: "heading",
+                            },
+
+                            gtk::Label {
+                                set_text: "450 items",
+                                set_halign: gtk::Align::Start,
+                                add_css_class: "dim-label",
+                                add_css_class: "caption",
+                            }
+                        },
+
+                        gtk::Image {
+                            set_icon_name: Some("go-next-symbolic"),
+                            add_css_class: "dim-label",
+                        }
+                    }
+                },
+
+                // Music library
+                gtk::ListBoxRow {
+                    set_activatable: true,
+
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 12,
+                        set_margin_all: 12,
+
+                        gtk::Image {
+                            set_icon_name: Some("audio-x-generic-symbolic"),
+                        },
+
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 2,
+                            set_hexpand: true,
+
+                            gtk::Label {
+                                set_text: "Music",
+                                set_halign: gtk::Align::Start,
+                                add_css_class: "heading",
+                            },
+
+                            gtk::Label {
+                                set_text: "2,890 items",
+                                set_halign: gtk::Align::Start,
+                                add_css_class: "dim-label",
+                                add_css_class: "caption",
+                            }
+                        },
+
+                        gtk::Image {
+                            set_icon_name: Some("go-next-symbolic"),
+                            add_css_class: "dim-label",
+                        }
+                    }
+                }
+            }
         }
     }
 
     fn init_model(source: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
         Self {
-            library_count: source.library_count,
-            is_online: source.connection_info.is_online,
-            is_expanded: false,
             source,
+            libraries: Vec::new(),
+            is_loading: false,
         }
     }
 
-    fn update(&mut self, msg: Self::Input, sender: FactorySender<Self>) {
+    fn update(&mut self, msg: Self::Input, _sender: FactorySender<Self>) {
         match msg {
-            SourceItemInput::Toggle => {
-                self.is_expanded = !self.is_expanded;
-                sender.output(SourceItemOutput::ToggleExpanded(SourceId::new(
-                    self.source.id.clone(),
-                )));
+            SourceGroupInput::LoadLibraries => {
+                self.is_loading = true;
             }
-            SourceItemInput::UpdateStatus(is_online) => {
-                self.is_online = is_online;
+            SourceGroupInput::LibrariesLoaded(libraries) => {
+                self.libraries = libraries;
+                self.is_loading = false;
             }
-            SourceItemInput::UpdateLibraryCount(count) => {
-                self.library_count = count;
+            SourceGroupInput::Refresh => {
+                debug!("Refreshing source: {}", self.source.name);
             }
         }
     }
@@ -159,9 +240,10 @@ impl FactoryComponent for SourceItem {
 #[derive(Debug)]
 pub struct Sidebar {
     db: DatabaseConnection,
-    sources: FactoryVecDeque<SourceItem>,
-    selected_source: Option<SourceId>,
-    selected_library: Option<LibraryId>,
+    source_groups: FactoryVecDeque<SourceGroup>,
+    has_sources: bool,
+    connection_status: String,
+    is_syncing: bool,
 }
 
 #[relm4::component(pub)]
@@ -174,38 +256,174 @@ impl Component for Sidebar {
     view! {
         root = gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
-            set_width_request: 280,
-            add_css_class: "sidebar",
 
-            // Header
-            gtk::HeaderBar {
-                set_show_title_buttons: false,
-                add_css_class: "flat",
-
-                #[wrap(Some)]
-                set_title_widget = &gtk::Label {
-                    set_text: "Sources",
-                    add_css_class: "heading",
-                },
-
-                pack_end = &gtk::Button {
-                    set_icon_name: "list-add-symbolic",
-                    set_tooltip_text: Some("Add Source"),
-                    add_css_class: "flat",
-                },
-            },
-
-            // Sources list
+            // Scrollable content area
             gtk::ScrolledWindow {
+                set_hscrollbar_policy: gtk::PolicyType::Never,
+                set_vscrollbar_policy: gtk::PolicyType::Automatic,
                 set_vexpand: true,
-                set_policy: (gtk::PolicyType::Never, gtk::PolicyType::Automatic),
 
-                #[local_ref]
-                sources_list -> gtk::ListBox {
-                    add_css_class: "navigation-sidebar",
-                    set_selection_mode: gtk::SelectionMode::Single,
-                },
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_margin_top: 12,
+                    set_margin_bottom: 12,
+                    set_margin_start: 12,
+                    set_margin_end: 12,
+                    set_spacing: 12,
+
+                    // Welcome section - shown when no sources
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 24,
+                        set_halign: gtk::Align::Center,
+                        set_valign: gtk::Align::Center,
+                        set_vexpand: true,
+                        set_visible: !model.has_sources,
+
+                        gtk::Image {
+                            set_icon_name: Some("applications-multimedia-symbolic"),
+                            set_pixel_size: 64,
+                            add_css_class: "dim-label",
+                        },
+
+                        gtk::Label {
+                            set_text: "Welcome to Reel",
+                            add_css_class: "title-2",
+                            set_halign: gtk::Align::Center,
+                        },
+
+                        gtk::Label {
+                            set_text: "Connect to your media server to get started",
+                            add_css_class: "body",
+                            set_halign: gtk::Align::Center,
+                        },
+
+                        gtk::Button {
+                            set_label: "Connect to Server",
+                            set_halign: gtk::Align::Center,
+                            add_css_class: "pill",
+                            add_css_class: "suggested-action",
+                            connect_clicked => SidebarInput::ManageSources,
+                        }
+                    },
+
+                    // Home section - shown when sources exist
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 12,
+                        set_visible: model.has_sources,
+
+                        gtk::ListBox {
+                            set_selection_mode: gtk::SelectionMode::None,
+                            add_css_class: "boxed-list",
+
+                            gtk::ListBoxRow {
+                                set_activatable: true,
+
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Horizontal,
+                                    set_spacing: 12,
+                                    set_margin_all: 12,
+
+                                    gtk::Image {
+                                        set_icon_name: Some("user-home-symbolic"),
+                                    },
+
+                                    gtk::Box {
+                                        set_orientation: gtk::Orientation::Vertical,
+                                        set_spacing: 2,
+                                        set_hexpand: true,
+
+                                        gtk::Label {
+                                            set_text: "Home",
+                                            set_halign: gtk::Align::Start,
+                                            add_css_class: "heading",
+                                        },
+
+                                        gtk::Label {
+                                            set_text: "Recently added from all sources",
+                                            set_halign: gtk::Align::Start,
+                                            add_css_class: "dim-label",
+                                            add_css_class: "caption",
+                                        }
+                                    },
+
+                                    gtk::Image {
+                                        set_icon_name: Some("go-next-symbolic"),
+                                    }
+                                },
+
+                                connect_activate => SidebarInput::NavigateHome,
+                            }
+                        }
+                    },
+
+                    // Sources container
+                    #[local_ref]
+                    sources_container -> gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 18,
+                        set_visible: model.has_sources,
+                    },
+
+                    // Status container
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 6,
+                        set_margin_top: 6,
+                        set_visible: model.has_sources,
+
+                        gtk::Image {
+                            set_icon_name: Some("network-transmit-receive-symbolic"),
+                            set_opacity: 0.5,
+                        },
+
+                        gtk::Label {
+                            set_text: &model.connection_status,
+                            add_css_class: "dim-label",
+                            add_css_class: "caption",
+                        },
+
+                        gtk::Spinner {
+                            set_spinning: model.is_syncing,
+                            set_visible: model.is_syncing,
+                            set_margin_start: 6,
+                        }
+                    }
+                }
             },
+
+            // Sticky Sources button at the bottom
+            gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+
+                gtk::Separator {
+                    set_orientation: gtk::Orientation::Horizontal,
+                },
+
+                gtk::Button {
+                    set_margin_top: 12,
+                    set_margin_bottom: 12,
+                    set_margin_start: 12,
+                    set_margin_end: 12,
+                    add_css_class: "pill",
+                    connect_clicked => SidebarInput::ManageSources,
+
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 6,
+                        set_halign: gtk::Align::Center,
+
+                        gtk::Image {
+                            set_icon_name: Some("network-server-symbolic"),
+                        },
+
+                        gtk::Label {
+                            set_text: "Servers & Accounts",
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -214,21 +432,23 @@ impl Component for Sidebar {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let sources = FactoryVecDeque::builder()
-            .launch(gtk::ListBox::default())
+        let source_groups = FactoryVecDeque::builder()
+            .launch(gtk::Box::new(gtk::Orientation::Vertical, 18))
             .forward(sender.input_sender(), |output| match output {
-                SourceItemOutput::SourceSelected(id) => SidebarInput::SourceSelected(id),
-                SourceItemOutput::ToggleExpanded(id) => SidebarInput::ToggleSource(id),
+                SourceGroupOutput::NavigateToLibrary(library_id) => {
+                    SidebarInput::NavigateToLibrary(library_id)
+                }
             });
 
         let model = Self {
             db,
-            sources,
-            selected_source: None,
-            selected_library: None,
+            source_groups,
+            has_sources: false,
+            connection_status: "No sources configured".to_string(),
+            is_syncing: false,
         };
 
-        let sources_list = model.sources.widget();
+        let sources_container = model.source_groups.widget();
         let widgets = view_output!();
 
         // Load initial sources
@@ -241,6 +461,7 @@ impl Component for Sidebar {
         match msg {
             SidebarInput::RefreshSources => {
                 debug!("Refreshing sources from database");
+                self.is_syncing = true;
 
                 // Clone the database connection for the async block
                 let db = self.db.clone();
@@ -264,40 +485,49 @@ impl Component for Sidebar {
 
             SidebarInput::SourcesLoaded(sources) => {
                 debug!("Handling loaded sources: {} sources", sources.len());
-                self.update_sources_list(sources);
+                self.has_sources = !sources.is_empty();
+                self.is_syncing = false;
+
+                if sources.is_empty() {
+                    self.connection_status = "No sources configured".to_string();
+                } else {
+                    self.connection_status = format!("All {} sources connected", sources.len());
+                }
+
+                // Update source groups
+                self.source_groups.guard().clear();
+                for source in sources {
+                    self.source_groups.guard().push_back(source);
+                }
             }
 
-            SidebarInput::SourceSelected(source_id) => {
-                debug!("Source selected: {}", source_id);
-                self.selected_source = Some(source_id.clone());
-                sender.output(SidebarOutput::NavigateToSource(source_id));
+            SidebarInput::LibrariesLoaded(source_id, libraries) => {
+                debug!(
+                    "Loaded {} libraries for source {}",
+                    libraries.len(),
+                    source_id
+                );
+                // Libraries are handled by individual SourceGroup components
             }
 
-            SidebarInput::LibrarySelected(library_id) => {
-                debug!("Library selected: {}", library_id);
-                self.selected_library = Some(library_id.clone());
+            SidebarInput::NavigateHome => {
+                debug!("Navigating to home");
+                sender.output(SidebarOutput::NavigateToHome);
+            }
+
+            SidebarInput::NavigateToLibrary(library_id) => {
+                debug!("Navigating to library: {}", library_id);
                 sender.output(SidebarOutput::NavigateToLibrary(library_id));
             }
 
-            SidebarInput::ToggleSource(source_id) => {
-                debug!("Toggling source: {}", source_id);
-                // TODO: Implement source toggle functionality
-                // This would expand/collapse the source to show its libraries
+            SidebarInput::ManageSources => {
+                debug!("Managing sources");
+                sender.output(SidebarOutput::NavigateToSources);
             }
-        }
-    }
-}
 
-impl Sidebar {
-    fn update_sources_list(&mut self, sources: Vec<Source>) {
-        debug!("Updating sources list with {} sources", sources.len());
-
-        // Clear existing sources
-        self.sources.guard().clear();
-
-        // Add new sources
-        for source in sources {
-            self.sources.guard().push_back(source);
+            SidebarInput::UpdateConnectionStatus(status) => {
+                self.connection_status = status;
+            }
         }
     }
 }

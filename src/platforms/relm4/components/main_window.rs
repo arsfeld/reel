@@ -64,37 +64,76 @@ impl AsyncComponent for MainWindow {
             set_content = &adw::ToolbarView {
                 #[name(header_bar)]
                 add_top_bar = &adw::HeaderBar {
-                    pack_start = &gtk::Button {
+                    set_show_title: false,
+
+                    pack_start = &adw::SplitButton {
                         set_icon_name: "sidebar-show-symbolic",
+                        set_tooltip_text: Some("Toggle Sidebar"),
+                        add_css_class: "flat",
                         connect_clicked => MainWindowInput::ToggleSidebar,
                     },
 
-                    set_title_widget = Some(&adw::WindowTitle::new("Reel", "Media Player")),
+                    #[wrap(Some)]
+                    set_title_widget = &gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 12,
+                        set_halign: gtk::Align::Center,
 
-                    pack_end = &gtk::MenuButton {
-                        set_icon_name: "open-menu-symbolic",
+                        gtk::Image {
+                            set_icon_name: Some("applications-multimedia-symbolic"),
+                            set_pixel_size: 20,
+                        },
+
+                        adw::WindowTitle {
+                            set_title: "Reel",
+                            set_subtitle: "Media Player",
+                        }
+                    },
+
+                    pack_end = &gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 6,
+                        add_css_class: "linked",
+
+                        gtk::Button {
+                            set_icon_name: "system-search-symbolic",
+                            set_tooltip_text: Some("Search Media"),
+                            add_css_class: "flat",
+                        },
+
+                        gtk::MenuButton {
+                            set_icon_name: "open-menu-symbolic",
+                            set_tooltip_text: Some("Main Menu"),
+                            add_css_class: "flat",
+                        }
                     },
                 },
 
                 #[wrap(Some)]
                 set_content = &adw::NavigationSplitView {
-                    set_sidebar_width_fraction: 0.2,
-                    set_min_sidebar_width: 200.0,
-                    set_max_sidebar_width: 300.0,
+                    set_sidebar_width_fraction: 0.25,
+                    set_min_sidebar_width: 280.0,
+                    set_max_sidebar_width: 400.0,
+                    set_show_content: true,
+                    set_collapsed: false,
 
                     #[wrap(Some)]
                     #[name(sidebar_page)]
                     set_sidebar = &adw::NavigationPage {
                         set_title: "Navigation",
+                        set_can_pop: false,
                     },
 
                     #[wrap(Some)]
                     set_content = &adw::NavigationPage {
                         set_title: "Content",
+                        set_can_pop: false,
 
                         #[wrap(Some)]
                         #[name(navigation_view)]
-                        set_child = &adw::NavigationView {},
+                        set_child = &adw::NavigationView {
+                            set_animate_transitions: true,
+                        },
                     },
                 },
             },
@@ -111,8 +150,11 @@ impl AsyncComponent for MainWindow {
             Sidebar::builder()
                 .launch(db.clone())
                 .forward(sender.input_sender(), |output| match output {
-                    SidebarOutput::NavigateToSource(id) => MainWindowInput::NavigateToSource(id),
+                    SidebarOutput::NavigateToHome => MainWindowInput::Navigate("home".to_string()),
                     SidebarOutput::NavigateToLibrary(id) => MainWindowInput::NavigateToLibrary(id),
+                    SidebarOutput::NavigateToSources => {
+                        MainWindowInput::Navigate("sources".to_string())
+                    }
                 });
 
         // Initialize the home page
