@@ -241,6 +241,12 @@ pub struct PlayerHandle {
     sender: mpsc::UnboundedSender<PlayerCommand>,
 }
 
+// PlayerHandle is safe to send between threads since the mpsc channel is Send-safe
+// The underlying Player is accessed only through the PlayerController which runs on
+// the main GTK thread via glib::spawn_future_local
+unsafe impl Send for PlayerHandle {}
+unsafe impl Sync for PlayerHandle {}
+
 impl PlayerHandle {
     /// Create a video widget for rendering
     pub async fn create_video_widget(&self) -> Result<gtk4::Widget> {

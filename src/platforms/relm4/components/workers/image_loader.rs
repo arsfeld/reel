@@ -265,11 +265,7 @@ impl Worker for ImageLoader {
     }
 }
 
-// Helper function to create a shared image loader instance
-static IMAGE_LOADER: std::sync::OnceLock<WorkerHandle<ImageLoader>> = std::sync::OnceLock::new();
-
+// Helper function to create an image loader instance
 pub fn get_image_loader() -> WorkerHandle<ImageLoader> {
-    IMAGE_LOADER
-        .get_or_init(|| ImageLoader::builder().detach_worker(()))
-        .clone()
+    ImageLoader::builder().detach_worker(())
 }

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 
 macro_rules! impl_id_type {
     ($name:ident) => {
@@ -52,6 +53,14 @@ macro_rules! impl_id_type {
         impl AsRef<str> for $name {
             fn as_ref(&self) -> &str {
                 &self.0
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = std::convert::Infallible;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                Ok(Self(s.to_string()))
             }
         }
     };
