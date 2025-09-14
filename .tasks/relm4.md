@@ -42,7 +42,7 @@
 
 **Previously Reported Issues - NOW RESOLVED**:
 1. ✅ Main window has no way of adding connections - **FIXED**: Sources page with Add Source button working
-2. ❌ **Sidebar still shows "Connect to Server" button only** - Despite having sources and libraries in database, sidebar doesn't display them
+2. ✅ **Sidebar still shows "Connect to Server" button only** - **FIXED** - Sidebar now loads real sources and libraries from database
 3. ✅ Initialization doesn't actually initialize anything - **FIXED**: App properly loads sources and libraries on startup
 4. ✅ Auth dialog not showing - **FIXED**: Dialog now properly presents with fallback for missing parent window
 5. ✅ Navigation error with sources page - **FIXED**: NavigationPage instances are now reused to avoid widget parent conflicts
@@ -111,8 +111,8 @@
 - ✅ ~~Jellyfin authentication~~ **FIXED** - Backend integration completed
 - ✅ ~~Connection testing~~ **FIXED** - Wired to BackendService
 - ✅ ~~Sync functionality~~ **FIXED** - Uses SyncService
-- ❌ Media library display (needs data loading)
-- ❌ Playback initialization (player integration incomplete)
+- ✅ Media library display - **FIXED** - Library page loads and displays media items correctly
+- ✅ Playback initialization - **FIXED** - Player properly loads media and plays content
 
 ### 16 TODO Comments Found Indicating Incomplete Features
 
@@ -673,7 +673,7 @@ let source = Source {
 - ⚠️ **Excessive unwrap() calls**
   - 10+ unwrap() calls in navigation handlers
   - No graceful error handling in many places
-  - Panic! in search_worker.rs:273 on init failure
+  - ✅ ~~Panic! in search_worker.rs:273 on init failure~~ **FIXED** - Now returns fallback worker on error
 
 - ⚠️ **Debug Output**
   - Multiple eprintln! calls instead of proper logging
