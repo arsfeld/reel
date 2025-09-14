@@ -1,9 +1,5 @@
 use super::{BaseRepository, Repository};
 use crate::db::entities::{Library, LibraryActiveModel, LibraryModel, libraries};
-use crate::events::{
-    event_bus::EventBus,
-    types::{DatabaseEvent, EventPayload, EventType},
-};
 use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{
@@ -38,15 +34,9 @@ pub struct LibraryRepositoryImpl {
 }
 
 impl LibraryRepositoryImpl {
-    pub fn new(db: Arc<DatabaseConnection>, event_bus: Arc<EventBus>) -> Self {
+    pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self {
-            base: BaseRepository::new(db, event_bus),
-        }
-    }
-
-    pub fn new_without_events(db: Arc<DatabaseConnection>) -> Self {
-        Self {
-            base: BaseRepository::new_without_events(db),
+            base: BaseRepository::new(db),
         }
     }
 }
@@ -93,23 +83,10 @@ impl Repository<LibraryModel> for LibraryRepositoryImpl {
             .exec(self.base.db.as_ref())
             .await?;
 
-        // Emit LibraryDeleted event if entity existed
-        if let Some(library) = entity {
-            let event = DatabaseEvent::new(
-                EventType::LibraryDeleted,
-                EventPayload::Library {
-                    id: library.id.clone(),
-                    source_id: library.source_id.clone(),
-                    item_count: Some(library.item_count),
-                },
-            );
-
-            if let Some(event_bus) = &self.base.event_bus {
-                if let Err(e) = event_bus.publish(event).await {
-                    tracing::warn!("Failed to publish LibraryDeleted event: {}", e);
-                }
-            }
-        }
+        // TODO: Broadcast via MessageBroker when needed
+        // if entity.is_some() {
+        //     BROKER.notify_library_updated(id.to_string()).await;
+        // }
 
         Ok(())
     }
@@ -142,21 +119,8 @@ impl LibraryRepository for LibraryRepositoryImpl {
             active_model.updated_at = Set(chrono::Utc::now().naive_utc());
             let updated_library = active_model.update(self.base.db.as_ref()).await?;
 
-            // Emit LibraryItemCountChanged event
-            let event = DatabaseEvent::new(
-                EventType::LibraryItemCountChanged,
-                EventPayload::Library {
-                    id: updated_library.id.clone(),
-                    source_id: updated_library.source_id.clone(),
-                    item_count: Some(updated_library.item_count),
-                },
-            );
-
-            if let Some(event_bus) = &self.base.event_bus {
-                if let Err(e) = event_bus.publish(event).await {
-                    tracing::warn!("Failed to publish LibraryItemCountChanged event: {}", e);
-                }
-            }
+            // TODO: Broadcast via MessageBroker when needed
+            // BROKER.notify_library_updated(updated_library.id.clone()).await;
         }
         Ok(())
     }

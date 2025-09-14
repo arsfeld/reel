@@ -21,7 +21,7 @@ pub struct MediaService;
 impl MediaService {
     /// Get all libraries (optionally filtered by source)
     pub async fn get_libraries(db: &DatabaseConnection) -> Result<Vec<Library>> {
-        let repo = LibraryRepositoryImpl::new_without_events(db.clone());
+        let repo = LibraryRepositoryImpl::new(db.clone());
         let models = repo
             .find_all()
             .await
@@ -39,7 +39,7 @@ impl MediaService {
         db: &DatabaseConnection,
         source_id: &SourceId,
     ) -> Result<Vec<Library>> {
-        let repo = LibraryRepositoryImpl::new_without_events(db.clone());
+        let repo = LibraryRepositoryImpl::new(db.clone());
         let models = repo
             .find_by_source(&source_id.to_string())
             .await
@@ -57,7 +57,7 @@ impl MediaService {
         db: &DatabaseConnection,
         library_id: &LibraryId,
     ) -> Result<Option<Library>> {
-        let repo = LibraryRepositoryImpl::new_without_events(db.clone());
+        let repo = LibraryRepositoryImpl::new(db.clone());
         let model = repo
             .find_by_id(&library_id.to_string())
             .await
@@ -75,7 +75,7 @@ impl MediaService {
         library: Library,
         source_id: &SourceId,
     ) -> Result<()> {
-        let repo = LibraryRepositoryImpl::new_without_events(db.clone());
+        let repo = LibraryRepositoryImpl::new(db.clone());
 
         // Convert to entity
         let entity = LibraryModel {
@@ -108,7 +108,7 @@ impl MediaService {
         offset: u32,
         limit: u32,
     ) -> Result<Vec<MediaItem>> {
-        let repo = MediaRepositoryImpl::new_without_events(db.clone());
+        let repo = MediaRepositoryImpl::new(db.clone());
 
         // Use paginated query if no media type filter is needed
         let items = if media_type.is_none() {
@@ -153,7 +153,7 @@ impl MediaService {
         db: &DatabaseConnection,
         item_id: &MediaItemId,
     ) -> Result<Option<MediaItem>> {
-        let repo = MediaRepositoryImpl::new_without_events(db.clone());
+        let repo = MediaRepositoryImpl::new(db.clone());
         let model = repo
             .find_by_id(&item_id.to_string())
             .await
@@ -181,7 +181,7 @@ impl MediaService {
         library_id: &LibraryId,
         source_id: &SourceId,
     ) -> Result<()> {
-        let repo = MediaRepositoryImpl::new_without_events(db.clone());
+        let repo = MediaRepositoryImpl::new(db.clone());
 
         // Convert to entity
         let entity = convert_media_item_to_entity(item.clone(), library_id, source_id)?;
@@ -223,7 +223,7 @@ impl MediaService {
         library_id: Option<&LibraryId>,
         media_type: Option<MediaType>,
     ) -> Result<Vec<MediaItem>> {
-        let repo = MediaRepositoryImpl::new_without_events(db.clone());
+        let repo = MediaRepositoryImpl::new(db.clone());
 
         // TODO: Add library-specific search to repository
         // For now, search all and filter if needed
@@ -269,7 +269,7 @@ impl MediaService {
 
     /// Get recently added media
     pub async fn get_recently_added(db: &DatabaseConnection, limit: u32) -> Result<Vec<MediaItem>> {
-        let repo = MediaRepositoryImpl::new_without_events(db.clone());
+        let repo = MediaRepositoryImpl::new(db.clone());
         let models = repo
             .find_recently_added(limit as usize)
             .await
@@ -287,8 +287,8 @@ impl MediaService {
         db: &DatabaseConnection,
         limit: u32,
     ) -> Result<Vec<MediaItem>> {
-        let playback_repo = PlaybackRepositoryImpl::new_without_events(db.clone());
-        let media_repo = MediaRepositoryImpl::new_without_events(db.clone());
+        let playback_repo = PlaybackRepositoryImpl::new(db.clone());
+        let media_repo = MediaRepositoryImpl::new(db.clone());
 
         // Get items with progress
         let progress_items = playback_repo
@@ -309,7 +309,7 @@ impl MediaService {
 
     /// Clear all media for a library
     pub async fn clear_library(db: &DatabaseConnection, library_id: &LibraryId) -> Result<()> {
-        let repo = MediaRepositoryImpl::new_without_events(db.clone());
+        let repo = MediaRepositoryImpl::new(db.clone());
         repo.delete_by_library(&library_id.to_string())
             .await
             .context("Failed to clear library")
@@ -318,10 +318,10 @@ impl MediaService {
     /// Clear all data for a source
     pub async fn clear_source(db: &DatabaseConnection, source_id: &SourceId) -> Result<()> {
         // Use repositories without transactions for now - they handle their own transactions
-        let media_repo = MediaRepositoryImpl::new_without_events(db.clone());
+        let media_repo = MediaRepositoryImpl::new(db.clone());
         media_repo.delete_by_source(&source_id.to_string()).await?;
 
-        let lib_repo = LibraryRepositoryImpl::new_without_events(db.clone());
+        let lib_repo = LibraryRepositoryImpl::new(db.clone());
         lib_repo.delete_by_source(&source_id.to_string()).await?;
 
         Ok(())
@@ -335,7 +335,7 @@ impl MediaService {
         duration_ms: i64,
         watched: bool,
     ) -> Result<()> {
-        let repo = PlaybackRepositoryImpl::new_without_events(db.clone());
+        let repo = PlaybackRepositoryImpl::new(db.clone());
 
         // Use None for user_id for now (single-user system)
         if watched {

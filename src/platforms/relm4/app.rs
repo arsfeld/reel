@@ -18,6 +18,10 @@ impl ReelApp {
     }
 
     pub fn run(self) -> anyhow::Result<()> {
+        // Force dark theme - no user preference
+        let style_manager = adw::StyleManager::default();
+        style_manager.set_color_scheme(adw::ColorScheme::ForceDark);
+
         // Set global CSS matching GTK library styles exactly
         relm4::set_global_css(
             r#"
@@ -72,8 +76,8 @@ impl ReelApp {
                 text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
             }
             .dim-label {
-                opacity: 0.55;
-                color: rgba(255, 255, 255, 0.6);
+                opacity: 0.7;
+                color: rgba(255, 255, 255, 0.7);
                 font-size: 14px;
             }
 

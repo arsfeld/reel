@@ -17,7 +17,7 @@ impl PlaybackService {
         user_id: &str,
         item_id: &MediaItemId,
     ) -> Result<Option<PlaybackProgressModel>> {
-        let repo = PlaybackRepositoryImpl::new_without_events(db.clone());
+        let repo = PlaybackRepositoryImpl::new(db.clone());
         repo.find_by_media_and_user(&item_id.to_string(), user_id)
             .await
             .context("Failed to get playback progress")
@@ -31,7 +31,7 @@ impl PlaybackService {
         position: Duration,
         duration: Duration,
     ) -> Result<()> {
-        let repo = PlaybackRepositoryImpl::new_without_events(db.clone());
+        let repo = PlaybackRepositoryImpl::new(db.clone());
 
         let progress_pct = if duration.as_secs() > 0 {
             (position.as_secs() as f64 / duration.as_secs() as f64 * 100.0) as i32
@@ -93,7 +93,7 @@ impl PlaybackService {
         user_id: &str,
         item_id: &MediaItemId,
     ) -> Result<()> {
-        let repo = PlaybackRepositoryImpl::new_without_events(db.clone());
+        let repo = PlaybackRepositoryImpl::new(db.clone());
         if let Some(mut progress) = repo
             .find_by_media_and_user(&item_id.to_string(), user_id)
             .await?
@@ -114,7 +114,7 @@ impl PlaybackService {
         user_id: &str,
         limit: Option<u64>,
     ) -> Result<Vec<String>> {
-        let repo = PlaybackRepositoryImpl::new_without_events(db.clone());
+        let repo = PlaybackRepositoryImpl::new(db.clone());
         let progress_items = repo.find_watched(Some(user_id)).await?;
 
         Ok(progress_items
@@ -130,7 +130,7 @@ impl PlaybackService {
         user_id: &str,
         limit: u64,
     ) -> Result<Vec<PlaybackProgressModel>> {
-        let repo = PlaybackRepositoryImpl::new_without_events(db.clone());
+        let repo = PlaybackRepositoryImpl::new(db.clone());
         let items = repo
             .find_in_progress(Some(user_id))
             .await
@@ -140,7 +140,7 @@ impl PlaybackService {
 
     /// Clean up old playback records
     pub async fn cleanup_old_progress(db: &DatabaseConnection, days_old: i64) -> Result<usize> {
-        let repo = PlaybackRepositoryImpl::new_without_events(db.clone());
+        let repo = PlaybackRepositoryImpl::new(db.clone());
         let cutoff = chrono::Utc::now().naive_utc() - chrono::Duration::days(days_old);
 
         // Use cleanup_old_entries method
@@ -152,7 +152,7 @@ impl PlaybackService {
 
     /// Calculate total watch time for a user
     pub async fn get_total_watch_time(db: &DatabaseConnection, user_id: &str) -> Result<Duration> {
-        let repo = PlaybackRepositoryImpl::new_without_events(db.clone());
+        let repo = PlaybackRepositoryImpl::new(db.clone());
         let all_progress = repo.find_watched(Some(user_id)).await?;
 
         let total_ms: i64 = all_progress

@@ -74,7 +74,7 @@ impl AsyncComponent for HomePage {
                     set_orientation: gtk::Orientation::Vertical,
                     set_margin_all: 24,
                     set_margin_top: 0,
-                    set_spacing: 36,
+                    set_spacing: 48,
 
                     // Continue Watching section
                     gtk::Box {
@@ -86,7 +86,7 @@ impl AsyncComponent for HomePage {
                         gtk::Label {
                             set_text: "Continue Watching",
                             set_halign: gtk::Align::Start,
-                            add_css_class: "title-3",
+                            add_css_class: "title-2",
                         },
 
                         gtk::ScrolledWindow {
@@ -115,7 +115,7 @@ impl AsyncComponent for HomePage {
                         gtk::Label {
                             set_text: "Recently Added",
                             set_halign: gtk::Align::Start,
-                            add_css_class: "title-3",
+                            add_css_class: "title-2",
                         },
 
                         gtk::ScrolledWindow {
@@ -178,31 +178,14 @@ impl AsyncComponent for HomePage {
                         }
                     },
 
-                    // Empty state
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 12,
-                        set_valign: gtk::Align::Center,
-                        set_vexpand: true,
-                        set_margin_all: 48,
+                    // Empty state - modern design with large icon
+                    adw::StatusPage {
                         #[watch]
                         set_visible: !model.is_loading && model.continue_watching_factory.is_empty() && model.recently_added_factory.is_empty(),
-
-                        gtk::Image {
-                            set_icon_name: Some("folder-music-symbolic"),
-                            set_pixel_size: 128,
-                            add_css_class: "dim-label",
-                        },
-
-                        gtk::Label {
-                            set_text: "No Media Found",
-                            add_css_class: "title-2",
-                        },
-
-                        gtk::Label {
-                            set_text: "Add a source from the sidebar to get started",
-                            add_css_class: "dim-label",
-                        },
+                        set_icon_name: Some("folder-videos-symbolic"),
+                        set_title: "Welcome to Reel",
+                        set_description: Some("Add a source from the sidebar to start watching"),
+                        add_css_class: "compact",
                     }
                 },
             },
@@ -266,7 +249,7 @@ impl AsyncComponent for HomePage {
                     // For now, get the models directly from the repository
                     // TODO: Update command to return MediaItemModel or convert MediaItem
                     use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
-                    let repo = MediaRepositoryImpl::new_without_events(db.clone());
+                    let repo = MediaRepositoryImpl::new(db.clone());
 
                     match repo.find_recently_added(20).await {
                         Ok(items) => {

@@ -1,3 +1,4 @@
+use crate::platforms::relm4::components::shared::broker::{BROKER, DataMessage, SourceMessage};
 use anyhow::{Context, Result};
 use chrono::NaiveDateTime;
 use sea_orm::TransactionTrait;
@@ -17,6 +18,12 @@ use crate::services::core::media::MediaService;
 pub struct SyncService;
 
 impl SyncService {
+    /// Estimate total items for sync progress tracking
+    async fn estimate_total_items(backend: &dyn MediaBackend) -> Result<Option<i32>> {
+        // For now, we can't estimate total items without fetching all libraries
+        // This would be too expensive, so we'll track progress per batch instead
+        Ok(None)
+    }
     /// Sync all libraries for a source
     pub async fn sync_source(
         db: &DatabaseConnection,
@@ -26,6 +33,14 @@ impl SyncService {
         info!("Starting sync for source: {}", source_id);
 
         let mut result = SyncResult::default();
+
+        // Try to get total items count for better progress tracking
+        let total_items = Self::estimate_total_items(backend).await.ok().flatten();
+
+        // Notify sync started with total items if available
+        BROKER
+            .notify_sync_started(source_id.to_string(), total_items.map(|v| v as usize))
+            .await;
 
         // Mark sync as in progress
         Self::update_sync_status(db, source_id, SyncStatus::InProgress, None).await?;
@@ -61,12 +76,23 @@ impl SyncService {
                     Some(chrono::Utc::now().naive_utc()),
                 )
                 .await?;
+
+                // Notify sync completed
+                BROKER
+                    .notify_sync_completed(source_id.to_string(), result.items_synced)
+                    .await;
             }
             Err(e) => {
                 result
                     .errors
                     .push(format!("Failed to get libraries: {}", e));
                 Self::update_sync_status(db, source_id, SyncStatus::Failed, None).await?;
+
+                // Notify sync error
+                BROKER
+                    .notify_sync_error(source_id.to_string(), e.to_string())
+                    .await;
+
                 return Err(e.context("Failed to sync source"));
             }
         }
@@ -126,7 +152,8 @@ impl SyncService {
 
         // Save items in batches
         let batch_size = 100;
-        for chunk in items.chunks(batch_size) {
+        let total_items = items.len();
+        for (index, chunk) in items.chunks(batch_size).enumerate() {
             MediaService::save_media_items_batch(
                 db,
                 chunk.to_vec(),
@@ -135,6 +162,12 @@ impl SyncService {
             )
             .await?;
             items_synced += chunk.len();
+
+            // Notify progress
+            let current = std::cmp::min((index + 1) * batch_size, total_items);
+            BROKER
+                .notify_sync_progress(source_id.to_string(), current, total_items)
+                .await;
         }
 
         // Sync episodes for TV shows
@@ -202,7 +235,7 @@ impl SyncService {
         db: &DatabaseConnection,
         source_id: &SourceId,
     ) -> Result<Option<SyncStatusModel>> {
-        let repo = SyncRepositoryImpl::new_without_events(db.clone());
+        let repo = SyncRepositoryImpl::new(db.clone());
         repo.find_latest_for_source(&source_id.to_string())
             .await
             .context("Failed to get sync status")
@@ -215,7 +248,7 @@ impl SyncService {
         status: SyncStatus,
         last_sync: Option<NaiveDateTime>,
     ) -> Result<()> {
-        let repo = SyncRepositoryImpl::new_without_events(db.clone());
+        let repo = SyncRepositoryImpl::new(db.clone());
 
         let entity = SyncStatusModel {
             id: 0, // Will be auto-generated
@@ -229,6 +262,7 @@ impl SyncService {
                 None
             },
             items_synced: 0,
+            total_items: None,
             error_message: None,
         };
 
@@ -251,8 +285,16 @@ impl SyncService {
             Some(s) => SyncProgress {
                 is_syncing: s.status == "running",
                 items_synced: s.items_synced as usize,
-                total_items: 0, // TODO: Add total_items field to sync_status table
-                percentage: 0,  // Can't calculate without total_items
+                total_items: s.total_items.unwrap_or(0) as usize,
+                percentage: if let Some(total) = s.total_items {
+                    if total > 0 {
+                        ((s.items_synced as f32 / total as f32) * 100.0) as u32
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                },
             },
             None => SyncProgress::default(),
         })
