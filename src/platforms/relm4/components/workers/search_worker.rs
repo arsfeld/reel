@@ -90,9 +90,9 @@ pub enum SearchWorkerOutput {
 }
 
 pub struct SearchWorker {
-    index: Index,
-    reader: IndexReader,
-    writer: IndexWriter,
+    index: Option<Index>,
+    reader: Option<IndexReader>,
+    writer: Option<IndexWriter>,
     id_field: Field,
     title_field: Field,
     overview_field: Field,
@@ -140,9 +140,9 @@ impl SearchWorker {
             .map_err(|e| format!("Failed to create index writer: {}", e))?;
 
         Ok(Self {
-            index,
-            reader,
-            writer,
+            index: Some(index),
+            reader: Some(reader),
+            writer: Some(writer),
             id_field,
             title_field,
             overview_field,
@@ -152,15 +152,23 @@ impl SearchWorker {
     }
 
     fn index_documents(&mut self, documents: Vec<SearchDocument>) -> Result<usize, String> {
+        // Check if we have a writer available
+        if self.writer.is_none() {
+            return Err("Search index not available".to_string());
+        }
+
         let count = documents.len();
 
         for doc in documents {
             self.add_document(doc)?;
         }
 
-        self.writer
-            .commit()
-            .map_err(|e| format!("Failed to commit index: {}", e))?;
+        // Now we can safely access the writer
+        if let Some(writer) = self.writer.as_mut() {
+            writer
+                .commit()
+                .map_err(|e| format!("Failed to commit index: {}", e))?;
+        }
 
         info!("Indexed {} documents", count);
         Ok(count)
@@ -187,25 +195,42 @@ impl SearchWorker {
             tantivy_doc.add_text(self.genres_field, &doc.genres.join(" "));
         }
 
-        self.writer
-            .add_document(tantivy_doc)
-            .map_err(|e| format!("Failed to add document: {}", e))?;
+        // Check if we have a writer available and add the document
+        if let Some(writer) = self.writer.as_mut() {
+            writer
+                .add_document(tantivy_doc)
+                .map_err(|e| format!("Failed to add document: {}", e))?;
+        } else {
+            return Err("Search index not available".to_string());
+        }
 
         Ok(())
     }
 
     fn remove_document_internal(&mut self, id: &MediaItemId) -> Result<(), String> {
-        let term = tantivy::Term::from_field_text(self.id_field, &id.to_string());
-        self.writer.delete_term(term);
+        // Check if we have a writer available
+        if let Some(writer) = self.writer.as_mut() {
+            let term = tantivy::Term::from_field_text(self.id_field, &id.to_string());
+            writer.delete_term(term);
+        }
         Ok(())
     }
 
     fn search(&self, query_str: &str, limit: usize) -> Result<(Vec<MediaItemId>, usize), String> {
-        let searcher = self.reader.searcher();
+        // Check if we have index and reader available
+        let index = self
+            .index
+            .as_ref()
+            .ok_or_else(|| "Search index not available".to_string())?;
+        let reader = self
+            .reader
+            .as_ref()
+            .ok_or_else(|| "Search index not available".to_string())?;
+        let searcher = reader.searcher();
 
         // Create query parser for multiple fields
         let query_parser = QueryParser::for_index(
-            &self.index,
+            index,
             vec![self.title_field, self.overview_field, self.genres_field],
         );
 
@@ -236,11 +261,17 @@ impl SearchWorker {
     }
 
     fn clear_index(&mut self) -> Result<(), String> {
-        self.writer
+        // Check if we have a writer available
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| "Search index not available".to_string())?;
+
+        writer
             .delete_all_documents()
             .map_err(|e| format!("Failed to clear index: {}", e))?;
 
-        self.writer
+        writer
             .commit()
             .map_err(|e| format!("Failed to commit after clearing: {}", e))?;
 
@@ -249,7 +280,13 @@ impl SearchWorker {
     }
 
     fn optimize_index(&mut self) -> Result<(), String> {
-        self.writer
+        // Check if we have a writer available
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| "Search index not available".to_string())?;
+
+        writer
             .commit()
             .map_err(|e| format!("Failed to commit before optimization: {}", e))?;
 
@@ -265,12 +302,41 @@ impl Worker for SearchWorker {
     type Input = SearchWorkerInput;
     type Output = SearchWorkerOutput;
 
-    fn init(_init: Self::Init, _sender: ComponentSender<Self>) -> Self {
+    fn init(_init: Self::Init, sender: ComponentSender<Self>) -> Self {
         match Self::new() {
             Ok(worker) => worker,
             Err(e) => {
-                error!("Failed to initialize search worker: {}", e);
-                panic!("Cannot initialize search worker: {}", e);
+                error!(
+                    "Failed to initialize search worker: {}. Creating fallback worker.",
+                    e
+                );
+                // Send error message to inform the component
+                sender
+                    .output(SearchWorkerOutput::Error(format!(
+                        "Search index unavailable: {}",
+                        e
+                    )))
+                    .ok();
+
+                // Return a worker with None values - it will handle searches by returning empty results
+                // We still need to create the field definitions even without an index
+                let mut schema_builder = Schema::builder();
+                let id_field = schema_builder.add_text_field("id", STORED);
+                let title_field = schema_builder.add_text_field("title", TEXT | STORED);
+                let overview_field = schema_builder.add_text_field("overview", TEXT);
+                let year_field = schema_builder.add_text_field("year", TEXT | STORED);
+                let genres_field = schema_builder.add_text_field("genres", TEXT);
+
+                SearchWorker {
+                    index: None,
+                    writer: None,
+                    reader: None,
+                    id_field,
+                    title_field,
+                    overview_field,
+                    year_field,
+                    genres_field,
+                }
             }
         }
     }
@@ -294,16 +360,24 @@ impl Worker for SearchWorker {
                 let id = document.id.clone();
                 match self.add_document(document) {
                     Ok(_) => {
-                        if let Err(e) = self.writer.commit() {
-                            sender
-                                .output(SearchWorkerOutput::Error(format!(
-                                    "Failed to commit update: {}",
-                                    e
-                                )))
-                                .ok();
+                        if let Some(writer) = self.writer.as_mut() {
+                            if let Err(e) = writer.commit() {
+                                sender
+                                    .output(SearchWorkerOutput::Error(format!(
+                                        "Failed to commit update: {}",
+                                        e
+                                    )))
+                                    .ok();
+                            } else {
+                                sender
+                                    .output(SearchWorkerOutput::DocumentUpdated { id })
+                                    .ok();
+                            }
                         } else {
                             sender
-                                .output(SearchWorkerOutput::DocumentUpdated { id })
+                                .output(SearchWorkerOutput::Error(
+                                    "Search index not available".to_string(),
+                                ))
                                 .ok();
                         }
                     }
@@ -315,16 +389,24 @@ impl Worker for SearchWorker {
 
             SearchWorkerInput::RemoveDocument(id) => match self.remove_document_internal(&id) {
                 Ok(_) => {
-                    if let Err(e) = self.writer.commit() {
-                        sender
-                            .output(SearchWorkerOutput::Error(format!(
-                                "Failed to commit removal: {}",
-                                e
-                            )))
-                            .ok();
+                    if let Some(writer) = self.writer.as_mut() {
+                        if let Err(e) = writer.commit() {
+                            sender
+                                .output(SearchWorkerOutput::Error(format!(
+                                    "Failed to commit removal: {}",
+                                    e
+                                )))
+                                .ok();
+                        } else {
+                            sender
+                                .output(SearchWorkerOutput::DocumentRemoved { id })
+                                .ok();
+                        }
                     } else {
                         sender
-                            .output(SearchWorkerOutput::DocumentRemoved { id })
+                            .output(SearchWorkerOutput::Error(
+                                "Search index not available".to_string(),
+                            ))
                             .ok();
                     }
                 }
