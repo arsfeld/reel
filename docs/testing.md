@@ -12,6 +12,8 @@ This document outlines the comprehensive testing strategy for the Relm4-based me
 3. **Type Safety First**: Leverage Rust's type system and our typed IDs to prevent runtime errors
 4. **Async-Aware**: Properly test async components, commands, and workers
 5. **Real Database Testing**: Use in-memory SQLite for integration tests
+6. **Message-Driven Testing**: Test component communication through the MessageBroker system
+7. **Race Condition Prevention**: Ensure sync operations are properly coordinated through messages
 
 ### Testing Pyramid
 ```
@@ -242,25 +244,64 @@ async fn test_library_deletion_cascade() {
 }
 ```
 
-#### MessageBroker Tests
-Test inter-component messaging:
+#### MessageBroker Tests (Implemented)
+Test inter-component messaging with the new BROKER system:
 
 ```rust
 #[tokio::test]
 async fn test_message_broker_routing() {
-    let broker = MessageBroker::<AppMessage>::new();
+    // Use the global BROKER instance
+    let component_id = "TestComponent".to_string();
+    let (tx, mut rx) = relm4::channel::<BrokerMessage>();
 
-    // Register subscribers
-    let mut sub1 = broker.subscribe();
-    let mut sub2 = broker.subscribe();
+    // Subscribe to broker
+    BROKER.subscribe(component_id.clone(), tx).await;
 
-    // Send message
-    broker.send(AppMessage::MediaUpdated(MediaItemId::new()));
+    // Send sync started message
+    BROKER.notify_sync_started("test-source".to_string(), Some(100)).await;
 
-    // Verify all subscribers receive message
-    let msg1 = sub1.recv().await.unwrap();
-    let msg2 = sub2.recv().await.unwrap();
-    assert_eq!(msg1, msg2);
+    // Verify message received
+    let msg = rx.recv().await.unwrap();
+    assert!(matches!(
+        msg,
+        BrokerMessage::Source(SourceMessage::SyncStarted { .. })
+    ));
+
+    // Test progress updates
+    BROKER.notify_sync_progress("test-source".to_string(), 50, 100).await;
+
+    let msg = rx.recv().await.unwrap();
+    assert!(matches!(
+        msg,
+        BrokerMessage::Source(SourceMessage::SyncProgress { current: 50, total: 100, .. })
+    ));
+
+    // Clean up
+    BROKER.unsubscribe(&component_id).await;
+}
+
+#[tokio::test]
+async fn test_component_subscription_pattern() {
+    // Test the pattern used in SourcesPage
+    let (component_tx, mut component_rx) = relm4::channel::<TestInput>();
+    let (broker_tx, mut broker_rx) = relm4::channel::<BrokerMessage>();
+
+    // Subscribe to broker
+    BROKER.subscribe("TestComponent".to_string(), broker_tx).await;
+
+    // Spawn forwarding task (as done in components)
+    tokio::spawn(async move {
+        while let Some(msg) = broker_rx.recv().await {
+            component_tx.send(TestInput::BrokerMsg(msg)).unwrap();
+        }
+    });
+
+    // Send message through broker
+    BROKER.notify_sync_completed("test-source".to_string(), 42).await;
+
+    // Verify component receives wrapped message
+    let msg = component_rx.recv().await.unwrap();
+    assert!(matches!(msg, TestInput::BrokerMsg(_)));
 }
 ```
 
@@ -368,7 +409,13 @@ pub async fn create_test_database() -> Arc<DatabaseConnection> {
 }
 
 pub async fn seed_test_data(db: &DatabaseConnection) {
-    // Add test sources, libraries, and media items
+    // Implemented in tests/common/fixtures.rs
+    // Creates comprehensive test data including:
+    // - Sources (Plex, Jellyfin)
+    // - Libraries (Movies, TV Shows, Music)
+    // - Media items with metadata
+    // - Playback progress
+    // - User preferences
 }
 ```
 
@@ -391,19 +438,44 @@ impl<C: Component> TestComponentBuilder<C> {
 }
 ```
 
-### Mock Services
+### Mock Services (Implemented)
 ```rust
+// tests/common/mocks/backend.rs
 pub struct MockBackend {
     responses: HashMap<String, serde_json::Value>,
+    error_mode: Option<ErrorMode>,
+    delay: Option<Duration>,
+}
+
+impl MockBackend {
+    pub fn with_error(mut self, error: ErrorMode) -> Self {
+        self.error_mode = Some(error);
+        self
+    }
+
+    pub fn with_delay(mut self, delay: Duration) -> Self {
+        self.delay = Some(delay);
+        self
+    }
 }
 
 #[async_trait]
 impl MediaBackend for MockBackend {
     async fn get_libraries(&self) -> Result<Vec<Library>> {
+        if let Some(delay) = self.delay {
+            tokio::time::sleep(delay).await;
+        }
+
+        if let Some(error) = &self.error_mode {
+            return Err(error.to_anyhow());
+        }
+
         Ok(serde_json::from_value(
             self.responses.get("libraries").unwrap().clone()
         )?)
     }
+
+    // All MediaBackend methods implemented with mock responses
 }
 ```
 
@@ -439,11 +511,20 @@ impl MediaBackend for MockBackend {
 - Verify cascade operations
 - Test concurrent access patterns
 
-## Test Organization
+## Test Organization (Implemented)
 
 ### Directory Structure
 ```
 tests/
+├── common/
+│   ├── mod.rs              # Test utilities and setup
+│   ├── fixtures.rs         # Test data fixtures
+│   ├── builders.rs         # Model builders for tests
+│   └── mocks/
+│       ├── mod.rs
+│       ├── backend.rs      # MockBackend implementation
+│       ├── player.rs       # MockPlayer implementation
+│       └── keyring.rs      # MockKeyring implementation
 ├── unit/
 │   ├── components/
 │   │   ├── sidebar_test.rs
@@ -499,56 +580,170 @@ test:
 
 ## Test Data Management
 
-### Fixtures
+### Fixtures (Implemented in tests/common/fixtures.rs)
 ```rust
 pub mod fixtures {
-    pub fn movie_fixture() -> MediaItemModel {
-        MediaItemModel {
-            id: MediaItemId::from_str("test-movie-1").unwrap(),
+    use crate::models::*;
+    use chrono::Utc;
+
+    pub fn movie_fixture() -> MediaItem {
+        MediaItem::Movie(Movie {
+            id: MediaItemId::from("test-movie-1"),
             title: "Test Movie".to_string(),
-            media_type: MediaType::Movie,
-            // ...
+            year: Some(2024),
+            overview: Some("A test movie for unit tests".to_string()),
+            rating: Some(8.5),
+            duration: Some(120),
+            genres: vec!["Action".to_string(), "Adventure".to_string()],
+            cast: vec![],
+            crew: vec![],
+            poster_path: Some("/posters/test-movie.jpg".to_string()),
+            backdrop_path: Some("/backdrops/test-movie.jpg".to_string()),
+            trailer_url: None,
+            imdb_id: Some("tt1234567".to_string()),
+            tmdb_id: Some("12345".to_string()),
+            studio: Some("Test Studios".to_string()),
+            tagline: None,
+            added_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+    }
+
+    pub fn show_fixture() -> MediaItem {
+        MediaItem::Show(Show {
+            id: ShowId::from("test-show-1"),
+            title: "Test Show".to_string(),
+            year: Some(2024),
+            overview: Some("A test TV show".to_string()),
+            rating: Some(9.0),
+            seasons: vec![season_fixture()],
+            genres: vec!["Drama".to_string()],
+            network: Some("Test Network".to_string()),
+            status: Some("Continuing".to_string()),
+            poster_path: Some("/posters/test-show.jpg".to_string()),
+            backdrop_path: Some("/backdrops/test-show.jpg".to_string()),
+            added_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+    }
+
+    pub fn library_fixture() -> Library {
+        Library {
+            id: LibraryId::from("test-library-1"),
+            title: "Test Movies".to_string(),
+            library_type: LibraryType::Movies,
+            item_count: 100,
+            source_id: SourceId::from("test-source-1"),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         }
     }
 
-    pub fn library_fixture() -> LibraryModel {
-        LibraryModel {
-            id: LibraryId::from_str("test-library-1").unwrap(),
-            name: "Test Library".to_string(),
-            library_type: LibraryType::Movies,
-            // ...
+    pub fn source_fixture(source_type: SourceType) -> Source {
+        Source {
+            id: SourceId::from("test-source-1"),
+            name: match source_type {
+                SourceType::PlexServer { .. } => "Test Plex Server",
+                SourceType::JellyfinServer => "Test Jellyfin Server",
+                _ => "Test Source",
+            }.to_string(),
+            source_type,
+            connection_info: ConnectionInfo {
+                url: "http://localhost:32400".to_string(),
+                requires_auth: true,
+            },
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         }
     }
 }
 ```
 
-### Test Data Builders
+### Test Data Builders (Implemented in tests/common/builders.rs)
 ```rust
 pub struct MediaItemBuilder {
-    item: MediaItemModel,
+    media_type: MediaType,
+    title: String,
+    year: Option<i32>,
+    rating: Option<f32>,
+    watched: bool,
+    progress: Option<f32>,
 }
 
 impl MediaItemBuilder {
-    pub fn new() -> Self {
+    pub fn movie() -> Self {
         Self {
-            item: MediaItemModel::default(),
+            media_type: MediaType::Movie,
+            title: "Test Movie".to_string(),
+            year: Some(2024),
+            rating: None,
+            watched: false,
+            progress: None,
+        }
+    }
+
+    pub fn show() -> Self {
+        Self {
+            media_type: MediaType::Show,
+            title: "Test Show".to_string(),
+            year: Some(2024),
+            rating: None,
+            watched: false,
+            progress: None,
         }
     }
 
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
-        self.item.title = title.into();
+        self.title = title.into();
+        self
+    }
+
+    pub fn with_year(mut self, year: i32) -> Self {
+        self.year = Some(year);
+        self
+    }
+
+    pub fn with_rating(mut self, rating: f32) -> Self {
+        self.rating = Some(rating);
         self
     }
 
     pub fn with_watched(mut self) -> Self {
-        self.item.watched = true;
+        self.watched = true;
         self
     }
 
-    pub fn build(self) -> MediaItemModel {
-        self.item
+    pub fn with_progress(mut self, progress: f32) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    pub fn build(self) -> MediaItem {
+        match self.media_type {
+            MediaType::Movie => MediaItem::Movie(Movie {
+                id: MediaItemId::new(),
+                title: self.title,
+                year: self.year,
+                rating: self.rating,
+                // ... other fields with defaults
+            }),
+            MediaType::Show => MediaItem::Show(Show {
+                id: ShowId::new(),
+                title: self.title,
+                year: self.year,
+                rating: self.rating,
+                // ... other fields with defaults
+            }),
+            _ => panic!("Unsupported media type in builder"),
+        }
     }
 }
+
+// Additional builders implemented:
+// - LibraryBuilder
+// - SourceBuilder
+// - PlaybackProgressBuilder
+// - UserPreferencesBuilder
 ```
 
 ## Debugging Tests
