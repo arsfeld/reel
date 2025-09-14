@@ -10,7 +10,7 @@ use super::pages::{
     HomePage, LibraryPage, MovieDetailsPage, PlayerPage, PreferencesPage, ShowDetailsPage,
     SourcesPage,
 };
-use super::sidebar::{Sidebar, SidebarOutput};
+use super::sidebar::{Sidebar, SidebarInput, SidebarOutput};
 use crate::db::connection::DatabaseConnection;
 use crate::models::{LibraryId, MediaItemId, SourceId};
 
@@ -24,7 +24,9 @@ pub struct MainWindow {
     show_details_page: Option<AsyncController<ShowDetailsPage>>,
     player_page: Option<AsyncController<PlayerPage>>,
     sources_page: Option<AsyncController<SourcesPage>>,
+    sources_nav_page: Option<adw::NavigationPage>,
     preferences_page: Option<AsyncController<PreferencesPage>>,
+    preferences_nav_page: Option<adw::NavigationPage>,
     auth_dialog: AsyncController<AuthDialog>,
     navigation_view: adw::NavigationView,
     // Window chrome management
@@ -37,10 +39,15 @@ pub struct MainWindow {
     content_stack: gtk::Stack,
     back_button: gtk::Button,
     content_title: adw::WindowTitle,
+    // Header bar dynamic content
+    header_start_box: gtk::Box,
+    header_end_box: gtk::Box,
     // Window state for restoration
     saved_window_size: Option<(i32, i32)>,
     was_maximized: bool,
     was_fullscreen: bool,
+    // Current navigation state
+    current_library_id: Option<LibraryId>,
 }
 
 #[derive(Debug)]
@@ -51,8 +58,12 @@ pub enum MainWindowInput {
     NavigateToMediaItem(MediaItemId),
     NavigateToPlayer(MediaItemId),
     ToggleSidebar,
+    SyncSource(SourceId),
     RestoreWindowChrome,
     ResizeWindow(i32, i32),
+    SetHeaderStartContent(Option<gtk::Widget>),
+    SetHeaderEndContent(Option<gtk::Widget>),
+    ClearHeaderContent,
 }
 
 #[derive(Debug)]
@@ -140,9 +151,23 @@ impl AsyncComponent for MainWindow {
                                 connect_clicked => MainWindowInput::ToggleSidebar,
                             },
 
+                            // Dynamic header start content (after sidebar button)
+                            #[name(header_start_box)]
+                            pack_start = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 6,
+                            },
+
                             #[wrap(Some)]
                             #[name(content_title)]
                             set_title_widget = &adw::WindowTitle::new("Select a Library", ""),
+
+                            // Dynamic header end content
+                            #[name(header_end_box)]
+                            pack_end = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 6,
+                            },
 
                             pack_end = &gtk::Button {
                                 set_icon_name: "system-search-symbolic",
@@ -243,7 +268,8 @@ impl AsyncComponent for MainWindow {
                 .forward(sender.input_sender(), |output| match output {
                     AuthDialogOutput::SourceAdded(source_id) => {
                         tracing::info!("Source added: {:?}", source_id);
-                        MainWindowInput::Navigate("sources".to_string())
+                        // Trigger a sync of the new source
+                        MainWindowInput::SyncSource(source_id)
                     }
                     AuthDialogOutput::Cancelled => {
                         tracing::info!("Auth dialog cancelled");
@@ -261,7 +287,9 @@ impl AsyncComponent for MainWindow {
             show_details_page: None,
             player_page: None,
             sources_page: None,
+            sources_nav_page: None,
             preferences_page: None,
+            preferences_nav_page: None,
             navigation_view: adw::NavigationView::new(),
             content_header: adw::HeaderBar::new(),
             sidebar_header: adw::HeaderBar::new(),
@@ -271,9 +299,12 @@ impl AsyncComponent for MainWindow {
             content_stack: gtk::Stack::new(),
             back_button: gtk::Button::new(),
             content_title: adw::WindowTitle::new("", ""),
+            header_start_box: gtk::Box::new(gtk::Orientation::Horizontal, 6),
+            header_end_box: gtk::Box::new(gtk::Orientation::Horizontal, 6),
             saved_window_size: None,
             was_maximized: false,
             was_fullscreen: false,
+            current_library_id: None,
         };
 
         let widgets = view_output!();
@@ -309,6 +340,8 @@ impl AsyncComponent for MainWindow {
         model.content_stack.clone_from(&widgets.content_stack);
         model.back_button.clone_from(&widgets.back_button);
         model.content_title.clone_from(&widgets.content_title);
+        model.header_start_box.clone_from(&widgets.header_start_box);
+        model.header_end_box.clone_from(&widgets.header_end_box);
 
         // Start with empty state shown
         widgets.content_stack.set_visible_child_name("empty");
@@ -333,6 +366,9 @@ impl AsyncComponent for MainWindow {
                 });
         }
 
+        // Trigger initial sync of all sources after a short delay to let UI initialize
+        sender.input(MainWindowInput::Navigate("init_sync".to_string()));
+
         AsyncComponentParts { model, widgets }
     }
 
@@ -350,7 +386,95 @@ impl AsyncComponent for MainWindow {
                         // Check if we have pages to pop (more than 1 page in stack)
                         if self.navigation_view.navigation_stack().n_items() > 1 {
                             self.navigation_view.pop();
+
+                            // Clear any custom header content when going back
+                            sender.input(MainWindowInput::ClearHeaderContent);
+
+                            // Check if we're back on Sources page and restore its header button
+                            if let Some(page) = self.navigation_view.visible_page() {
+                                if page.title() == "Sources" {
+                                    // Re-add the "Add Source" button to the header
+                                    let add_button = gtk::Button::builder()
+                                        .icon_name("list-add-symbolic")
+                                        .tooltip_text("Add Source")
+                                        .css_classes(vec!["suggested-action"])
+                                        .build();
+
+                                    let sender_clone = sender.input_sender().clone();
+                                    add_button.connect_clicked(move |_| {
+                                        sender_clone.emit(MainWindowInput::Navigate(
+                                            "auth_dialog".to_string(),
+                                        ));
+                                    });
+
+                                    sender.input(MainWindowInput::SetHeaderEndContent(Some(
+                                        add_button.upcast(),
+                                    )));
+                                }
+                            }
                         }
+                    }
+                    "init_sync" => {
+                        // Trigger sync for all existing sources on startup
+                        let db_clone = self.db.clone();
+                        sender.oneshot_command(async move {
+                            // Wait a moment for the UI to fully initialize
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+                            use crate::models::SourceId;
+                            use crate::services::commands::{
+                                Command, auth_commands::LoadSourcesCommand,
+                            };
+                            use crate::services::core::backend::BackendService;
+
+                            let cmd = LoadSourcesCommand {
+                                db: db_clone.clone(),
+                            };
+                            match cmd.execute().await {
+                                Ok(sources) => {
+                                    tracing::info!(
+                                        "Found {} sources to sync on startup",
+                                        sources.len()
+                                    );
+                                    for source in sources {
+                                        let source_id = SourceId::new(source.id.clone());
+                                        tracing::info!(
+                                            "Starting startup sync for source: {}",
+                                            source.name
+                                        );
+
+                                        // Sync the source in the background
+                                        match BackendService::sync_source(&db_clone, &source_id)
+                                            .await
+                                        {
+                                            Ok(sync_result) => {
+                                                tracing::info!(
+                                                    "Source {} sync completed: {} items synced",
+                                                    source.name,
+                                                    sync_result.items_synced
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    "Failed to sync source {}: {}",
+                                                    source.name,
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to load sources for initial sync: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        });
+
+                        // Also trigger a sidebar refresh after initiating syncs
+                        sender.input(MainWindowInput::Navigate("refresh_sidebar".to_string()));
                     }
                     "update_header" => {
                         // Update back button visibility based on navigation stack
@@ -389,12 +513,29 @@ impl AsyncComponent for MainWindow {
                             .build();
                         self.navigation_view.push(&home_nav_page);
 
+                        // Clear library tracking since we're on home
+                        self.current_library_id = None;
+
+                        // Clear any custom header content
+                        sender.input(MainWindowInput::ClearHeaderContent);
+
                         // Trigger header update
                         sender.input(MainWindowInput::Navigate("update_header".to_string()));
                     }
                     "sources" => {
                         // Switch to content view
                         self.content_stack.set_visible_child_name("content");
+
+                        // Clear library tracking since we're on sources
+                        self.current_library_id = None;
+
+                        // Check if we're already on the sources page
+                        if let Some(visible_page) = self.navigation_view.visible_page() {
+                            if visible_page.title() == "Sources" {
+                                // Already on sources page, don't push again
+                                return;
+                            }
+                        }
 
                         // Create sources page if it doesn't exist
                         if self.sources_page.is_none() {
@@ -406,16 +547,40 @@ impl AsyncComponent for MainWindow {
                                         MainWindowInput::Navigate("auth_dialog".to_string())
                                     }
                                 });
-                            self.sources_page = Some(sources_controller);
-                        }
 
-                        // Push the sources page to navigation
-                        if let Some(ref sources_controller) = self.sources_page {
+                            // Create the navigation page once
                             let page = adw::NavigationPage::builder()
                                 .title("Sources")
                                 .child(sources_controller.widget())
                                 .build();
-                            self.navigation_view.push(&page);
+
+                            self.sources_nav_page = Some(page);
+                            self.sources_page = Some(sources_controller);
+                        }
+
+                        // Push the existing navigation page
+                        if let Some(ref page) = self.sources_nav_page {
+                            self.navigation_view.push(page);
+
+                            // Add the "Add Source" button to the header
+                            tracing::info!("Adding Add Source button to header");
+                            let add_button = gtk::Button::builder()
+                                .icon_name("list-add-symbolic")
+                                .tooltip_text("Add Source")
+                                .css_classes(vec!["suggested-action"])
+                                .build();
+
+                            let sender_clone = sender.input_sender().clone();
+                            add_button.connect_clicked(move |_| {
+                                tracing::info!("Add Source button clicked");
+                                sender_clone
+                                    .emit(MainWindowInput::Navigate("auth_dialog".to_string()));
+                            });
+
+                            add_button.set_visible(true);
+                            sender.input(MainWindowInput::SetHeaderEndContent(Some(
+                                add_button.upcast(),
+                            )));
 
                             // Trigger header update
                             sender.input(MainWindowInput::Navigate("update_header".to_string()));
@@ -424,6 +589,14 @@ impl AsyncComponent for MainWindow {
                     "preferences" => {
                         // Switch to content view
                         self.content_stack.set_visible_child_name("content");
+
+                        // Check if we're already on the preferences page
+                        if let Some(visible_page) = self.navigation_view.visible_page() {
+                            if visible_page.title() == "Preferences" {
+                                // Already on preferences page, don't push again
+                                return;
+                            }
+                        }
 
                         // Create preferences page if it doesn't exist
                         if self.preferences_page.is_none() {
@@ -439,16 +612,20 @@ impl AsyncComponent for MainWindow {
                                         MainWindowInput::Navigate("preferences_error".to_string())
                                     }
                                 });
-                            self.preferences_page = Some(preferences_controller);
-                        }
 
-                        // Push the preferences page to navigation
-                        if let Some(ref preferences_controller) = self.preferences_page {
+                            // Create the navigation page once
                             let page = adw::NavigationPage::builder()
                                 .title("Preferences")
                                 .child(preferences_controller.widget())
                                 .build();
-                            self.navigation_view.push(&page);
+
+                            self.preferences_nav_page = Some(page);
+                            self.preferences_page = Some(preferences_controller);
+                        }
+
+                        // Push the existing navigation page
+                        if let Some(ref page) = self.preferences_nav_page {
+                            self.navigation_view.push(page);
 
                             // Trigger header update
                             sender.input(MainWindowInput::Navigate("update_header".to_string()));
@@ -458,6 +635,11 @@ impl AsyncComponent for MainWindow {
                         tracing::info!("Opening authentication dialog");
                         // Send show message to the auth dialog
                         self.auth_dialog.emit(AuthDialogInput::Show);
+                    }
+                    "refresh_sidebar" => {
+                        tracing::info!("Refreshing sidebar after sync");
+                        // Trigger sidebar refresh
+                        self.sidebar.emit(SidebarInput::RefreshSources);
                     }
                     _ => {}
                 }
@@ -482,53 +664,90 @@ impl AsyncComponent for MainWindow {
             MainWindowInput::NavigateToLibrary(library_id) => {
                 tracing::info!("Navigating to library: {}", library_id);
 
+                // Check if we're already on this library page
+                if let Some(ref current_id) = self.current_library_id {
+                    if current_id == &library_id {
+                        tracing::debug!("Already on library: {}, skipping navigation", library_id);
+                        return;
+                    }
+                }
+
+                // Check if we're already on a library page in the navigation stack
+                // and if so, pop back to before it
+                if self.current_library_id.is_some() {
+                    // We're on a library page, check if it's the visible page
+                    if let Some(visible_page) = self.navigation_view.visible_page() {
+                        let title = visible_page.title();
+                        // If the current page is a library page (not Home, Sources, etc.)
+                        if !title.is_empty()
+                            && title != "Home"
+                            && title != "Sources"
+                            && title != "Preferences"
+                            && title != "Movie Details"
+                            && title != "Show Details"
+                            && title != "Player"
+                        {
+                            // Pop the current library page
+                            self.navigation_view.pop();
+                        }
+                    }
+                }
+
                 // Switch to content view
                 self.content_stack.set_visible_child_name("content");
 
-                // Create library page if it doesn't exist
-                if self.library_page.is_none() {
-                    let library_controller = LibraryPage::builder()
-                        .launch(self.db.clone())
-                        .forward(sender.input_sender(), |output| match output {
-                            crate::platforms::relm4::components::pages::library::LibraryPageOutput::NavigateToMediaItem(id) => {
-                                MainWindowInput::NavigateToMediaItem(id)
-                            }
-                        });
-                    self.library_page = Some(library_controller);
-                }
-
-                // Set the library on the page
-                if let Some(ref library_controller) = self.library_page {
-                    library_controller.emit(crate::platforms::relm4::components::pages::library::LibraryPageInput::SetLibrary(library_id.clone()));
-
-                    // Fetch library details for the title
-                    let library_title = {
-                        use crate::services::commands::{
-                            Command, media_commands::GetLibraryCommand,
-                        };
-                        let cmd = GetLibraryCommand {
-                            db: self.db.clone(),
-                            library_id: library_id.clone(),
-                        };
-                        match cmd.execute().await {
-                            Ok(Some(library)) => library.title,
-                            _ => "Library".to_string(),
+                // Always recreate the library page for each navigation to avoid widget parent conflicts
+                // This ensures the widget isn't already attached to another navigation page
+                let library_controller = LibraryPage::builder()
+                    .launch(self.db.clone())
+                    .forward(sender.input_sender(), |output| match output {
+                        crate::platforms::relm4::components::pages::library::LibraryPageOutput::NavigateToMediaItem(id) => {
+                            MainWindowInput::NavigateToMediaItem(id)
                         }
+                    });
+
+                // Set the library on the new controller
+                library_controller.emit(crate::platforms::relm4::components::pages::library::LibraryPageInput::SetLibrary(library_id.clone()));
+
+                // Fetch library details for the title
+                let library_title = {
+                    use crate::services::commands::{Command, media_commands::GetLibraryCommand};
+                    let cmd = GetLibraryCommand {
+                        db: self.db.clone(),
+                        library_id: library_id.clone(),
                     };
+                    match cmd.execute().await {
+                        Ok(Some(library)) => library.title,
+                        _ => "Library".to_string(),
+                    }
+                };
 
-                    // Create navigation page and push it
-                    let page = adw::NavigationPage::builder()
-                        .title(&library_title)
-                        .child(library_controller.widget())
-                        .build();
-                    self.navigation_view.push(&page);
+                // Create navigation page with the new controller's widget
+                let page = adw::NavigationPage::builder()
+                    .title(&library_title)
+                    .child(library_controller.widget())
+                    .build();
 
-                    // Trigger header update
-                    sender.input(MainWindowInput::Navigate("update_header".to_string()));
-                }
+                // Store the controller for later use
+                self.library_page = Some(library_controller);
+
+                // Update current library ID
+                self.current_library_id = Some(library_id);
+
+                // Push the page to navigation
+                self.navigation_view.push(&page);
+
+                // Clear any custom header content (library page can add its own filters later)
+                sender.input(MainWindowInput::ClearHeaderContent);
+
+                // Trigger header update
+                sender.input(MainWindowInput::Navigate("update_header".to_string()));
             }
             MainWindowInput::NavigateToMediaItem(item_id) => {
                 tracing::info!("Navigating to media item: {}", item_id);
+
+                // Clear library tracking since we're navigating to a media item
+                self.current_library_id = None;
 
                 // Switch to content view
                 self.content_stack.set_visible_child_name("content");
@@ -632,6 +851,33 @@ impl AsyncComponent for MainWindow {
                     self.split_view.set_show_content(true);
                 }
             }
+            MainWindowInput::SyncSource(source_id) => {
+                tracing::info!("Syncing new source: {:?}", source_id);
+
+                // Trigger sync in background
+                let db = self.db.clone();
+                let source_id_clone = source_id.clone();
+
+                sender.oneshot_command(async move {
+                    use crate::services::core::backend::BackendService;
+
+                    // Sync the source
+                    match BackendService::sync_source(&db, &source_id_clone).await {
+                        Ok(sync_result) => {
+                            tracing::info!(
+                                "Source sync completed: {} items synced",
+                                sync_result.items_synced
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to sync source: {}", e);
+                        }
+                    }
+                });
+
+                // Trigger a manual refresh of the sidebar after scheduling sync
+                sender.input(MainWindowInput::Navigate("refresh_sidebar".to_string()));
+            }
             MainWindowInput::RestoreWindowChrome => {
                 tracing::info!("Restoring window chrome after player");
 
@@ -668,6 +914,40 @@ impl AsyncComponent for MainWindow {
                 // Center the window on screen after resize
                 // Note: GTK4 doesn't have a direct center method, but setting default size
                 // and letting the window manager handle it usually works well
+            }
+            MainWindowInput::SetHeaderStartContent(widget) => {
+                // Clear existing content
+                while let Some(child) = self.header_start_box.first_child() {
+                    self.header_start_box.remove(&child);
+                }
+                // Add new content if provided
+                if let Some(widget) = widget {
+                    self.header_start_box.append(&widget);
+                }
+            }
+            MainWindowInput::SetHeaderEndContent(widget) => {
+                tracing::info!("Setting header end content");
+                // Clear existing content
+                while let Some(child) = self.header_end_box.first_child() {
+                    self.header_end_box.remove(&child);
+                }
+                // Add new content if provided
+                if let Some(widget) = widget {
+                    tracing::info!("Adding widget to header end box");
+                    self.header_end_box.append(&widget);
+                    self.header_end_box.set_visible(true);
+                } else {
+                    tracing::info!("No widget provided to add");
+                }
+            }
+            MainWindowInput::ClearHeaderContent => {
+                // Clear both header boxes
+                while let Some(child) = self.header_start_box.first_child() {
+                    self.header_start_box.remove(&child);
+                }
+                while let Some(child) = self.header_end_box.first_child() {
+                    self.header_end_box.remove(&child);
+                }
             }
         }
     }

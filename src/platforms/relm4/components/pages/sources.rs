@@ -20,6 +20,7 @@ use crate::services::commands::{
 pub struct SourcesPage {
     db: DatabaseConnection,
     sources: Vec<Source>,
+    sources_factory: FactoryVecDeque<SourceListItem>,
     is_loading: bool,
     syncing_sources: std::collections::HashSet<SourceId>,
 }
@@ -251,15 +252,18 @@ impl AsyncComponent for SourcesPage {
             set_spacing: 0,
             add_css_class: "background",
 
-            // Header
-            adw::HeaderBar {
-                set_title_widget: Some(&adw::WindowTitle::new("Sources", "Manage your media servers")),
+            // Section header
+            gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_margin_top: 12,
+                set_margin_bottom: 12,
+                set_margin_start: 24,
+                set_margin_end: 24,
 
-                pack_end = &gtk::Button {
-                    set_icon_name: "list-add-symbolic",
-                    set_tooltip_text: Some("Add Source"),
-                    add_css_class: "suggested-action",
-                    connect_clicked => SourcesPageInput::AddSource,
+                gtk::Label {
+                    set_text: "Servers & Accounts",
+                    set_halign: gtk::Align::Start,
+                    add_css_class: "title-2",
                 },
             },
 
@@ -348,16 +352,25 @@ impl AsyncComponent for SourcesPage {
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
-        let model = Self {
-            db: db.clone(),
-            sources: Vec::new(),
-            is_loading: true,
-            syncing_sources: std::collections::HashSet::new(),
-        };
-
         let sources_list = gtk::ListBox::new();
         sources_list.add_css_class("boxed-list");
         sources_list.set_selection_mode(gtk::SelectionMode::None);
+
+        let mut sources_factory = FactoryVecDeque::<SourceListItem>::builder()
+            .launch(sources_list.clone())
+            .forward(sender.input_sender(), |output| match output {
+                SourceItemAction::Sync(id) => SourcesPageInput::SyncSource(id),
+                SourceItemAction::TestConnection(id) => SourcesPageInput::TestConnection(id),
+                SourceItemAction::Remove(id) => SourcesPageInput::RemoveSource(id),
+            });
+
+        let model = Self {
+            db: db.clone(),
+            sources: Vec::new(),
+            sources_factory,
+            is_loading: true,
+            syncing_sources: std::collections::HashSet::new(),
+        };
 
         let widgets = view_output!();
 
@@ -393,8 +406,15 @@ impl AsyncComponent for SourcesPage {
 
             SourcesPageInput::SourcesLoaded(sources) => {
                 info!("Loaded {} sources", sources.len());
-                self.sources = sources;
+                self.sources = sources.clone();
                 self.is_loading = false;
+
+                // Clear and repopulate the factory
+                let mut factory_guard = self.sources_factory.guard();
+                factory_guard.clear();
+                for source in sources {
+                    factory_guard.push_back(source);
+                }
             }
 
             SourcesPageInput::AddSource => {
@@ -425,26 +445,69 @@ impl AsyncComponent for SourcesPage {
             SourcesPageInput::SourceRemoved(source_id) => {
                 info!("Source removed: {}", source_id);
                 self.sources.retain(|s| s.id != source_id.to_string());
+
+                // Remove from factory
+                let mut factory_guard = self.sources_factory.guard();
+                let index_to_remove = factory_guard
+                    .iter()
+                    .position(|s| s.source.id == source_id.to_string());
+                if let Some(index) = index_to_remove {
+                    factory_guard.remove(index);
+                }
             }
 
             SourcesPageInput::TestConnection(source_id) => {
                 info!("Testing connection for source: {}", source_id);
-                // TODO: Implement connection testing
-                sender.input(SourcesPageInput::Error(
-                    "Connection testing not yet implemented".to_string(),
-                ));
+
+                let db = self.db.clone();
+                let source_id_clone = source_id.clone();
+
+                sender.oneshot_command(async move {
+                    use crate::services::core::backend::BackendService;
+
+                    // Test connection using the BackendService
+                    match BackendService::test_connection(&db, &source_id_clone).await {
+                        Ok(true) => {
+                            info!("Connection test successful");
+                            SourcesPageInput::Error("✓ Connection successful".to_string())
+                        }
+                        Ok(false) => {
+                            info!("Connection test failed");
+                            SourcesPageInput::Error("✗ Connection failed".to_string())
+                        }
+                        Err(e) => {
+                            error!("Connection test error: {}", e);
+                            SourcesPageInput::Error(format!("✗ Connection error: {}", e))
+                        }
+                    }
+                });
             }
 
             SourcesPageInput::SyncSource(source_id) => {
                 info!("Syncing source: {}", source_id);
                 self.syncing_sources.insert(source_id.clone());
 
-                // TODO: SyncSourceCommand requires a backend instance
-                // For now, just report completion
-                sender.input(SourcesPageInput::SyncCompleted(
-                    source_id.clone(),
-                    Err("Sync not yet implemented - requires backend instance".to_string()),
-                ));
+                let db = self.db.clone();
+                let source_id_clone = source_id.clone();
+
+                sender.oneshot_command(async move {
+                    use crate::services::core::backend::BackendService;
+
+                    // Use BackendService to sync the source
+                    match BackendService::sync_source(&db, &source_id_clone).await {
+                        Ok(sync_result) => {
+                            info!(
+                                "Source sync completed successfully: {} items synced",
+                                sync_result.items_synced
+                            );
+                            SourcesPageInput::SyncCompleted(source_id_clone, Ok(()))
+                        }
+                        Err(e) => {
+                            error!("Source sync failed: {}", e);
+                            SourcesPageInput::SyncCompleted(source_id_clone, Err(e.to_string()))
+                        }
+                    }
+                });
             }
 
             SourcesPageInput::SyncCompleted(source_id, result) => {
