@@ -1,5 +1,6 @@
 use crate::db::DatabaseConnection;
 use crate::models::{LibraryId, SourceId};
+use crate::services::core::backend::BackendService;
 use crate::services::core::sync::SyncService;
 use gtk::prelude::*;
 use relm4::prelude::*;
@@ -93,67 +94,28 @@ impl SyncWorker {
             })
             .ok();
 
-        // Simulate sync progress
-        let total_items = 100; // This would come from the actual sync
-        for i in 0..total_items {
-            // Check if cancelled
-            if tokio::time::timeout(Duration::from_millis(10), tokio::task::yield_now())
-                .await
-                .is_err()
-            {
+        // Call actual sync service using stateless BackendService
+        match BackendService::sync_source(&db, &source_id).await {
+            Ok(sync_result) => {
                 sender
-                    .output(SyncWorkerOutput::SyncCancelled {
-                        source_id: source_id.clone(),
+                    .output(SyncWorkerOutput::SyncCompleted {
+                        source_id,
+                        library_id,
+                        items_synced: sync_result.items_synced,
+                        duration: start_time.elapsed(),
                     })
                     .ok();
-                return;
             }
-
-            // Send progress update every 10 items
-            if i % 10 == 0 {
+            Err(e) => {
                 sender
-                    .output(SyncWorkerOutput::SyncProgress(SyncProgress {
-                        source_id: source_id.clone(),
-                        library_id: library_id.clone(),
-                        current: i,
-                        total: total_items,
-                        message: format!("Syncing item {} of {}", i + 1, total_items),
-                    }))
+                    .output(SyncWorkerOutput::SyncFailed {
+                        source_id,
+                        library_id,
+                        error: e.to_string(),
+                    })
                     .ok();
             }
-
-            // Simulate work
-            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-
-        // TODO: Call actual sync service
-        // match SyncService::sync_source(&db, &source_id, library_id.as_ref(), force).await {
-        //     Ok(items_synced) => {
-        //         sender.output(SyncWorkerOutput::SyncCompleted {
-        //             source_id,
-        //             library_id,
-        //             items_synced,
-        //             duration: start_time.elapsed(),
-        //         }).ok();
-        //     }
-        //     Err(e) => {
-        //         sender.output(SyncWorkerOutput::SyncFailed {
-        //             source_id,
-        //             library_id,
-        //             error: e.to_string(),
-        //         }).ok();
-        //     }
-        // }
-
-        // For now, simulate success
-        sender
-            .output(SyncWorkerOutput::SyncCompleted {
-                source_id,
-                library_id,
-                items_synced: total_items,
-                duration: start_time.elapsed(),
-            })
-            .ok();
     }
 
     fn start_sync(

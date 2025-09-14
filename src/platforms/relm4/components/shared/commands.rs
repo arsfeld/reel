@@ -3,6 +3,7 @@ use crate::db::entities::{libraries, sources};
 use crate::db::repository::{Repository, SourceRepositoryImpl};
 use crate::events::event_bus::EventBus;
 use crate::models::{LibraryId, MediaItem, MediaItemId, SourceId};
+use crate::services::core::backend::BackendService;
 use crate::services::core::media::MediaService;
 use anyhow::Result;
 use std::sync::Arc;
@@ -67,28 +68,33 @@ pub async fn execute_command(command: AppCommand, db: &DatabaseConnection) -> Co
             let source_id = SourceId::new(source_id);
             match MediaService::get_libraries_for_source(db, &source_id).await {
                 Ok(libraries) => {
-                    // Convert to entity models for backward compatibility
-                    let library_models: Vec<libraries::Model> = libraries
-                        .into_iter()
-                        .map(|lib| {
-                            libraries::Model {
-                                id: lib.id.clone(),
-                                source_id: source_id.to_string(),
-                                title: lib.title,
-                                library_type: match lib.library_type {
-                                    crate::models::LibraryType::Movies => "movies".to_string(),
-                                    crate::models::LibraryType::Shows => "shows".to_string(),
-                                    crate::models::LibraryType::Music => "music".to_string(),
-                                    crate::models::LibraryType::Photos => "photos".to_string(),
-                                    crate::models::LibraryType::Mixed => "mixed".to_string(),
-                                },
-                                icon: lib.icon,
-                                item_count: 0, // TODO: This should be calculated from media_items count
-                                created_at: chrono::Utc::now().naive_utc(),
-                                updated_at: chrono::Utc::now().naive_utc(),
-                            }
-                        })
-                        .collect();
+                    // Get media repository to calculate item counts
+                    use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
+                    let media_repo = MediaRepositoryImpl::new_without_events(db.clone());
+
+                    // Convert to entity models with actual item counts
+                    let mut library_models = Vec::new();
+                    for lib in libraries {
+                        // Get actual item count from database
+                        let item_count = media_repo.count_by_library(&lib.id).await.unwrap_or(0);
+
+                        library_models.push(libraries::Model {
+                            id: lib.id.clone(),
+                            source_id: source_id.to_string(),
+                            title: lib.title,
+                            library_type: match lib.library_type {
+                                crate::models::LibraryType::Movies => "movies".to_string(),
+                                crate::models::LibraryType::Shows => "shows".to_string(),
+                                crate::models::LibraryType::Music => "music".to_string(),
+                                crate::models::LibraryType::Photos => "photos".to_string(),
+                                crate::models::LibraryType::Mixed => "mixed".to_string(),
+                            },
+                            icon: lib.icon,
+                            item_count: item_count as i32,
+                            created_at: chrono::Utc::now().naive_utc(),
+                            updated_at: chrono::Utc::now().naive_utc(),
+                        });
+                    }
                     CommandResult::LibrariesLoaded {
                         source_id: source_id.to_string(),
                         libraries: library_models,
@@ -153,32 +159,35 @@ async fn load_initial_data(
     let sources = load_all_sources(db).await?;
     let mut all_libraries = Vec::new();
 
+    // Get media repository to calculate item counts
+    use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
+    let media_repo = MediaRepositoryImpl::new_without_events(db.clone());
+
     for source in &sources {
         let source_id = SourceId::new(source.id.clone());
         if let Ok(libraries) = MediaService::get_libraries_for_source(db, &source_id).await {
-            // Convert to entity models
-            let library_models: Vec<libraries::Model> = libraries
-                .into_iter()
-                .map(|lib| {
-                    libraries::Model {
-                        id: lib.id.clone(),
-                        source_id: source.id.clone(),
-                        title: lib.title,
-                        library_type: match lib.library_type {
-                            crate::models::LibraryType::Movies => "movies".to_string(),
-                            crate::models::LibraryType::Shows => "shows".to_string(),
-                            crate::models::LibraryType::Music => "music".to_string(),
-                            crate::models::LibraryType::Photos => "photos".to_string(),
-                            crate::models::LibraryType::Mixed => "mixed".to_string(),
-                        },
-                        icon: lib.icon,
-                        item_count: 0, // TODO: Calculate from media_items
-                        created_at: chrono::Utc::now().naive_utc(),
-                        updated_at: chrono::Utc::now().naive_utc(),
-                    }
-                })
-                .collect();
-            all_libraries.extend(library_models);
+            // Convert to entity models with actual item counts
+            for lib in libraries {
+                // Get actual item count from database
+                let item_count = media_repo.count_by_library(&lib.id).await.unwrap_or(0);
+
+                all_libraries.push(libraries::Model {
+                    id: lib.id.clone(),
+                    source_id: source.id.clone(),
+                    title: lib.title,
+                    library_type: match lib.library_type {
+                        crate::models::LibraryType::Movies => "movies".to_string(),
+                        crate::models::LibraryType::Shows => "shows".to_string(),
+                        crate::models::LibraryType::Music => "music".to_string(),
+                        crate::models::LibraryType::Photos => "photos".to_string(),
+                        crate::models::LibraryType::Mixed => "mixed".to_string(),
+                    },
+                    icon: lib.icon,
+                    item_count: item_count as i32,
+                    created_at: chrono::Utc::now().naive_utc(),
+                    updated_at: chrono::Utc::now().naive_utc(),
+                });
+            }
         }
     }
 
@@ -200,9 +209,15 @@ async fn load_home_data(
     Ok((continue_watching, recently_added, trending))
 }
 
-async fn start_playback(_db: &DatabaseConnection, media_id: &str) -> Result<String> {
-    // TODO: Get actual stream URL from backend
-    Ok(format!("stream://{}", media_id))
+async fn start_playback(db: &DatabaseConnection, media_id: &str) -> Result<String> {
+    // Get actual stream URL from backend using stateless BackendService
+    let media_item_id = MediaItemId::new(media_id.to_string());
+
+    // BackendService::get_stream_url handles all the backend creation and URL fetching
+    let stream_info = BackendService::get_stream_url(db, &media_item_id).await?;
+
+    // Return the actual stream URL
+    Ok(stream_info.url)
 }
 
 async fn update_progress(db: &DatabaseConnection, media_id: &str, position: f64) -> Result<()> {

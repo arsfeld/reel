@@ -1,3 +1,4 @@
+pub mod connection_monitor;
 pub mod image_loader;
 pub mod search_worker;
 pub mod sync_worker;
@@ -13,3 +14,5 @@ pub use search_worker::{
 pub use sync_worker::{
     SyncProgress, SyncWorker, SyncWorkerInput, SyncWorkerOutput, create_sync_worker,
 };
+
+pub use connection_monitor::{ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput};
