@@ -10,6 +10,7 @@ use crate::models::{
     SourceId,
     auth_provider::{ConnectionInfo, Source, SourceType},
 };
+use crate::platforms::relm4::components::shared::broker::{BROKER, BrokerMessage, SourceMessage};
 use crate::services::commands::{
     Command,
     auth_commands::{LoadSourcesCommand, RemoveSourceCommand},
@@ -22,7 +23,6 @@ pub struct SourcesPage {
     sources: Vec<Source>,
     sources_factory: FactoryVecDeque<SourceListItem>,
     is_loading: bool,
-    syncing_sources: std::collections::HashSet<SourceId>,
 }
 
 #[derive(Debug)]
@@ -43,6 +43,8 @@ pub enum SourcesPageInput {
     SyncSource(SourceId),
     /// Sync completed
     SyncCompleted(SourceId, Result<(), String>),
+    /// Message from the broker
+    BrokerMsg(BrokerMessage),
     /// Error occurred
     Error(String),
 }
@@ -369,13 +371,29 @@ impl AsyncComponent for SourcesPage {
             sources: Vec::new(),
             sources_factory,
             is_loading: true,
-            syncing_sources: std::collections::HashSet::new(),
         };
 
         let widgets = view_output!();
 
         // Load sources on init
         sender.input(SourcesPageInput::LoadData);
+
+        // Subscribe to MessageBroker
+        let broker_sender = sender.input_sender().clone();
+        relm4::spawn(async move {
+            // Create a channel to forward broker messages
+            let (tx, mut rx) = relm4::channel::<BrokerMessage>();
+
+            // Subscribe to the broker with our channel
+            BROKER.subscribe("SourcesPage".to_string(), tx).await;
+
+            // Forward messages to the component
+            while let Some(msg) = rx.recv().await {
+                broker_sender
+                    .send(SourcesPageInput::BrokerMsg(msg))
+                    .unwrap();
+            }
+        });
 
         AsyncComponentParts { model, widgets }
     }
@@ -483,9 +501,48 @@ impl AsyncComponent for SourcesPage {
                 });
             }
 
+            SourcesPageInput::BrokerMsg(msg) => {
+                match msg {
+                    BrokerMessage::Source(SourceMessage::SyncStarted { source_id, .. }) => {
+                        info!("Sync started for source: {}", source_id);
+                        // Update UI to show sync in progress
+                        let mut factory_guard = self.sources_factory.guard();
+                        for item in factory_guard.iter_mut() {
+                            if item.source.id == source_id {
+                                item.is_syncing = true;
+                            }
+                        }
+                    }
+                    BrokerMessage::Source(SourceMessage::SyncCompleted { source_id, .. }) => {
+                        info!("Sync completed for source: {}", source_id);
+                        // Update UI to show sync completed
+                        let mut factory_guard = self.sources_factory.guard();
+                        for item in factory_guard.iter_mut() {
+                            if item.source.id == source_id {
+                                item.is_syncing = false;
+                            }
+                        }
+                        // Reload sources to get updated data
+                        sender.input(SourcesPageInput::LoadData);
+                    }
+                    BrokerMessage::Source(SourceMessage::SyncError { source_id, error }) => {
+                        error!("Sync error for source {}: {}", source_id, error);
+                        // Update UI to show sync failed
+                        let mut factory_guard = self.sources_factory.guard();
+                        for item in factory_guard.iter_mut() {
+                            if item.source.id == source_id {
+                                item.is_syncing = false;
+                            }
+                        }
+                        sender.input(SourcesPageInput::Error(format!("Sync failed: {}", error)));
+                    }
+                    _ => {}
+                }
+            }
+
             SourcesPageInput::SyncSource(source_id) => {
-                info!("Syncing source: {}", source_id);
-                self.syncing_sources.insert(source_id.clone());
+                info!("Starting sync for source: {}", source_id);
+                // The broker messages will handle the UI state updates
 
                 let db = self.db.clone();
                 let source_id_clone = source_id.clone();
@@ -511,13 +568,11 @@ impl AsyncComponent for SourcesPage {
             }
 
             SourcesPageInput::SyncCompleted(source_id, result) => {
-                self.syncing_sources.remove(&source_id);
+                // Don't manually track syncing here - let the broker messages handle it
                 match result {
-                    Ok(_) => info!("Source synced successfully: {}", source_id),
-                    Err(e) => error!("Failed to sync source {}: {}", source_id, e),
+                    Ok(_) => info!("Source sync command completed: {}", source_id),
+                    Err(e) => error!("Source sync command failed {}: {}", source_id, e),
                 }
-                // Reload sources to get updated status
-                sender.input(SourcesPageInput::LoadData);
             }
 
             SourcesPageInput::Error(msg) => {

@@ -1,9 +1,5 @@
 use super::{BaseRepository, Repository};
 use crate::db::entities::{Source, SourceActiveModel, SourceModel, sources};
-use crate::events::{
-    event_bus::EventBus,
-    types::{DatabaseEvent, EventPayload, EventType},
-};
 use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{
@@ -66,15 +62,9 @@ pub struct SourceRepositoryImpl {
 }
 
 impl SourceRepositoryImpl {
-    pub fn new(db: Arc<DatabaseConnection>, event_bus: Arc<EventBus>) -> Self {
+    pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self {
-            base: BaseRepository::new(db, event_bus),
-        }
-    }
-
-    pub fn new_without_events(db: Arc<DatabaseConnection>) -> Self {
-        Self {
-            base: BaseRepository::new_without_events(db),
+            base: BaseRepository::new(db),
         }
     }
 }
@@ -108,23 +98,6 @@ impl Repository<SourceModel> for SourceRepositoryImpl {
         };
 
         let result = active_model.insert(self.base.db.as_ref()).await?;
-
-        // Emit SourceAdded event
-        let event = DatabaseEvent::new(
-            EventType::SourceAdded,
-            EventPayload::Source {
-                id: result.id.clone(),
-                source_type: result.source_type.clone(),
-                is_online: Some(result.is_online),
-            },
-        );
-
-        if let Some(event_bus) = &self.base.event_bus {
-            if let Err(e) = event_bus.publish(event).await {
-                tracing::warn!("Failed to publish SourceAdded event: {}", e);
-            }
-        }
-
         Ok(result)
     }
 
@@ -133,23 +106,6 @@ impl Repository<SourceModel> for SourceRepositoryImpl {
         active_model.updated_at = Set(chrono::Utc::now().naive_utc());
 
         let result = active_model.update(self.base.db.as_ref()).await?;
-
-        // Emit SourceUpdated event
-        let event = DatabaseEvent::new(
-            EventType::SourceUpdated,
-            EventPayload::Source {
-                id: result.id.clone(),
-                source_type: result.source_type.clone(),
-                is_online: Some(result.is_online),
-            },
-        );
-
-        if let Some(event_bus) = &self.base.event_bus {
-            if let Err(e) = event_bus.publish(event).await {
-                tracing::warn!("Failed to publish SourceUpdated event: {}", e);
-            }
-        }
-
         Ok(result)
     }
 
@@ -158,25 +114,6 @@ impl Repository<SourceModel> for SourceRepositoryImpl {
         let entity = self.find_by_id(id).await?;
 
         Source::delete_by_id(id).exec(self.base.db.as_ref()).await?;
-
-        // Emit SourceRemoved event if entity existed
-        if let Some(source) = entity {
-            let event = DatabaseEvent::new(
-                EventType::SourceRemoved,
-                EventPayload::Source {
-                    id: source.id.clone(),
-                    source_type: source.source_type.clone(),
-                    is_online: Some(source.is_online),
-                },
-            );
-
-            if let Some(event_bus) = &self.base.event_bus {
-                if let Err(e) = event_bus.publish(event).await {
-                    tracing::warn!("Failed to publish SourceRemoved event: {}", e);
-                }
-            }
-        }
-
         Ok(())
     }
 
@@ -207,22 +144,6 @@ impl SourceRepository for SourceRepositoryImpl {
             active_model.is_online = Set(is_online);
             active_model.updated_at = Set(chrono::Utc::now().naive_utc());
             active_model.update(self.base.db.as_ref()).await?;
-
-            // Emit SourceOnlineStatusChanged event
-            let event = DatabaseEvent::new(
-                EventType::SourceOnlineStatusChanged,
-                EventPayload::Source {
-                    id: source.id.clone(),
-                    source_type: source.source_type.clone(),
-                    is_online: Some(is_online),
-                },
-            );
-
-            if let Some(event_bus) = &self.base.event_bus {
-                if let Err(e) = event_bus.publish(event).await {
-                    tracing::warn!("Failed to publish SourceOnlineStatusChanged event: {}", e);
-                }
-            }
         }
         Ok(())
     }

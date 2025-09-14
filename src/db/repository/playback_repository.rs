@@ -2,7 +2,6 @@ use super::{BaseRepository, Repository};
 use crate::db::entities::{
     PlaybackProgress, PlaybackProgressActiveModel, PlaybackProgressModel, playback_progress,
 };
-use crate::events::event_bus::EventBus;
 use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{
@@ -63,15 +62,9 @@ pub struct PlaybackRepositoryImpl {
 }
 
 impl PlaybackRepositoryImpl {
-    pub fn new(db: Arc<DatabaseConnection>, event_bus: Arc<EventBus>) -> Self {
+    pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self {
-            base: BaseRepository::new(db, event_bus),
-        }
-    }
-
-    pub fn new_without_events(db: Arc<DatabaseConnection>) -> Self {
-        Self {
-            base: BaseRepository::new_without_events(db),
+            base: BaseRepository::new(db),
         }
     }
 }

@@ -24,6 +24,7 @@ pub struct LibraryPage {
     view_mode: ViewMode,
     sort_by: SortBy,
     filter_text: String,
+    search_visible: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -61,6 +62,10 @@ pub enum LibraryPageInput {
     SetFilter(String),
     /// Clear all items and reload
     Refresh,
+    /// Show search bar
+    ShowSearch,
+    /// Hide search bar
+    HideSearch,
 }
 
 #[derive(Debug)]
@@ -77,186 +82,108 @@ impl AsyncComponent for LibraryPage {
     type CommandOutput = ();
 
     view! {
-        gtk::Box {
-            set_orientation: gtk::Orientation::Vertical,
-            set_spacing: 0,
-            add_css_class: "background",
+        gtk::Overlay {
+            set_can_focus: true,
+            grab_focus: (),
 
-            // Header with filters
-            gtk::Box {
-                set_orientation: gtk::Orientation::Vertical,
-                set_spacing: 12,
-                add_css_class: "toolbar",
-                set_margin_all: 12,
-
-                // Title and view controls
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Horizontal,
-                    set_spacing: 12,
-
-                    gtk::Label {
-                        set_text: "Library",
-                        set_halign: gtk::Align::Start,
-                        set_hexpand: true,
-                        add_css_class: "title-2",
-                    },
-
-                    // View mode toggle
-                    gtk::Box {
-                        set_spacing: 0,
-                        add_css_class: "linked",
-
-                        gtk::ToggleButton {
-                            set_icon_name: "view-grid-symbolic",
-                            set_tooltip_text: Some("Grid View"),
-                            #[watch]
-                            set_active: model.view_mode == ViewMode::Grid,
-                            connect_toggled[sender] => move |btn| {
-                                if btn.is_active() {
-                                    sender.input(LibraryPageInput::SetViewMode(ViewMode::Grid));
-                                }
-                            }
-                        },
-
-                        gtk::ToggleButton {
-                            set_icon_name: "view-list-symbolic",
-                            set_tooltip_text: Some("List View"),
-                            #[watch]
-                            set_active: model.view_mode == ViewMode::List,
-                            connect_toggled[sender] => move |btn| {
-                                if btn.is_active() {
-                                    sender.input(LibraryPageInput::SetViewMode(ViewMode::List));
-                                }
-                            }
-                        },
-                    },
-                },
-
-                // Filter bar
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Horizontal,
-                    set_spacing: 12,
-
-                    // Search entry matching GTK version
-                    gtk::SearchEntry {
-                        set_placeholder_text: Some("Search movies..."),
-                        set_hexpand: true,
-                        connect_search_changed[sender] => move |entry| {
-                            sender.input(LibraryPageInput::SetFilter(entry.text().to_string()));
-                        }
-                    },
-
-                    // Sort dropdown
-                    gtk::DropDown {
-                        set_model: Some(&gtk::StringList::new(&[
-                            "Title",
-                            "Year",
-                            "Date Added",
-                            "Rating",
-                        ])),
-                        #[watch]
-                        set_selected: model.sort_by as u32,
-                        connect_selected_notify[sender] => move |dropdown| {
-                            let sort_by = match dropdown.selected() {
-                                0 => SortBy::Title,
-                                1 => SortBy::Year,
-                                2 => SortBy::DateAdded,
-                                3 => SortBy::Rating,
-                                _ => SortBy::Title,
-                            };
-                            sender.input(LibraryPageInput::SetSortBy(sort_by));
-                        }
-                    },
-
-                    // Refresh button
-                    gtk::Button {
-                        set_icon_name: "view-refresh-symbolic",
-                        set_tooltip_text: Some("Refresh"),
-                        add_css_class: "flat",
-                        connect_clicked[sender] => move |_| {
-                            sender.input(LibraryPageInput::Refresh);
-                        }
-                    },
-                },
+            // Add keyboard event controller to capture typing
+            add_controller = gtk::EventControllerKey {
+                connect_key_pressed[sender] => move |_, key, _, _| {
+                    // Show search on slash or Control+F
+                    if key == gtk::gdk::Key::slash || key == gtk::gdk::Key::f {
+                        sender.input(LibraryPageInput::ShowSearch);
+                        gtk::glib::Propagation::Stop
+                    }
+                    // Hide search on Escape
+                    else if key == gtk::gdk::Key::Escape {
+                        sender.input(LibraryPageInput::HideSearch);
+                        gtk::glib::Propagation::Stop
+                    } else {
+                        gtk::glib::Propagation::Proceed
+                    }
+                }
             },
 
-            // Content area - matching GTK library page exactly
+            // Main content
             gtk::ScrolledWindow {
                 set_vexpand: true,
                 set_hscrollbar_policy: gtk::PolicyType::Never,
                 set_vscrollbar_policy: gtk::PolicyType::Automatic,
 
-                #[local_ref]
-                media_box -> gtk::FlowBox {
-                    set_column_spacing: 16,  // Tighter spacing like GTK version
-                    set_row_spacing: 20,      // Good vertical spacing
-                    set_homogeneous: true,
-                    set_min_children_per_line: 4,   // More items per row with smaller sizes
-                    set_max_children_per_line: 12,  // Allow more on wide screens
-                    set_selection_mode: gtk::SelectionMode::None,
-                    set_margin_top: 16,
-                    set_margin_bottom: 16,
-                    set_margin_start: 16,
-                    set_margin_end: 16,
-                    set_valign: gtk::Align::Start,
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 0,
 
-                    // Scroll detection for infinite scrolling
-                    add_controller = gtk::EventControllerScroll {
-                        set_flags: gtk::EventControllerScrollFlags::VERTICAL,
-                        connect_scroll[sender, has_more = model.has_more] => move |_, _, dy| {
-                            // Load more when scrolling near bottom
-                            if dy > 0.0 && has_more {
-                                sender.input(LibraryPageInput::LoadMore);
-                            }
-                            gtk::glib::Propagation::Proceed
-                        }
+                    #[local_ref]
+                    media_box -> gtk::FlowBox {
+                        set_column_spacing: 12,  // Tighter grid spacing
+                        set_row_spacing: 16,      // Reduced vertical spacing
+                        set_homogeneous: true,
+                        set_min_children_per_line: 4,   // More items per row with smaller sizes
+                        set_max_children_per_line: 12,  // Allow more on wide screens
+                        set_selection_mode: gtk::SelectionMode::None,
+                        set_margin_top: 24,
+                        set_margin_bottom: 16,
+                        set_margin_start: 16,
+                        set_margin_end: 16,
+                        set_valign: gtk::Align::Start,
+                    },
+
+                    // Loading indicator at bottom
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_halign: gtk::Align::Center,
+                        set_margin_all: 12,
+                        #[watch]
+                        set_visible: model.is_loading,
+
+                        gtk::Spinner {
+                            set_spinning: true,
+                        },
+
+                        gtk::Label {
+                            set_text: "Loading more...",
+                            set_margin_start: 12,
+                            add_css_class: "dim-label",
+                        },
+                    },
+
+                    // Empty state - modern design with large icon
+                    adw::StatusPage {
+                        #[watch]
+                        set_visible: !model.is_loading && model.media_factory.is_empty(),
+                        set_icon_name: Some("folder-videos-symbolic"),
+                        set_title: "No Media Found",
+                        set_description: Some("This library is empty or still syncing"),
+                        add_css_class: "compact",
                     }
                 },
             },
 
-            // Loading indicator at bottom
-            gtk::Box {
+            // Floating search bar overlay
+            add_overlay = &gtk::Box {
                 set_orientation: gtk::Orientation::Horizontal,
                 set_halign: gtk::Align::Center,
-                set_margin_all: 12,
+                set_valign: gtk::Align::Start,
+                set_margin_top: 12,
                 #[watch]
-                set_visible: model.is_loading,
+                set_visible: model.search_visible,
+                add_css_class: "osd",
+                add_css_class: "toolbar",
+                set_css_classes: &["osd", "toolbar", "floating-search"],
 
-                gtk::Spinner {
-                    set_spinning: true,
-                },
-
-                gtk::Label {
-                    set_text: "Loading more...",
-                    set_margin_start: 12,
-                    add_css_class: "dim-label",
-                },
-            },
-
-            // Empty state
-            gtk::Box {
-                set_orientation: gtk::Orientation::Vertical,
-                set_spacing: 12,
-                set_valign: gtk::Align::Center,
-                set_vexpand: true,
-                set_margin_all: 48,
-                #[watch]
-                set_visible: !model.is_loading && model.media_factory.is_empty(),
-
-                gtk::Image {
-                    set_icon_name: Some("folder-videos-symbolic"),
-                    set_pixel_size: 128,
-                    add_css_class: "dim-label",
-                },
-
-                gtk::Label {
-                    set_text: "No Media Found",
-                    add_css_class: "title-2",
-                },
-
-                gtk::Label {
-                    set_text: "This library is empty or still syncing",
-                    add_css_class: "dim-label",
+                #[name = "search_entry"]
+                gtk::SearchEntry {
+                    set_placeholder_text: Some("Type to search..."),
+                    set_width_request: 350,
+                    #[watch]
+                    set_text: &model.filter_text,
+                    connect_search_changed[sender] => move |entry| {
+                        sender.input(LibraryPageInput::SetFilter(entry.text().to_string()));
+                    },
+                    connect_stop_search[sender] => move |_| {
+                        sender.input(LibraryPageInput::HideSearch);
+                    }
                 },
             }
         }
@@ -287,6 +214,7 @@ impl AsyncComponent for LibraryPage {
             view_mode: ViewMode::Grid,
             sort_by: SortBy::Title,
             filter_text: String::new(),
+            search_visible: false,
         };
 
         let widgets = view_output!();
@@ -360,6 +288,18 @@ impl AsyncComponent for LibraryPage {
                 debug!("Refreshing library");
                 self.refresh(sender.clone());
             }
+
+            LibraryPageInput::ShowSearch => {
+                self.search_visible = true;
+            }
+
+            LibraryPageInput::HideSearch => {
+                self.search_visible = false;
+                if !self.filter_text.is_empty() {
+                    self.filter_text.clear();
+                    self.refresh(sender.clone());
+                }
+            }
         }
     }
 }
@@ -378,7 +318,7 @@ impl LibraryPage {
 
             relm4::spawn(async move {
                 use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
-                let repo = MediaRepositoryImpl::new_without_events(db.clone());
+                let repo = MediaRepositoryImpl::new(db.clone());
 
                 // Calculate offset
                 let offset = page * items_per_page;

@@ -13,7 +13,6 @@ pub struct PreferencesPage {
     default_player: String,
     hardware_acceleration: bool,
     // Display preferences
-    theme_preference: String,
     default_view_mode: String,
     items_per_page: i32,
     // Cache preferences
@@ -25,7 +24,6 @@ pub struct PreferencesPage {
 pub enum PreferencesInput {
     SetDefaultPlayer(String),
     SetHardwareAcceleration(bool),
-    SetThemePreference(String),
     SetDefaultViewMode(String),
     SetItemsPerPage(i32),
     SetCacheSize(i32),
@@ -107,45 +105,6 @@ impl AsyncComponent for PreferencesPage {
                         },
                     },
 
-                    // Appearance Settings Group
-                    adw::PreferencesGroup {
-                        set_title: "Appearance",
-                        set_description: Some("Customize the look and feel"),
-
-                        // Theme Preference
-                        add = &adw::ActionRow {
-                            set_title: "Theme",
-                            set_subtitle: "Choose your preferred color scheme",
-
-                            add_suffix = &gtk::Box {
-                                set_orientation: gtk::Orientation::Horizontal,
-                                set_spacing: 6,
-                                set_valign: gtk::Align::Center,
-
-                                gtk::DropDown {
-                                    set_model: Some(&gtk::StringList::new(&[
-                                        "Follow System",
-                                        "Light",
-                                        "Dark",
-                                    ])),
-                                    set_selected: match model.theme_preference.as_str() {
-                                        "light" => 1,
-                                        "dark" => 2,
-                                        _ => 0,
-                                    },
-                                    connect_selected_notify[sender] => move |dropdown| {
-                                        let selected = dropdown.selected();
-                                        let theme = match selected {
-                                            1 => "light",
-                                            2 => "dark",
-                                            _ => "system",
-                                        };
-                                        sender.input(PreferencesInput::SetThemePreference(theme.to_string()));
-                                    }
-                                }
-                            }
-                        },
-                    },
 
                     // Library Settings Group
                     adw::PreferencesGroup {
@@ -307,7 +266,6 @@ impl AsyncComponent for PreferencesPage {
             db,
             default_player: "mpv".to_string(),
             hardware_acceleration: true,
-            theme_preference: "system".to_string(),
             default_view_mode: "grid".to_string(),
             items_per_page: 48,
             cache_size_mb: 1000,
@@ -334,19 +292,6 @@ impl AsyncComponent for PreferencesPage {
                 self.hardware_acceleration = enabled;
                 tracing::info!("Hardware acceleration: {}", enabled);
             }
-            PreferencesInput::SetThemePreference(theme) => {
-                self.theme_preference = theme.clone();
-
-                // Apply theme preference
-                let style_manager = adw::StyleManager::default();
-                match theme.as_str() {
-                    "light" => style_manager.set_color_scheme(adw::ColorScheme::ForceLight),
-                    "dark" => style_manager.set_color_scheme(adw::ColorScheme::ForceDark),
-                    _ => style_manager.set_color_scheme(adw::ColorScheme::PreferDark),
-                }
-
-                tracing::info!("Theme preference set to: {}", theme);
-            }
             PreferencesInput::SetDefaultViewMode(mode) => {
                 self.default_view_mode = mode;
                 tracing::info!("Default view mode set to: {}", self.default_view_mode);
@@ -372,7 +317,6 @@ impl AsyncComponent for PreferencesPage {
                 // Reset to default values
                 self.default_player = "mpv".to_string();
                 self.hardware_acceleration = true;
-                self.theme_preference = "system".to_string();
                 self.default_view_mode = "grid".to_string();
                 self.items_per_page = 48;
                 self.cache_size_mb = 1000;

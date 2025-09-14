@@ -54,44 +54,45 @@ impl AsyncComponent for MovieDetailsPage {
             gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
 
-                // Hero Section with backdrop
+                // Hero Section with full-bleed backdrop
                 gtk::Overlay {
-                    set_height_request: 400,
+                    set_height_request: 550,  // Taller for more immersive feel
 
-                    // Backdrop image
+                    // Backdrop image - full bleed
                     gtk::Picture {
                         set_content_fit: gtk::ContentFit::Cover,
                         #[watch]
                         set_paintable: model.movie.as_ref()
                             .and_then(|m| m.backdrop_url.as_ref())
                             .and_then(|url| {
-                                gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, -1, 400)
+                                gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, -1, 550)
                                     .ok()
                                     .map(|pb| gtk::gdk::Texture::for_pixbuf(&pb))
                             })
                             .as_ref(),
                     },
 
-                    // Gradient overlay
+                    // Stronger gradient overlay for better text contrast
                     add_overlay = &gtk::Box {
-                        add_css_class: "osd",
+                        add_css_class: "hero-gradient",
                         set_valign: gtk::Align::End,
 
                         gtk::Box {
                             set_orientation: gtk::Orientation::Horizontal,
-                            set_margin_all: 24,
-                            set_spacing: 24,
+                            set_margin_all: 32,
+                            set_spacing: 32,
 
-                            // Poster
+                            // Larger poster
                             gtk::Picture {
-                                set_width_request: 200,
-                                set_height_request: 300,
+                                set_width_request: 300,  // Increased from 200
+                                set_height_request: 450, // Increased from 300
                                 add_css_class: "card",
+                                add_css_class: "poster-shadow",
                                 #[watch]
                                 set_paintable: model.movie.as_ref()
                                     .and_then(|m| m.poster_url.as_ref())
                                     .and_then(|url| {
-                                        gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, 200, 300)
+                                        gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, 300, 450)
                                             .ok()
                                             .map(|pb| gtk::gdk::Texture::for_pixbuf(&pb))
                                     })
@@ -114,33 +115,45 @@ impl AsyncComponent for MovieDetailsPage {
                                     set_label: &model.movie.as_ref().map(|m| m.title.clone()).unwrap_or_default(),
                                 },
 
-                                // Metadata row
+                                // Metadata pills row
                                 gtk::Box {
                                     set_orientation: gtk::Orientation::Horizontal,
-                                    set_spacing: 12,
+                                    set_spacing: 8,
 
-                                    // Year
-                                    gtk::Label {
-                                        add_css_class: "dim-label",
+                                    // Year pill
+                                    gtk::Box {
+                                        add_css_class: "metadata-pill",
                                         #[watch]
                                         set_visible: model.movie.as_ref().and_then(|m| m.year).is_some(),
-                                        #[watch]
-                                        set_label: &model.movie.as_ref()
-                                            .and_then(|m| m.year.map(|y| y.to_string()))
-                                            .unwrap_or_default(),
+
+                                        gtk::Label {
+                                            set_margin_start: 12,
+                                            set_margin_end: 12,
+                                            set_margin_top: 6,
+                                            set_margin_bottom: 6,
+                                            #[watch]
+                                            set_label: &model.movie.as_ref()
+                                                .and_then(|m| m.year.map(|y| y.to_string()))
+                                                .unwrap_or_default(),
+                                        },
                                     },
 
-                                    // Rating
+                                    // Rating pill
                                     gtk::Box {
+                                        add_css_class: "metadata-pill",
                                         set_spacing: 6,
                                         #[watch]
                                         set_visible: model.movie.as_ref().and_then(|m| m.rating).is_some(),
 
                                         gtk::Image {
                                             set_icon_name: Some("starred-symbolic"),
+                                            set_margin_start: 12,
                                         },
 
                                         gtk::Label {
+                                            set_margin_end: 12,
+                                            set_margin_top: 6,
+                                            set_margin_bottom: 6,
                                             #[watch]
                                             set_label: &model.movie.as_ref()
                                                 .and_then(|m| m.rating.map(|r| format!("{:.1}", r)))
@@ -148,22 +161,31 @@ impl AsyncComponent for MovieDetailsPage {
                                         }
                                     },
 
-                                    // Duration
-                                    gtk::Label {
-                                        add_css_class: "dim-label",
+                                    // Duration pill
+                                    gtk::Box {
+                                        add_css_class: "metadata-pill",
                                         #[watch]
-                                        set_label: &model.movie.as_ref()
-                                            .map(|m| {
-                                                let total_minutes = m.duration.as_secs() / 60;
-                                                let hours = total_minutes / 60;
-                                                let minutes = total_minutes % 60;
-                                                if hours > 0 {
-                                                    format!("{}h {}m", hours, minutes)
-                                                } else {
-                                                    format!("{}m", minutes)
-                                                }
-                                            })
-                                            .unwrap_or_default(),
+                                        set_visible: model.movie.is_some(),
+
+                                        gtk::Label {
+                                            set_margin_start: 12,
+                                            set_margin_end: 12,
+                                            set_margin_top: 6,
+                                            set_margin_bottom: 6,
+                                            #[watch]
+                                            set_label: &model.movie.as_ref()
+                                                .map(|m| {
+                                                    let total_minutes = m.duration.as_secs() / 60;
+                                                    let hours = total_minutes / 60;
+                                                    let minutes = total_minutes % 60;
+                                                    if hours > 0 {
+                                                        format!("{}h {}m", hours, minutes)
+                                                    } else {
+                                                        format!("{}m", minutes)
+                                                    }
+                                                })
+                                                .unwrap_or_default(),
+                                        },
                                     },
                                 },
 

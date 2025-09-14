@@ -59,44 +59,45 @@ impl AsyncComponent for ShowDetailsPage {
             gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
 
-                // Hero Section with backdrop
+                // Hero Section with full-bleed backdrop
                 gtk::Overlay {
-                    set_height_request: 400,
+                    set_height_request: 550,  // Taller for more immersive feel
 
-                    // Backdrop image
+                    // Backdrop image - full bleed
                     gtk::Picture {
                         set_content_fit: gtk::ContentFit::Cover,
                         #[watch]
                         set_paintable: model.show.as_ref()
                             .and_then(|s| s.backdrop_url.as_ref())
                             .and_then(|url| {
-                                gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, -1, 400)
+                                gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, -1, 550)
                                     .ok()
                                     .map(|pb| gtk::gdk::Texture::for_pixbuf(&pb))
                             })
                             .as_ref(),
                     },
 
-                    // Gradient overlay
+                    // Stronger gradient overlay for better text contrast
                     add_overlay = &gtk::Box {
-                        add_css_class: "osd",
+                        add_css_class: "hero-gradient",
                         set_valign: gtk::Align::End,
 
                         gtk::Box {
                             set_orientation: gtk::Orientation::Horizontal,
-                            set_margin_all: 24,
-                            set_spacing: 24,
+                            set_margin_all: 32,
+                            set_spacing: 32,
 
-                            // Poster
+                            // Larger poster
                             gtk::Picture {
-                                set_width_request: 200,
-                                set_height_request: 300,
+                                set_width_request: 300,  // Increased from 200
+                                set_height_request: 450, // Increased from 300
                                 add_css_class: "card",
+                                add_css_class: "poster-shadow",
                                 #[watch]
                                 set_paintable: model.show.as_ref()
                                     .and_then(|s| s.poster_url.as_ref())
                                     .and_then(|url| {
-                                        gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, 200, 300)
+                                        gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, 300, 450)
                                             .ok()
                                             .map(|pb| gtk::gdk::Texture::for_pixbuf(&pb))
                                     })

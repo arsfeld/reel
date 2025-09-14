@@ -4,7 +4,6 @@ pub mod playback_repository;
 pub mod source_repository;
 pub mod sync_repository;
 
-use crate::events::event_bus::EventBus;
 use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{DatabaseConnection, EntityTrait};
@@ -39,22 +38,11 @@ pub trait Repository<T> {
 #[derive(Debug)]
 pub struct BaseRepository {
     pub db: Arc<DatabaseConnection>,
-    pub event_bus: Option<Arc<EventBus>>,
 }
 
 impl BaseRepository {
-    pub fn new(db: Arc<DatabaseConnection>, event_bus: Arc<EventBus>) -> Self {
-        Self {
-            db,
-            event_bus: Some(event_bus),
-        }
-    }
-
-    pub fn new_without_events(db: Arc<DatabaseConnection>) -> Self {
-        Self {
-            db,
-            event_bus: None,
-        }
+    pub fn new(db: Arc<DatabaseConnection>) -> Self {
+        Self { db }
     }
 }
 

@@ -17,7 +17,7 @@ impl ConnectionService {
         use crate::db::repository::Repository;
         use crate::db::repository::source_repository::{SourceRepository, SourceRepositoryImpl};
 
-        let repo = SourceRepositoryImpl::new_without_events(db.clone());
+        let repo = SourceRepositoryImpl::new(db.clone());
         let source = Repository::find_by_id(&repo, &source_id.to_string())
             .await?
             .ok_or_else(|| anyhow::anyhow!("Source not found"))?;

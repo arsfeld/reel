@@ -110,7 +110,7 @@ impl AuthService {
         // Use the provided server URL
 
         // Save to database
-        let repo = SourceRepositoryImpl::new_without_events(db.clone());
+        let repo = SourceRepositoryImpl::new(db.clone());
         let entity = SourceModel {
             id: source_id.to_string(),
             name,
@@ -160,7 +160,7 @@ impl AuthService {
         Self::remove_credentials(source_id).await?;
 
         // Remove from database
-        let repo = SourceRepositoryImpl::new_without_events(db.clone());
+        let repo = SourceRepositoryImpl::new(db.clone());
         repo.delete(&source_id.to_string()).await?;
 
         info!("Removed source: {}", source_id);
@@ -196,7 +196,7 @@ impl AuthService {
         let user = Self::authenticate(backend, credentials.clone()).await?;
 
         // Update source in database
-        let repo = SourceRepositoryImpl::new_without_events(db.clone());
+        let repo = SourceRepositoryImpl::new(db.clone());
         if let Some(mut source) = repo.find_by_id(&source_id.to_string()).await? {
             source.is_online = true;
             source.auth_provider_id = Some(user.id);

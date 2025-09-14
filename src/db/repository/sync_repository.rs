@@ -1,6 +1,5 @@
 use super::{BaseRepository, Repository};
 use crate::db::entities::{SyncStatus, SyncStatusActiveModel, SyncStatusModel, sync_status};
-use crate::events::event_bus::EventBus;
 use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{
@@ -23,7 +22,12 @@ pub trait SyncRepository: Repository<SyncStatusModel> {
     async fn find_running(&self) -> Result<Vec<SyncStatusModel>>;
 
     /// Start a new sync
-    async fn start_sync(&self, source_id: &str, sync_type: &str) -> Result<SyncStatusModel>;
+    async fn start_sync(
+        &self,
+        source_id: &str,
+        sync_type: &str,
+        total_items: Option<i32>,
+    ) -> Result<SyncStatusModel>;
 
     /// Complete a sync
     async fn complete_sync(&self, sync_id: i32, items_synced: i32) -> Result<()>;
@@ -54,15 +58,9 @@ pub struct SyncRepositoryImpl {
 }
 
 impl SyncRepositoryImpl {
-    pub fn new(db: Arc<DatabaseConnection>, event_bus: Arc<EventBus>) -> Self {
+    pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self {
-            base: BaseRepository::new(db, event_bus),
-        }
-    }
-
-    pub fn new_without_events(db: Arc<DatabaseConnection>) -> Self {
-        Self {
-            base: BaseRepository::new_without_events(db),
+            base: BaseRepository::new(db),
         }
     }
 }
@@ -91,6 +89,7 @@ impl Repository<SyncStatusModel> for SyncRepositoryImpl {
             started_at: Set(entity.started_at),
             completed_at: Set(entity.completed_at),
             items_synced: Set(entity.items_synced),
+            total_items: Set(entity.total_items),
             error_message: Set(entity.error_message.clone()),
         };
 
@@ -140,7 +139,12 @@ impl SyncRepository for SyncRepositoryImpl {
             .await?)
     }
 
-    async fn start_sync(&self, source_id: &str, sync_type: &str) -> Result<SyncStatusModel> {
+    async fn start_sync(
+        &self,
+        source_id: &str,
+        sync_type: &str,
+        total_items: Option<i32>,
+    ) -> Result<SyncStatusModel> {
         let now = chrono::Utc::now().naive_utc();
 
         let active_model = SyncStatusActiveModel {
@@ -151,6 +155,7 @@ impl SyncRepository for SyncRepositoryImpl {
             started_at: Set(Some(now)),
             completed_at: Set(None),
             items_synced: Set(0),
+            total_items: Set(total_items),
             error_message: Set(None),
         };
 

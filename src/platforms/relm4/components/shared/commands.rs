@@ -1,7 +1,6 @@
 use crate::db::connection::DatabaseConnection;
 use crate::db::entities::{libraries, sources};
 use crate::db::repository::{Repository, SourceRepositoryImpl};
-use crate::events::event_bus::EventBus;
 use crate::models::{LibraryId, MediaItem, MediaItemId, SourceId};
 use crate::services::core::backend::BackendService;
 use crate::services::core::media::MediaService;
@@ -70,7 +69,7 @@ pub async fn execute_command(command: AppCommand, db: &DatabaseConnection) -> Co
                 Ok(libraries) => {
                     // Get media repository to calculate item counts
                     use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
-                    let media_repo = MediaRepositoryImpl::new_without_events(db.clone());
+                    let media_repo = MediaRepositoryImpl::new(db.clone());
 
                     // Convert to entity models with actual item counts
                     let mut library_models = Vec::new();
@@ -161,7 +160,7 @@ async fn load_initial_data(
 
     // Get media repository to calculate item counts
     use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
-    let media_repo = MediaRepositoryImpl::new_without_events(db.clone());
+    let media_repo = MediaRepositoryImpl::new(db.clone());
 
     for source in &sources {
         let source_id = SourceId::new(source.id.clone());
@@ -195,7 +194,7 @@ async fn load_initial_data(
 }
 
 async fn load_all_sources(db: &DatabaseConnection) -> Result<Vec<sources::Model>> {
-    let repo = SourceRepositoryImpl::new(db.clone(), Arc::new(EventBus::new(100)));
+    let repo = SourceRepositoryImpl::new(db.clone());
     repo.find_all().await
 }
 

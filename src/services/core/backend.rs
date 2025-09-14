@@ -24,14 +24,14 @@ impl BackendService {
         media_item_id: &MediaItemId,
     ) -> Result<StreamInfo> {
         // Load media item to find its source
-        let media_repo = MediaRepositoryImpl::new_without_events(db.clone());
+        let media_repo = MediaRepositoryImpl::new(db.clone());
         let media_item = media_repo
             .find_by_id(media_item_id.as_str())
             .await?
             .ok_or_else(|| anyhow::anyhow!("Media item not found"))?;
 
         // Load source configuration
-        let source_repo = SourceRepositoryImpl::new_without_events(db.clone());
+        let source_repo = SourceRepositoryImpl::new(db.clone());
         let source_entity = source_repo
             .find_by_id(&media_item.source_id)
             .await?
@@ -148,7 +148,7 @@ impl BackendService {
         use std::sync::Arc;
 
         // Load source configuration
-        let source_repo = SourceRepositoryImpl::new_without_events(db.clone());
+        let source_repo = SourceRepositoryImpl::new(db.clone());
         let source_entity = source_repo
             .find_by_id(source_id.as_str())
             .await?
@@ -161,7 +161,7 @@ impl BackendService {
         let libraries = backend.get_libraries().await?;
 
         // Save libraries to database
-        let library_repo = LibraryRepositoryImpl::new_without_events(db.clone());
+        let library_repo = LibraryRepositoryImpl::new(db.clone());
 
         // Get existing libraries for this source to track what needs to be deleted
         let existing_libraries = library_repo.find_by_source(source_id.as_str()).await?;
@@ -234,7 +234,7 @@ impl BackendService {
     /// Test connection for a source - stateless connection test
     pub async fn test_connection(db: &DatabaseConnection, source_id: &SourceId) -> Result<bool> {
         // Load source and try to create backend
-        let source_repo = SourceRepositoryImpl::new_without_events(db.clone());
+        let source_repo = SourceRepositoryImpl::new(db.clone());
         let source_entity = source_repo
             .find_by_id(source_id.as_str())
             .await?

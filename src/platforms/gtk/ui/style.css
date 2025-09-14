@@ -1,3 +1,57 @@
+/* Floating search bar */
+.floating-search {
+    background-color: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(10px);
+    border-radius: 28px;
+    padding: 8px 16px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.floating-search entry {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: white;
+}
+
+.floating-search entry text {
+    color: white;
+}
+
+/* Metadata pills for details pages */
+.metadata-pill {
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    color: white;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.metadata-pill label {
+    color: white;
+}
+
+.metadata-pill image {
+    color: white;
+}
+
+/* Hero gradient overlay */
+.hero-gradient {
+    background: linear-gradient(to bottom,
+        transparent 0%,
+        transparent 40%,
+        rgba(0, 0, 0, 0.4) 60%,
+        rgba(0, 0, 0, 0.8) 80%,
+        rgba(0, 0, 0, 0.95) 100%);
+}
+
+/* Poster shadow for depth */
+.poster-shadow {
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5),
+                0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
 /* Skip button styles for intro/credits */
 .osd.pill {
     background-color: rgba(0, 0, 0, 0.8);
