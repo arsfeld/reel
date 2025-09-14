@@ -2,7 +2,7 @@ mod api;
 mod auth;
 
 pub use api::PlexApi;
-pub use auth::{PlexAuth, PlexConnection, PlexServer};
+pub use auth::{PlexAuth, PlexConnection, PlexPin, PlexServer};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;

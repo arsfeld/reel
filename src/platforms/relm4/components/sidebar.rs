@@ -9,6 +9,7 @@ use crate::db::connection::DatabaseConnection;
 use crate::models::auth_provider::Source;
 use crate::models::{Library, LibraryId, LibraryType, SourceId};
 use crate::services::commands::{Command, auth_commands::LoadSourcesCommand};
+use crate::services::core::media::MediaService;
 
 // Messages for the sidebar component
 #[derive(Debug)]
@@ -45,6 +46,79 @@ pub struct SourceGroup {
     source: Source,
     libraries: Vec<Library>,
     is_loading: bool,
+    db: DatabaseConnection,
+}
+
+impl SourceGroup {
+    fn update_library_list(&self, library_list: &gtk::ListBox) {
+        // Clear existing children
+        while let Some(child) = library_list.first_child() {
+            library_list.remove(&child);
+        }
+
+        // Add libraries from the actual data
+        for library in &self.libraries {
+            let row = gtk::ListBoxRow::new();
+            row.set_activatable(true);
+
+            let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+            hbox.set_margin_top(12);
+            hbox.set_margin_bottom(12);
+            hbox.set_margin_start(12);
+            hbox.set_margin_end(12);
+
+            // Icon based on library type
+            let icon_name = match library.library_type {
+                LibraryType::Movies => "video-x-generic-symbolic",
+                LibraryType::Shows => "video-display-symbolic",
+                LibraryType::Music => "audio-x-generic-symbolic",
+                LibraryType::Photos => "image-x-generic-symbolic",
+                LibraryType::Mixed => "folder-symbolic",
+            };
+            let icon = gtk::Image::from_icon_name(icon_name);
+            hbox.append(&icon);
+
+            // Library info box
+            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            vbox.set_hexpand(true);
+
+            let name_label = gtk::Label::new(Some(&library.title));
+            name_label.set_halign(gtk::Align::Start);
+            name_label.add_css_class("heading");
+            vbox.append(&name_label);
+
+            // For now, we'll show a placeholder count
+            // TODO: Get actual item count from database
+            let count_label = gtk::Label::new(Some("Loading..."));
+            count_label.set_halign(gtk::Align::Start);
+            count_label.add_css_class("dim-label");
+            count_label.add_css_class("caption");
+            vbox.append(&count_label);
+
+            hbox.append(&vbox);
+
+            // Arrow icon
+            let arrow = gtk::Image::from_icon_name("go-next-symbolic");
+            arrow.add_css_class("dim-label");
+            hbox.append(&arrow);
+
+            row.set_child(Some(&hbox));
+            library_list.append(&row);
+        }
+
+        // If no libraries, show a placeholder
+        if self.libraries.is_empty() {
+            let row = gtk::ListBoxRow::new();
+            row.set_activatable(false);
+
+            let label = gtk::Label::new(Some("No libraries found"));
+            label.set_margin_top(12);
+            label.set_margin_bottom(12);
+            label.add_css_class("dim-label");
+            row.set_child(Some(&label));
+            library_list.append(&row);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -65,7 +139,7 @@ pub enum SourceGroupOutput {
 
 #[relm4::factory(pub)]
 impl FactoryComponent for SourceGroup {
-    type Init = Source;
+    type Init = (Source, DatabaseConnection);
     type Input = SourceGroupInput;
     type Output = SourceGroupOutput;
     type CommandOutput = ();
@@ -83,144 +157,92 @@ impl FactoryComponent for SourceGroup {
                 set_margin_start: 12,
             },
 
-            gtk::ListBox {
+            #[local_ref]
+            library_list -> gtk::ListBox {
                 set_selection_mode: gtk::SelectionMode::None,
                 add_css_class: "boxed-list",
                 set_margin_start: 12,
                 set_margin_end: 12,
-
-                // Movies library
-                gtk::ListBoxRow {
-                    set_activatable: true,
-                    connect_activate => move |_| {
-                        // Will be handled by row activation
-                    },
-
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 12,
-                        set_margin_all: 12,
-
-                        gtk::Image {
-                            set_icon_name: Some("video-x-generic-symbolic"),
-                        },
-
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Vertical,
-                            set_spacing: 2,
-                            set_hexpand: true,
-
-                            gtk::Label {
-                                set_text: "Movies",
-                                set_halign: gtk::Align::Start,
-                                add_css_class: "heading",
-                            },
-
-                            gtk::Label {
-                                set_text: "1,250 items",
-                                set_halign: gtk::Align::Start,
-                                add_css_class: "dim-label",
-                                add_css_class: "caption",
-                            }
-                        },
-
-                        gtk::Image {
-                            set_icon_name: Some("go-next-symbolic"),
-                            add_css_class: "dim-label",
-                        }
-                    }
-                },
-
-                // TV Shows library
-                gtk::ListBoxRow {
-                    set_activatable: true,
-
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 12,
-                        set_margin_all: 12,
-
-                        gtk::Image {
-                            set_icon_name: Some("video-display-symbolic"),
-                        },
-
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Vertical,
-                            set_spacing: 2,
-                            set_hexpand: true,
-
-                            gtk::Label {
-                                set_text: "TV Shows",
-                                set_halign: gtk::Align::Start,
-                                add_css_class: "heading",
-                            },
-
-                            gtk::Label {
-                                set_text: "450 items",
-                                set_halign: gtk::Align::Start,
-                                add_css_class: "dim-label",
-                                add_css_class: "caption",
-                            }
-                        },
-
-                        gtk::Image {
-                            set_icon_name: Some("go-next-symbolic"),
-                            add_css_class: "dim-label",
-                        }
-                    }
-                },
-
-                // Music library
-                gtk::ListBoxRow {
-                    set_activatable: true,
-
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 12,
-                        set_margin_all: 12,
-
-                        gtk::Image {
-                            set_icon_name: Some("audio-x-generic-symbolic"),
-                        },
-
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Vertical,
-                            set_spacing: 2,
-                            set_hexpand: true,
-
-                            gtk::Label {
-                                set_text: "Music",
-                                set_halign: gtk::Align::Start,
-                                add_css_class: "heading",
-                            },
-
-                            gtk::Label {
-                                set_text: "2,890 items",
-                                set_halign: gtk::Align::Start,
-                                add_css_class: "dim-label",
-                                add_css_class: "caption",
-                            }
-                        },
-
-                        gtk::Image {
-                            set_icon_name: Some("go-next-symbolic"),
-                            add_css_class: "dim-label",
-                        }
-                    }
-                }
             }
         }
     }
 
-    fn init_model(source: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
+    fn init_model(init: Self::Init, _index: &DynamicIndex, sender: FactorySender<Self>) -> Self {
+        let (source, db) = init;
+        let source_clone = source.clone();
+        let db_clone = db.clone();
+        let sender_clone = sender.clone();
+
+        // Load libraries for this source asynchronously
+        relm4::spawn(async move {
+            let source_id = SourceId::new(source_clone.id.clone());
+            match MediaService::get_libraries_for_source(&db_clone, &source_id).await {
+                Ok(libraries) => {
+                    debug!(
+                        "Loaded {} libraries for source {}",
+                        libraries.len(),
+                        source_clone.name
+                    );
+                    sender_clone.input(SourceGroupInput::LibrariesLoaded(libraries));
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to load libraries for source {}: {}",
+                        source_clone.name, e
+                    );
+                    sender_clone.input(SourceGroupInput::LibrariesLoaded(Vec::new()));
+                }
+            }
+        });
+
         Self {
             source,
             libraries: Vec::new(),
-            is_loading: false,
+            is_loading: true,
+            db,
         }
     }
 
-    fn update(&mut self, msg: Self::Input, _sender: FactorySender<Self>) {
+    fn init_widgets(
+        &mut self,
+        _index: &DynamicIndex,
+        root: Self::Root,
+        _returned_widget: &gtk::Widget,
+        sender: FactorySender<Self>,
+    ) -> Self::Widgets {
+        let library_list = gtk::ListBox::new();
+        library_list.set_selection_mode(gtk::SelectionMode::None);
+        library_list.add_css_class("boxed-list");
+
+        // Connect row activation to send proper library IDs
+        let sender_clone = sender.clone();
+        let libraries_clone = self.libraries.clone();
+        library_list.connect_row_activated(move |_, row| {
+            if row.index() >= 0 {
+                let index = row.index() as usize;
+                if let Some(library) = libraries_clone.get(index) {
+                    let lib_id = LibraryId::new(library.id.clone());
+                    sender_clone
+                        .output(SourceGroupOutput::NavigateToLibrary(lib_id))
+                        .unwrap_or_else(|_| error!("Failed to send library navigation"));
+                }
+            }
+        });
+
+        let widgets = view_output!();
+
+        // Initially populate with any libraries we already have
+        self.update_library_list(&widgets.library_list);
+
+        widgets
+    }
+
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        msg: Self::Input,
+        sender: FactorySender<Self>,
+    ) {
         match msg {
             SourceGroupInput::LoadLibraries => {
                 self.is_loading = true;
@@ -228,6 +250,23 @@ impl FactoryComponent for SourceGroup {
             SourceGroupInput::LibrariesLoaded(libraries) => {
                 self.libraries = libraries;
                 self.is_loading = false;
+                // Update the library list widget
+                self.update_library_list(&widgets.library_list);
+
+                // Re-connect row activation with updated libraries
+                let sender_clone = sender.clone();
+                let libraries_clone = self.libraries.clone();
+                widgets.library_list.connect_row_activated(move |_, row| {
+                    if row.index() >= 0 {
+                        let index = row.index() as usize;
+                        if let Some(library) = libraries_clone.get(index) {
+                            let lib_id = LibraryId::new(library.id.clone());
+                            sender_clone
+                                .output(SourceGroupOutput::NavigateToLibrary(lib_id))
+                                .unwrap_or_else(|_| error!("Failed to send library navigation"));
+                        }
+                    }
+                });
             }
             SourceGroupInput::Refresh => {
                 debug!("Refreshing source: {}", self.source.name);
@@ -497,7 +536,9 @@ impl Component for Sidebar {
                 // Update source groups
                 self.source_groups.guard().clear();
                 for source in sources {
-                    self.source_groups.guard().push_back(source);
+                    self.source_groups
+                        .guard()
+                        .push_back((source, self.db.clone()));
                 }
             }
 

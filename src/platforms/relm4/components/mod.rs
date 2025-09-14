@@ -1,3 +1,4 @@
+pub mod dialogs;
 pub mod factories;
 pub mod main_window;
 pub mod pages;

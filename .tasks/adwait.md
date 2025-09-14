@@ -87,13 +87,13 @@
 
 **Implementation Steps**
 
-1) Restructure Main Window Layout (Relm4)
+1) ✅ Restructure Main Window Layout (Relm4) - COMPLETED
    - Update `src/platforms/relm4/components/main_window.rs` view! macro:
      - Move the top-level `ToolbarView` and `HeaderBar` into the `NavigationSplitView.sidebar` and `.content` as independent `ToolbarView` + `HeaderBar` pairs.
      - Add `Adw.StatusPage` as default content.
      - Keep `Adw.NavigationView` as child inside the content pane’s `ToolbarView`.
 
-2) Wire Header State + Back Button
+2) ✅ Wire Header State + Back Button - COMPLETED
    - On `NavigationView` push/pop, update `WindowTitle` and toggle back button visibility.
    - Standardize per-page titles/subtitles (Home, Library[name], Details[title], Player).
 
@@ -129,7 +129,13 @@
 
 **Milestones**
 
-- M1: Header refactor + empty state visible (structural parity)
+- M1: Header refactor + empty state visible (structural parity) ✅ COMPLETED
+  - ✅ Implemented per-pane ToolbarView structure
+  - ✅ Separate headers for sidebar and content panes
+  - ✅ StatusPage empty state shown by default
+  - ✅ Navigation view properly nested in content stack
+  - ✅ Back button visibility tied to navigation state
+  - ✅ Dynamic title updates on navigation
 - M2: App menu/actions + back button behavior
 - M3: CSS unification pass 1 (sidebar, headers, status pages)
 - M4: CSS unification pass 2 (cards, details, episodes, OSD)

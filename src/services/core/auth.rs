@@ -117,6 +117,9 @@ impl AuthService {
             source_type,
             auth_provider_id: Some(user.id.clone()),
             connection_url: server_url,
+            connections: None, // Will be populated later by connection discovery
+            machine_id: None,  // Will be set for Plex servers
+            is_owned: true,    // Default to owned
             is_online: true,
             last_sync: None,
             created_at: chrono::Utc::now().naive_utc(),

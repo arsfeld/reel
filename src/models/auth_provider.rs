@@ -196,8 +196,8 @@ impl From<crate::db::entities::SourceModel> for Source {
     fn from(model: crate::db::entities::SourceModel) -> Self {
         let source_type = match model.source_type.as_str() {
             "plex" => SourceType::PlexServer {
-                machine_id: model.id.clone(), // Using id as machine_id for now
-                owned: true,
+                machine_id: model.machine_id.clone().unwrap_or_else(|| model.id.clone()),
+                owned: model.is_owned,
             },
             "jellyfin" => SourceType::JellyfinServer,
             "local" => SourceType::LocalFolder {

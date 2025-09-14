@@ -10,6 +10,9 @@ pub struct Model {
     pub source_type: String, // 'plex', 'jellyfin', 'local'
     pub auth_provider_id: Option<String>,
     pub connection_url: Option<String>,
+    pub connections: Option<serde_json::Value>, // JSON array of all discovered connections
+    pub machine_id: Option<String>,             // Plex machine identifier
+    pub is_owned: bool,                         // Whether this is an owned Plex server
     pub is_online: bool,
     pub last_sync: Option<DateTime>,
     pub created_at: DateTime,

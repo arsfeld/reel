@@ -52,6 +52,12 @@ pub trait SourceRepository: Repository<SourceModel> {
 
     /// Clean up sources with unknown source_type (corrupted data)
     async fn cleanup_unknown_sources(&self) -> Result<Vec<SourceModel>>;
+
+    /// Update the primary connection URL for a source
+    async fn update_connection_url(&self, id: &str, connection_url: Option<String>) -> Result<()>;
+
+    /// Update the connections JSON for a source
+    async fn update_connections(&self, id: &str, connections: serde_json::Value) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -92,6 +98,9 @@ impl Repository<SourceModel> for SourceRepositoryImpl {
             source_type: Set(entity.source_type.clone()),
             auth_provider_id: Set(entity.auth_provider_id.clone()),
             connection_url: Set(entity.connection_url.clone()),
+            connections: Set(entity.connections.clone()),
+            machine_id: Set(entity.machine_id.clone()),
+            is_owned: Set(entity.is_owned),
             is_online: Set(entity.is_online),
             last_sync: Set(entity.last_sync),
             created_at: Set(chrono::Utc::now().naive_utc()),
@@ -354,5 +363,25 @@ impl SourceRepository for SourceRepositoryImpl {
         }
 
         Ok(removed_sources)
+    }
+
+    async fn update_connection_url(&self, id: &str, connection_url: Option<String>) -> Result<()> {
+        if let Some(source) = self.find_by_id(id).await? {
+            let mut active_model: SourceActiveModel = source.into();
+            active_model.connection_url = Set(connection_url);
+            active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+            active_model.update(self.base.db.as_ref()).await?;
+        }
+        Ok(())
+    }
+
+    async fn update_connections(&self, id: &str, connections: serde_json::Value) -> Result<()> {
+        if let Some(source) = self.find_by_id(id).await? {
+            let mut active_model: SourceActiveModel = source.into();
+            active_model.connections = Set(Some(connections));
+            active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+            active_model.update(self.base.db.as_ref()).await?;
+        }
+        Ok(())
     }
 }
