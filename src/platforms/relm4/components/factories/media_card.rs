@@ -21,6 +21,7 @@ pub struct MediaCard {
     selected: bool,
     progress_percent: f64,
     image_loaded: bool,
+    watched: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -47,93 +48,109 @@ impl FactoryComponent for MediaCard {
     type ParentWidget = gtk::FlowBox;
 
     view! {
-        root = gtk::Box {
-            set_orientation: gtk::Orientation::Vertical,
-            set_spacing: 0,
-            add_css_class: "card",
-            set_width_request: 200,
-            set_height_request: 340,
+        // Root button matching GTK MediaCard button style
+        root = gtk::Button {
+            add_css_class: "flat",
+            add_css_class: "media-card",
+            add_css_class: "poster-card",
+            set_width_request: 130,
+            set_height_request: 195,
 
+            // Main overlay container
             gtk::Overlay {
+                add_css_class: "poster-overlay",
+
+                // Poster image
                 #[name(poster)]
                 gtk::Picture {
                     set_content_fit: gtk::ContentFit::Cover,
-                    set_height_request: 300,
-                    add_css_class: "card-poster",
+                    set_width_request: 130,
+                    set_height_request: 195,
+                    add_css_class: "rounded-poster",
                 },
 
-                add_overlay = &gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    set_valign: gtk::Align::End,
-                    set_visible: self.show_progress && self.progress_percent > 0.0,
-
-                    gtk::ProgressBar {
-                        set_fraction: self.progress_percent,
-                        add_css_class: "osd",
-                        set_margin_all: 6,
-                    }
-                },
-
+                // Loading spinner overlay
                 add_overlay = &gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
                     set_halign: gtk::Align::Center,
                     set_valign: gtk::Align::Center,
-                    #[track(self.changed(MediaCard::hover()))]
-                    set_visible: self.hover,
+                    #[track(self.changed(MediaCard::image_loaded()))]
+                    set_visible: !self.image_loaded,
 
-                    gtk::Button {
-                        add_css_class: "circular",
-                        add_css_class: "suggested-action",
-                        add_css_class: "osd",
-                        set_icon_name: "media-playback-start-symbolic",
-                        set_width_request: 48,
-                        set_height_request: 48,
+                    gtk::Spinner {
+                        set_spinning: true,
+                        set_width_request: 24,
+                        set_height_request: 24,
+                    }
+                },
 
-                        connect_clicked[sender, item_id = self.item_id.clone()] => move |_| {
-                            sender.output(MediaCardOutput::Play(item_id.clone())).unwrap();
+                // Info gradient at bottom
+                add_overlay = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_valign: gtk::Align::End,
+                    add_css_class: "poster-info-gradient",
+
+                    // Inner box with text
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 2,
+                        set_margin_bottom: 8,
+                        set_margin_start: 8,
+                        set_margin_end: 8,
+                        set_margin_top: 8,
+                        add_css_class: "media-card-info",
+
+                        gtk::Label {
+                            set_label: &self.item.title,
+                            set_xalign: 0.0,
+                            set_single_line_mode: true,
+                            set_ellipsize: gtk::pango::EllipsizeMode::End,
+                            add_css_class: "title-4",
+                        },
+
+                        gtk::Label {
+                            set_label: &self.format_subtitle(),
+                            set_xalign: 0.0,
+                            set_single_line_mode: true,
+                            set_ellipsize: gtk::pango::EllipsizeMode::End,
+                            add_css_class: "subtitle",
+                            #[track(self.changed(MediaCard::item()))]
+                            set_visible: !self.format_subtitle().is_empty(),
                         }
                     }
-                }
-            },
-
-            gtk::Box {
-                set_orientation: gtk::Orientation::Vertical,
-                set_spacing: 3,
-                set_margin_all: 12,
-
-                gtk::Label {
-                    set_label: &self.item.title,
-                    set_ellipsize: gtk::pango::EllipsizeMode::End,
-                    set_max_width_chars: 20,
-                    set_xalign: 0.0,
-                    add_css_class: "heading",
                 },
 
-                gtk::Label {
-                    set_label: &self.format_subtitle(),
-                    set_ellipsize: gtk::pango::EllipsizeMode::End,
-                    set_max_width_chars: 20,
-                    set_xalign: 0.0,
-                    add_css_class: "dim-label",
-                    add_css_class: "caption",
+                // Unwatched indicator (top-right glowing dot)
+                add_overlay = &gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_halign: gtk::Align::End,
+                    set_valign: gtk::Align::Start,
+                    set_margin_top: 8,
+                    set_margin_end: 8,
                     #[track(self.changed(MediaCard::item()))]
-                    set_visible: !self.format_subtitle().is_empty(),
-                }
-            },
+                    set_visible: !self.is_watched(),
+                    add_css_class: "unwatched-indicator",
 
-            add_controller = gtk::EventControllerMotion {
-                connect_enter[sender] => move |_, _, _| {
-                    sender.input(MediaCardInput::SetHover(true));
+                    gtk::Box {
+                        set_width_request: 14,
+                        set_height_request: 14,
+                        add_css_class: "unwatched-glow-dot",
+                    }
                 },
-                connect_leave[sender] => move |_| {
-                    sender.input(MediaCardInput::SetHover(false));
+
+                // Progress bar overlay (bottom)
+                add_overlay = &gtk::ProgressBar {
+                    set_valign: gtk::Align::End,
+                    #[track(self.changed(MediaCard::progress_percent()))]
+                    set_visible: self.is_partially_watched(),
+                    #[track(self.changed(MediaCard::progress_percent()))]
+                    set_fraction: self.progress_percent,
+                    add_css_class: "media-progress",
                 }
             },
 
-            add_controller = gtk::GestureClick {
-                connect_released[sender, item_id = self.item_id.clone()] => move |_, _, _, _| {
-                    sender.output(MediaCardOutput::Clicked(item_id.clone())).unwrap();
-                }
+            connect_clicked[sender, item_id = self.item_id.clone()] => move |_| {
+                sender.output(MediaCardOutput::Clicked(item_id.clone())).unwrap();
             }
         }
     }
@@ -161,6 +178,7 @@ impl FactoryComponent for MediaCard {
             selected: false,
             progress_percent: 0.0,
             image_loaded: false,
+            watched: false, // TODO: Get from playback progress
             tracker: 0,
         }
     }
@@ -195,24 +213,61 @@ impl MediaCard {
         match self.item.media_type.as_str() {
             "movie" => {
                 if let Some(year) = self.item.year {
-                    format!("{} • Movie", year)
+                    format!("{}", year)
                 } else {
-                    "Movie".to_string()
+                    String::new()
                 }
             }
             "show" => {
-                format!("TV Show")
+                // For shows, we'll extract episode count from metadata if available
+                // Otherwise default to "TV Series"
+                if let Some(metadata) = &self.item.metadata {
+                    // Try to extract episode count from metadata JSON
+                    if let Some(episode_count) =
+                        metadata.get("total_episode_count").and_then(|v| v.as_u64())
+                    {
+                        if episode_count == 1 {
+                            "1 episode".to_string()
+                        } else {
+                            format!("{} episodes", episode_count)
+                        }
+                    } else if let Some(season_count) =
+                        metadata.get("season_count").and_then(|v| v.as_u64())
+                    {
+                        if season_count == 1 {
+                            "1 season".to_string()
+                        } else {
+                            format!("{} seasons", season_count)
+                        }
+                    } else {
+                        "TV Series".to_string()
+                    }
+                } else {
+                    "TV Series".to_string()
+                }
             }
             "episode" => {
+                // For episodes, format like GTK version
                 if let (Some(season), Some(episode)) =
                     (self.item.season_number, self.item.episode_number)
                 {
-                    format!("S{:02}E{:02}", season, episode)
+                    format!("S{}E{}", season, episode)
                 } else {
                     "Episode".to_string()
                 }
             }
             _ => String::new(),
         }
+    }
+
+    fn is_watched(&self) -> bool {
+        // This will be determined by playback progress from the database
+        // For now, use the watched field we track
+        self.watched
+    }
+
+    fn is_partially_watched(&self) -> bool {
+        // Check if progress is between 0 and 90%
+        self.progress_percent > 0.0 && self.progress_percent < 0.9
     }
 }

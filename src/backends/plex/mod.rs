@@ -465,18 +465,49 @@ impl MediaBackend for PlexBackend {
 
             match PlexAuth::discover_servers(&token).await {
                 Ok(servers) => {
+                    tracing::info!("Discovered {} Plex servers", servers.len());
+
+                    // Log server details for debugging
+                    for server in &servers {
+                        tracing::debug!(
+                            "Server: {} (ID: {}, Owned: {})",
+                            server.name,
+                            server.client_identifier,
+                            server.owned
+                        );
+                    }
+
                     // Find the right server based on our source's machine_id if available
                     let target_server = if let Some(ref source) = self.source {
                         if let SourceType::PlexServer { ref machine_id, .. } = source.source_type {
-                            servers.iter().find(|s| &s.client_identifier == machine_id)
+                            tracing::info!("Looking for server with machine_id: {}", machine_id);
+                            let found = servers.iter().find(|s| &s.client_identifier == machine_id);
+                            if found.is_none() && !machine_id.is_empty() {
+                                tracing::warn!(
+                                    "Could not find server with machine_id: {}. Available servers: {:?}",
+                                    machine_id,
+                                    servers
+                                        .iter()
+                                        .map(|s| &s.client_identifier)
+                                        .collect::<Vec<_>>()
+                                );
+                            }
+                            found
                         } else {
+                            tracing::info!("Source type is not PlexServer, using first server");
                             servers.first()
                         }
                     } else {
+                        tracing::info!("No source info available, using first server");
                         servers.first()
                     };
 
                     if let Some(server) = target_server {
+                        tracing::info!(
+                            "Selected server: {} (ID: {})",
+                            server.name,
+                            server.client_identifier
+                        );
                         // Test all connections in parallel and use the fastest one
                         match self.find_best_connection(server, &token).await {
                             Ok(best_conn) => {
@@ -521,26 +552,46 @@ impl MediaBackend for PlexBackend {
                             }
                             Err(e) => {
                                 tracing::warn!("Failed to connect to any server endpoint: {}", e);
+                                // Return error if we can't connect to the server
+                                return Err(anyhow::anyhow!(
+                                    "Failed to connect to Plex server '{}': {}. The server may be offline or unreachable.",
+                                    server.name,
+                                    e
+                                ));
                             }
                         }
                     } else {
-                        tracing::warn!("No Plex servers found");
+                        tracing::warn!("No matching Plex server found for this source");
+                        // Return error if we couldn't find or connect to any server
+                        return Err(anyhow::anyhow!(
+                            "No matching Plex server found. The server may be offline or the source configuration may be incorrect."
+                        ));
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to discover servers (will retry later): {}", e);
-                    // Still return success since we have the user authenticated
-                    // Server discovery can be retried later
+                    tracing::warn!("Failed to discover servers: {}", e);
+                    // Return error if we can't discover servers
+                    return Err(anyhow::anyhow!(
+                        "Failed to discover Plex servers: {}. Please check your network connection.",
+                        e
+                    ));
                 }
             }
         }
 
-        Ok(Some(User {
-            id: plex_user.id.to_string(),
-            username: plex_user.username,
-            email: Some(plex_user.email),
-            avatar_url: plex_user.thumb,
-        }))
+        // Only return success if we have successfully initialized the API
+        if self.is_initialized().await {
+            Ok(Some(User {
+                id: plex_user.id.to_string(),
+                username: plex_user.username,
+                email: Some(plex_user.email),
+                avatar_url: plex_user.thumb,
+            }))
+        } else {
+            Err(anyhow::anyhow!(
+                "Failed to initialize Plex backend. API client not properly configured."
+            ))
+        }
     }
 
     async fn is_initialized(&self) -> bool {
