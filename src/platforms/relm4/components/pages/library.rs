@@ -137,9 +137,9 @@ impl AsyncComponent for LibraryPage {
                     set_orientation: gtk::Orientation::Horizontal,
                     set_spacing: 12,
 
-                    // Search entry
+                    // Search entry matching GTK version
                     gtk::SearchEntry {
-                        set_placeholder_text: Some("Search..."),
+                        set_placeholder_text: Some("Search movies..."),
                         set_hexpand: true,
                         connect_search_changed[sender] => move |entry| {
                             sender.input(LibraryPageInput::SetFilter(entry.text().to_string()));
@@ -180,21 +180,25 @@ impl AsyncComponent for LibraryPage {
                 },
             },
 
-            // Content area
+            // Content area - matching GTK library page exactly
             gtk::ScrolledWindow {
                 set_vexpand: true,
                 set_hscrollbar_policy: gtk::PolicyType::Never,
+                set_vscrollbar_policy: gtk::PolicyType::Automatic,
 
                 #[local_ref]
                 media_box -> gtk::FlowBox {
-                    set_orientation: gtk::Orientation::Horizontal,
-                    set_column_spacing: 12,
-                    set_row_spacing: 12,
+                    set_column_spacing: 16,  // Tighter spacing like GTK version
+                    set_row_spacing: 20,      // Good vertical spacing
                     set_homogeneous: true,
-                    set_min_children_per_line: 2,
-                    set_max_children_per_line: 10,
+                    set_min_children_per_line: 4,   // More items per row with smaller sizes
+                    set_max_children_per_line: 12,  // Allow more on wide screens
                     set_selection_mode: gtk::SelectionMode::None,
-                    set_margin_all: 12,
+                    set_margin_top: 16,
+                    set_margin_bottom: 16,
+                    set_margin_start: 16,
+                    set_margin_end: 16,
+                    set_valign: gtk::Align::Start,
 
                     // Scroll detection for infinite scrolling
                     add_controller = gtk::EventControllerScroll {

@@ -18,24 +18,37 @@ impl ReelApp {
     }
 
     pub fn run(self) -> anyhow::Result<()> {
-        // Set global CSS
+        // Set global CSS matching GTK library styles exactly
         relm4::set_global_css(
             r#"
-            /* Typography Classes */
+            /* Typography Classes from GTK */
             .title-1 {
                 font-size: 32pt;
                 font-weight: 800;
                 line-height: 1.1;
+                text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8),
+                             0 1px 3px rgba(0, 0, 0, 0.9);
             }
             .title-2 {
                 font-size: 24pt;
                 font-weight: 700;
                 line-height: 1.2;
+                color: rgba(255, 255, 255, 0.7);
+                font-size: 14px;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
             }
             .title-3 {
                 font-size: 18pt;
                 font-weight: 600;
                 line-height: 1.2;
+            }
+            .title-4 {
+                color: white;
+                font-weight: 600;
+                text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+                font-size: 0.85em;
             }
             .heading {
                 font-size: 15pt;
@@ -50,38 +63,179 @@ impl ReelApp {
                 font-size: 9pt;
                 line-height: 1.3;
             }
+            .caption.bold {
+                font-weight: bold;
+            }
+            .subtitle {
+                color: rgba(255, 255, 255, 0.85);
+                font-size: 0.75em;
+                text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+            }
             .dim-label {
                 opacity: 0.55;
+                color: rgba(255, 255, 255, 0.6);
+                font-size: 14px;
             }
 
-            /* Media Cards */
-            .media-card {
-                background: var(--card-bg-color);
+            /* Card Base Styles */
+            .card {
                 border-radius: 8px;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-                padding: 12px;
-                margin: 6px;
-                transition: all 0.2s ease;
-            }
-            .media-card:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                background-color: @card_bg_color;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
             }
 
-            /* Progress indicators */
-            .progress-bar {
-                background: var(--accent-color);
-                border-radius: 2px;
-                min-height: 4px;
+            /* Movie Poster Card Styles - GTK Library Exact Match */
+            .poster-card {
+                border-radius: 8px;
+                transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+                width: 130px;
+                height: 195px;
             }
 
-            /* Player styles */
-            .video-area {
-                background-color: black;
+            .poster-card:hover {
+                transform: scale(1.03) translateY(-2px);
+                box-shadow: 0 10px 20px rgba(0, 0, 0, 0.25),
+                            0 4px 8px rgba(0, 0, 0, 0.15);
             }
-            .fullscreen .video-area {
-                background-color: black;
+
+            /* Poster Overlay Container */
+            .poster-overlay {
+                border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15),
+                            0 1px 3px rgba(0, 0, 0, 0.1);
+                background: linear-gradient(to bottom,
+                            rgba(255, 255, 255, 0.02) 0%,
+                            transparent 50%,
+                            rgba(0, 0, 0, 0.03) 100%);
+                width: 130px;
+                height: 195px;
+            }
+
+            /* Rounded Poster Image */
+            .rounded-poster {
+                border-radius: 8px;
+            }
+
+            /* Info Gradient at Bottom of Poster */
+            .poster-info-gradient {
+                background: linear-gradient(to top,
+                            rgba(0, 0, 0, 0.95) 0%,
+                            rgba(0, 0, 0, 0.7) 50%,
+                            rgba(0, 0, 0, 0) 100%);
+                padding: 6px 8px;
+                padding-bottom: 8px;
+                border-bottom-left-radius: 6px;
+                border-bottom-right-radius: 6px;
+                min-height: 50px;
+            }
+
+            /* Text on Poster */
+            .poster-info-gradient label.title-4 {
+                color: white;
+                font-weight: 600;
+                text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+                font-size: 0.85em;
+            }
+
+            .poster-info-gradient label.subtitle {
+                color: rgba(255, 255, 255, 0.85);
+                font-size: 0.75em;
+                text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+            }
+
+            /* Loading Spinner Styling */
+            .poster-card spinner {
+                background: rgba(0, 0, 0, 0.5);
+                border-radius: 50%;
+                padding: 6px;
+            }
+
+            /* Poster Background Gradient */
+            .poster-card picture {
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            }
+
+            /* Flow Box Child Sizing */
+            flowboxchild {
+                width: 130px;
+                height: 195px;
+            }
+
+            /* Badge Styles */
+            .badge {
+                background-color: alpha(@accent_color, 0.8);
+                color: @accent_fg_color;
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-weight: bold;
+            }
+
+            .badge.small {
+                font-size: 0.8em;
+            }
+
+            /* Watched Overlay */
+            .watched-overlay {
+                background: linear-gradient(to bottom, transparent, alpha(black, 0.6));
+                border-radius: 0 0 8px 8px;
+            }
+
+            /* Unwatched Indicator */
+            .unwatched-indicator {
+                filter: drop-shadow(0 2px 6px alpha(black, 0.5));
+            }
+
+            .unwatched-glow-dot {
+                background: radial-gradient(circle, #3584e4, #1c71d8);
+                border-radius: 50%;
+                border: 2px solid rgba(255, 255, 255, 0.9);
+                box-shadow: 0 0 12px #3584e4,
+                            0 0 24px #3584e4,
+                            0 0 36px #1c71d8,
+                            inset 0 0 10px rgba(255, 255, 255, 0.4);
+            }
+
+            /* Media Progress Bar */
+            .media-progress {
+                min-height: 3px;
+                border-radius: 0 0 8px 8px;
+            }
+
+            /* Media Card Info Box */
+            .media-card-info {
                 padding: 0;
+                margin: 0;
+            }
+
+            /* Flow Box in Library */
+            flowbox {
+                background: transparent;
+            }
+
+            /* Search Entry Styles */
+            searchentry {
+                border-radius: 6px;
+                padding: 6px;
+            }
+
+            /* Dropdown Styles */
+            dropdown {
+                min-width: 120px;
+            }
+
+            dropdown button {
+                padding: 4px 8px;
+            }
+
+            /* Header Bar Separator */
+            headerbar separator {
+                margin: 0 8px;
+                opacity: 0.3;
+            }
+
+            /* Status Pages */
+            statuspage > box {
+                margin: 24px;
             }
 
             /* OSD Controls */
@@ -92,9 +246,18 @@ impl ReelApp {
                 margin: 12px;
             }
             .osd.pill {
-                background: rgba(0,0,0,0.75);
-                border-radius: 999px;
-                padding: 12px 24px;
+                background-color: rgba(0, 0, 0, 0.8);
+                border-radius: 20px;
+                padding: 10px 20px;
+                color: white;
+                font-weight: bold;
+                border: 2px solid rgba(255, 255, 255, 0.3);
+                transition: all 200ms ease;
+            }
+            .osd.pill:hover {
+                background-color: rgba(0, 0, 0, 0.9);
+                border-color: rgba(255, 255, 255, 0.5);
+                transform: scale(1.05);
             }
             .osd scale {
                 min-width: 200px;
@@ -110,10 +273,18 @@ impl ReelApp {
                 background: rgba(255,255,255,0.2);
             }
 
-            /* Navigation styles */
+            /* Navigation Sidebar */
             .navigation-sidebar {
                 background: transparent;
                 padding: 6px;
+            }
+            .navigation-sidebar listbox row:has(separator) {
+                min-height: 0;
+                padding: 0;
+                background: transparent;
+            }
+            .navigation-sidebar listbox row separator {
+                opacity: 0.15;
             }
             .navigation-sidebar row {
                 border-radius: 6px;
@@ -128,32 +299,47 @@ impl ReelApp {
                 background: alpha(currentColor, 0.07);
             }
 
-            /* Card overlays */
-            .poster-overlay {
-                background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
-                padding: 12px;
-            }
-
-            /* Episode cards */
+            /* Episode Cards */
             .episode-card {
-                border-radius: 8px;
-                background: var(--card-bg-color);
-                padding: 8px;
-                transition: all 0.2s ease;
+                border-radius: 10px;
+                background: transparent;
+                transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+                overflow: visible;
+                border: none;
+                box-shadow: none;
             }
             .episode-card:hover {
-                transform: scale(1.02);
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                transform: translateY(-2px);
             }
 
-            /* Pills and badges */
+            /* Pills and Badges */
             .pill {
                 border-radius: 999px;
                 padding: 6px 12px;
                 font-weight: 500;
             }
+            .pill.suggested-action {
+                background: linear-gradient(135deg, @accent_color, shade(@accent_color, 0.9));
+                box-shadow: 0 4px 12px alpha(@accent_color, 0.3),
+                            inset 0 1px 0 alpha(white, 0.2);
+                transition: all 200ms ease-in-out;
+            }
+            .pill.suggested-action:hover {
+                box-shadow: 0 6px 20px alpha(@accent_color, 0.4),
+                            inset 0 1px 0 alpha(white, 0.3);
+                transform: translateY(-1px);
+            }
+            .pill:not(.suggested-action) {
+                background: @card_bg_color;
+                border: 1px solid alpha(@borders, 0.3);
+                transition: all 200ms ease-in-out;
+            }
+            .pill:not(.suggested-action):hover {
+                background: shade(@card_bg_color, 1.1);
+                transform: translateY(-1px);
+            }
 
-            /* Loading states */
+            /* Loading States */
             @keyframes pulse {
                 0% { opacity: 0.6; }
                 50% { opacity: 1.0; }
@@ -161,6 +347,15 @@ impl ReelApp {
             }
             .loading {
                 animation: pulse 1.5s ease-in-out infinite;
+            }
+
+            /* Player Styles */
+            .video-area {
+                background-color: black;
+            }
+            .fullscreen .video-area {
+                background-color: black;
+                padding: 0;
             }
             "#,
         );

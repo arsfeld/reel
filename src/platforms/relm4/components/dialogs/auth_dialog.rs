@@ -4,11 +4,13 @@ use libadwaita::prelude::*;
 use relm4::component::{AsyncComponent, AsyncComponentParts, AsyncComponentSender};
 use tracing::info;
 
+use crate::backends::MediaBackend;
+use crate::backends::jellyfin::JellyfinBackend;
 use crate::backends::plex::{PlexAuth, PlexPin};
 use crate::db::connection::DatabaseConnection;
 use crate::models::{Credentials, Source, SourceId};
-// use crate::services::commands::auth_commands::CreateSourceCommand;
-// use crate::services::commands::Command;
+use crate::services::commands::Command;
+use crate::services::commands::auth_commands::CreateSourceCommand;
 
 #[derive(Debug, Clone)]
 pub enum BackendType {
@@ -32,6 +34,7 @@ pub enum AuthDialogInput {
     OpenPlexLink,
     // Jellyfin inputs
     ConnectJellyfin,
+    JellyfinAuthError(String),
     RetryJellyfin,
     // Manual Plex inputs
     ConnectManualPlex,
@@ -403,7 +406,7 @@ impl AsyncComponent for AuthDialog {
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
-        let model = AuthDialog {
+        let mut model = AuthDialog {
             db,
             backend_type: BackendType::Plex,
             is_visible: false,
@@ -445,6 +448,9 @@ impl AsyncComponent for AuthDialog {
 
         let widgets = view_output!();
 
+        // Store reference to dialog for later use
+        model.dialog = widgets.dialog.clone();
+
         // Start progress bar pulse animations
         glib::timeout_add_local(std::time::Duration::from_millis(100), {
             let auth_progress = model.auth_progress.clone();
@@ -469,10 +475,20 @@ impl AsyncComponent for AuthDialog {
             AuthDialogInput::Show => {
                 info!("Showing auth dialog");
                 self.is_visible = true;
+
+                // Try to get the application and window
                 if let Some(app) = relm4::main_application().downcast_ref::<adw::Application>() {
+                    info!("Got application");
                     if let Some(window) = app.active_window() {
+                        info!("Got active window, presenting dialog");
                         self.dialog.present(Some(&window));
+                    } else {
+                        info!("No active window found, presenting without parent");
+                        self.dialog.present(None::<&gtk4::Window>);
                     }
+                } else {
+                    info!("Could not get application, presenting without parent");
+                    self.dialog.present(None::<&gtk4::Window>);
                 }
             }
 
@@ -756,16 +772,67 @@ impl AsyncComponent for AuthDialog {
                 self.jellyfin_auth_in_progress = true;
                 self.jellyfin_auth_error = None;
 
-                // TODO: Actually authenticate with Jellyfin
-                // For now, just simulate success after a delay
+                // Authenticate with Jellyfin
+                let url = self.jellyfin_url.clone();
+                let username = self.jellyfin_username.clone();
+                let password = self.jellyfin_password.clone();
+                let db = self.db.clone();
                 let sender_clone = sender.clone();
-                sender.oneshot_command(async move {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                    sender_clone.input(AuthDialogInput::Hide);
-                });
 
-                self.jellyfin_auth_success = true;
+                sender.oneshot_command(async move {
+                    // Create Jellyfin backend
+                    let jellyfin_client = JellyfinBackend::new();
+
+                    // Authenticate directly with credentials and URL
+                    match jellyfin_client
+                        .authenticate_with_credentials(&url, &username, &password)
+                        .await
+                    {
+                        Ok(_) => {
+                            info!("Jellyfin authentication successful for user: {}", username);
+
+                            // Create credentials for storage
+                            let credentials = Credentials::UsernamePassword {
+                                username: username.clone(),
+                                password: password.clone(),
+                            };
+
+                            // Create the source using CreateSourceCommand
+                            let command = CreateSourceCommand {
+                                db,
+                                backend: &jellyfin_client as &dyn MediaBackend,
+                                source_type: "jellyfin".to_string(),
+                                name: format!("Jellyfin - {}", username),
+                                credentials,
+                                server_url: Some(url),
+                            };
+
+                            match command.execute().await {
+                                Ok(source) => {
+                                    info!("Created Jellyfin source: {}", source.id);
+                                    let source_id = SourceId::new(source.id);
+                                    sender_clone.input(AuthDialogInput::SourceCreated(source_id));
+                                }
+                                Err(e) => {
+                                    let error_msg = format!("Failed to create source: {}", e);
+                                    sender_clone
+                                        .input(AuthDialogInput::JellyfinAuthError(error_msg));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let error_msg = format!("Authentication failed: {}", e);
+                            sender_clone.input(AuthDialogInput::JellyfinAuthError(error_msg));
+                        }
+                    }
+                });
+            }
+
+            AuthDialogInput::JellyfinAuthError(error) => {
+                info!("Jellyfin auth error: {}", error);
+                self.jellyfin_auth_error = Some(error);
                 self.jellyfin_auth_in_progress = false;
+                self.jellyfin_auth_success = false;
             }
 
             AuthDialogInput::RetryJellyfin => {

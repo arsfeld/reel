@@ -61,6 +61,11 @@ impl SourceGroup {
             let row = gtk::ListBoxRow::new();
             row.set_activatable(true);
 
+            // Store the library ID as data on the row
+            unsafe {
+                row.set_data("library_id", library.id.clone());
+            }
+
             let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 12);
             hbox.set_margin_top(12);
             hbox.set_margin_bottom(12);
@@ -216,12 +221,11 @@ impl FactoryComponent for SourceGroup {
 
         // Connect row activation to send proper library IDs
         let sender_clone = sender.clone();
-        let libraries_clone = self.libraries.clone();
         library_list.connect_row_activated(move |_, row| {
-            if row.index() >= 0 {
-                let index = row.index() as usize;
-                if let Some(library) = libraries_clone.get(index) {
-                    let lib_id = LibraryId::new(library.id.clone());
+            // Get the library ID from the row data
+            unsafe {
+                if let Some(library_id) = row.data::<String>("library_id") {
+                    let lib_id = LibraryId::new(library_id.as_ref().clone());
                     sender_clone
                         .output(SourceGroupOutput::NavigateToLibrary(lib_id))
                         .unwrap_or_else(|_| error!("Failed to send library navigation"));
@@ -252,21 +256,6 @@ impl FactoryComponent for SourceGroup {
                 self.is_loading = false;
                 // Update the library list widget
                 self.update_library_list(&widgets.library_list);
-
-                // Re-connect row activation with updated libraries
-                let sender_clone = sender.clone();
-                let libraries_clone = self.libraries.clone();
-                widgets.library_list.connect_row_activated(move |_, row| {
-                    if row.index() >= 0 {
-                        let index = row.index() as usize;
-                        if let Some(library) = libraries_clone.get(index) {
-                            let lib_id = LibraryId::new(library.id.clone());
-                            sender_clone
-                                .output(SourceGroupOutput::NavigateToLibrary(lib_id))
-                                .unwrap_or_else(|_| error!("Failed to send library navigation"));
-                        }
-                    }
-                });
             }
             SourceGroupInput::Refresh => {
                 debug!("Refreshing source: {}", self.source.name);
@@ -311,6 +300,7 @@ impl Component for Sidebar {
                     set_spacing: 12,
 
                     // Welcome section - shown when no sources
+                    #[name = "welcome_box"]
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
                         set_spacing: 24,
@@ -347,6 +337,7 @@ impl Component for Sidebar {
                     },
 
                     // Home section - shown when sources exist
+                    #[name = "home_section"]
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
                         set_spacing: 12,
@@ -406,6 +397,7 @@ impl Component for Sidebar {
                     },
 
                     // Status container
+                    #[name = "status_container"]
                     gtk::Box {
                         set_orientation: gtk::Orientation::Horizontal,
                         set_spacing: 6,
@@ -496,7 +488,13 @@ impl Component for Sidebar {
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        msg: Self::Input,
+        sender: ComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
         match msg {
             SidebarInput::RefreshSources => {
                 debug!("Refreshing sources from database");
@@ -532,6 +530,12 @@ impl Component for Sidebar {
                 } else {
                     self.connection_status = format!("All {} sources connected", sources.len());
                 }
+
+                // Update visibility based on has_sources
+                widgets.welcome_box.set_visible(!self.has_sources);
+                widgets.home_section.set_visible(self.has_sources);
+                widgets.sources_container.set_visible(self.has_sources);
+                widgets.status_container.set_visible(self.has_sources);
 
                 // Update source groups
                 self.source_groups.guard().clear();
