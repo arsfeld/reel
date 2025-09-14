@@ -67,10 +67,10 @@ impl SourceGroup {
             }
 
             let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-            hbox.set_margin_top(12);
-            hbox.set_margin_bottom(12);
-            hbox.set_margin_start(12);
-            hbox.set_margin_end(12);
+            hbox.set_margin_top(8);
+            hbox.set_margin_bottom(8);
+            hbox.set_margin_start(8);
+            hbox.set_margin_end(8);
 
             // Icon based on library type
             let icon_name = match library.library_type {
@@ -102,10 +102,7 @@ impl SourceGroup {
 
             hbox.append(&vbox);
 
-            // Arrow icon
-            let arrow = gtk::Image::from_icon_name("go-next-symbolic");
-            arrow.add_css_class("dim-label");
-            hbox.append(&arrow);
+            // Remove arrow icon for cleaner look
 
             row.set_child(Some(&hbox));
             library_list.append(&row);
@@ -153,21 +150,19 @@ impl FactoryComponent for SourceGroup {
     view! {
         root = gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
-            set_spacing: 18,
+            set_spacing: 12,
 
             gtk::Label {
                 set_text: &self.source.name,
                 set_halign: gtk::Align::Start,
-                add_css_class: "heading",
-                set_margin_start: 12,
+                add_css_class: "dim-label",
+                add_css_class: "caption",
             },
 
             #[local_ref]
             library_list -> gtk::ListBox {
                 set_selection_mode: gtk::SelectionMode::None,
                 add_css_class: "boxed-list",
-                set_margin_start: 12,
-                set_margin_end: 12,
             }
         }
     }
@@ -284,6 +279,7 @@ impl Component for Sidebar {
     view! {
         root = gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
+            add_css_class: "navigation-sidebar",
 
             // Scrollable content area
             gtk::ScrolledWindow {
@@ -293,10 +289,6 @@ impl Component for Sidebar {
 
                 gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
-                    set_margin_top: 12,
-                    set_margin_bottom: 12,
-                    set_margin_start: 12,
-                    set_margin_end: 12,
                     set_spacing: 12,
 
                     // Welcome section - shown when no sources
@@ -311,7 +303,7 @@ impl Component for Sidebar {
 
                         gtk::Image {
                             set_icon_name: Some("applications-multimedia-symbolic"),
-                            set_pixel_size: 64,
+                            set_pixel_size: 128,
                             add_css_class: "dim-label",
                         },
 
@@ -378,9 +370,6 @@ impl Component for Sidebar {
                                         }
                                     },
 
-                                    gtk::Image {
-                                        set_icon_name: Some("go-next-symbolic"),
-                                    }
                                 },
 
                                 connect_activate => SidebarInput::NavigateHome,

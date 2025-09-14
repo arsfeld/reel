@@ -436,6 +436,7 @@ impl AsyncComponent for MainWindow {
                                         "Found {} sources to sync on startup",
                                         sources.len()
                                     );
+                                    let mut any_synced = false;
                                     for source in sources {
                                         let source_id = SourceId::new(source.id.clone());
                                         tracing::info!(
@@ -453,6 +454,7 @@ impl AsyncComponent for MainWindow {
                                                     source.name,
                                                     sync_result.items_synced
                                                 );
+                                                any_synced = true;
                                             }
                                             Err(e) => {
                                                 tracing::error!(
@@ -462,6 +464,11 @@ impl AsyncComponent for MainWindow {
                                                 );
                                             }
                                         }
+                                    }
+
+                                    // After all syncs complete, refresh the sidebar
+                                    if any_synced {
+                                        // We'll handle the refresh after this command completes
                                     }
                                 }
                                 Err(e) => {
@@ -473,8 +480,13 @@ impl AsyncComponent for MainWindow {
                             }
                         });
 
-                        // Also trigger a sidebar refresh after initiating syncs
-                        sender.input(MainWindowInput::Navigate("refresh_sidebar".to_string()));
+                        // Schedule a delayed sidebar refresh since sources might sync
+                        let sender_clone = sender.clone();
+                        relm4::spawn_local(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            sender_clone
+                                .input(MainWindowInput::Navigate("refresh_sidebar".to_string()));
+                        });
                     }
                     "update_header" => {
                         // Update back button visibility based on navigation stack
@@ -640,6 +652,13 @@ impl AsyncComponent for MainWindow {
                         tracing::info!("Refreshing sidebar after sync");
                         // Trigger sidebar refresh
                         self.sidebar.emit(SidebarInput::RefreshSources);
+                    }
+                    "refresh_sources_page" => {
+                        // Refresh sources page if it exists
+                        if let Some(ref sources_page) = self.sources_page {
+                            tracing::info!("Refreshing sources page after sync");
+                            sources_page.emit(crate::platforms::relm4::components::pages::sources::SourcesPageInput::LoadData);
+                        }
                     }
                     _ => {}
                 }
@@ -875,8 +894,16 @@ impl AsyncComponent for MainWindow {
                     }
                 });
 
-                // Trigger a manual refresh of the sidebar after scheduling sync
-                sender.input(MainWindowInput::Navigate("refresh_sidebar".to_string()));
+                // Schedule UI refresh after sync completes
+                let sender_clone = sender.clone();
+                relm4::spawn_local(async move {
+                    // Wait for sync to complete (approximate time)
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    sender_clone.input(MainWindowInput::Navigate("refresh_sidebar".to_string()));
+                    sender_clone.input(MainWindowInput::Navigate(
+                        "refresh_sources_page".to_string(),
+                    ));
+                });
             }
             MainWindowInput::RestoreWindowChrome => {
                 tracing::info!("Restoring window chrome after player");

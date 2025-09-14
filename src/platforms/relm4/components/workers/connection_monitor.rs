@@ -83,7 +83,7 @@ impl Worker for ConnectionMonitor {
                 let sender = sender.clone();
 
                 tokio::spawn(async move {
-                    let repo = SourceRepositoryImpl::new_without_events(db.clone());
+                    let repo = SourceRepositoryImpl::new(db.clone());
 
                     match Repository::find_all(&repo).await {
                         Ok(sources) => {

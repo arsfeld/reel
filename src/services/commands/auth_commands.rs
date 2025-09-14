@@ -133,7 +133,7 @@ pub struct LoadSourcesCommand {
 #[async_trait]
 impl Command<Vec<Source>> for LoadSourcesCommand {
     async fn execute(&self) -> Result<Vec<Source>> {
-        let repo = SourceRepositoryImpl::new_without_events(self.db.clone());
+        let repo = SourceRepositoryImpl::new(self.db.clone());
         let source_models = repo.find_all().await?;
 
         // Convert SourceModel to Source

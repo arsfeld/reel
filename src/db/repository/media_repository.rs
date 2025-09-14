@@ -1,9 +1,5 @@
 use super::{BaseRepository, Repository};
 use crate::db::entities::{MediaItem, MediaItemActiveModel, MediaItemModel, media_items};
-use crate::events::{
-    event_bus::EventBus,
-    types::{DatabaseEvent, EventPayload, EventType},
-};
 use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{
@@ -71,15 +67,9 @@ pub struct MediaRepositoryImpl {
 }
 
 impl MediaRepositoryImpl {
-    pub fn new(db: Arc<DatabaseConnection>, event_bus: Arc<EventBus>) -> Self {
+    pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self {
-            base: BaseRepository::new(db, event_bus),
-        }
-    }
-
-    pub fn new_without_events(db: Arc<DatabaseConnection>) -> Self {
-        Self {
-            base: BaseRepository::new_without_events(db),
+            base: BaseRepository::new(db),
         }
     }
 
@@ -178,22 +168,8 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
 
         let result = active_model.insert(self.base.db.as_ref()).await?;
 
-        // Emit MediaCreated event
-        let event = DatabaseEvent::new(
-            EventType::MediaCreated,
-            EventPayload::Media {
-                id: result.id.clone(),
-                media_type: result.media_type.clone(),
-                library_id: result.library_id.clone(),
-                source_id: result.source_id.clone(),
-            },
-        );
-
-        if let Some(event_bus) = &self.base.event_bus {
-            if let Err(e) = event_bus.publish(event).await {
-                tracing::warn!("Failed to publish MediaCreated event: {}", e);
-            }
-        }
+        // TODO: Broadcast via MessageBroker when needed
+        // BROKER.notify_media_updated(result.id.clone()).await;
 
         Ok(result)
     }
@@ -204,22 +180,8 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
 
         let result = active_model.update(self.base.db.as_ref()).await?;
 
-        // Emit MediaUpdated event
-        let event = DatabaseEvent::new(
-            EventType::MediaUpdated,
-            EventPayload::Media {
-                id: result.id.clone(),
-                media_type: result.media_type.clone(),
-                library_id: result.library_id.clone(),
-                source_id: result.source_id.clone(),
-            },
-        );
-
-        if let Some(event_bus) = &self.base.event_bus {
-            if let Err(e) = event_bus.publish(event).await {
-                tracing::warn!("Failed to publish MediaUpdated event: {}", e);
-            }
-        }
+        // TODO: Broadcast via MessageBroker when needed
+        // BROKER.notify_media_updated(result.id.clone()).await;
 
         Ok(result)
     }
@@ -232,24 +194,10 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
             .exec(self.base.db.as_ref())
             .await?;
 
-        // Emit MediaDeleted event if entity existed
-        if let Some(media) = entity {
-            let event = DatabaseEvent::new(
-                EventType::MediaDeleted,
-                EventPayload::Media {
-                    id: media.id.clone(),
-                    media_type: media.media_type.clone(),
-                    library_id: media.library_id.clone(),
-                    source_id: media.source_id.clone(),
-                },
-            );
-
-            if let Some(event_bus) = &self.base.event_bus {
-                if let Err(e) = event_bus.publish(event).await {
-                    tracing::warn!("Failed to publish MediaDeleted event: {}", e);
-                }
-            }
-        }
+        // TODO: Broadcast via MessageBroker when needed
+        // if entity.is_some() {
+        //     BROKER.notify_media_updated(id.to_string()).await;
+        // }
 
         Ok(())
     }
@@ -371,21 +319,8 @@ impl MediaRepository for MediaRepositoryImpl {
             .exec(self.base.db.as_ref())
             .await?;
 
-        // Emit MediaBatchCreated event
-        let event = DatabaseEvent::new(
-            EventType::MediaBatchCreated,
-            EventPayload::MediaBatch {
-                ids: item_ids,
-                library_id,
-                source_id,
-            },
-        );
-
-        if let Some(event_bus) = &self.base.event_bus {
-            if let Err(e) = event_bus.publish(event).await {
-                tracing::warn!("Failed to publish MediaBatchCreated event: {}", e);
-            }
-        }
+        // TODO: Broadcast via MessageBroker when needed
+        // BROKER.notify_library_updated(library_id.to_string()).await;
 
         Ok(())
     }

@@ -707,7 +707,7 @@ impl AsyncComponent for AuthDialog {
                         updated_at: chrono::Utc::now().naive_utc(),
                     };
 
-                    let repo = SourceRepositoryImpl::new_without_events(db.clone());
+                    let repo = SourceRepositoryImpl::new(db.clone());
                     use crate::db::repository::Repository;
                     match Repository::insert(&repo, source_model.clone()).await {
                         Ok(_) => {
