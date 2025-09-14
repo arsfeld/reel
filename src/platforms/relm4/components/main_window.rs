@@ -1,10 +1,15 @@
 use adw::prelude::*;
+use gtk::gio;
 use gtk::prelude::*;
 use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;
 
-use super::pages::{HomePage, LibraryPage, MovieDetailsPage, PlayerPage, ShowDetailsPage};
+use super::dialogs::{AuthDialog, AuthDialogInput, AuthDialogOutput};
+use super::pages::{
+    HomePage, LibraryPage, MovieDetailsPage, PlayerPage, PreferencesPage, ShowDetailsPage,
+    SourcesPage,
+};
 use super::sidebar::{Sidebar, SidebarOutput};
 use crate::db::connection::DatabaseConnection;
 use crate::models::{LibraryId, MediaItemId, SourceId};
@@ -18,10 +23,20 @@ pub struct MainWindow {
     movie_details_page: Option<AsyncController<MovieDetailsPage>>,
     show_details_page: Option<AsyncController<ShowDetailsPage>>,
     player_page: Option<AsyncController<PlayerPage>>,
+    sources_page: Option<AsyncController<SourcesPage>>,
+    preferences_page: Option<AsyncController<PreferencesPage>>,
+    auth_dialog: AsyncController<AuthDialog>,
     navigation_view: adw::NavigationView,
     // Window chrome management
-    header_bar: adw::HeaderBar,
-    toolbar_view: adw::ToolbarView,
+    content_header: adw::HeaderBar,
+    sidebar_header: adw::HeaderBar,
+    content_toolbar: adw::ToolbarView,
+    sidebar_toolbar: adw::ToolbarView,
+    // Navigation state
+    split_view: adw::NavigationSplitView,
+    content_stack: gtk::Stack,
+    back_button: gtk::Button,
+    content_title: adw::WindowTitle,
     // Window state for restoration
     saved_window_size: Option<(i32, i32)>,
     was_maximized: bool,
@@ -60,79 +75,100 @@ impl AsyncComponent for MainWindow {
             set_default_height: 800,
 
             #[wrap(Some)]
-            #[name(toolbar_view)]
-            set_content = &adw::ToolbarView {
-                #[name(header_bar)]
-                add_top_bar = &adw::HeaderBar {
-                    set_show_title: false,
+            #[name(split_view)]
+            set_content = &adw::NavigationSplitView {
+                set_sidebar_width_fraction: 0.25,
+                set_min_sidebar_width: 280.0,
+                set_max_sidebar_width: 400.0,
+                set_show_content: true,
+                set_collapsed: false,
 
-                    pack_start = &adw::SplitButton {
-                        set_icon_name: "sidebar-show-symbolic",
-                        set_tooltip_text: Some("Toggle Sidebar"),
-                        add_css_class: "flat",
-                        connect_clicked => MainWindowInput::ToggleSidebar,
-                    },
+                #[wrap(Some)]
+                set_sidebar = &adw::NavigationPage {
+                    set_title: "Navigation",
+                    set_can_pop: false,
 
                     #[wrap(Some)]
-                    set_title_widget = &gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 12,
-                        set_halign: gtk::Align::Center,
+                    #[name(sidebar_toolbar)]
+                    set_child = &adw::ToolbarView {
+                        #[name(sidebar_header)]
+                        add_top_bar = &adw::HeaderBar {
+                            set_show_title: true,
+                            set_title_widget: Some(&adw::WindowTitle::new("Reel", "")),
 
-                        gtk::Image {
-                            set_icon_name: Some("applications-multimedia-symbolic"),
-                            set_pixel_size: 20,
+                            #[name(primary_menu_button)]
+                            pack_end = &gtk::MenuButton {
+                                set_icon_name: "open-menu-symbolic",
+                                set_tooltip_text: Some("Main Menu"),
+                                add_css_class: "flat",
+                            }
                         },
 
-                        adw::WindowTitle {
-                            set_title: "Reel",
-                            set_subtitle: "Media Player",
-                        }
-                    },
-
-                    pack_end = &gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 6,
-                        add_css_class: "linked",
-
-                        gtk::Button {
-                            set_icon_name: "system-search-symbolic",
-                            set_tooltip_text: Some("Search Media"),
-                            add_css_class: "flat",
+                        #[wrap(Some)]
+                        #[name(sidebar_content)]
+                        set_content = &gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
                         },
-
-                        gtk::MenuButton {
-                            set_icon_name: "open-menu-symbolic",
-                            set_tooltip_text: Some("Main Menu"),
-                            add_css_class: "flat",
-                        }
                     },
                 },
 
                 #[wrap(Some)]
-                set_content = &adw::NavigationSplitView {
-                    set_sidebar_width_fraction: 0.25,
-                    set_min_sidebar_width: 280.0,
-                    set_max_sidebar_width: 400.0,
-                    set_show_content: true,
-                    set_collapsed: false,
+                set_content = &adw::NavigationPage {
+                    set_title: "Content",
+                    set_can_pop: false,
 
                     #[wrap(Some)]
-                    #[name(sidebar_page)]
-                    set_sidebar = &adw::NavigationPage {
-                        set_title: "Navigation",
-                        set_can_pop: false,
-                    },
+                    #[name(content_toolbar)]
+                    set_child = &adw::ToolbarView {
+                        #[name(content_header)]
+                        add_top_bar = &adw::HeaderBar {
+                            set_show_title: true,
 
-                    #[wrap(Some)]
-                    set_content = &adw::NavigationPage {
-                        set_title: "Content",
-                        set_can_pop: false,
+                            #[name(back_button)]
+                            pack_start = &gtk::Button {
+                                set_icon_name: "go-previous-symbolic",
+                                set_tooltip_text: Some("Go Back"),
+                                add_css_class: "flat",
+                                set_visible: false,
+                                connect_clicked => MainWindowInput::Navigate("back".to_string()),
+                            },
+
+                            pack_start = &gtk::Button {
+                                set_icon_name: "sidebar-show-symbolic",
+                                set_tooltip_text: Some("Toggle Sidebar"),
+                                add_css_class: "flat",
+                                connect_clicked => MainWindowInput::ToggleSidebar,
+                            },
+
+                            #[wrap(Some)]
+                            #[name(content_title)]
+                            set_title_widget = &adw::WindowTitle::new("Select a Library", ""),
+
+                            pack_end = &gtk::Button {
+                                set_icon_name: "system-search-symbolic",
+                                set_tooltip_text: Some("Search Media"),
+                                add_css_class: "flat",
+                            },
+                        },
 
                         #[wrap(Some)]
-                        #[name(navigation_view)]
-                        set_child = &adw::NavigationView {
-                            set_animate_transitions: true,
+                        #[name(content_stack)]
+                        set_content = &gtk::Stack {
+                            set_transition_type: gtk::StackTransitionType::Crossfade,
+                            set_transition_duration: 200,
+
+                            add_named[Some("empty")] = &adw::StatusPage {
+                                set_icon_name: Some("folder-symbolic"),
+                                set_title: "Select a Library",
+                                set_description: Some("Choose a library from the sidebar to browse your media"),
+                                set_vexpand: true,
+                                set_hexpand: true,
+                            },
+
+                            #[name(navigation_view)]
+                            add_named[Some("content")] = &adw::NavigationView {
+                                set_animate_transitions: true,
+                            },
                         },
                     },
                 },
@@ -145,6 +181,40 @@ impl AsyncComponent for MainWindow {
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
+        // Set up application actions
+        if let Some(app) = root.application() {
+            if let Some(adw_app) = app.downcast_ref::<adw::Application>() {
+                // Preferences action
+                let preferences_action = gio::SimpleAction::new("preferences", None);
+                preferences_action.connect_activate(move |_, _| {
+                    println!("Preferences action triggered");
+                    // TODO: Open preferences dialog
+                });
+                adw_app.add_action(&preferences_action);
+
+                // About action
+                let about_action = gio::SimpleAction::new("about", None);
+                about_action.connect_activate(move |_, _| {
+                    println!("About action triggered");
+                    // TODO: Open about dialog
+                });
+                adw_app.add_action(&about_action);
+
+                // Quit action
+                let quit_action = gio::SimpleAction::new("quit", None);
+                let app_clone = adw_app.clone();
+                quit_action.connect_activate(move |_, _| {
+                    app_clone.quit();
+                });
+                adw_app.add_action(&quit_action);
+
+                // Set keyboard shortcuts
+                adw_app.set_accels_for_action("app.preferences", &["<primary>comma"]);
+                adw_app.set_accels_for_action("app.quit", &["<primary>q"]);
+                adw_app.set_accels_for_action("window.close", &["<primary>w"]);
+            }
+        }
+
         // Initialize the sidebar
         let sidebar =
             Sidebar::builder()
@@ -166,17 +236,41 @@ impl AsyncComponent for MainWindow {
                 }
             });
 
+        // Initialize the auth dialog
+        let auth_dialog =
+            AuthDialog::builder()
+                .launch(db.clone())
+                .forward(sender.input_sender(), |output| match output {
+                    AuthDialogOutput::SourceAdded(source_id) => {
+                        tracing::info!("Source added: {:?}", source_id);
+                        MainWindowInput::Navigate("sources".to_string())
+                    }
+                    AuthDialogOutput::Cancelled => {
+                        tracing::info!("Auth dialog cancelled");
+                        MainWindowInput::Navigate("sources".to_string())
+                    }
+                });
+
         let mut model = Self {
             db,
             sidebar,
             home_page,
+            auth_dialog,
             library_page: None,
             movie_details_page: None,
             show_details_page: None,
             player_page: None,
+            sources_page: None,
+            preferences_page: None,
             navigation_view: adw::NavigationView::new(),
-            header_bar: adw::HeaderBar::new(),
-            toolbar_view: adw::ToolbarView::new(),
+            content_header: adw::HeaderBar::new(),
+            sidebar_header: adw::HeaderBar::new(),
+            content_toolbar: adw::ToolbarView::new(),
+            sidebar_toolbar: adw::ToolbarView::new(),
+            split_view: adw::NavigationSplitView::new(),
+            content_stack: gtk::Stack::new(),
+            back_button: gtk::Button::new(),
+            content_title: adw::WindowTitle::new("", ""),
             saved_window_size: None,
             was_maximized: false,
             was_fullscreen: false,
@@ -184,20 +278,60 @@ impl AsyncComponent for MainWindow {
 
         let widgets = view_output!();
 
-        // Set the sidebar widget
-        widgets.sidebar_page.set_child(Some(model.sidebar.widget()));
+        // Set the sidebar widget in the sidebar toolbar
+        widgets.sidebar_content.append(model.sidebar.widget());
+
+        // Create primary menu
+        let primary_menu = gio::Menu::new();
+
+        // First section with preferences
+        let section1 = gio::Menu::new();
+        section1.append(Some("_Preferences"), Some("app.preferences"));
+        primary_menu.append_section(None, &section1);
+
+        // Second section with about
+        let section2 = gio::Menu::new();
+        section2.append(Some("_About Reel"), Some("app.about"));
+        primary_menu.append_section(None, &section2);
+
+        // Set the menu on the MenuButton
+        widgets
+            .primary_menu_button
+            .set_menu_model(Some(&primary_menu));
 
         // Store references to widgets for later use
         model.navigation_view.clone_from(&widgets.navigation_view);
-        model.header_bar.clone_from(&widgets.header_bar);
-        model.toolbar_view.clone_from(&widgets.toolbar_view);
+        model.content_header.clone_from(&widgets.content_header);
+        model.sidebar_header.clone_from(&widgets.sidebar_header);
+        model.content_toolbar.clone_from(&widgets.content_toolbar);
+        model.sidebar_toolbar.clone_from(&widgets.sidebar_toolbar);
+        model.split_view.clone_from(&widgets.split_view);
+        model.content_stack.clone_from(&widgets.content_stack);
+        model.back_button.clone_from(&widgets.back_button);
+        model.content_title.clone_from(&widgets.content_title);
 
-        // Add the home page as the initial page
-        let home_nav_page = adw::NavigationPage::builder()
-            .title("Home")
-            .child(model.home_page.widget())
-            .build();
-        model.navigation_view.add(&home_nav_page);
+        // Start with empty state shown
+        widgets.content_stack.set_visible_child_name("empty");
+
+        // Connect navigation view signals
+        {
+            let sender_clone = sender.input_sender().clone();
+            model.navigation_view.connect_pushed(move |_nav_view| {
+                sender_clone
+                    .send(MainWindowInput::Navigate("update_header".to_string()))
+                    .unwrap();
+            });
+        }
+        {
+            let sender_clone = sender.input_sender().clone();
+            model
+                .navigation_view
+                .connect_popped(move |_nav_view, _page| {
+                    sender_clone
+                        .send(MainWindowInput::Navigate("update_header".to_string()))
+                        .unwrap();
+                });
+        }
 
         AsyncComponentParts { model, widgets }
     }
@@ -211,10 +345,129 @@ impl AsyncComponent for MainWindow {
         match msg {
             MainWindowInput::Navigate(page) => {
                 tracing::info!("Navigating to: {}", page);
-                // TODO: Implement generic navigation
+                match page.as_str() {
+                    "back" => {
+                        // Check if we have pages to pop (more than 1 page in stack)
+                        if self.navigation_view.navigation_stack().n_items() > 1 {
+                            self.navigation_view.pop();
+                        }
+                    }
+                    "update_header" => {
+                        // Update back button visibility based on navigation stack
+                        let can_pop = self.navigation_view.navigation_stack().n_items() > 1;
+                        self.back_button.set_visible(can_pop);
+
+                        // Update title and subtitle based on current page
+                        if let Some(page) = self.navigation_view.visible_page() {
+                            let title = page.title();
+                            let subtitle = match title.as_str() {
+                                "Home" => "",
+                                "Sources" => "Manage your media sources",
+                                "Preferences" => "Configure application settings",
+                                "Library" => "Browse your media collection",
+                                "Movie Details" => "Movie information",
+                                "Show Details" => "TV show information",
+                                "Player" => "", // Hide title in player
+                                _ => "",
+                            };
+                            self.content_title.set_title(&title);
+                            self.content_title.set_subtitle(subtitle);
+                        }
+                    }
+                    "home" => {
+                        // Switch to content view and show home page
+                        self.content_stack.set_visible_child_name("content");
+
+                        // Clear navigation stack and push home page
+                        while self.navigation_view.navigation_stack().n_items() > 1 {
+                            self.navigation_view.pop();
+                        }
+
+                        let home_nav_page = adw::NavigationPage::builder()
+                            .title("Home")
+                            .child(self.home_page.widget())
+                            .build();
+                        self.navigation_view.push(&home_nav_page);
+
+                        // Trigger header update
+                        sender.input(MainWindowInput::Navigate("update_header".to_string()));
+                    }
+                    "sources" => {
+                        // Switch to content view
+                        self.content_stack.set_visible_child_name("content");
+
+                        // Create sources page if it doesn't exist
+                        if self.sources_page.is_none() {
+                            let sources_controller = SourcesPage::builder()
+                                .launch(self.db.clone())
+                                .forward(sender.input_sender(), |output| match output {
+                                    crate::platforms::relm4::components::pages::sources::SourcesPageOutput::OpenAuthDialog => {
+                                        tracing::info!("Opening auth dialog for adding source");
+                                        MainWindowInput::Navigate("auth_dialog".to_string())
+                                    }
+                                });
+                            self.sources_page = Some(sources_controller);
+                        }
+
+                        // Push the sources page to navigation
+                        if let Some(ref sources_controller) = self.sources_page {
+                            let page = adw::NavigationPage::builder()
+                                .title("Sources")
+                                .child(sources_controller.widget())
+                                .build();
+                            self.navigation_view.push(&page);
+
+                            // Trigger header update
+                            sender.input(MainWindowInput::Navigate("update_header".to_string()));
+                        }
+                    }
+                    "preferences" => {
+                        // Switch to content view
+                        self.content_stack.set_visible_child_name("content");
+
+                        // Create preferences page if it doesn't exist
+                        if self.preferences_page.is_none() {
+                            let preferences_controller = PreferencesPage::builder()
+                                .launch(self.db.clone())
+                                .forward(sender.input_sender(), |output| match output {
+                                    crate::platforms::relm4::components::pages::preferences::PreferencesOutput::PreferencesSaved => {
+                                        tracing::info!("Preferences saved");
+                                        MainWindowInput::Navigate("preferences_saved".to_string())
+                                    }
+                                    crate::platforms::relm4::components::pages::preferences::PreferencesOutput::Error(msg) => {
+                                        tracing::error!("Preferences error: {}", msg);
+                                        MainWindowInput::Navigate("preferences_error".to_string())
+                                    }
+                                });
+                            self.preferences_page = Some(preferences_controller);
+                        }
+
+                        // Push the preferences page to navigation
+                        if let Some(ref preferences_controller) = self.preferences_page {
+                            let page = adw::NavigationPage::builder()
+                                .title("Preferences")
+                                .child(preferences_controller.widget())
+                                .build();
+                            self.navigation_view.push(&page);
+
+                            // Trigger header update
+                            sender.input(MainWindowInput::Navigate("update_header".to_string()));
+                        }
+                    }
+                    "auth_dialog" => {
+                        tracing::info!("Opening authentication dialog");
+                        // Send show message to the auth dialog
+                        self.auth_dialog.emit(AuthDialogInput::Show);
+                    }
+                    _ => {}
+                }
             }
             MainWindowInput::NavigateToSource(source_id) => {
                 tracing::info!("Navigating to source: {}", source_id);
+
+                // Switch to content view
+                self.content_stack.set_visible_child_name("content");
+
                 // TODO: Create and push source page
                 // For now, just create a placeholder page
                 let page = adw::NavigationPage::builder()
@@ -228,6 +481,9 @@ impl AsyncComponent for MainWindow {
             }
             MainWindowInput::NavigateToLibrary(library_id) => {
                 tracing::info!("Navigating to library: {}", library_id);
+
+                // Switch to content view
+                self.content_stack.set_visible_child_name("content");
 
                 // Create library page if it doesn't exist
                 if self.library_page.is_none() {
@@ -245,16 +501,37 @@ impl AsyncComponent for MainWindow {
                 if let Some(ref library_controller) = self.library_page {
                     library_controller.emit(crate::platforms::relm4::components::pages::library::LibraryPageInput::SetLibrary(library_id.clone()));
 
+                    // Fetch library details for the title
+                    let library_title = {
+                        use crate::services::commands::{
+                            Command, media_commands::GetLibraryCommand,
+                        };
+                        let cmd = GetLibraryCommand {
+                            db: self.db.clone(),
+                            library_id: library_id.clone(),
+                        };
+                        match cmd.execute().await {
+                            Ok(Some(library)) => library.title,
+                            _ => "Library".to_string(),
+                        }
+                    };
+
                     // Create navigation page and push it
                     let page = adw::NavigationPage::builder()
-                        .title(&format!("Library"))
+                        .title(&library_title)
                         .child(library_controller.widget())
                         .build();
                     self.navigation_view.push(&page);
+
+                    // Trigger header update
+                    sender.input(MainWindowInput::Navigate("update_header".to_string()));
                 }
             }
             MainWindowInput::NavigateToMediaItem(item_id) => {
                 tracing::info!("Navigating to media item: {}", item_id);
+
+                // Switch to content view
+                self.content_stack.set_visible_child_name("content");
 
                 // Create movie details page if not exists
                 if self.movie_details_page.is_none() {
@@ -296,8 +573,9 @@ impl AsyncComponent for MainWindow {
                 self.was_fullscreen = root.is_fullscreen();
 
                 // Hide window chrome for immersive viewing
-                self.header_bar.set_visible(false);
-                self.toolbar_view.set_top_bar_style(adw::ToolbarStyle::Flat);
+                self.content_header.set_visible(false);
+                self.content_toolbar
+                    .set_top_bar_style(adw::ToolbarStyle::Flat);
 
                 // Create player page if not exists
                 if self.player_page.is_none() {
@@ -344,14 +622,22 @@ impl AsyncComponent for MainWindow {
             }
             MainWindowInput::ToggleSidebar => {
                 tracing::info!("Toggling sidebar");
-                // TODO: Implement sidebar toggle
+
+                // Toggle the collapsed state of the split view
+                let is_collapsed = self.split_view.is_collapsed();
+                self.split_view.set_collapsed(!is_collapsed);
+
+                // If we're collapsing, ensure content is shown
+                if !is_collapsed {
+                    self.split_view.set_show_content(true);
+                }
             }
             MainWindowInput::RestoreWindowChrome => {
                 tracing::info!("Restoring window chrome after player");
 
                 // Show window chrome again
-                self.header_bar.set_visible(true);
-                self.toolbar_view
+                self.content_header.set_visible(true);
+                self.content_toolbar
                     .set_top_bar_style(adw::ToolbarStyle::Raised);
 
                 // Restore window size and state

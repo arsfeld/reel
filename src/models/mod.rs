@@ -1,9 +1,11 @@
 pub mod auth_provider;
+pub mod connection;
 mod identifiers;
 
 pub use auth_provider::{
     AuthProvider, ConnectionInfo, NetworkAuthType, NetworkCredentialData, Source, SourceType,
 };
+pub use connection::{ServerConnection, ServerConnections};
 pub use identifiers::{BackendId, LibraryId, MediaItemId, ProviderId, ShowId, SourceId, UserId};
 
 use chrono::{DateTime, Utc};

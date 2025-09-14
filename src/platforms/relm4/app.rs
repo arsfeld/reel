@@ -1,17 +1,12 @@
-use super::components::shared::{AppCommand, AppInput, AppOutput, CommandResult, NavigationTarget};
-// MessageBrokers are now static and accessed directly from broker modules
+use super::components::MainWindow;
 use crate::db::{Database, DatabaseConnection};
+use gtk::gio;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use relm4::gtk;
 use relm4::prelude::*;
-use std::cell::RefCell;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-
-thread_local! {
-    static RUNTIME: RefCell<Option<Arc<Runtime>>> = RefCell::new(None);
-}
 
 pub struct ReelApp {
     runtime: Arc<Runtime>,
@@ -22,36 +17,18 @@ impl ReelApp {
         Self { runtime }
     }
 
-    pub fn run(&self) -> anyhow::Result<()> {
-        // Store runtime in a thread-local for AppModel to access
-        RUNTIME.with(|r| {
-            *r.borrow_mut() = Some(self.runtime.clone());
-        });
-
-        let app = adw::Application::builder()
-            .application_id("one.reel.Reel")
-            .build();
-
-        // Initialize AdwStyleManager for proper theme support
-        let style_manager = adw::StyleManager::default();
-        style_manager.set_color_scheme(adw::ColorScheme::PreferDark);
-
-        let app = RelmApp::from_app(app);
+    pub fn run(self) -> anyhow::Result<()> {
+        // Set global CSS
         relm4::set_global_css(
-            "
-            /* Navigation and Layout */
-            .navigation-sidebar {
-                background: transparent;
-            }
-
-            /* Adwaita Typography Classes */
+            r#"
+            /* Typography Classes */
             .title-1 {
-                font-size: 28pt;
+                font-size: 32pt;
                 font-weight: 800;
                 line-height: 1.1;
             }
             .title-2 {
-                font-size: 22pt;
+                font-size: 24pt;
                 font-weight: 700;
                 line-height: 1.2;
             }
@@ -104,409 +81,109 @@ impl ReelApp {
             }
             .fullscreen .video-area {
                 background-color: black;
+                padding: 0;
             }
 
-            /* OSD controls with proper dark theme support */
-            .overlay-controls {
-                background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
+            /* OSD Controls */
+            .osd {
+                background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
                 border-radius: 12px;
-                padding: 24px;
-                transition: opacity 0.3s ease;
+                padding: 18px;
+                margin: 12px;
             }
-            .overlay-controls button {
-                background: rgba(255, 255, 255, 0.1);
-                border: 1px solid rgba(255, 255, 255, 0.2);
+            .osd.pill {
+                background: rgba(0,0,0,0.75);
+                border-radius: 999px;
+                padding: 12px 24px;
+            }
+            .osd scale {
+                min-width: 200px;
+            }
+            .osd button {
+                background: rgba(255,255,255,0.1);
+                border: none;
                 color: white;
-                border-radius: 50%;
                 min-width: 48px;
                 min-height: 48px;
-                margin: 0 6px;
             }
-            .overlay-controls button:hover {
-                background: rgba(255, 255, 255, 0.2);
-            }
-            .seek-bar {
-                min-height: 8px;
-                border-radius: 4px;
+            .osd button:hover {
+                background: rgba(255,255,255,0.2);
             }
 
-            /* Button styling */
-            .suggested-action {
+            /* Navigation styles */
+            .navigation-sidebar {
+                background: transparent;
+                padding: 6px;
+            }
+            .navigation-sidebar row {
+                border-radius: 6px;
+                padding: 8px;
+                margin: 2px 0;
+            }
+            .navigation-sidebar row:selected {
                 background: var(--accent-bg-color);
                 color: var(--accent-fg-color);
             }
-            .destructive-action {
-                background: var(--destructive-bg-color);
-                color: var(--destructive-fg-color);
+            .navigation-sidebar row:hover:not(:selected) {
+                background: alpha(currentColor, 0.07);
             }
-            .flat {
-                background: transparent;
-                box-shadow: none;
-                border: none;
+
+            /* Card overlays */
+            .poster-overlay {
+                background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
+                padding: 12px;
             }
-            .circular {
-                border-radius: 50%;
+
+            /* Episode cards */
+            .episode-card {
+                border-radius: 8px;
+                background: var(--card-bg-color);
+                padding: 8px;
+                transition: all 0.2s ease;
             }
+            .episode-card:hover {
+                transform: scale(1.02);
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            }
+
+            /* Pills and badges */
             .pill {
                 border-radius: 999px;
                 padding: 6px 12px;
+                font-weight: 500;
             }
 
-            /* Responsive design helpers */
-            @media (max-width: 640px) {
-                .media-grid {
-                    grid-template-columns: repeat(2, 1fr);
-                }
-                .title-1 {
-                    font-size: 22pt;
-                }
+            /* Loading states */
+            @keyframes pulse {
+                0% { opacity: 0.6; }
+                50% { opacity: 1.0; }
+                100% { opacity: 0.6; }
             }
-            @media (min-width: 641px) and (max-width: 1024px) {
-                .media-grid {
-                    grid-template-columns: repeat(4, 1fr);
-                }
+            .loading {
+                animation: pulse 1.5s ease-in-out infinite;
             }
-            @media (min-width: 1025px) {
-                .media-grid {
-                    grid-template-columns: repeat(6, 1fr);
-                }
-            }
-            ",
+            "#,
         );
-        app.run_async::<AppModel>(());
+
+        // Initialize database in a blocking context first
+        let db = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let database = Database::new()
+                .await
+                .expect("Failed to initialize database");
+
+            // Run database migrations
+            database
+                .migrate()
+                .await
+                .expect("Failed to run database migrations");
+
+            database.get_connection()
+        });
+
+        // Create the Relm4 application and run it
+        let app = relm4::RelmApp::new("com.github.reel");
+        app.with_args(vec![]).run_async::<MainWindow>(db);
 
         Ok(())
-    }
-}
-
-pub struct AppModel {
-    db: DatabaseConnection,
-    runtime: Arc<Runtime>,
-    loading: bool,
-    current_page: NavigationTarget,
-    style_manager: adw::StyleManager,
-}
-
-#[relm4::component(pub async)]
-impl AsyncComponent for AppModel {
-    type Input = AppInput;
-    type Output = AppOutput;
-    type Init = ();
-    type CommandOutput = CommandResult;
-
-    view! {
-        #[root]
-        adw::ApplicationWindow {
-            set_title: Some("Reel"),
-            set_default_width: 1280,
-            set_default_height: 720,
-
-            #[wrap(Some)]
-            set_content = &gtk::Box {
-                set_orientation: gtk::Orientation::Vertical,
-
-                adw::HeaderBar {
-                    #[wrap(Some)]
-                    set_title_widget = &adw::WindowTitle {
-                        set_title: "Reel",
-                        set_subtitle: "Media Player",
-                    },
-
-                    pack_end = &gtk::Button {
-                        set_icon_name: "preferences-system-symbolic",
-                        set_tooltip_text: Some("Preferences"),
-                        connect_clicked => AppInput::Navigate(NavigationTarget::Preferences),
-                    }
-                },
-
-                if model.loading {
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 24,
-                        set_halign: gtk::Align::Center,
-                        set_valign: gtk::Align::Center,
-                        set_vexpand: true,
-                        set_hexpand: true,
-
-                        gtk::Image {
-                            set_icon_name: Some("content-loading-symbolic"),
-                            set_pixel_size: 64,
-                        },
-
-                        gtk::Label {
-                            set_label: "Loading Reel",
-                            add_css_class: "title-2",
-                        },
-
-                        gtk::Label {
-                            set_label: "Initializing your media libraries...",
-                            add_css_class: "dim-label",
-                        },
-
-                        gtk::Spinner {
-                            set_spinning: true,
-                            set_width_request: 48,
-                            set_height_request: 48,
-                        }
-                    }
-                } else {
-                    adw::NavigationSplitView {
-                        set_collapsed: false,
-                        set_show_content: true,
-
-                        #[wrap(Some)]
-                        set_sidebar = &adw::NavigationPage {
-                            set_title: "Navigation",
-
-                            #[wrap(Some)]
-                            set_child = &gtk::Box {
-                                set_orientation: gtk::Orientation::Vertical,
-                                set_width_request: 280,
-
-                                gtk::SearchEntry {
-                                    set_placeholder_text: Some("Search media..."),
-                                    set_margin_all: 12,
-                                    add_css_class: "flat",
-                                },
-
-                                gtk::ScrolledWindow {
-                                    set_vexpand: true,
-                                    set_policy: (gtk::PolicyType::Never, gtk::PolicyType::Automatic),
-
-                                    gtk::ListBox {
-                                        set_selection_mode: gtk::SelectionMode::Single,
-                                        add_css_class: "navigation-sidebar",
-
-                                        adw::ActionRow {
-                                            set_title: "Home",
-                                            set_icon_name: Some("user-home-symbolic"),
-                                            set_activatable: true,
-                                        },
-
-                                        adw::ActionRow {
-                                            set_title: "Movies",
-                                            set_icon_name: Some("video-x-generic-symbolic"),
-                                            set_activatable: true,
-                                        },
-
-                                        adw::ActionRow {
-                                            set_title: "TV Shows",
-                                            set_icon_name: Some("media-playlist-symbolic"),
-                                            set_activatable: true,
-                                        },
-
-                                        adw::ActionRow {
-                                            set_title: "Continue Watching",
-                                            set_icon_name: Some("media-playback-start-symbolic"),
-                                            set_activatable: true,
-                                        },
-
-                                        adw::ActionRow {
-                                            set_title: "Watchlist",
-                                            set_icon_name: Some("starred-symbolic"),
-                                            set_activatable: true,
-                                        }
-                                    }
-                                }
-                            }
-                        },
-
-                        #[wrap(Some)]
-                        set_content = &adw::NavigationPage {
-                            set_title: "Home",
-
-                            #[wrap(Some)]
-                            set_child = &gtk::Stack {
-                                set_transition_type: gtk::StackTransitionType::SlideLeftRight,
-                                set_transition_duration: 250,
-
-                                add_named[Some("home")] = &gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
-                                    set_spacing: 24,
-                                    set_halign: gtk::Align::Center,
-                                    set_valign: gtk::Align::Center,
-                                    set_vexpand: true,
-                                    set_hexpand: true,
-
-                                    gtk::Image {
-                                        set_icon_name: Some("applications-multimedia-symbolic"),
-                                        set_pixel_size: 128,
-                                        add_css_class: "dim-label",
-                                    },
-
-                                    gtk::Label {
-                                        set_label: "Welcome to Reel",
-                                        add_css_class: "title-1",
-                                        set_halign: gtk::Align::Center,
-                                    },
-
-                                    gtk::Label {
-                                        set_label: "Your premium media experience starts here.\nConnect your Plex or Jellyfin server to get started.",
-                                        add_css_class: "body",
-                                        set_halign: gtk::Align::Center,
-                                        set_justify: gtk::Justification::Center,
-                                    },
-
-                                    gtk::Box {
-                                        set_orientation: gtk::Orientation::Horizontal,
-                                        set_spacing: 12,
-                                        set_halign: gtk::Align::Center,
-                                        set_margin_top: 24,
-
-                                        gtk::Button {
-                                            set_label: "Add Server",
-                                            add_css_class: "suggested-action",
-                                            add_css_class: "pill",
-                                        },
-
-                                        gtk::Button {
-                                            set_label: "Browse Local Files",
-                                            add_css_class: "flat",
-                                        }
-                                    }
-                                },
-
-                                add_named[Some("preferences")] = &gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
-                                    set_margin_all: 24,
-                                    set_spacing: 18,
-
-                                    gtk::Label {
-                                        set_label: "Preferences",
-                                        add_css_class: "title-1",
-                                        set_halign: gtk::Align::Start,
-                                        set_margin_bottom: 12,
-                                    },
-
-                                    gtk::Box {
-                                        set_orientation: gtk::Orientation::Vertical,
-                                        set_spacing: 12,
-                                        add_css_class: "card",
-
-                                        gtk::Label {
-                                            set_label: "Appearance",
-                                            add_css_class: "heading",
-                                            set_halign: gtk::Align::Start,
-                                        },
-
-                                        gtk::ListBox {
-                                            set_selection_mode: gtk::SelectionMode::None,
-                                            add_css_class: "boxed-list",
-
-                                            adw::ComboRow {
-                                                set_title: "Theme",
-                                                set_subtitle: "Choose your preferred theme",
-                                            },
-
-                                            adw::SwitchRow {
-                                                set_title: "Use System Theme",
-                                                set_subtitle: "Follow system dark/light theme preference",
-                                                set_active: true,
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    async fn init(
-        _init: Self::Init,
-        root: Self::Root,
-        sender: AsyncComponentSender<Self>,
-    ) -> AsyncComponentParts<Self> {
-        use crate::config::Config;
-
-        // Get runtime from thread-local
-        let runtime = RUNTIME.with(|r| {
-            r.borrow()
-                .as_ref()
-                .expect("Runtime not initialized")
-                .clone()
-        });
-
-        let config = Config::default();
-
-        // Initialize database directly
-        let database = Database::new()
-            .await
-            .expect("Failed to initialize database");
-        let db = database.get_connection();
-
-        let model = AppModel {
-            db: db.clone(),
-            runtime,
-            loading: true,
-            current_page: NavigationTarget::Home,
-            style_manager: adw::StyleManager::default(),
-        };
-
-        let widgets = view_output!();
-
-        // Make sure window is visible
-        root.set_visible(true);
-        root.present();
-
-        // Simple initialization - no backend management needed
-        sender.oneshot_command(async move {
-            CommandResult::InitialDataLoaded {
-                sources: vec![],
-                libraries: vec![],
-            }
-        });
-
-        AsyncComponentParts { model, widgets }
-    }
-
-    async fn update(
-        &mut self,
-        msg: Self::Input,
-        sender: AsyncComponentSender<Self>,
-        root: &Self::Root,
-    ) {
-        match msg {
-            AppInput::Initialize => {
-                self.loading = true;
-                let db = self.db.clone();
-                sender.oneshot_command(async move {
-                    super::components::shared::execute_command(AppCommand::LoadInitialData, &db)
-                        .await
-                });
-            }
-            AppInput::Navigate(target) => {
-                self.current_page = target.clone();
-            }
-            AppInput::ShowError(error) => {
-                eprintln!("Error: {}", error);
-            }
-            AppInput::ShowLoading(loading) => {
-                self.loading = loading;
-            }
-            AppInput::Quit => {
-                relm4::main_application().quit();
-            }
-        }
-    }
-
-    async fn update_cmd(
-        &mut self,
-        msg: Self::CommandOutput,
-        _sender: AsyncComponentSender<Self>,
-        _root: &Self::Root,
-    ) {
-        match msg {
-            CommandResult::InitialDataLoaded { .. } => {
-                self.loading = false;
-            }
-            CommandResult::Error(error) => {
-                self.loading = false;
-                eprintln!("Command error: {}", error);
-            }
-            _ => {}
-        }
     }
 }
