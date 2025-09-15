@@ -7,9 +7,6 @@ use tracing::{debug, error, info};
 use super::{Player, PlayerState};
 use crate::config::Config;
 
-#[cfg(feature = "gtk")]
-use crate::player::UpscalingMode;
-#[cfg(feature = "relm4")]
 use crate::player::UpscalingMode;
 
 /// Commands that can be sent to the player controller
@@ -85,7 +82,6 @@ pub enum PlayerCommand {
     /// Get current subtitle track
     GetCurrentSubtitleTrack { respond_to: oneshot::Sender<i32> },
     /// Set upscaling mode (MPV only)
-    #[cfg(any(feature = "gtk", feature = "relm4"))]
     SetUpscalingMode {
         mode: UpscalingMode,
         respond_to: oneshot::Sender<Result<()>>,
@@ -210,7 +206,6 @@ impl PlayerController {
                     let track = self.player.get_current_subtitle_track().await;
                     let _ = respond_to.send(track);
                 }
-                #[cfg(any(feature = "gtk", feature = "relm4"))]
                 PlayerCommand::SetUpscalingMode { mode, respond_to } => {
                     debug!("🎮 PlayerController: Setting upscaling mode to {:?}", mode);
                     let result = match &self.player {
@@ -448,7 +443,6 @@ impl PlayerHandle {
     }
 
     /// Set upscaling mode (MPV only)
-    #[cfg(any(feature = "gtk", feature = "relm4"))]
     pub async fn set_upscaling_mode(&self, mode: UpscalingMode) -> Result<()> {
         let (respond_to, response) = oneshot::channel();
         self.sender

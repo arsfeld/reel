@@ -23,13 +23,15 @@ mod sync_service_tests {
             id: "lib1".to_string(),
             title: "Movies".to_string(),
             library_type: LibraryType::Movies,
-            item_count: 5,
+            icon: None,
+            item_count: Some(5),
         });
         mock_backend.add_library(Library {
             id: "lib2".to_string(),
             title: "Shows".to_string(),
             library_type: LibraryType::Shows,
-            item_count: 3,
+            icon: None,
+            item_count: Some(3),
         });
 
         // Execute sync
