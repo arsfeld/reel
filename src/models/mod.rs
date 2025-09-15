@@ -1,12 +1,14 @@
 pub mod auth_provider;
 pub mod connection;
 mod identifiers;
+pub mod playlist_context;
 
 pub use auth_provider::{
     AuthProvider, ConnectionInfo, NetworkAuthType, NetworkCredentialData, Source, SourceType,
 };
 pub use connection::{ServerConnection, ServerConnections};
 pub use identifiers::{BackendId, LibraryId, MediaItemId, ProviderId, ShowId, SourceId, UserId};
+pub use playlist_context::{EpisodeInfo, PlaylistContext};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -26,6 +28,7 @@ pub struct Library {
     pub title: String,
     pub library_type: LibraryType,
     pub icon: Option<String>,
+    pub item_count: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

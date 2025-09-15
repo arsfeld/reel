@@ -242,6 +242,7 @@ impl AsyncComponent for HomePage {
 
                 // Clone database for async operations
                 let db = self.db.clone();
+                let db_clone = self.db.clone();
                 let sender_clone = sender.clone();
 
                 // Load recently added items
@@ -263,8 +264,38 @@ impl AsyncComponent for HomePage {
                     }
                 });
 
-                // TODO: Load continue watching items when playback tracking is ready
-                let _ = sender.input(HomePageInput::ContinueWatchingLoaded(Vec::new()));
+                // Load continue watching items
+                let sender_clone = sender.clone();
+                relm4::spawn(async move {
+                    use crate::db::repository::{
+                        MediaRepository, MediaRepositoryImpl, PlaybackRepository,
+                        PlaybackRepositoryImpl, Repository,
+                    };
+
+                    let playback_repo = PlaybackRepositoryImpl::new(db_clone.clone());
+                    let media_repo = MediaRepositoryImpl::new(db_clone.clone());
+
+                    // Get items with progress
+                    match playback_repo.find_in_progress(None).await {
+                        Ok(progress_items) => {
+                            // Fetch the full media items
+                            let mut items = Vec::new();
+                            for progress in progress_items.into_iter().take(20) {
+                                if let Ok(Some(model)) =
+                                    media_repo.find_by_id(&progress.media_id).await
+                                {
+                                    items.push(model);
+                                }
+                            }
+                            debug!("Loaded {} continue watching items", items.len());
+                            sender_clone.input(HomePageInput::ContinueWatchingLoaded(items));
+                        }
+                        Err(e) => {
+                            error!("Failed to load continue watching items: {}", e);
+                            sender_clone.input(HomePageInput::ContinueWatchingLoaded(Vec::new()));
+                        }
+                    }
+                });
             }
 
             HomePageInput::ContinueWatchingLoaded(items) => {
@@ -278,6 +309,8 @@ impl AsyncComponent for HomePage {
                         .push_back(MediaCardInit {
                             item,
                             show_progress: true, // Continue watching shows progress
+                            watched: false,
+                            progress_percent: 0.0,
                         });
                 }
 
@@ -298,6 +331,8 @@ impl AsyncComponent for HomePage {
                         .push_back(MediaCardInit {
                             item,
                             show_progress: false, // Recently added doesn't show progress
+                            watched: false,
+                            progress_percent: 0.0,
                         });
                 }
 

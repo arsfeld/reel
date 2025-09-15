@@ -12,7 +12,7 @@ use super::pages::{
 };
 use super::sidebar::{Sidebar, SidebarInput, SidebarOutput};
 use crate::db::connection::DatabaseConnection;
-use crate::models::{LibraryId, MediaItemId, SourceId};
+use crate::models::{LibraryId, MediaItemId, PlaylistContext, SourceId};
 
 #[derive(Debug)]
 pub struct MainWindow {
@@ -56,7 +56,14 @@ pub enum MainWindowInput {
     NavigateToSource(SourceId),
     NavigateToLibrary(LibraryId),
     NavigateToMediaItem(MediaItemId),
+    NavigateToMovie(MediaItemId),
+    NavigateToShow(MediaItemId),
     NavigateToPlayer(MediaItemId),
+    NavigateToPlayerWithContext {
+        media_id: MediaItemId,
+        context: PlaylistContext,
+    },
+    NavigateToPreferences,
     ToggleSidebar,
     SyncSource(SourceId),
     RestoreWindowChrome,
@@ -211,17 +218,28 @@ impl AsyncComponent for MainWindow {
             if let Some(adw_app) = app.downcast_ref::<adw::Application>() {
                 // Preferences action
                 let preferences_action = gio::SimpleAction::new("preferences", None);
+                let sender_clone = sender.clone();
                 preferences_action.connect_activate(move |_, _| {
-                    println!("Preferences action triggered");
-                    // TODO: Open preferences dialog
+                    sender_clone.input(MainWindowInput::NavigateToPreferences);
                 });
                 adw_app.add_action(&preferences_action);
 
                 // About action
                 let about_action = gio::SimpleAction::new("about", None);
+                let window_clone = root.clone();
                 about_action.connect_activate(move |_, _| {
-                    println!("About action triggered");
-                    // TODO: Open about dialog
+                    let about_dialog = adw::AboutDialog::builder()
+                        .application_name("Reel")
+                        .application_icon("media-reel")
+                        .version(env!("CARGO_PKG_VERSION"))
+                        .comments("A native media player for Plex and Jellyfin")
+                        .website("https://github.com/arosenfeld/gnome-reel")
+                        .issue_url("https://github.com/arosenfeld/gnome-reel/issues")
+                        .license_type(gtk::License::Gpl30)
+                        .developers(vec!["Aaron Rosenfeld"])
+                        .build();
+
+                    about_dialog.present(Some(&window_clone));
                 });
                 adw_app.add_action(&about_action);
 
@@ -663,6 +681,42 @@ impl AsyncComponent for MainWindow {
                     _ => {}
                 }
             }
+            MainWindowInput::NavigateToPreferences => {
+                tracing::info!("Opening preferences dialog");
+
+                // Create a preferences dialog window
+                let dialog = adw::Dialog::builder()
+                    .title("Preferences")
+                    .content_width(600)
+                    .content_height(500)
+                    .build();
+
+                // Create preferences page if it doesn't exist
+                if self.preferences_page.is_none() {
+                    let preferences_controller = PreferencesPage::builder()
+                        .launch(self.db.clone())
+                        .forward(sender.input_sender(), |output| match output {
+                            crate::platforms::relm4::components::pages::preferences::PreferencesOutput::PreferencesSaved => {
+                                tracing::info!("Preferences saved");
+                                MainWindowInput::Navigate("preferences_saved".to_string())
+                            }
+                            crate::platforms::relm4::components::pages::preferences::PreferencesOutput::Error(msg) => {
+                                tracing::error!("Preferences error: {}", msg);
+                                MainWindowInput::Navigate("preferences_error".to_string())
+                            }
+                        });
+
+                    self.preferences_page = Some(preferences_controller);
+                }
+
+                // Set the preferences page as the dialog's child
+                if let Some(ref preferences_controller) = self.preferences_page {
+                    dialog.set_child(Some(preferences_controller.widget()));
+                }
+
+                // Present the dialog
+                dialog.present(Some(root));
+            }
             MainWindowInput::NavigateToSource(source_id) => {
                 tracing::info!("Navigating to source: {}", source_id);
 
@@ -771,6 +825,40 @@ impl AsyncComponent for MainWindow {
                 // Switch to content view
                 self.content_stack.set_visible_child_name("content");
 
+                // First, we need to determine what type of media this is
+                let db_clone = self.db.clone();
+                let item_id_clone = item_id.clone();
+                let sender_clone = sender.clone();
+
+                relm4::spawn_local(async move {
+                    use crate::db::repository::{MediaRepository, MediaRepositoryImpl, Repository};
+
+                    let repo = MediaRepositoryImpl::new(db_clone);
+                    if let Ok(Some(media)) = repo.find_by_id(item_id_clone.as_ref()).await {
+                        match media.media_type.as_str() {
+                            "movie" => {
+                                sender_clone.input(MainWindowInput::NavigateToMovie(item_id_clone));
+                            }
+                            "show" => {
+                                sender_clone.input(MainWindowInput::NavigateToShow(item_id_clone));
+                            }
+                            "episode" => {
+                                // For episodes, navigate directly to player with context
+                                sender_clone
+                                    .input(MainWindowInput::NavigateToPlayer(item_id_clone));
+                            }
+                            _ => {
+                                tracing::warn!("Unknown media type: {}", media.media_type);
+                            }
+                        }
+                    } else {
+                        tracing::error!("Failed to find media item: {}", item_id_clone);
+                    }
+                });
+            }
+            MainWindowInput::NavigateToMovie(item_id) => {
+                tracing::info!("Navigating to movie: {}", item_id);
+
                 // Create movie details page if not exists
                 if self.movie_details_page.is_none() {
                     let db = std::sync::Arc::new(self.db.clone());
@@ -797,6 +885,44 @@ impl AsyncComponent for MainWindow {
                     let page = adw::NavigationPage::builder()
                         .title("Movie Details")
                         .child(movie_page.widget())
+                        .build();
+                    self.navigation_view.push(&page);
+                }
+            }
+            MainWindowInput::NavigateToShow(item_id) => {
+                tracing::info!("Navigating to show: {}", item_id);
+
+                // Create show details page if not exists
+                if self.show_details_page.is_none() {
+                    let db = std::sync::Arc::new(self.db.clone());
+                    let sender_clone = sender.clone();
+                    self.show_details_page = Some(
+                        ShowDetailsPage::builder()
+                            .launch((item_id.clone(), db))
+                            .forward(sender.input_sender(), move |output| match output {
+                                crate::platforms::relm4::components::pages::show_details::ShowDetailsOutput::PlayMedia(id) => {
+                                    tracing::info!("Playing episode: {}", id);
+                                    MainWindowInput::NavigateToPlayer(id)
+                                }
+                                crate::platforms::relm4::components::pages::show_details::ShowDetailsOutput::PlayMediaWithContext { media_id, context } => {
+                                    tracing::info!("Playing episode with context: {}", media_id);
+                                    MainWindowInput::NavigateToPlayerWithContext { media_id, context }
+                                }
+                                crate::platforms::relm4::components::pages::show_details::ShowDetailsOutput::NavigateBack => {
+                                    MainWindowInput::Navigate("back".to_string())
+                                }
+                            }),
+                    );
+                } else if let Some(ref show_page) = self.show_details_page {
+                    // Update existing page with new item
+                    show_page.sender().send(crate::platforms::relm4::components::pages::show_details::ShowDetailsInput::LoadShow(item_id.clone())).unwrap();
+                }
+
+                // Push the page to navigation
+                if let Some(ref show_page) = self.show_details_page {
+                    let page = adw::NavigationPage::builder()
+                        .title("Show Details")
+                        .child(show_page.widget())
                         .build();
                     self.navigation_view.push(&page);
                 }
@@ -847,6 +973,73 @@ impl AsyncComponent for MainWindow {
                 } else if let Some(ref player_page) = self.player_page {
                     // Update existing page with new media
                     player_page.sender().send(crate::platforms::relm4::components::pages::player::PlayerInput::LoadMedia(media_id.clone())).unwrap();
+                }
+
+                // Push the player page to navigation
+                if let Some(ref player_page) = self.player_page {
+                    let page = adw::NavigationPage::builder()
+                        .title("Player")
+                        .child(player_page.widget())
+                        .build();
+                    self.navigation_view.push(&page);
+                }
+            }
+            MainWindowInput::NavigateToPlayerWithContext { media_id, context } => {
+                tracing::info!("Navigating to player with context for media: {}", media_id);
+
+                // Save current window state before entering player
+                let (width, height) = root.default_size();
+                self.saved_window_size = Some((width, height));
+                self.was_maximized = root.is_maximized();
+                self.was_fullscreen = root.is_fullscreen();
+
+                // Hide window chrome for immersive viewing
+                self.content_header.set_visible(false);
+                self.content_toolbar
+                    .set_top_bar_style(adw::ToolbarStyle::Flat);
+
+                // Create player page if not exists
+                if self.player_page.is_none() {
+                    let db = std::sync::Arc::new(self.db.clone());
+                    let sender_clone = sender.clone();
+                    self.player_page = Some(
+                        PlayerPage::builder()
+                            .launch((Some(media_id.clone()), db, root.clone()))
+                            .forward(sender.input_sender(), move |output| match output {
+                                crate::platforms::relm4::components::pages::player::PlayerOutput::NavigateBack => {
+                                    // Restore window chrome when leaving player
+                                    sender_clone.input(MainWindowInput::RestoreWindowChrome);
+                                    MainWindowInput::Navigate("back".to_string())
+                                }
+                                crate::platforms::relm4::components::pages::player::PlayerOutput::MediaLoaded => {
+                                    tracing::info!("Media loaded in player");
+                                    MainWindowInput::Navigate("media_loaded".to_string())
+                                }
+                                crate::platforms::relm4::components::pages::player::PlayerOutput::Error(msg) => {
+                                    tracing::error!("Player error: {}", msg);
+                                    // Restore window chrome on error
+                                    sender_clone.input(MainWindowInput::RestoreWindowChrome);
+                                    MainWindowInput::Navigate("player_error".to_string())
+                                }
+                                crate::platforms::relm4::components::pages::player::PlayerOutput::WindowStateChanged { width, height } => {
+                                    // Player is requesting window size change for aspect ratio
+                                    MainWindowInput::ResizeWindow(width, height)
+                                }
+                            }),
+                    );
+                    // Send the context to the player
+                    if let Some(ref player_page) = self.player_page {
+                        player_page.sender().send(crate::platforms::relm4::components::pages::player::PlayerInput::LoadMediaWithContext {
+                            media_id: media_id.clone(),
+                            context,
+                        }).unwrap();
+                    }
+                } else if let Some(ref player_page) = self.player_page {
+                    // Update existing page with new media and context
+                    player_page.sender().send(crate::platforms::relm4::components::pages::player::PlayerInput::LoadMediaWithContext {
+                        media_id: media_id.clone(),
+                        context,
+                    }).unwrap();
                 }
 
                 // Push the player page to navigation

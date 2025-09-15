@@ -2,7 +2,7 @@ pub mod builders;
 pub mod fixtures;
 pub mod mocks;
 
-use gnome_reel::db::{connection::DatabaseConnection, entities::*};
+use reel::db::{connection::DatabaseConnection, entities::*};
 use sea_orm::{Database, DatabaseConnection as DbConn, EntityTrait, Set};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -45,7 +45,7 @@ pub async fn create_test_database() -> Arc<DatabaseConnection> {
 
 pub async fn seed_test_data(db: &Arc<DatabaseConnection>) -> TestData {
     use chrono::Utc;
-    use gnome_reel::models::{MediaType, ServerType};
+    use reel::models::{MediaType, ServerType};
 
     // Create test source
     let source = sources::ActiveModel {

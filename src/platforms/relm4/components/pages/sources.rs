@@ -345,7 +345,7 @@ impl AsyncComponent for SourcesPage {
                     add_css_class: "suggested-action",
                     connect_clicked => SourcesPageInput::AddSource,
                 },
-            }
+            },
         }
     }
 
@@ -577,7 +577,9 @@ impl AsyncComponent for SourcesPage {
 
             SourcesPageInput::Error(msg) => {
                 error!("Error: {}", msg);
-                // TODO: Show error in UI (toast notification)
+                // For now, just log the error. Toast implementation would require
+                // restructuring the view with an overlay wrapper
+                tracing::error!("Source operation failed: {}", msg);
             }
         }
     }

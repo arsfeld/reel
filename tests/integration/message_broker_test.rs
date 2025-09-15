@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod message_broker_tests {
-    use gnome_reel::platforms::relm4::components::shared::broker::{
+    use reel::platforms::relm4::components::shared::broker::{
         BROKER, BrokerMessage, SourceMessage, DataMessage, NavigationMessage, PlaybackMessage
     };
     use relm4::Sender;

@@ -59,6 +59,33 @@ pub trait MediaRepository: Repository<MediaItemModel> {
 
     /// Delete all media items for a source
     async fn delete_by_source(&self, source_id: &str) -> Result<()>;
+
+    /// Get all episodes for a show in playback order
+    async fn find_episode_playlist(&self, show_id: &str) -> Result<Vec<MediaItemModel>>;
+
+    /// Find the next episode after the given one
+    async fn find_next_episode(
+        &self,
+        show_id: &str,
+        season: i32,
+        episode: i32,
+    ) -> Result<Option<MediaItemModel>>;
+
+    /// Find the previous episode before the given one
+    async fn find_previous_episode(
+        &self,
+        show_id: &str,
+        season: i32,
+        episode: i32,
+    ) -> Result<Option<MediaItemModel>>;
+
+    /// Find next unwatched episode in show
+    async fn find_next_unwatched_episode(
+        &self,
+        show_id: &str,
+        after_season: i32,
+        after_episode: i32,
+    ) -> Result<Option<MediaItemModel>>;
 }
 
 #[derive(Debug)]
@@ -407,6 +434,106 @@ impl MediaRepository for MediaRepositoryImpl {
             source_id
         );
         Ok(())
+    }
+
+    async fn find_episode_playlist(&self, show_id: &str) -> Result<Vec<MediaItemModel>> {
+        Ok(MediaItem::find()
+            .filter(media_items::Column::ParentId.eq(show_id))
+            .filter(media_items::Column::MediaType.eq("episode"))
+            .order_by_asc(media_items::Column::SeasonNumber)
+            .order_by_asc(media_items::Column::EpisodeNumber)
+            .all(self.base.db.as_ref())
+            .await?)
+    }
+
+    async fn find_next_episode(
+        &self,
+        show_id: &str,
+        season: i32,
+        episode: i32,
+    ) -> Result<Option<MediaItemModel>> {
+        use sea_orm::Condition;
+
+        Ok(MediaItem::find()
+            .filter(media_items::Column::ParentId.eq(show_id))
+            .filter(media_items::Column::MediaType.eq("episode"))
+            .filter(
+                Condition::any()
+                    .add(
+                        Condition::all()
+                            .add(media_items::Column::SeasonNumber.eq(season))
+                            .add(media_items::Column::EpisodeNumber.gt(episode)),
+                    )
+                    .add(media_items::Column::SeasonNumber.gt(season)),
+            )
+            .order_by_asc(media_items::Column::SeasonNumber)
+            .order_by_asc(media_items::Column::EpisodeNumber)
+            .one(self.base.db.as_ref())
+            .await?)
+    }
+
+    async fn find_previous_episode(
+        &self,
+        show_id: &str,
+        season: i32,
+        episode: i32,
+    ) -> Result<Option<MediaItemModel>> {
+        use sea_orm::Condition;
+
+        Ok(MediaItem::find()
+            .filter(media_items::Column::ParentId.eq(show_id))
+            .filter(media_items::Column::MediaType.eq("episode"))
+            .filter(
+                Condition::any()
+                    .add(
+                        Condition::all()
+                            .add(media_items::Column::SeasonNumber.eq(season))
+                            .add(media_items::Column::EpisodeNumber.lt(episode)),
+                    )
+                    .add(media_items::Column::SeasonNumber.lt(season)),
+            )
+            .order_by_desc(media_items::Column::SeasonNumber)
+            .order_by_desc(media_items::Column::EpisodeNumber)
+            .one(self.base.db.as_ref())
+            .await?)
+    }
+
+    async fn find_next_unwatched_episode(
+        &self,
+        show_id: &str,
+        after_season: i32,
+        after_episode: i32,
+    ) -> Result<Option<MediaItemModel>> {
+        use crate::db::entities::playback_progress;
+        use sea_orm::Condition;
+        use sea_orm::JoinType;
+        use sea_orm::QuerySelect;
+
+        // First, try to get the next episode after the given one that is unwatched
+        let result = MediaItem::find()
+            .filter(media_items::Column::ParentId.eq(show_id))
+            .filter(media_items::Column::MediaType.eq("episode"))
+            .filter(
+                Condition::any()
+                    .add(
+                        Condition::all()
+                            .add(media_items::Column::SeasonNumber.eq(after_season))
+                            .add(media_items::Column::EpisodeNumber.gt(after_episode)),
+                    )
+                    .add(media_items::Column::SeasonNumber.gt(after_season)),
+            )
+            .left_join(playback_progress::Entity)
+            .filter(
+                Condition::any()
+                    .add(playback_progress::Column::Watched.eq(false))
+                    .add(playback_progress::Column::Watched.is_null()),
+            )
+            .order_by_asc(media_items::Column::SeasonNumber)
+            .order_by_asc(media_items::Column::EpisodeNumber)
+            .one(self.base.db.as_ref())
+            .await?;
+
+        Ok(result)
     }
 }
 

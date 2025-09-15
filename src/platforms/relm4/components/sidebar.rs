@@ -92,9 +92,9 @@ impl SourceGroup {
             name_label.add_css_class("heading");
             vbox.append(&name_label);
 
-            // For now, we'll show a placeholder count
-            // TODO: Get actual item count from database
-            let count_label = gtk::Label::new(Some("Loading..."));
+            // Display the actual item count from the library model
+            let count_text = format!("{} items", library.item_count);
+            let count_label = gtk::Label::new(Some(&count_text));
             count_label.set_halign(gtk::Align::Start);
             count_label.add_css_class("dim-label");
             count_label.add_css_class("caption");

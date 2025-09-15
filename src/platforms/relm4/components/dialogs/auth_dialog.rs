@@ -703,6 +703,9 @@ impl AsyncComponent for AuthDialog {
                         is_owned: best_server.map(|s| s.owned).unwrap_or(true),
                         is_online: true,
                         last_sync: None,
+                        last_connection_test: Some(chrono::Utc::now().naive_utc()),
+                        connection_failure_count: 0,
+                        connection_quality: None, // Will be determined later
                         created_at: chrono::Utc::now().naive_utc(),
                         updated_at: chrono::Utc::now().naive_utc(),
                     };
