@@ -81,8 +81,8 @@ impl Database {
 
     /// Get the default database path
     fn db_path() -> Result<PathBuf> {
-        let cache_dir = dirs::cache_dir().context("Failed to get cache directory")?;
-        Ok(cache_dir.join("reel").join("data.db"))
+        let data_dir = dirs::data_dir().context("Failed to get data directory")?;
+        Ok(data_dir.join("reel").join("data.db"))
     }
 
     /// Run migrations

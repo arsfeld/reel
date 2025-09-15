@@ -7,7 +7,7 @@
 
   [![CI](https://github.com/arsfeld/reel/actions/workflows/ci.yml/badge.svg)](https://github.com/arsfeld/reel/actions/workflows/ci.yml)
   [![Rust](https://img.shields.io/badge/rust-1.89%2B-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-  [![GTK4](https://img.shields.io/badge/GTK-4.14%2B-blue.svg?style=flat-square)](https://gtk.org/)
+  [![Relm4](https://img.shields.io/badge/Relm4-0.10-ff6b6b.svg?style=flat-square)](https://relm4.org/)
   [![Relm4](https://img.shields.io/badge/Relm4-0.9-ff6b6b.svg?style=flat-square)](https://relm4.org/)
   [![License](https://img.shields.io/badge/license-GPLv3-green.svg?style=flat-square)](LICENSE)
   [![Nix Flakes](https://img.shields.io/badge/nix-flakes-5277C3.svg?style=flat-square&logo=nixos&logoColor=white)](https://nixos.wiki/wiki/Flakes)
@@ -43,13 +43,13 @@ Reel is a native Linux media player that brings your Plex and Jellyfin libraries
 | **⚛️ Relm4 Reactive** | Component-based reactive UI with AsyncComponents and Factory patterns |
 | **🔌 Multi-Backend** | Simultaneous Plex and Jellyfin connections with automatic failover |
 | **💾 Offline-First** | SQLite caching keeps your library browsable even offline |
-| **🎨 Native GTK4** | Seamlessly integrates with modern GNOME desktops |
+| **🎨 Native UI** | Built with Relm4 for seamless GNOME desktop integration |
 | **⚡ Async Everything** | Built on Tokio for responsive, non-blocking operations |
 | **🎥 Dual Players** | MPV (default) and GStreamer backends for maximum compatibility |
 
 ## 🚀 Getting Started
 
-This project uses Nix flakes to manage the development environment, ensuring all dependencies (including GStreamer plugins and GTK schemas) are properly configured.
+This project uses Nix flakes to manage the development environment, ensuring all dependencies (including GStreamer plugins) are properly configured.
 
 ### 📋 Prerequisites
 
@@ -111,7 +111,7 @@ Download the latest release from the [Releases page](https://github.com/arsfeld/
 | Library | Minimum Version | Notes |
 |---------|-----------------|-------|
 | **libadwaita** | 1.5 | UI toolkit |
-| **GTK4** | 4.13.5 | GUI framework |
+| **Relm4** | 0.10.0 | Reactive UI framework |
 | **GStreamer** | 1.20+ | Media framework with plugins-bad |
 | **MPV** | libmpv2 0.29+ | Primary video player backend |
 | **glibc** | 2.35+ | With 64-bit time_t support |
@@ -216,7 +216,7 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 - **Continue Watching** - Progress tracking and resume functionality
 - **Offline-First** - SQLite cache for instant startup and offline browsing
 - **Source Management** - Add/remove/test/sync sources with automatic connection failover
-- **GNOME Integration** - Native GTK4/libadwaita UI with proper NavigationSplitView
+- **GNOME Integration** - Native Relm4/libadwaita UI with proper NavigationSplitView
 
 ### 🚧 Outstanding Issues (Migration Completion)
 
@@ -246,7 +246,7 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 ## 🛠️ Tech Stack
 
 - **Language**: Rust 2021 edition
-- **UI Framework**: [Relm4](https://relm4.org/) + GTK4 + libadwaita
+- **UI Framework**: [Relm4](https://relm4.org/) + libadwaita
 - **Database**: SQLite with [SeaORM](https://www.sea-ql.org/SeaORM/) and typed IDs
 - **Async Runtime**: [Tokio](https://tokio.rs/) with MessageBroker for component communication
 - **HTTP Client**: [Reqwest](https://github.com/seanmonstar/reqwest) with HTTP/2
@@ -272,6 +272,6 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 ## 🙏 Acknowledgments
 
 Built with excellent Rust crates and GNOME technologies:
-- The [gtk-rs](https://gtk-rs.org/) team for exceptional Rust bindings
+- The [Relm4](https://relm4.org/) team for the reactive UI framework
 - [GNOME](https://www.gnome.org/) for the beautiful desktop platform
 - The Rust community for an amazing ecosystem of crates

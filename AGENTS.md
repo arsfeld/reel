@@ -6,14 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Reel is a native, cross-platform media player application written in Rust that brings your Plex and Jellyfin libraries to the desktop with a premium, Netflix-like experience. The application features:
 
-- **Multi-platform support**: GTK4/libadwaita for Linux/GNOME (primary), macOS support in development
+- **Multi-platform support**: Relm4/libadwaita for Linux/GNOME (primary), macOS support in development
 - **Multiple backend support**: Simultaneous connections to Plex, Jellyfin, and local media libraries
 - **Offline-first architecture**: Instant UI loading from SQLite cache with background synchronization
-- **Reactive UI system**: Event-driven ViewModels with observable properties for responsive updates
+- **Reactive UI system**: Relm4 components with AsyncComponents, Factory patterns, and Worker components
 - **Dual playback engines**: MPV (default, recommended) and GStreamer for maximum compatibility
 - **Modern Rust architecture**: Type-safe database layer with SeaORM, async/await with Tokio, repository pattern
 
-The project is transitioning to a fully Relm4-based UI implementation that leverages AsyncComponents, Tracker patterns, Factory patterns for collections, Worker components for background tasks, and Command patterns for structured async operations - abandoning ViewModels in favor of Relm4's native reactive architecture.
+The project uses a fully Relm4-based UI implementation that leverages AsyncComponents, Tracker patterns, Factory patterns for collections, Worker components for background tasks, and Command patterns for structured async operations.
 
 ## Development Environment
 
@@ -76,16 +76,7 @@ cargo test -- --nocapture
     - `factories/` - Factory components for collections (media cards, episode lists)
     - `workers/` - Background worker components (sync, search, image loading)
     - `shared/` - Common messages, commands, navigation
-- `src/platforms/gtk/` - Legacy GTK4 platform implementation
-  - `app.rs` - GTK application initialization
-  - `ui/` - GTK4/libadwaita UI components
-    - `main_window.rs` - Main application window
-    - `pages/` - Different application views
-    - `widgets/` - Reusable UI components
-    - `viewmodels/` - Reactive ViewModels (being phased out)
 - `src/core/` - Platform-agnostic core logic
-  - `state.rs` - Application state management
-  - `viewmodels/` - Core ViewModels (library, player, sources, sidebar, details, home)
   - `player_traits.rs` - Media player abstraction
   - `frontend.rs` - Frontend trait for platform abstraction
 - `src/backends/` - Media server integrations
@@ -139,7 +130,7 @@ cargo test -- --nocapture
    - Background sync updates data without blocking UI
    - Offline fallback for all operations
 
-6. **Platform Abstraction**: Frontend trait allows for multiple platform implementations (GTK currently, macOS planned)
+6. **Platform Abstraction**: Frontend trait allows for multiple platform implementations (macOS planned)
 
 ## Backend System
 
@@ -175,33 +166,25 @@ Key indexes for performance:
 
 ## UI Framework
 
-Built with GTK4 and libadwaita:
+Built with Relm4 and libadwaita:
 - Follows GNOME Human Interface Guidelines
 - Responsive design adapting to window size
 - Hardware-accelerated video playback via MPV/GStreamer
 - Dark mode support
-- Blueprint UI templates for declarative layouts
+- Reactive components with AsyncComponents, Factory patterns, and Worker components
 
-## ViewModels & Event System
+## Event System
 
-The application uses a reactive ViewModel pattern:
-- **ViewModels** manage UI state and react to data changes
-- **Properties** provide observable data containers with change notifications
-- **EventBus** broadcasts events system-wide using Tokio channels
-- **Event types** include Media, Sync, Library, Playback, Source events
-
-Current migration status (75% complete):
-- ✅ Database infrastructure with SeaORM
-- ✅ Repository pattern implementation
-- ✅ Event system with 12/27 event types working
-- ✅ LibraryViewModel and SidebarViewModel fully reactive
-- 🟡 4 of 6 UI pages need ViewModel integration
+The application uses Relm4's MessageBroker for inter-component communication:
+- **MessageBroker** replaces custom EventBus for component communication
+- **Commands** provide structured async operations with proper lifecycle
+- **Worker Components** handle background tasks in isolation
 
 ## Dependencies
 
 Key dependencies managed through Cargo.toml:
 - **Relm4 Stack**: `relm4`, `relm4-components`, `relm4-icons`, `tracker` for reactive UI
-- GTK4/libadwaita for UI foundation
+- Relm4/libadwaita for UI foundation
 - MPV (libmpv2) for primary video playback
 - GStreamer for secondary playback option
 - Tokio for async runtime
@@ -213,7 +196,7 @@ Key dependencies managed through Cargo.toml:
 ## Development Notes
 
 - The project uses Nix flakes - always work within `nix develop` shell
-- GStreamer plugins and GTK schemas are configured in the Nix environment
+- GStreamer plugins are configured in the Nix environment
 - Database uses SeaORM with migrations in `src/db/migrations/`
 - Use `cargo watch` for auto-rebuild during development
 - Pre-commit hooks run `cargo fmt` automatically
@@ -245,9 +228,8 @@ build-all-packages
 
 ### Architecture Gaps
 - Repository layer has zero event integration (bypasses event system)
-- PropertySubscriber uses panic! in Clone implementation
 - Transaction support exists but not integrated into sync flow
-- 4 UI pages still need ViewModel integration (MovieDetails, ShowDetails, Sources partial, Player)
+- Some UI pages still need full Relm4 component integration
 
 ### Backend Implementation Status
 - **Plex**: 90% complete (missing proper cast/crew extraction)
