@@ -9,14 +9,35 @@ use crate::db::connection::DatabaseConnection;
 use crate::db::entities::MediaItemModel;
 use crate::models::{LibraryId, MediaItemId};
 use crate::platforms::relm4::components::factories::media_card::{
-    MediaCard, MediaCardInit, MediaCardOutput,
+    MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput,
 };
+use crate::platforms::relm4::components::workers::{
+    ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize,
+};
+use relm4::Worker;
 
-#[derive(Debug)]
+impl std::fmt::Debug for LibraryPage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LibraryPage")
+            .field("library_id", &self.library_id)
+            .field("is_loading", &self.is_loading)
+            .field("current_page", &self.current_page)
+            .field("items_per_page", &self.items_per_page)
+            .field("has_more", &self.has_more)
+            .field("view_mode", &self.view_mode)
+            .field("sort_by", &self.sort_by)
+            .field("filter_text", &self.filter_text)
+            .field("search_visible", &self.search_visible)
+            .finish()
+    }
+}
+
 pub struct LibraryPage {
     db: DatabaseConnection,
     library_id: Option<LibraryId>,
     media_factory: FactoryVecDeque<MediaCard>,
+    image_loader: relm4::WorkerController<ImageLoader>,
+    image_requests: std::collections::HashMap<String, usize>,
     is_loading: bool,
     current_page: usize,
     items_per_page: usize,
@@ -52,6 +73,11 @@ pub enum LibraryPageInput {
         items: Vec<MediaItemModel>,
         has_more: bool,
     },
+    /// Media items loaded with progress
+    MediaItemsLoadedWithProgress {
+        items: Vec<(MediaItemModel, bool, f64)>,
+        has_more: bool,
+    },
     /// Media item selected
     MediaItemSelected(MediaItemId),
     /// Change view mode
@@ -66,6 +92,13 @@ pub enum LibraryPageInput {
     ShowSearch,
     /// Hide search bar
     HideSearch,
+    /// Image loaded from worker
+    ImageLoaded {
+        id: String,
+        texture: gtk::gdk::Texture,
+    },
+    /// Image load failed
+    ImageLoadFailed { id: String },
 }
 
 #[derive(Debug)]
@@ -203,10 +236,29 @@ impl AsyncComponent for LibraryPage {
                 MediaCardOutput::Play(id) => LibraryPageInput::MediaItemSelected(id),
             });
 
+        // Create the image loader worker
+        let image_loader =
+            ImageLoader::builder()
+                .detach_worker(())
+                .forward(sender.input_sender(), |output| match output {
+                    ImageLoaderOutput::ImageLoaded { id, texture, .. } => {
+                        LibraryPageInput::ImageLoaded { id, texture }
+                    }
+                    ImageLoaderOutput::LoadFailed { id, .. } => {
+                        LibraryPageInput::ImageLoadFailed { id }
+                    }
+                    ImageLoaderOutput::CacheCleared => {
+                        // Ignore cache cleared events for now
+                        LibraryPageInput::Refresh
+                    }
+                });
+
         let model = Self {
             db,
             library_id: None,
             media_factory,
+            image_loader,
+            image_requests: std::collections::HashMap::new(),
             is_loading: false,
             current_page: 0,
             items_per_page: 50,
@@ -248,11 +300,61 @@ impl AsyncComponent for LibraryPage {
             LibraryPageInput::MediaItemsLoaded { items, has_more } => {
                 debug!("Loaded {} items", items.len());
 
+                let mut factory_guard = self.media_factory.guard();
                 for item in items {
-                    self.media_factory.guard().push_back(MediaCardInit {
-                        item,
+                    let index = factory_guard.push_back(MediaCardInit {
+                        item: item.clone(),
                         show_progress: false,
+                        watched: false,
+                        progress_percent: 0.0,
                     });
+
+                    // Request image loading if poster URL exists
+                    if let Some(poster_url) = &item.poster_url {
+                        let id = item.id.clone();
+                        self.image_requests
+                            .insert(id.clone(), index.current_index());
+
+                        self.image_loader
+                            .emit(ImageLoaderInput::LoadImage(ImageRequest {
+                                id,
+                                url: poster_url.clone(),
+                                size: ImageSize::Card,
+                                priority: 5,
+                            }));
+                    }
+                }
+
+                self.has_more = has_more;
+                self.is_loading = false;
+            }
+
+            LibraryPageInput::MediaItemsLoadedWithProgress { items, has_more } => {
+                debug!("Loaded {} items with progress", items.len());
+
+                let mut factory_guard = self.media_factory.guard();
+                for (item, watched, progress_percent) in items {
+                    let index = factory_guard.push_back(MediaCardInit {
+                        item: item.clone(),
+                        show_progress: progress_percent > 0.0 && progress_percent < 0.9,
+                        watched,
+                        progress_percent,
+                    });
+
+                    // Request image loading if poster URL exists
+                    if let Some(poster_url) = &item.poster_url {
+                        let id = item.id.clone();
+                        self.image_requests
+                            .insert(id.clone(), index.current_index());
+
+                        self.image_loader
+                            .emit(ImageLoaderInput::LoadImage(ImageRequest {
+                                id,
+                                url: poster_url.clone(),
+                                size: ImageSize::Card,
+                                priority: 5,
+                            }));
+                    }
                 }
 
                 self.has_more = has_more;
@@ -300,6 +402,21 @@ impl AsyncComponent for LibraryPage {
                     self.refresh(sender.clone());
                 }
             }
+
+            LibraryPageInput::ImageLoaded { id, texture } => {
+                // Find the card index for this image ID and update it
+                if let Some(&index) = self.image_requests.get(&id) {
+                    // Send message to the specific card in the factory
+                    self.media_factory
+                        .send(index, MediaCardInput::ImageLoaded(texture));
+                }
+            }
+
+            LibraryPageInput::ImageLoadFailed { id } => {
+                debug!("Failed to load image for item: {}", id);
+                // Remove from tracking but keep card functional without image
+                self.image_requests.remove(&id);
+            }
         }
     }
 }
@@ -317,14 +434,18 @@ impl LibraryPage {
             let filter = self.filter_text.clone();
 
             relm4::spawn(async move {
-                use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
-                let repo = MediaRepositoryImpl::new(db.clone());
+                use crate::db::repository::{
+                    MediaRepository, MediaRepositoryImpl, PlaybackRepository,
+                    PlaybackRepositoryImpl,
+                };
+                let media_repo = MediaRepositoryImpl::new(db.clone());
+                let playback_repo = PlaybackRepositoryImpl::new(db.clone());
 
                 // Calculate offset
                 let offset = page * items_per_page;
 
                 // Get items for this library with pagination
-                match repo
+                match media_repo
                     .find_by_library_paginated(
                         &library_id.to_string(),
                         offset as u64,
@@ -336,7 +457,7 @@ impl LibraryPage {
                         let has_more = items.len() == items_per_page;
 
                         // Apply client-side filtering if needed
-                        let filtered_items = if filter.is_empty() {
+                        let mut filtered_items = if filter.is_empty() {
                             items
                         } else {
                             items
@@ -347,14 +468,33 @@ impl LibraryPage {
                                 .collect()
                         };
 
-                        sender.input(LibraryPageInput::MediaItemsLoaded {
-                            items: filtered_items,
+                        // Load playback progress for each item
+                        let items_with_progress: Vec<(MediaItemModel, bool, f64)> = {
+                            let mut result = Vec::new();
+                            for item in filtered_items {
+                                let progress = playback_repo
+                                    .find_by_media_id(&item.id)
+                                    .await
+                                    .ok()
+                                    .flatten();
+                                let watched = progress.as_ref().map(|p| p.watched).unwrap_or(false);
+                                let progress_percent = progress
+                                    .as_ref()
+                                    .map(|p| p.get_progress_percentage() as f64)
+                                    .unwrap_or(0.0);
+                                result.push((item, watched, progress_percent));
+                            }
+                            result
+                        };
+
+                        sender.input(LibraryPageInput::MediaItemsLoadedWithProgress {
+                            items: items_with_progress,
                             has_more,
                         });
                     }
                     Err(e) => {
                         error!("Failed to load library items: {}", e);
-                        sender.input(LibraryPageInput::MediaItemsLoaded {
+                        sender.input(LibraryPageInput::MediaItemsLoadedWithProgress {
                             items: Vec::new(),
                             has_more: false,
                         });

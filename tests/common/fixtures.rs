@@ -1,5 +1,5 @@
 use super::builders::*;
-use gnome_reel::models::*;
+use reel::models::*;
 
 pub struct Fixtures;
 

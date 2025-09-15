@@ -122,6 +122,9 @@ impl AuthService {
             is_owned: true,    // Default to owned
             is_online: true,
             last_sync: None,
+            last_connection_test: None,
+            connection_failure_count: 0,
+            connection_quality: None,
             created_at: chrono::Utc::now().naive_utc(),
             updated_at: chrono::Utc::now().naive_utc(),
         };

@@ -2,6 +2,12 @@ pub mod auth_commands;
 pub mod media_commands;
 pub mod sync_commands;
 
+// Re-export commonly used commands
+pub use media_commands::{
+    GetContinueWatchingCommand, GetLibrariesCommand, GetMediaItemCommand, GetMediaItemsCommand,
+    GetRecentlyAddedCommand, UpdatePlaybackProgressCommand,
+};
+
 use anyhow::Result;
 use async_trait::async_trait;
 

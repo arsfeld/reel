@@ -246,4 +246,24 @@ impl BackendService {
             Err(_) => Ok(false),
         }
     }
+
+    /// Update playback progress on the backend server
+    pub async fn update_playback_progress(
+        db: &DatabaseConnection,
+        source_id: &str,
+        media_id: &MediaItemId,
+        position: std::time::Duration,
+        duration: std::time::Duration,
+    ) -> Result<()> {
+        // Load source configuration
+        let source_repo = SourceRepositoryImpl::new(db.clone());
+        let source_entity = source_repo
+            .find_by_id(source_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
+
+        // Create backend and update progress
+        let backend = Self::create_backend_for_source(db, &source_entity).await?;
+        backend.update_progress(media_id, position, duration).await
+    }
 }

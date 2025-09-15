@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use gnome_reel::{
+use reel::{
     backends::traits::MediaBackend, models::*, player::traits::MediaPlayer, utils::error::RResult,
 };
 use std::collections::HashMap;
@@ -61,7 +61,7 @@ impl MockBackend {
 
     fn check_error(&self) -> RResult<()> {
         if let Some(error) = self.error_mode.lock().unwrap().clone() {
-            return Err(gnome_reel::utils::error::AppError::BackendError(error));
+            return Err(reel::utils::error::AppError::BackendError(error));
         }
         Ok(())
     }
@@ -118,7 +118,7 @@ impl MediaBackend for MockBackend {
                 return Ok(movie.clone());
             }
         }
-        Err(gnome_reel::utils::error::AppError::NotFound)
+        Err(reel::utils::error::AppError::NotFound)
     }
 
     async fn get_show_details(&self, show_id: &str) -> RResult<Show> {
@@ -128,7 +128,7 @@ impl MediaBackend for MockBackend {
                 return Ok(show.clone());
             }
         }
-        Err(gnome_reel::utils::error::AppError::NotFound)
+        Err(reel::utils::error::AppError::NotFound)
     }
 
     async fn get_stream_url(&self, _item_id: &str) -> RResult<String> {
@@ -207,7 +207,7 @@ impl MockPlayer {
 
     fn check_error(&self) -> RResult<()> {
         if let Some(error) = self.error_mode.lock().unwrap().clone() {
-            return Err(gnome_reel::utils::error::AppError::PlayerError(error));
+            return Err(reel::utils::error::AppError::PlayerError(error));
         }
         Ok(())
     }

@@ -80,84 +80,114 @@ mod tests {
 
     macro_rules! test_id_type {
         ($name:ident) => {
-            mod $name {
-                use super::*;
+            #[test]
+            fn test_creation_and_conversion() {
+                let id = $name::new("test_id");
+                assert_eq!(id.as_str(), "test_id");
+                assert_eq!(id.to_string(), "test_id");
+            }
 
-                #[test]
-                fn test_creation_and_conversion() {
-                    let id = $name::new("test_id");
-                    assert_eq!(id.as_str(), "test_id");
-                    assert_eq!(id.to_string(), "test_id");
-                }
+            #[test]
+            fn test_from_string() {
+                let id = $name::from("test_id".to_string());
+                assert_eq!(id.as_str(), "test_id");
+            }
 
-                #[test]
-                fn test_from_string() {
-                    let id = $name::from("test_id".to_string());
-                    assert_eq!(id.as_str(), "test_id");
-                }
+            #[test]
+            fn test_from_str() {
+                let id = $name::from("test_id");
+                assert_eq!(id.as_str(), "test_id");
+            }
 
-                #[test]
-                fn test_from_str() {
-                    let id = $name::from("test_id");
-                    assert_eq!(id.as_str(), "test_id");
-                }
+            #[test]
+            fn test_equality() {
+                let id1 = $name::new("test_id");
+                let id2 = $name::new("test_id");
+                let id3 = $name::new("other_id");
 
-                #[test]
-                fn test_equality() {
-                    let id1 = $name::new("test_id");
-                    let id2 = $name::new("test_id");
-                    let id3 = $name::new("other_id");
+                assert_eq!(id1, id2);
+                assert_ne!(id1, id3);
+            }
 
-                    assert_eq!(id1, id2);
-                    assert_ne!(id1, id3);
-                }
+            #[test]
+            fn test_hashing() {
+                use std::collections::HashSet;
 
-                #[test]
-                fn test_hashing() {
-                    use std::collections::HashSet;
+                let mut set = HashSet::new();
+                let id1 = $name::new("test_id");
+                let id2 = $name::new("test_id");
+                let id3 = $name::new("other_id");
 
-                    let mut set = HashSet::new();
-                    let id1 = $name::new("test_id");
-                    let id2 = $name::new("test_id");
-                    let id3 = $name::new("other_id");
+                set.insert(id1.clone());
+                assert!(set.contains(&id2));
+                assert!(!set.contains(&id3));
+            }
 
-                    set.insert(id1.clone());
-                    assert!(set.contains(&id2));
-                    assert!(!set.contains(&id3));
-                }
+            #[test]
+            fn test_serialization() {
+                let id = $name::new("test_id");
+                let json = serde_json::to_string(&id).unwrap();
+                assert_eq!(json, "\"test_id\"");
 
-                #[test]
-                fn test_serialization() {
-                    let id = $name::new("test_id");
-                    let json = serde_json::to_string(&id).unwrap();
-                    assert_eq!(json, "\"test_id\"");
+                let deserialized: $name = serde_json::from_str(&json).unwrap();
+                assert_eq!(deserialized, id);
+            }
 
-                    let deserialized: $name = serde_json::from_str(&json).unwrap();
-                    assert_eq!(deserialized, id);
-                }
+            #[test]
+            fn test_debug() {
+                let id = $name::new("test_id");
+                let debug_str = format!("{:?}", id);
+                assert!(debug_str.contains("test_id"));
+            }
 
-                #[test]
-                fn test_debug() {
-                    let id = $name::new("test_id");
-                    let debug_str = format!("{:?}", id);
-                    assert!(debug_str.contains("test_id"));
-                }
-
-                #[test]
-                fn test_clone() {
-                    let id1 = $name::new("test_id");
-                    let id2 = id1.clone();
-                    assert_eq!(id1, id2);
-                }
+            #[test]
+            fn test_clone() {
+                let id1 = $name::new("test_id");
+                let id2 = id1.clone();
+                assert_eq!(id1, id2);
             }
         };
     }
 
-    test_id_type!(SourceId);
-    test_id_type!(BackendId);
-    test_id_type!(ProviderId);
-    test_id_type!(LibraryId);
-    test_id_type!(MediaItemId);
-    test_id_type!(ShowId);
-    test_id_type!(UserId);
+    // Generate tests for SourceId
+    mod source_id {
+        use super::*;
+        test_id_type!(SourceId);
+    }
+
+    // Generate tests for BackendId
+    mod backend_id {
+        use super::*;
+        test_id_type!(BackendId);
+    }
+
+    // Generate tests for ProviderId
+    mod provider_id {
+        use super::*;
+        test_id_type!(ProviderId);
+    }
+
+    // Generate tests for LibraryId
+    mod library_id {
+        use super::*;
+        test_id_type!(LibraryId);
+    }
+
+    // Generate tests for MediaItemId
+    mod media_item_id {
+        use super::*;
+        test_id_type!(MediaItemId);
+    }
+
+    // Generate tests for ShowId
+    mod show_id {
+        use super::*;
+        test_id_type!(ShowId);
+    }
+
+    // Generate tests for UserId
+    mod user_id {
+        use super::*;
+        test_id_type!(UserId);
+    }
 }

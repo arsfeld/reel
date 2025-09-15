@@ -1,5 +1,5 @@
 use chrono::Utc;
-use gnome_reel::models::*;
+use reel::models::*;
 
 pub struct MediaItemBuilder {
     id: String,

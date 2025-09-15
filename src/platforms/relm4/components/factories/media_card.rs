@@ -8,6 +8,8 @@ use relm4::prelude::*;
 pub struct MediaCardInit {
     pub item: MediaItemModel,
     pub show_progress: bool,
+    pub watched: bool,
+    pub progress_percent: f64,
 }
 
 #[tracker::track]
@@ -22,6 +24,8 @@ pub struct MediaCard {
     progress_percent: f64,
     image_loaded: bool,
     watched: bool,
+    #[do_not_track]
+    texture: Option<gtk::gdk::Texture>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,7 +33,7 @@ pub enum MediaCardInput {
     SetHover(bool),
     SetSelected(bool),
     UpdateProgress(f64),
-    ImageLoaded,
+    ImageLoaded(gtk::gdk::Texture),
     Play,
 }
 
@@ -155,20 +159,8 @@ impl FactoryComponent for MediaCard {
         }
     }
 
-    fn init_model(init: Self::Init, _index: &DynamicIndex, sender: FactorySender<Self>) -> Self {
+    fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
         let item_id = MediaItemId::new(init.item.id.clone());
-
-        // Start loading the image
-        if let Some(poster_url) = &init.item.poster_url {
-            let sender = sender.clone();
-            let url = poster_url.clone();
-            relm4::spawn_local(async move {
-                // TODO: Integrate with ImageWorker when available
-                // For now, just signal that image is loaded
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                sender.input(MediaCardInput::ImageLoaded);
-            });
-        }
 
         Self {
             item: init.item,
@@ -176,14 +168,20 @@ impl FactoryComponent for MediaCard {
             show_progress: init.show_progress,
             hover: false,
             selected: false,
-            progress_percent: 0.0,
+            progress_percent: init.progress_percent,
             image_loaded: false,
-            watched: false, // TODO: Get from playback progress
+            watched: init.watched,
+            texture: None,
             tracker: 0,
         }
     }
 
-    fn update(&mut self, msg: Self::Input, sender: FactorySender<Self>) {
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        msg: Self::Input,
+        sender: FactorySender<Self>,
+    ) {
         self.reset();
 
         match msg {
@@ -196,7 +194,10 @@ impl FactoryComponent for MediaCard {
             MediaCardInput::UpdateProgress(progress) => {
                 self.set_progress_percent(progress);
             }
-            MediaCardInput::ImageLoaded => {
+            MediaCardInput::ImageLoaded(texture) => {
+                // Set the texture on the picture widget
+                widgets.poster.set_paintable(Some(&texture));
+                self.texture = Some(texture);
                 self.set_image_loaded(true);
             }
             MediaCardInput::Play => {

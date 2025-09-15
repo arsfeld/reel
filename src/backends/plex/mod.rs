@@ -410,32 +410,63 @@ impl MediaBackend for PlexBackend {
         let existing_url = self.base_url.read().await.clone();
 
         if let Some(url) = existing_url {
-            // We already have a URL from the source, just use it
+            // We already have a URL from the source
             tracing::info!("Using existing URL from source: {}", url);
 
-            // Test if the URL is actually reachable
-            let test_client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .danger_accept_invalid_certs(true)
-                .build()?;
+            // Check if we can skip testing via cache
+            use crate::models::SourceId;
+            use crate::services::core::ConnectionService;
 
-            let test_result = test_client
-                .get(format!("{}/identity", url))
-                .header("X-Plex-Token", &token)
-                .send()
-                .await;
-
-            if let Err(e) = test_result {
-                tracing::warn!(
-                    "Saved URL {} is not reachable: {}. Will try to discover servers.",
-                    url,
-                    e
-                );
-                // Clear the bad URL and fall through to discovery
-                *self.base_url.write().await = None;
+            let source_id = self.source.as_ref().map(|s| SourceId::new(s.id.clone()));
+            let should_test = if let Some(ref sid) = source_id {
+                let cache = ConnectionService::cache();
+                !cache.should_skip_test(sid).await
             } else {
-                tracing::info!("URL {} is reachable, using it", url);
+                true // Always test if no source ID
+            };
 
+            if should_test {
+                // Test if the URL is actually reachable
+                let test_client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(5))
+                    .danger_accept_invalid_certs(true)
+                    .build()?;
+
+                let test_result = test_client
+                    .get(format!("{}/identity", url))
+                    .header("X-Plex-Token", &token)
+                    .send()
+                    .await;
+
+                if let Err(e) = test_result {
+                    tracing::warn!(
+                        "Saved URL {} is not reachable: {}. Will try to discover servers.",
+                        url,
+                        e
+                    );
+                    // Clear the bad URL and fall through to discovery
+                    *self.base_url.write().await = None;
+
+                    // Update cache to mark failure
+                    if let Some(ref sid) = source_id {
+                        let cache = ConnectionService::cache();
+                        cache.update_failure(sid).await;
+                    }
+                } else {
+                    tracing::info!("URL {} is reachable, using it", url);
+
+                    // Update cache with success
+                    if let Some(ref sid) = source_id {
+                        let cache = ConnectionService::cache();
+                        cache.update_success(sid, 100).await; // Assuming ~100ms for successful test
+                    }
+                }
+            } else {
+                tracing::info!("Skipping URL test due to recent cache (URL: {})", url);
+            }
+
+            // If URL is still valid (not cleared due to failure), create API client
+            if self.base_url.read().await.is_some() {
                 // Create and store the API client
                 let api = PlexApi::with_backend_id(
                     url.clone(),

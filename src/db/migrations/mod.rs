@@ -4,6 +4,7 @@ mod m20250101_000001_create_initial_schema;
 mod m20250102_000001_add_episode_fields;
 mod m20250103_000001_add_source_connections;
 mod m20250104_000001_add_sync_total_items;
+mod m20250105_000001_add_connection_tracking;
 
 pub struct Migrator;
 
@@ -15,6 +16,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20250102_000001_add_episode_fields::Migration),
             Box::new(m20250103_000001_add_source_connections::Migration),
             Box::new(m20250104_000001_add_sync_total_items::Migration),
+            Box::new(m20250105_000001_add_connection_tracking::Migration),
         ]
     }
 }

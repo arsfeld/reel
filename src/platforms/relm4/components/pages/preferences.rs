@@ -260,15 +260,22 @@ impl AsyncComponent for PreferencesPage {
         _root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
-        // Load preferences from config or database
-        // For now, use defaults
+        // Load preferences from config file
+        let config = match crate::config::Config::load() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Failed to load config, using defaults: {}", e);
+                crate::config::Config::default()
+            }
+        };
+
         let model = Self {
             db,
-            default_player: "mpv".to_string(),
-            hardware_acceleration: true,
-            default_view_mode: "grid".to_string(),
+            default_player: config.playback.player_backend,
+            hardware_acceleration: config.playback.hardware_acceleration,
+            default_view_mode: "grid".to_string(), // These would need to be added to config
             items_per_page: 48,
-            cache_size_mb: 1000,
+            cache_size_mb: config.playback.mpv_cache_size_mb as i32,
             auto_clean_cache: true,
         };
 
@@ -309,9 +316,36 @@ impl AsyncComponent for PreferencesPage {
                 tracing::info!("Auto-clean cache: {}", enabled);
             }
             PreferencesInput::SavePreferences => {
-                // TODO: Save preferences to config file or database
                 tracing::info!("Saving preferences...");
-                sender.output(PreferencesOutput::PreferencesSaved).unwrap();
+
+                // Load current config or create new one
+                let mut config = match crate::config::Config::load() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("Failed to load config: {}", e);
+                        crate::config::Config::default()
+                    }
+                };
+
+                // Update config with current preferences
+                config.playback.player_backend = self.default_player.clone();
+                config.playback.hardware_acceleration = self.hardware_acceleration;
+                // Note: view_mode and items_per_page would need to be added to config struct
+                // For now we'll just save what we can
+
+                // Save config to file
+                match config.save() {
+                    Ok(_) => {
+                        tracing::info!("Preferences saved successfully");
+                        sender.output(PreferencesOutput::PreferencesSaved).unwrap();
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to save preferences: {}", e);
+                        sender
+                            .output(PreferencesOutput::Error(format!("Failed to save: {}", e)))
+                            .unwrap();
+                    }
+                }
             }
             PreferencesInput::RestoreDefaults => {
                 // Reset to default values

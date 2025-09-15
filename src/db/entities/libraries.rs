@@ -99,6 +99,7 @@ impl TryFrom<Model> for crate::models::Library {
             title: model.title,
             library_type,
             icon: model.icon,
+            item_count: model.item_count,
         })
     }
 }

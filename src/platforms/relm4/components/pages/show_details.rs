@@ -1,6 +1,7 @@
-use crate::models::{Episode, MediaItem, MediaItemId, Season, Show};
+use crate::models::{Episode, MediaItem, MediaItemId, PlaylistContext, Season, Show};
 use crate::services::commands::Command;
 use crate::services::commands::media_commands::{GetEpisodesCommand, GetItemDetailsCommand};
+use crate::services::core::PlaylistService;
 use adw::prelude::*;
 use gtk::prelude::*;
 use libadwaita as adw;
@@ -8,6 +9,7 @@ use relm4::RelmWidgetExt;
 use relm4::gtk;
 use relm4::prelude::*;
 use std::sync::Arc;
+use tracing::error;
 
 #[derive(Debug)]
 pub struct ShowDetailsPage {
@@ -33,6 +35,10 @@ pub enum ShowDetailsInput {
 #[derive(Debug)]
 pub enum ShowDetailsOutput {
     PlayMedia(MediaItemId),
+    PlayMediaWithContext {
+        media_id: MediaItemId,
+        context: PlaylistContext,
+    },
     NavigateBack,
 }
 
@@ -40,6 +46,11 @@ pub enum ShowDetailsOutput {
 pub enum ShowDetailsCommand {
     LoadDetails,
     LoadEpisodes(String, u32),
+    PlayWithContext {
+        episode_id: MediaItemId,
+        context: PlaylistContext,
+    },
+    PlayWithoutContext(MediaItemId),
 }
 
 #[relm4::component(pub, async)]
@@ -334,15 +345,52 @@ impl AsyncComponent for ShowDetailsPage {
                 }
             }
             ShowDetailsInput::PlayEpisode(episode_id) => {
-                sender
-                    .output(ShowDetailsOutput::PlayMedia(episode_id))
-                    .unwrap();
+                // Build playlist context for the episode
+                let db_clone = self.db.clone();
+                let episode_id_clone = episode_id.clone();
+
+                sender.oneshot_command(async move {
+                    // Try to build playlist context for TV show navigation
+                    match PlaylistService::build_show_context(&db_clone, &episode_id_clone).await {
+                        Ok(context) => ShowDetailsCommand::PlayWithContext {
+                            episode_id: episode_id_clone,
+                            context,
+                        },
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to build playlist context: {}, playing without context",
+                                e
+                            );
+                            ShowDetailsCommand::PlayWithoutContext(episode_id_clone)
+                        }
+                    }
+                });
             }
             ShowDetailsInput::ToggleEpisodeWatched(index) => {
                 if let Some(episode) = self.episodes.get_mut(index) {
                     episode.watched = !episode.watched;
-                    // TODO: Update database
-                    self.update_episode_grid();
+
+                    // Update database with watched status
+                    let db = (*self.db).clone();
+                    let media_id = episode.id.clone();
+                    let watched = episode.watched;
+
+                    relm4::spawn(async move {
+                        use crate::db::repository::{PlaybackRepository, PlaybackRepositoryImpl};
+
+                        let repo = PlaybackRepositoryImpl::new(db);
+                        if watched {
+                            if let Err(e) = repo.mark_watched(&media_id.to_string(), None).await {
+                                error!("Failed to mark episode as watched: {}", e);
+                            }
+                        } else {
+                            if let Err(e) = repo.mark_unwatched(&media_id.to_string(), None).await {
+                                error!("Failed to mark episode as unwatched: {}", e);
+                            }
+                        }
+                    });
+
+                    self.update_episode_grid(&sender);
                 }
             }
             ShowDetailsInput::LoadEpisodes => {
@@ -387,9 +435,23 @@ impl AsyncComponent for ShowDetailsPage {
                                 &seasons.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
                             );
                             self.season_dropdown.set_model(Some(&model));
-                            self.season_dropdown.set_selected(0);
 
-                            // Load episodes for first season
+                            // Find the season with the first unwatched episode
+                            let db_clone = (*self.db).clone();
+                            let season_to_select =
+                                find_season_with_next_unwatched(&show, db_clone).await;
+
+                            // Select the appropriate season (default to first if none found)
+                            let season_index = show
+                                .seasons
+                                .iter()
+                                .position(|s| s.season_number == season_to_select)
+                                .unwrap_or(0);
+
+                            self.season_dropdown.set_selected(season_index as u32);
+                            self.current_season = season_to_select;
+
+                            // Load episodes for the selected season
                             if !show.seasons.is_empty() {
                                 sender.input(ShowDetailsInput::LoadEpisodes);
                             }
@@ -411,19 +473,37 @@ impl AsyncComponent for ShowDetailsPage {
                 match Command::execute(&cmd).await {
                     Ok(episodes) => {
                         self.episodes = episodes;
-                        self.update_episode_grid();
+                        self.update_episode_grid(&sender);
                     }
                     Err(e) => {
                         tracing::error!("Failed to load episodes: {}", e);
                     }
                 }
             }
+            ShowDetailsCommand::PlayWithContext {
+                episode_id,
+                context,
+            } => {
+                // Send output with context to main window
+                sender
+                    .output(ShowDetailsOutput::PlayMediaWithContext {
+                        media_id: episode_id,
+                        context,
+                    })
+                    .unwrap();
+            }
+            ShowDetailsCommand::PlayWithoutContext(episode_id) => {
+                // Fall back to playing without context
+                sender
+                    .output(ShowDetailsOutput::PlayMedia(episode_id))
+                    .unwrap();
+            }
         }
     }
 }
 
 impl ShowDetailsPage {
-    fn update_episode_grid(&self) {
+    fn update_episode_grid(&self, sender: &AsyncComponentSender<Self>) {
         // Clear existing children
         while let Some(child) = self.episode_grid.first_child() {
             self.episode_grid.remove(&child);
@@ -431,19 +511,91 @@ impl ShowDetailsPage {
 
         // Add episode cards
         for (index, episode) in self.episodes.iter().enumerate() {
-            let card = create_episode_card(episode, index);
+            let card = create_episode_card(episode, index, sender.clone());
             self.episode_grid.append(&card);
+        }
+
+        // Scroll to the first unwatched episode
+        if let Some(first_unwatched_index) = self.episodes.iter().position(|e| !e.watched) {
+            if let Some(child) = self
+                .episode_grid
+                .child_at_index(first_unwatched_index as i32)
+            {
+                // Focus on the first unwatched episode for better visibility
+                child.grab_focus();
+            }
         }
     }
 }
 
-fn create_episode_card(episode: &Episode, index: usize) -> gtk::Box {
+async fn find_season_with_next_unwatched(
+    show: &Show,
+    db: crate::db::connection::DatabaseConnection,
+) -> u32 {
+    use crate::db::repository::{
+        MediaRepository, MediaRepositoryImpl, PlaybackRepository, PlaybackRepositoryImpl,
+    };
+
+    // Get all episodes for the show
+    let media_repo = MediaRepositoryImpl::new(db.clone());
+    let playback_repo = PlaybackRepositoryImpl::new(db);
+
+    // Try to find the first season with an unwatched episode
+    for season in &show.seasons {
+        match media_repo
+            .find_episodes_by_season(&show.id, season.season_number as i32)
+            .await
+        {
+            Ok(episode_models) => {
+                // Check if this season has any unwatched episodes
+                for episode_model in &episode_models {
+                    // Check playback progress to determine if watched
+                    let is_watched = match playback_repo.find_by_media_id(&episode_model.id).await {
+                        Ok(Some(progress)) => progress.watched,
+                        _ => false,
+                    };
+
+                    if !is_watched {
+                        return season.season_number;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to get episodes for season {}: {}",
+                    season.season_number,
+                    e
+                );
+            }
+        }
+    }
+
+    // If no unwatched episodes found or all watched, return the first season
+    show.seasons.first().map(|s| s.season_number).unwrap_or(1)
+}
+
+fn create_episode_card(
+    episode: &Episode,
+    index: usize,
+    sender: AsyncComponentSender<ShowDetailsPage>,
+) -> gtk::Box {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(6)
         .width_request(200)
         .css_classes(["card"])
         .build();
+
+    // Make the card clickable
+    let click_controller = gtk::GestureClick::new();
+    let episode_id = MediaItemId::new(&episode.id);
+    click_controller.connect_released(move |_, _, _, _| {
+        sender.input(ShowDetailsInput::PlayEpisode(episode_id.clone()));
+    });
+    card.add_controller(click_controller);
+
+    // Add hover effects
+    card.set_cursor_from_name(Some("pointer"));
 
     // Episode thumbnail with number overlay
     let overlay = gtk::Overlay::new();

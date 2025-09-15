@@ -67,6 +67,7 @@ impl PlexApi {
                     _ => LibraryType::Mixed,
                 },
                 icon: dir.thumb,
+                item_count: 0, // Plex doesn't provide count in library listing
             })
             .collect();
 

@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::models::MediaItemId;
+use crate::models::{MediaItemId, PlaylistContext};
 use crate::player::{PlayerController, PlayerHandle, PlayerState};
 use adw::prelude::*;
 use gtk::glib::{self, SourceId};
@@ -33,6 +33,8 @@ pub struct PlayerPage {
     volume: f64,
     db: Arc<crate::db::connection::DatabaseConnection>,
     video_container: gtk::Box,
+    // Playlist context
+    playlist_context: Option<PlaylistContext>,
     // UI state
     show_controls: bool,
     is_fullscreen: bool,
@@ -62,6 +64,10 @@ impl std::fmt::Debug for PlayerPage {
 #[derive(Debug)]
 pub enum PlayerInput {
     LoadMedia(MediaItemId),
+    LoadMediaWithContext {
+        media_id: MediaItemId,
+        context: PlaylistContext,
+    },
     PlayPause,
     Stop,
     Seek(Duration),
@@ -311,6 +317,7 @@ impl AsyncComponent for PlayerPage {
             volume: 1.0,
             db,
             video_container: video_container.clone(),
+            playlist_context: None,
             show_controls: true,
             is_fullscreen: false,
             controls_timer: None,
@@ -454,6 +461,8 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::LoadMedia(id) => {
                 self.media_item_id = Some(id.clone());
                 self.player_state = PlayerState::Loading;
+                // Clear context when loading without context
+                self.playlist_context = None;
 
                 // Get actual media URL from backend using GetStreamUrlCommand
                 let db_clone = self.db.clone();
@@ -487,6 +496,90 @@ impl AsyncComponent for PlayerPage {
                         match player_handle.load_media(&stream_info.url).await {
                             Ok(_) => {
                                 info!("Media loaded successfully");
+
+                                // Try to get video dimensions and calculate appropriate window size
+                                if let Ok(Some((width, height))) =
+                                    player_handle.get_video_dimensions().await
+                                {
+                                    if width > 0 && height > 0 {
+                                        // Calculate window size based on video aspect ratio
+                                        // Keep width reasonable (max 1920) and scale height accordingly
+                                        let max_width = 1920.0_f32.min(width as f32);
+                                        let scale = max_width / width as f32;
+                                        let window_width = max_width as i32;
+                                        let window_height = (height as f32 * scale) as i32;
+
+                                        // Add some padding for controls
+                                        let final_height = window_height + 100; // Extra space for controls
+
+                                        info!(
+                                            "Video dimensions: {}x{}, window size: {}x{}",
+                                            width, height, window_width, final_height
+                                        );
+
+                                        // Request window resize through output
+                                        sender_clone
+                                            .output(PlayerOutput::WindowStateChanged {
+                                                width: window_width,
+                                                height: final_height,
+                                            })
+                                            .ok();
+                                    }
+                                }
+
+                                PlayerCommandOutput::StateChanged(PlayerState::Idle)
+                            }
+                            Err(e) => {
+                                error!("Failed to load media: {}", e);
+                                PlayerCommandOutput::StateChanged(PlayerState::Error)
+                            }
+                        }
+                    });
+                }
+            }
+            PlayerInput::LoadMediaWithContext { media_id, context } => {
+                self.media_item_id = Some(media_id.clone());
+                self.player_state = PlayerState::Loading;
+                self.playlist_context = Some(context);
+
+                // Get actual media URL from backend using GetStreamUrlCommand
+                let db_clone = self.db.clone();
+                let media_id_clone = media_id.clone();
+                let sender_clone = sender.clone();
+
+                if let Some(player) = &self.player {
+                    let player_handle = player.clone();
+                    sender.oneshot_command(async move {
+                        use crate::services::commands::Command;
+                        use crate::services::commands::media_commands::GetStreamUrlCommand;
+
+                        // Get the stream info from the backend using stateless command
+                        let stream_info = match (GetStreamUrlCommand {
+                            db: db_clone.as_ref().clone(),
+                            media_item_id: media_id_clone,
+                        })
+                        .execute()
+                        .await
+                        {
+                            Ok(info) => info,
+                            Err(e) => {
+                                error!("Failed to get stream URL: {}", e);
+                                sender_clone
+                                    .output(PlayerOutput::Error(format!(
+                                        "Failed to get stream URL: {}",
+                                        e
+                                    )))
+                                    .unwrap();
+                                return PlayerCommandOutput::StateChanged(PlayerState::Error);
+                            }
+                        };
+
+                        info!("Got stream URL: {}", stream_info.url);
+
+                        // Load the media into the player using channel-based API
+                        match player_handle.load_media(&stream_info.url).await {
+                            Ok(_) => {
+                                info!("Media loaded successfully with playlist context");
 
                                 // Try to get video dimensions and calculate appropriate window size
                                 if let Ok(Some((width, height))) =
@@ -640,12 +733,44 @@ impl AsyncComponent for PlayerPage {
                 }));
             }
             PlayerInput::Previous => {
-                // TODO: Implement previous track/episode logic
                 debug!("Previous track requested");
+
+                if let Some(ref context) = self.playlist_context {
+                    if let Some(prev_id) = context.get_previous_item() {
+                        // Keep the context and just load the previous media
+                        let mut new_context = context.clone();
+                        new_context.update_current_index(&prev_id);
+
+                        sender.input(PlayerInput::LoadMediaWithContext {
+                            media_id: prev_id,
+                            context: new_context,
+                        });
+                    } else {
+                        debug!("No previous episode available");
+                    }
+                } else {
+                    debug!("No playlist context available for previous navigation");
+                }
             }
             PlayerInput::Next => {
-                // TODO: Implement next track/episode logic
                 debug!("Next track requested");
+
+                if let Some(ref context) = self.playlist_context {
+                    if let Some(next_id) = context.get_next_item() {
+                        // Keep the context and just load the next media
+                        let mut new_context = context.clone();
+                        new_context.update_current_index(&next_id);
+
+                        sender.input(PlayerInput::LoadMediaWithContext {
+                            media_id: next_id,
+                            context: new_context,
+                        });
+                    } else {
+                        debug!("No next episode available");
+                    }
+                } else {
+                    debug!("No playlist context available for next navigation");
+                }
             }
             PlayerInput::ShowCursor => {
                 // Set cursor to default (visible)
@@ -707,6 +832,35 @@ impl AsyncComponent for PlayerPage {
                     // Update seek bar position (only if not being dragged)
                     if !self.seek_bar.has_focus() {
                         self.seek_bar.set_value(pos.as_secs_f64());
+                    }
+
+                    // Save playback progress to database
+                    if let (Some(media_id), Some(dur)) = (&self.media_item_id, duration) {
+                        let db = (*self.db).clone();
+                        let media_id = media_id.clone();
+                        let position_ms = pos.as_millis() as i64;
+                        let duration_ms = dur.as_millis() as i64;
+
+                        relm4::spawn(async move {
+                            use crate::services::commands::{
+                                Command, UpdatePlaybackProgressCommand,
+                            };
+
+                            // Mark as watched if we're past 90% of the duration
+                            let watched = position_ms as f64 / duration_ms as f64 > 0.9;
+
+                            let command = UpdatePlaybackProgressCommand {
+                                db,
+                                media_id,
+                                position_ms,
+                                duration_ms,
+                                watched,
+                            };
+
+                            if let Err(e) = command.execute().await {
+                                debug!("Failed to save playback progress: {}", e);
+                            }
+                        });
                     }
                 }
                 if let Some(dur) = duration {

@@ -200,6 +200,22 @@ impl SyncService {
             }
         }
 
+        // Update library item count in database
+        use crate::db::repository::{LibraryRepository, LibraryRepositoryImpl};
+        let library_repo = LibraryRepositoryImpl::new(db.clone());
+        if let Ok(Some(mut lib_entity)) = library_repo.find_by_id(&library.id).await {
+            // Get actual count from media repository
+            use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
+            let media_repo = MediaRepositoryImpl::new(db.clone());
+            if let Ok(count) = media_repo.count_by_library(&library.id).await {
+                lib_entity.item_count = count as i32;
+                lib_entity.updated_at = chrono::Utc::now().naive_utc();
+                if let Err(e) = library_repo.update(lib_entity).await {
+                    warn!("Failed to update library item count: {}", e);
+                }
+            }
+        }
+
         debug!(
             "Synced {} items for library {}",
             items_synced, library.title

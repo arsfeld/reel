@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod sync_service_tests {
-    use gnome_reel::services::core::sync::{SyncService, SyncResult, SyncStatus, SyncProgress};
-    use gnome_reel::db::connection::DatabaseConnection;
-    use gnome_reel::db::repository::{Repository, sync_repository::SyncRepository};
-    use gnome_reel::models::{SourceId, Library, LibraryType};
-    use gnome_reel::backends::traits::MediaBackend;
+    use reel::services::core::sync::{SyncService, SyncResult, SyncStatus, SyncProgress};
+    use reel::db::connection::DatabaseConnection;
+    use reel::db::repository::{Repository, sync_repository::SyncRepository};
+    use reel::models::{SourceId, Library, LibraryType};
+    use reel::backends::traits::MediaBackend;
     use crate::common::{create_test_database, seed_test_data};
     use crate::common::mocks::MockBackend;
     use std::sync::Arc;
@@ -228,8 +228,8 @@ mod sync_service_tests {
     }
 
     // Helper function to create test movies
-    fn create_test_movie(id: &str, title: &str) -> gnome_reel::models::Movie {
-        use gnome_reel::models::{Movie, MediaItemId};
+    fn create_test_movie(id: &str, title: &str) -> reel::models::Movie {
+        use reel::models::{Movie, MediaItemId};
         use chrono::Utc;
 
         Movie {

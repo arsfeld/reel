@@ -93,6 +93,9 @@ impl Repository<SourceModel> for SourceRepositoryImpl {
             is_owned: Set(entity.is_owned),
             is_online: Set(entity.is_online),
             last_sync: Set(entity.last_sync),
+            last_connection_test: Set(entity.last_connection_test),
+            connection_failure_count: Set(entity.connection_failure_count),
+            connection_quality: Set(entity.connection_quality),
             created_at: Set(chrono::Utc::now().naive_utc()),
             updated_at: Set(chrono::Utc::now().naive_utc()),
         };
