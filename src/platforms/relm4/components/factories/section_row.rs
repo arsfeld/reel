@@ -171,6 +171,8 @@ impl FactoryComponent for SectionRow {
                     self.media_items.guard().push_back(MediaCardInit {
                         item,
                         show_progress: false, // Could be made conditional
+                        watched: false,
+                        progress_percent: 0.0,
                     });
                 }
             }
@@ -180,6 +182,8 @@ impl FactoryComponent for SectionRow {
                     guard.push_back(MediaCardInit {
                         item,
                         show_progress: false,
+                        watched: false,
+                        progress_percent: 0.0,
                     });
                 }
             }

@@ -1,19 +1,44 @@
 use crate::db::DatabaseConnection;
 use crate::models::{ServerConnection, ServerConnections, Source, SourceId};
+use crate::services::core::connection_cache::{ConnectionCache, ConnectionState, ConnectionType};
 use anyhow::Result;
 use reqwest::Client;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
+
+// Global connection cache - shared across all backends
+lazy_static::lazy_static! {
+    static ref CONNECTION_CACHE: Arc<ConnectionCache> = Arc::new(ConnectionCache::new());
+}
 
 /// Service for managing and selecting optimal server connections
 pub struct ConnectionService;
 
 impl ConnectionService {
+    /// Get the global connection cache
+    pub fn cache() -> Arc<ConnectionCache> {
+        CONNECTION_CACHE.clone()
+    }
+
     /// Test all connections for a source and update the best one
     pub async fn select_best_connection(
         db: &DatabaseConnection,
         source_id: &SourceId,
     ) -> Result<Option<String>> {
+        // Check cache first
+        let cache = Self::cache();
+        if cache.should_skip_test(source_id).await {
+            if let Some(state) = cache.get(source_id).await {
+                debug!(
+                    "Using cached connection for {}: {} (age: {:?})",
+                    source_id,
+                    state.url,
+                    state.age()
+                );
+                return Ok(Some(state.url));
+            }
+        }
         use crate::db::repository::Repository;
         use crate::db::repository::source_repository::{SourceRepository, SourceRepositoryImpl};
 
@@ -53,6 +78,28 @@ impl ConnectionService {
                     serde_json::to_value(&server_connections)?,
                 )
                 .await?;
+
+                // Update cache with successful connection
+                let conn_type = ConnectionType::from_connection(best_conn);
+                let state = ConnectionState::new(
+                    best_conn.uri.clone(),
+                    conn_type,
+                    best_conn.response_time_ms.unwrap_or(0),
+                );
+                cache.insert(source_id.clone(), state).await;
+
+                // Update database connection tracking fields
+                use crate::db::entities::sources::{ActiveModel, Entity as SourceEntity};
+                use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+
+                let mut active_model = ActiveModel {
+                    id: Set(source_id.to_string()),
+                    last_connection_test: Set(Some(chrono::Utc::now().naive_utc())),
+                    connection_failure_count: Set(0),
+                    connection_quality: Set(Some(conn_type.to_string())),
+                    ..Default::default()
+                };
+                active_model.update(db.as_ref()).await?;
 
                 return Ok(Some(best_conn.uri.clone()));
             }

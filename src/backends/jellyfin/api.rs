@@ -202,6 +202,7 @@ impl JellyfinApi {
                         self.base_url, view.id, tag
                     )
                 }),
+                item_count: 0, // Will be updated during sync
             })
             .collect();
 

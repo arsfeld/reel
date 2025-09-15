@@ -334,11 +334,32 @@
 
 ## Current Blockers & Issues
 
+### ⚠️ CRITICAL: Test Compilation Issues (2025-01-14)
+
+**GTK Feature Must Be Disabled**:
+- The deprecated GTK feature causes compilation errors during testing
+- Tests MUST be run with: `cargo test --no-default-features --features relm4`
+- DO NOT run tests with default features or GTK will cause failures
+
+**Remaining Compilation Errors**:
+When running `cargo test --no-default-features --features relm4 --no-run`:
+```
+error[E0432]: unresolved imports `reel::player::traits`, `reel::utils::error`
+error[E0432]: unresolved import `reel::models::ServerType`
+error[E0433]: failed to resolve: could not find `error` in `utils`
+error[E0412]: cannot find type `MediaType` in this scope
+error[E0412]: cannot find type `Movie` in this scope
+error[E0422]: cannot find struct, variant or union type `Movie` in this scope
+```
+
+These errors appear to be related to module visibility and imports when testing with specific features.
+
 ### High Priority
 - [x] ✅ Test infrastructure created
 - [x] ✅ Mock implementations for backends completed
 - [x] ✅ Test database utilities implemented
-- [x] ✅ Library compilation errors resolved with MessageBroker integration
+- [x] ✅ Library compilation errors partially resolved with MessageBroker integration
+- [ ] ❌ Fix remaining import/visibility issues for test compilation
 
 ### Medium Priority
 - [ ] 🟡 Some components still being developed
@@ -353,6 +374,27 @@
 ---
 
 ## Notes
+
+### Test Execution Commands
+
+**IMPORTANT**: Always use these commands for testing:
+```bash
+# Compile tests without running (to check compilation)
+nix develop -c cargo test --no-default-features --features relm4 --no-run
+
+# Run all tests
+nix develop -c cargo test --no-default-features --features relm4
+
+# Run specific test
+nix develop -c cargo test --no-default-features --features relm4 test_name
+
+# Run with output
+nix develop -c cargo test --no-default-features --features relm4 -- --nocapture
+```
+
+**NEVER use**:
+- `cargo test` (includes GTK feature by default)
+- `cargo test --all-features` (includes deprecated GTK)
 
 ### Recent Accomplishments (2025-01-14)
 
@@ -395,6 +437,6 @@
 
 ---
 
-**Last Updated**: 2025-01-14 (Testing Implementation Started)
+**Last Updated**: 2025-01-14 (Test Compilation Issues Documented)
 **Next Review**: When Phase 1 complete
 **Owner**: Development Team

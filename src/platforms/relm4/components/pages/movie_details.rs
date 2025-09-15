@@ -8,6 +8,7 @@ use relm4::RelmWidgetExt;
 use relm4::gtk;
 use relm4::prelude::*;
 use std::sync::Arc;
+use tracing::error;
 
 #[derive(Debug)]
 pub struct MovieDetailsPage {
@@ -353,7 +354,26 @@ impl AsyncComponent for MovieDetailsPage {
             MovieDetailsInput::ToggleWatched => {
                 if let Some(movie) = &mut self.movie {
                     movie.watched = !movie.watched;
-                    // TODO: Update database
+
+                    // Update database with watched status
+                    let db = (*self.db).clone();
+                    let media_id = self.item_id.clone();
+                    let watched = movie.watched;
+
+                    relm4::spawn(async move {
+                        use crate::db::repository::{PlaybackRepository, PlaybackRepositoryImpl};
+
+                        let repo = PlaybackRepositoryImpl::new(db);
+                        if watched {
+                            if let Err(e) = repo.mark_watched(&media_id.to_string(), None).await {
+                                error!("Failed to mark as watched: {}", e);
+                            }
+                        } else {
+                            if let Err(e) = repo.mark_unwatched(&media_id.to_string(), None).await {
+                                error!("Failed to mark as unwatched: {}", e);
+                            }
+                        }
+                    });
                 }
             }
         }

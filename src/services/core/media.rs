@@ -84,7 +84,7 @@ impl MediaService {
             title: library.title.clone(),
             library_type: format!("{:?}", library.library_type).to_lowercase(),
             icon: library.icon.clone(),
-            item_count: 0, // Will be updated during sync
+            item_count: library.item_count,
             created_at: chrono::Utc::now().naive_utc(),
             updated_at: chrono::Utc::now().naive_utc(),
         };
@@ -282,6 +282,13 @@ impl MediaService {
             .context("Failed to convert media items")
     }
 
+    /// Get trending items (currently uses recently added as a proxy)
+    pub async fn get_trending(db: &DatabaseConnection, limit: u32) -> Result<Vec<MediaItem>> {
+        // TODO: Implement proper trending algorithm based on watch history
+        // For now, use recently added items as trending
+        Self::get_recently_added(db, limit).await
+    }
+
     /// Get continue watching items
     pub async fn get_continue_watching(
         db: &DatabaseConnection,
@@ -343,6 +350,38 @@ impl MediaService {
         } else {
             repo.upsert_progress(&media_id.to_string(), None, position_ms, duration_ms)
                 .await?;
+        }
+
+        // Also sync progress to the backend server in a fire-and-forget manner
+        // Parse source ID from media ID (format: "source_id:item_id")
+        let media_id_str = media_id.to_string();
+        if let Some(colon_pos) = media_id_str.find(':') {
+            let source_id = media_id_str[..colon_pos].to_string();
+            let media_id_clone = media_id.clone();
+            let db_clone = db.clone();
+            let position_ms_clone = position_ms;
+            let duration_ms_clone = duration_ms;
+
+            // Spawn a detached task to sync with backend
+            tokio::spawn(async move {
+                use crate::services::core::backend::BackendService;
+                use std::time::Duration;
+
+                let position = Duration::from_millis(position_ms_clone as u64);
+                let duration = Duration::from_millis(duration_ms_clone as u64);
+
+                if let Err(e) = BackendService::update_playback_progress(
+                    &db_clone,
+                    &source_id,
+                    &media_id_clone,
+                    position,
+                    duration,
+                )
+                .await
+                {
+                    debug!("Failed to sync playback progress to backend: {}", e);
+                }
+            });
         }
 
         Ok(())

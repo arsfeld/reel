@@ -1,5 +1,6 @@
 use relm4::Worker;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use crate::db::DatabaseConnection;
@@ -8,13 +9,14 @@ use crate::services::core::ConnectionService;
 
 pub struct ConnectionMonitor {
     db: DatabaseConnection,
-    interval: Duration,
+    next_check_times: HashMap<SourceId, Instant>,
 }
 
 #[derive(Debug, Clone)]
 pub enum ConnectionMonitorInput {
     CheckSource(SourceId),
     CheckAllSources,
+    UpdateCheckTimes(HashMap<SourceId, Instant>),
     Stop,
 }
 
@@ -41,7 +43,7 @@ impl Worker for ConnectionMonitor {
     fn init(db: Self::Init, _sender: relm4::ComponentSender<Self>) -> Self {
         Self {
             db,
-            interval: Duration::from_secs(30), // Check every 30 seconds
+            next_check_times: HashMap::new(),
         }
     }
 
@@ -81,19 +83,34 @@ impl Worker for ConnectionMonitor {
 
                 let db = self.db.clone();
                 let sender = sender.clone();
+                let mut next_check_times = self.next_check_times.clone();
 
                 tokio::spawn(async move {
                     let repo = SourceRepositoryImpl::new(db.clone());
 
                     match Repository::find_all(&repo).await {
                         Ok(sources) => {
-                            info!("Checking connections for {} sources", sources.len());
+                            let mut sources_to_check = 0;
 
                             for source in sources {
-                                let source_id = SourceId::new(source.id);
+                                let source_id = SourceId::new(source.id.clone());
 
-                                // Store the previous URL
+                                // Check if this source is due for checking
+                                let should_check = next_check_times
+                                    .get(&source_id)
+                                    .map(|&next_check| Instant::now() >= next_check)
+                                    .unwrap_or(true);
+
+                                if !should_check {
+                                    debug!("Skipping {} - not due for check yet", source_id);
+                                    continue;
+                                }
+
+                                sources_to_check += 1;
+
+                                // Store the previous URL and quality
                                 let previous_url = source.connection_url.clone();
+                                let previous_quality = source.connection_quality.clone();
 
                                 // Check and select best connection
                                 match ConnectionService::select_best_connection(&db, &source_id)
@@ -137,15 +154,49 @@ impl Worker for ConnectionMonitor {
                                     }
                                 }
 
+                                // Calculate next check time based on current quality
+                                let current_quality = source
+                                    .connection_quality
+                                    .as_deref()
+                                    .or(previous_quality.as_deref());
+
+                                let next_check = match current_quality {
+                                    Some("local") => Instant::now() + Duration::from_secs(300),
+                                    Some("remote") => Instant::now() + Duration::from_secs(120),
+                                    Some("relay") => Instant::now() + Duration::from_secs(30),
+                                    _ => Instant::now() + Duration::from_secs(60),
+                                };
+
+                                next_check_times.insert(source_id, next_check);
+
                                 // Small delay between sources to avoid overwhelming
                                 tokio::time::sleep(Duration::from_millis(100)).await;
                             }
+
+                            if sources_to_check > 0 {
+                                info!(
+                                    "Checked {} sources for connection updates",
+                                    sources_to_check
+                                );
+                            }
+
+                            // Update the monitor's next check times
+                            sender
+                                .input(ConnectionMonitorInput::UpdateCheckTimes(next_check_times));
                         }
                         Err(e) => {
                             warn!("Failed to get sources for connection monitoring: {}", e);
                         }
                     }
                 });
+            }
+
+            ConnectionMonitorInput::UpdateCheckTimes(times) => {
+                self.next_check_times = times;
+                debug!(
+                    "Updated check times for {} sources",
+                    self.next_check_times.len()
+                );
             }
 
             ConnectionMonitorInput::Stop => {
@@ -156,15 +207,37 @@ impl Worker for ConnectionMonitor {
 }
 
 impl ConnectionMonitor {
-    /// Start periodic monitoring of all sources
+    /// Calculate next check time based on connection quality
+    fn calculate_next_check(&self, _source_id: &SourceId, quality: Option<&str>) -> Instant {
+        let interval = match quality {
+            Some("local") => Duration::from_secs(300), // 5 minutes for local
+            Some("remote") => Duration::from_secs(120), // 2 minutes for remote
+            Some("relay") => Duration::from_secs(30),  // 30 seconds for relay
+            _ => Duration::from_secs(60),              // 1 minute default
+        };
+        Instant::now() + interval
+    }
+
+    /// Check if a source needs checking based on its quality
+    fn should_check_source(&self, source_id: &SourceId) -> bool {
+        self.next_check_times
+            .get(source_id)
+            .map(|&next_check| Instant::now() >= next_check)
+            .unwrap_or(true) // Check if we haven't tracked it yet
+    }
+
+    /// Start periodic monitoring of all sources with variable frequency
     pub fn start_monitoring(sender: relm4::ComponentSender<ConnectionMonitor>) {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            // Use a shorter base interval to check more frequently
+            // Individual sources will be skipped if not due for checking
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
 
             loop {
                 interval.tick().await;
 
                 // Send check all sources message
+                // The handler will skip sources that aren't due for checking
                 sender.input(ConnectionMonitorInput::CheckAllSources);
             }
         });

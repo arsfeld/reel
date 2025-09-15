@@ -15,6 +15,9 @@ pub struct Model {
     pub is_owned: bool,                         // Whether this is an owned Plex server
     pub is_online: bool,
     pub last_sync: Option<DateTime>,
+    pub last_connection_test: Option<DateTime>, // When connections were last tested
+    pub connection_failure_count: i32,          // Number of consecutive connection failures
+    pub connection_quality: Option<String>,     // "local", "remote", or "relay"
     pub created_at: DateTime,
     pub updated_at: DateTime,
 }

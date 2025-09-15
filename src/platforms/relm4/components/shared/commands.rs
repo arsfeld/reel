@@ -203,7 +203,7 @@ async fn load_home_data(
 ) -> Result<(Vec<MediaItem>, Vec<MediaItem>, Vec<MediaItem>)> {
     let continue_watching = MediaService::get_continue_watching(db, 10).await?;
     let recently_added = MediaService::get_recently_added(db, 10).await?;
-    let trending = Vec::new(); // TODO: Implement trending
+    let trending = MediaService::get_trending(db, 10).await?;
 
     Ok((continue_watching, recently_added, trending))
 }
