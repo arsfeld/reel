@@ -200,8 +200,8 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
   <a href="docs/journal.md">
     <img src="https://img.shields.io/badge/📖_Migration_Journal-docs%2Fjournal.md-purple?style=for-the-badge" alt="View Migration Progress"/>
   </a>
-  <a href="TASKS.md">
-    <img src="https://img.shields.io/badge/📋_Detailed_Roadmap-TASKS.md-blue?style=for-the-badge" alt="View Full Roadmap"/>
+  <a href="https://github.com/MrLesk/Backlog.md">
+    <img src="https://img.shields.io/badge/📋_Task_Management-Backlog.md-blue?style=for-the-badge" alt="Managed with Backlog.md"/>
   </a>
 </p>
 
@@ -257,7 +257,7 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 
 ## 🤝 Contributing
 
-Contributions are welcome! Since this is an early-stage Rust project, please check [TASKS.md](TASKS.md) for areas needing work.
+Contributions are welcome! This project uses [Backlog.md](https://github.com/MrLesk/Backlog.md) for task management. To see available tasks and contribute, use the `backlog` CLI tool after entering the development environment.
 
 ### Before Submitting a PR:
 - Run `cargo fmt` to format your code
