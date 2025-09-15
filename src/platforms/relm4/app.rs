@@ -242,40 +242,6 @@ impl ReelApp {
                 margin: 24px;
             }
 
-            /* OSD Controls */
-            .osd {
-                background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
-                border-radius: 12px;
-                padding: 18px;
-                margin: 12px;
-            }
-            .osd.pill {
-                background-color: rgba(0, 0, 0, 0.8);
-                border-radius: 20px;
-                padding: 10px 20px;
-                color: white;
-                font-weight: bold;
-                border: 2px solid rgba(255, 255, 255, 0.3);
-                transition: all 200ms ease;
-            }
-            .osd.pill:hover {
-                background-color: rgba(0, 0, 0, 0.9);
-                border-color: rgba(255, 255, 255, 0.5);
-                transform: scale(1.05);
-            }
-            .osd scale {
-                min-width: 200px;
-            }
-            .osd button {
-                background: rgba(255,255,255,0.1);
-                border: none;
-                color: white;
-                min-width: 48px;
-                min-height: 48px;
-            }
-            .osd button:hover {
-                background: rgba(255,255,255,0.2);
-            }
 
             /* Navigation Sidebar */
             .navigation-sidebar {

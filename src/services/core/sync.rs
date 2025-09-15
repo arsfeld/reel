@@ -2,6 +2,7 @@ use crate::platforms::relm4::components::shared::broker::{BROKER, DataMessage, S
 use anyhow::{Context, Result};
 use chrono::NaiveDateTime;
 use sea_orm::TransactionTrait;
+use std::error::Error;
 use tracing::{debug, info, warn};
 
 use crate::backends::traits::MediaBackend;
@@ -57,10 +58,25 @@ impl SyncService {
                     // Sync library content
                     match Self::sync_library(db, backend, source_id, &library).await {
                         Ok(items_count) => {
+                            info!(
+                                "Successfully synced {} items for library {}",
+                                items_count, library.title
+                            );
                             result.items_synced += items_count;
                         }
                         Err(e) => {
                             warn!("Failed to sync library {}: {}", library.id, e);
+                            // Also log the full error chain for debugging
+                            let mut error_chain = vec![e.to_string()];
+                            let mut source = e.source();
+                            while let Some(err) = source {
+                                error_chain.push(err.to_string());
+                                source = err.source();
+                            }
+                            warn!(
+                                "Error chain for library {}: {:?}",
+                                library.title, error_chain
+                            );
                             result
                                 .errors
                                 .push(format!("Library {}: {}", library.title, e));
@@ -112,24 +128,31 @@ impl SyncService {
         source_id: &SourceId,
         library: &Library,
     ) -> Result<usize> {
-        debug!("Syncing library: {} ({})", library.title, library.id);
+        info!(
+            "Syncing library: {} ({}) of type {:?}",
+            library.title, library.id, library.library_type
+        );
 
         let mut items_synced = 0;
 
         // Fetch items based on library type
         let items = match &library.library_type {
-            crate::models::LibraryType::Movies => backend
-                .get_movies(&crate::models::LibraryId::new(library.id.clone()))
-                .await?
-                .into_iter()
-                .map(MediaItem::Movie)
-                .collect(),
-            crate::models::LibraryType::Shows => backend
-                .get_shows(&crate::models::LibraryId::new(library.id.clone()))
-                .await?
-                .into_iter()
-                .map(MediaItem::Show)
-                .collect(),
+            crate::models::LibraryType::Movies => {
+                info!("Fetching movies for library {}", library.title);
+                let movies = backend
+                    .get_movies(&crate::models::LibraryId::new(library.id.clone()))
+                    .await?;
+                info!("Found {} movies in library {}", movies.len(), library.title);
+                movies.into_iter().map(MediaItem::Movie).collect()
+            }
+            crate::models::LibraryType::Shows => {
+                info!("Fetching shows for library {}", library.title);
+                let shows = backend
+                    .get_shows(&crate::models::LibraryId::new(library.id.clone()))
+                    .await?;
+                info!("Found {} shows in library {}", shows.len(), library.title);
+                shows.into_iter().map(MediaItem::Show).collect()
+            }
             crate::models::LibraryType::Music => {
                 // For music, we might need both albums and tracks
                 let mut music_items = Vec::new();
@@ -231,19 +254,80 @@ impl SyncService {
         library_id: &crate::models::LibraryId,
         show_id: &crate::models::ShowId,
     ) -> Result<usize> {
-        // TODO: This should properly iterate through all seasons
-        // For now, just get season 1 as a placeholder
-        let episodes = backend
-            .get_episodes(show_id, 1)
-            .await?
-            .into_iter()
-            .map(MediaItem::Episode)
-            .collect::<Vec<_>>();
+        debug!("Syncing episodes for show: {}", show_id.as_str());
 
-        let count = episodes.len();
-        MediaService::save_media_items_batch(db, episodes, library_id, source_id).await?;
+        // First, get the show to find out how many seasons it has
+        let shows = MediaService::get_media_items(db, library_id, None, 0, 1000).await?;
+        let show_data = shows.into_iter().find_map(|item| match item {
+            MediaItem::Show(show) if show.id == show_id.as_str() => Some(show),
+            _ => None,
+        });
 
-        Ok(count)
+        let show = match show_data {
+            Some(show) => show,
+            None => {
+                warn!(
+                    "Show {} not found in database, cannot sync episodes",
+                    show_id.as_str()
+                );
+                return Ok(0);
+            }
+        };
+
+        let mut total_episodes_synced = 0;
+
+        // Iterate through all seasons
+        for season in &show.seasons {
+            debug!(
+                "Syncing season {} for show {}",
+                season.season_number, show.title
+            );
+
+            match backend.get_episodes(show_id, season.season_number).await {
+                Ok(episodes) => {
+                    let episodes_media: Vec<MediaItem> =
+                        episodes.into_iter().map(MediaItem::Episode).collect();
+
+                    let episode_count = episodes_media.len();
+                    if episode_count > 0 {
+                        MediaService::save_media_items_batch(
+                            db,
+                            episodes_media,
+                            library_id,
+                            source_id,
+                        )
+                        .await?;
+
+                        total_episodes_synced += episode_count;
+                        debug!(
+                            "Synced {} episodes for season {}",
+                            episode_count, season.season_number
+                        );
+
+                        // Notify progress for this season
+                        BROKER
+                            .notify_sync_progress(
+                                source_id.to_string(),
+                                total_episodes_synced,
+                                show.total_episode_count as usize,
+                            )
+                            .await;
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to sync episodes for show {} season {}: {}",
+                        show.title, season.season_number, e
+                    );
+                }
+            }
+        }
+
+        debug!(
+            "Synced total of {} episodes for show {}",
+            total_episodes_synced, show.title
+        );
+        Ok(total_episodes_synced)
     }
 
     /// Get sync status for a source
@@ -264,28 +348,44 @@ impl SyncService {
         status: SyncStatus,
         last_sync: Option<NaiveDateTime>,
     ) -> Result<()> {
-        let repo = SyncRepositoryImpl::new(db.clone());
+        use crate::db::entities::sync_status;
+        use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
-        let entity = SyncStatusModel {
-            id: 0, // Will be auto-generated
-            source_id: source_id.to_string(),
-            sync_type: "full".to_string(),
-            status: status.to_string(),
-            started_at: last_sync,
-            completed_at: if status == SyncStatus::Completed {
-                Some(chrono::Utc::now().naive_utc())
-            } else {
-                None
-            },
-            items_synced: 0,
-            total_items: None,
-            error_message: None,
-        };
+        // Try to find existing sync status for this source
+        let existing = sync_status::Entity::find()
+            .filter(sync_status::Column::SourceId.eq(source_id.to_string()))
+            .filter(sync_status::Column::SyncType.eq("full"))
+            .one(db.as_ref())
+            .await?;
 
-        // Since id is auto-generated, we need to find by source_id instead
-        // For now, just insert a new record each time
-        // TODO: Implement proper update logic based on source_id
-        repo.insert(entity).await?;
+        if let Some(existing_model) = existing {
+            // Update existing record
+            let mut active_model: sync_status::ActiveModel = existing_model.into();
+            active_model.status = Set(status.to_string());
+            if status == SyncStatus::Completed {
+                active_model.completed_at = Set(Some(chrono::Utc::now().naive_utc()));
+            }
+            active_model.update(db.as_ref()).await?;
+        } else {
+            // Insert new record
+            let repo = SyncRepositoryImpl::new(db.clone());
+            let entity = SyncStatusModel {
+                id: 0, // Will be auto-generated
+                source_id: source_id.to_string(),
+                sync_type: "full".to_string(),
+                status: status.to_string(),
+                started_at: last_sync.or_else(|| Some(chrono::Utc::now().naive_utc())),
+                completed_at: if status == SyncStatus::Completed {
+                    Some(chrono::Utc::now().naive_utc())
+                } else {
+                    None
+                },
+                items_synced: 0,
+                total_items: None,
+                error_message: None,
+            };
+            repo.insert(entity).await?;
+        }
 
         Ok(())
     }

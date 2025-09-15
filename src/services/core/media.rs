@@ -204,15 +204,43 @@ impl MediaService {
         library_id: &LibraryId,
         source_id: &SourceId,
     ) -> Result<()> {
+        info!(
+            "Saving batch of {} media items to library {} for source {}",
+            items.len(),
+            library_id,
+            source_id
+        );
+
+        if items.is_empty() {
+            debug!("No items to save, returning early");
+            return Ok(());
+        }
+
         let txn = db.begin().await?;
 
-        for item in items {
+        for (index, item) in items.iter().enumerate() {
+            debug!(
+                "Saving item {}/{}: {} ({})",
+                index + 1,
+                items.len(),
+                item.id(),
+                match item {
+                    MediaItem::Movie(m) => &m.title,
+                    MediaItem::Show(s) => &s.title,
+                    MediaItem::Episode(e) => &e.title,
+                    MediaItem::MusicAlbum(a) => &a.title,
+                    MediaItem::MusicTrack(t) => &t.title,
+                    MediaItem::Photo(p) => &p.title,
+                }
+            );
+
             // Use the db connection directly for now
             // TODO: Properly implement transaction support
-            Self::save_media_item(db, item, library_id, source_id).await?;
+            Self::save_media_item(db, item.clone(), library_id, source_id).await?;
         }
 
         txn.commit().await?;
+        info!("Successfully saved {} media items", items.len());
         Ok(())
     }
 
