@@ -33,6 +33,7 @@ pub struct PlayerPage {
     volume: f64,
     db: Arc<crate::db::connection::DatabaseConnection>,
     video_container: gtk::Box,
+    video_placeholder: Option<gtk::Label>,
     // Playlist context
     playlist_context: Option<PlaylistContext>,
     // UI state
@@ -44,9 +45,11 @@ pub struct PlayerPage {
     seek_bar: gtk::Scale,
     position_label: gtk::Label,
     duration_label: gtk::Label,
-    volume_button: gtk::VolumeButton,
+    volume_slider: gtk::Scale,
     // Window reference for cursor management
     window: adw::ApplicationWindow,
+    // Seek bar drag state
+    is_seeking: bool,
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -82,6 +85,11 @@ pub enum PlayerInput {
     ShowCursor,
     HideCursor,
     ResetCursorTimer,
+    StartSeeking,
+    StopSeeking,
+    UpdateSeekPreview(Duration),
+    Rewind,
+    Forward,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +159,7 @@ impl AsyncComponent for PlayerPage {
                 set_valign: gtk::Align::Start,
                 set_margin_top: 12,
                 set_margin_start: 12,
+                add_css_class: "osd-overlay",
                 #[watch]
                 set_visible: model.show_controls,
                 #[watch]
@@ -173,6 +182,7 @@ impl AsyncComponent for PlayerPage {
                 set_valign: gtk::Align::Start,
                 set_margin_top: 12,
                 set_margin_end: 12,
+                add_css_class: "osd-overlay",
                 #[watch]
                 set_visible: model.show_controls,
                 #[watch]
@@ -192,85 +202,163 @@ impl AsyncComponent for PlayerPage {
                 },
             },
 
-            // Bottom controls overlay
+            // Bottom controls overlay with full control layout
             add_overlay = &gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
-                set_halign: gtk::Align::Fill,
+                set_halign: gtk::Align::Center,
                 set_valign: gtk::Align::End,
                 set_margin_all: 20,
+                set_width_request: 700,
                 #[watch]
                 set_visible: model.show_controls,
                 #[watch]
                 set_opacity: if model.show_controls { 1.0 } else { 0.0 },
                 add_css_class: "osd",
                 add_css_class: "player-controls",
+                add_css_class: "minimal",
 
-                // Seek bar with time labels
+                // Progress bar with time labels
                 gtk::Box {
                     set_orientation: gtk::Orientation::Horizontal,
-                    set_spacing: 12,
-                    set_margin_bottom: 12,
+                    set_spacing: 8,
+                    set_margin_bottom: 8,
 
                     model.position_label.clone() {
-                        add_css_class: "numeric",
-                        set_width_chars: 8,
+                        add_css_class: "dim-label",
+                        set_width_chars: 7,
                     },
 
                     model.seek_bar.clone() {
                         set_hexpand: true,
                         set_draw_value: false,
-                        add_css_class: "seek-bar",
+                        add_css_class: "progress-bar",
                     },
 
                     model.duration_label.clone() {
-                        add_css_class: "numeric",
-                        set_width_chars: 8,
+                        add_css_class: "dim-label",
+                        set_width_chars: 7,
                     },
                 },
 
-                // Playback controls
+                // Main controls row with three sections
                 gtk::Box {
                     set_orientation: gtk::Orientation::Horizontal,
-                    set_halign: gtk::Align::Center,
-                    set_spacing: 12,
+                    set_spacing: 0,
 
-                    gtk::Button {
-                        set_icon_name: "media-skip-backward-symbolic",
-                        add_css_class: "circular",
-                        set_size_request: (36, 36),
-                        set_tooltip_text: Some("Previous"),
-                        connect_clicked => PlayerInput::Previous,
-                    },
+                    // Left section: Volume control
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_width_request: 150,
+                        set_halign: gtk::Align::Start,
+                        set_spacing: 4,
 
-                    gtk::Button {
-                        #[watch]
-                        set_icon_name: if matches!(model.player_state, PlayerState::Playing) {
-                            "media-playback-pause-symbolic"
-                        } else {
-                            "media-playback-start-symbolic"
+                        gtk::Image {
+                            set_icon_name: Some("audio-volume-high-symbolic"),
+                            set_pixel_size: 16,
+                            add_css_class: "dim-label",
                         },
-                        add_css_class: "circular",
-                        add_css_class: "suggested-action",
-                        set_size_request: (48, 48),
-                        connect_clicked => PlayerInput::PlayPause,
+
+                        model.volume_slider.clone() {
+                            set_size_request: (100, -1),
+                            set_draw_value: false,
+                            add_css_class: "volume-slider",
+                            set_value: 1.0,
+                        },
                     },
 
-                    gtk::Button {
-                        set_icon_name: "media-skip-forward-symbolic",
-                        add_css_class: "circular",
-                        set_size_request: (36, 36),
-                        set_tooltip_text: Some("Next"),
-                        connect_clicked => PlayerInput::Next,
+                    // Center section: Playback controls
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 4,
+                        set_halign: gtk::Align::Center,
+                        set_hexpand: true,
+
+                        // Previous track button
+                        gtk::Button {
+                            set_icon_name: "media-skip-backward-symbolic",
+                            add_css_class: "flat",
+                            set_tooltip_text: Some("Previous"),
+                            connect_clicked => PlayerInput::Previous,
+                        },
+
+                        // Rewind button (seek backward 10s)
+                        gtk::Button {
+                            set_icon_name: "media-seek-backward-symbolic",
+                            add_css_class: "flat",
+                            set_tooltip_text: Some("Rewind 10 seconds"),
+                            connect_clicked => PlayerInput::Rewind,
+                        },
+
+                        // Play/pause button (center, slightly larger)
+                        gtk::Button {
+                            #[watch]
+                            set_icon_name: if matches!(model.player_state, PlayerState::Playing) {
+                                "media-playback-pause-symbolic"
+                            } else {
+                                "media-playback-start-symbolic"
+                            },
+                            add_css_class: "circular",
+                            set_size_request: (40, 40),
+                            connect_clicked => PlayerInput::PlayPause,
+                        },
+
+                        // Forward button (seek forward 10s)
+                        gtk::Button {
+                            set_icon_name: "media-seek-forward-symbolic",
+                            add_css_class: "flat",
+                            set_tooltip_text: Some("Forward 10 seconds"),
+                            connect_clicked => PlayerInput::Forward,
+                        },
+
+                        // Next track button
+                        gtk::Button {
+                            set_icon_name: "media-skip-forward-symbolic",
+                            add_css_class: "flat",
+                            set_tooltip_text: Some("Next"),
+                            connect_clicked => PlayerInput::Next,
+                        },
                     },
 
-                    gtk::Separator {
-                        set_orientation: gtk::Orientation::Vertical,
-                        set_margin_start: 12,
-                        set_margin_end: 12,
-                    },
+                    // Right section: Track selection and fullscreen
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_width_request: 150,
+                        set_halign: gtk::Align::End,
+                        set_spacing: 2,
 
-                    model.volume_button.clone() {
-                        set_size_request: (36, 36),
+                        // Audio tracks button
+                        gtk::MenuButton {
+                            set_icon_name: "audio-x-generic-symbolic",
+                            add_css_class: "flat",
+                            set_tooltip_text: Some("Audio Track"),
+                        },
+
+                        // Subtitle tracks button
+                        gtk::MenuButton {
+                            set_icon_name: "media-view-subtitles-symbolic",
+                            add_css_class: "flat",
+                            set_tooltip_text: Some("Subtitles"),
+                        },
+
+                        // Quality/Resolution button
+                        gtk::MenuButton {
+                            set_icon_name: "preferences-system-symbolic",
+                            add_css_class: "flat",
+                            set_tooltip_text: Some("Video Quality"),
+                        },
+
+                        // Fullscreen button
+                        gtk::Button {
+                            #[watch]
+                            set_icon_name: if model.is_fullscreen {
+                                "view-restore-symbolic"
+                            } else {
+                                "view-fullscreen-symbolic"
+                            },
+                            add_css_class: "flat",
+                            set_tooltip_text: Some("Fullscreen"),
+                            connect_clicked => PlayerInput::ToggleFullscreen,
+                        },
                     },
                 },
             },
@@ -283,6 +371,15 @@ impl AsyncComponent for PlayerPage {
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
         let (media_item_id, db, window) = init;
+
+        // Load player CSS styles
+        let css_provider = gtk::CssProvider::new();
+        css_provider.load_from_string(include_str!("../../styles/player.css"));
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().expect("Could not get default display"),
+            &css_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
 
         // Create a container for the video widget that will be populated when player initializes
         let video_container = gtk::Box::builder()
@@ -299,14 +396,29 @@ impl AsyncComponent for PlayerPage {
         // Create seek bar
         let seek_bar = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
         seek_bar.set_draw_value(false);
+        seek_bar.set_has_tooltip(true);
+
+        // Add tooltip to show time at cursor position
+        seek_bar.connect_query_tooltip(|scale, x, _y, _keyboard_mode, tooltip| {
+            let adjustment = scale.adjustment();
+            // x is already relative to the widget
+            let width = scale.allocated_width() as f64;
+            let ratio = x as f64 / width;
+            let max = adjustment.upper();
+            let value = ratio * max;
+            let duration = Duration::from_secs_f64(value);
+            tooltip.set_text(Some(&format_duration(duration)));
+            true
+        });
 
         // Create time labels
         let position_label = gtk::Label::new(Some("0:00"));
         let duration_label = gtk::Label::new(Some("0:00"));
 
-        // Create volume button
-        let volume_button = gtk::VolumeButton::new();
-        volume_button.set_value(1.0);
+        // Create volume slider
+        let volume_slider = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
+        volume_slider.set_value(1.0);
+        volume_slider.set_draw_value(false);
 
         let mut model = Self {
             media_item_id,
@@ -317,6 +429,7 @@ impl AsyncComponent for PlayerPage {
             volume: 1.0,
             db,
             video_container: video_container.clone(),
+            video_placeholder: Some(placeholder.clone()),
             playlist_context: None,
             show_controls: true,
             is_fullscreen: false,
@@ -325,8 +438,9 @@ impl AsyncComponent for PlayerPage {
             seek_bar: seek_bar.clone(),
             position_label: position_label.clone(),
             duration_label: duration_label.clone(),
-            volume_button: volume_button.clone(),
+            volume_slider: volume_slider.clone(),
             window: window.clone(),
+            is_seeking: false,
         };
 
         // Initialize the player controller
@@ -345,9 +459,24 @@ impl AsyncComponent for PlayerPage {
                 // Note: We need to spawn this as a local future too
                 let handle_clone = handle.clone();
                 let video_container_clone = model.video_container.clone();
+                let placeholder_clone = model.video_placeholder.take();
                 glib::spawn_future_local(async move {
                     if let Ok(video_widget) = handle_clone.create_video_widget().await {
+                        // Remove placeholder if it exists
+                        if let Some(placeholder) = placeholder_clone {
+                            video_container_clone.remove(&placeholder);
+                        }
+
+                        // Set proper expansion for the video widget
+                        video_widget.set_vexpand(true);
+                        video_widget.set_hexpand(true);
+                        video_widget.set_valign(gtk::Align::Fill);
+                        video_widget.set_halign(gtk::Align::Fill);
+
+                        // Add the video widget
                         video_container_clone.append(&video_widget);
+
+                        info!("Video widget successfully attached to container");
                     }
                 });
 
@@ -364,25 +493,45 @@ impl AsyncComponent for PlayerPage {
             }
         }
 
-        // Setup seek bar handler
+        // Setup seek bar handlers
         {
-            let sender = sender.clone();
+            // Track when user starts dragging
+            let sender_press = sender.clone();
+            let button_controller = gtk::GestureClick::new();
+            button_controller.set_button(gtk::gdk::BUTTON_PRIMARY);
+            button_controller.connect_pressed(move |_, _, _, _| {
+                sender_press.input(PlayerInput::StartSeeking);
+            });
+            model.seek_bar.add_controller(button_controller);
+
+            // Track when user releases drag and perform seek
+            let sender_release = sender.clone();
+            let seek_bar_clone = model.seek_bar.clone();
+            let button_release_controller = gtk::GestureClick::new();
+            button_release_controller.set_button(gtk::gdk::BUTTON_PRIMARY);
+            button_release_controller.connect_released(move |_, _, _, _| {
+                let position = seek_bar_clone.value();
+                sender_release.input(PlayerInput::StopSeeking);
+                sender_release.input(PlayerInput::Seek(Duration::from_secs_f64(position)));
+            });
+            model.seek_bar.add_controller(button_release_controller);
+
+            // Also handle value changes during drag for smooth preview
+            let sender_changed = sender.clone();
             let seek_bar = model.seek_bar.clone();
             seek_bar.connect_value_changed(move |scale| {
-                if scale.has_focus() {
-                    // Only send seek if user is dragging
-                    let position = scale.value();
-                    sender.input(PlayerInput::Seek(Duration::from_secs_f64(position)));
-                }
+                // Update time labels during drag for preview
+                let position = Duration::from_secs_f64(scale.value());
+                sender_changed.input(PlayerInput::UpdateSeekPreview(position));
             });
         }
 
-        // Setup volume button handler
+        // Setup volume slider handler
         {
             let sender = sender.clone();
-            let volume_button = model.volume_button.clone();
-            volume_button.connect_value_changed(move |button, _value| {
-                sender.input(PlayerInput::SetVolume(button.value()));
+            let volume_slider = model.volume_slider.clone();
+            volume_slider.connect_value_changed(move |scale| {
+                sender.input(PlayerInput::SetVolume(scale.value()));
             });
         }
 
@@ -806,6 +955,32 @@ impl AsyncComponent for PlayerPage {
                     glib::ControlFlow::Break
                 }));
             }
+            PlayerInput::StartSeeking => {
+                self.is_seeking = true;
+            }
+            PlayerInput::StopSeeking => {
+                self.is_seeking = false;
+            }
+            PlayerInput::UpdateSeekPreview(position) => {
+                // Update position label to show preview time during seek
+                self.position_label.set_text(&format_duration(position));
+            }
+            PlayerInput::Rewind => {
+                // Seek backward 10 seconds
+                let new_position = self.position.saturating_sub(Duration::from_secs(10));
+                sender.input(PlayerInput::Seek(new_position));
+            }
+            PlayerInput::Forward => {
+                // Seek forward 10 seconds
+                let new_position = self.position + Duration::from_secs(10);
+                // Clamp to duration if we have it
+                let final_position = if new_position > self.duration {
+                    self.duration
+                } else {
+                    new_position
+                };
+                sender.input(PlayerInput::Seek(final_position));
+            }
         }
     }
 
@@ -830,7 +1005,7 @@ impl AsyncComponent for PlayerPage {
                     self.position_label.set_text(&format_duration(pos));
 
                     // Update seek bar position (only if not being dragged)
-                    if !self.seek_bar.has_focus() {
+                    if !self.is_seeking {
                         self.seek_bar.set_value(pos.as_secs_f64());
                     }
 

@@ -532,19 +532,62 @@ impl AsyncComponent for MainWindow {
                         // Switch to content view and show home page
                         self.content_stack.set_visible_child_name("content");
 
-                        // Clear navigation stack and push home page
-                        while self.navigation_view.navigation_stack().n_items() > 1 {
+                        // Clear library tracking since we're on home
+                        self.current_library_id = None;
+
+                        // Check if we need to navigate to home or if we're already there
+                        let stack = self.navigation_view.navigation_stack();
+
+                        // If there's only 1 page in stack, check if it's the home page
+                        if stack.n_items() == 1 {
+                            if let Some(page) = stack.item(0) {
+                                if let Ok(nav_page) = page.downcast::<adw::NavigationPage>() {
+                                    if nav_page.title() == "Home" {
+                                        // Already on home page with clean stack, just trigger header update
+                                        sender.input(MainWindowInput::ClearHeaderContent);
+                                        sender.input(MainWindowInput::Navigate(
+                                            "update_header".to_string(),
+                                        ));
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Pop all pages except the root page
+                        while stack.n_items() > 1 {
                             self.navigation_view.pop();
                         }
 
-                        let home_nav_page = adw::NavigationPage::builder()
-                            .title("Home")
-                            .child(self.home_page.widget())
-                            .build();
-                        self.navigation_view.push(&home_nav_page);
+                        // Check if the remaining page is home, if not, replace it
+                        let needs_home_page = if stack.n_items() == 1 {
+                            if let Some(page) = stack.item(0) {
+                                if let Ok(nav_page) = page.downcast::<adw::NavigationPage>() {
+                                    nav_page.title() != "Home"
+                                } else {
+                                    true
+                                }
+                            } else {
+                                true
+                            }
+                        } else {
+                            // No pages in stack, need to add home
+                            true
+                        };
 
-                        // Clear library tracking since we're on home
-                        self.current_library_id = None;
+                        if needs_home_page {
+                            // If we have a non-home page as the root, pop it too
+                            if stack.n_items() > 0 {
+                                self.navigation_view.pop();
+                            }
+
+                            // Create and push home page
+                            let home_nav_page = adw::NavigationPage::builder()
+                                .title("Home")
+                                .child(self.home_page.widget())
+                                .build();
+                            self.navigation_view.push(&home_nav_page);
+                        }
 
                         // Clear any custom header content
                         sender.input(MainWindowInput::ClearHeaderContent);
@@ -559,62 +602,92 @@ impl AsyncComponent for MainWindow {
                         // Clear library tracking since we're on sources
                         self.current_library_id = None;
 
-                        // Check if we're already on the sources page
-                        if let Some(visible_page) = self.navigation_view.visible_page() {
-                            if visible_page.title() == "Sources" {
-                                // Already on sources page, don't push again
-                                return;
+                        // Check if Sources page exists in the navigation stack
+                        let stack = self.navigation_view.navigation_stack();
+                        let mut sources_page_index = None;
+
+                        for i in 0..stack.n_items() {
+                            if let Some(page) = stack.item(i) {
+                                if let Ok(nav_page) = page.downcast::<adw::NavigationPage>() {
+                                    if nav_page.title() == "Sources" {
+                                        sources_page_index = Some(i);
+                                        break;
+                                    }
+                                }
                             }
                         }
 
-                        // Create sources page if it doesn't exist
-                        if self.sources_page.is_none() {
-                            let sources_controller = SourcesPage::builder()
-                                .launch(self.db.clone())
-                                .forward(sender.input_sender(), |output| match output {
-                                    crate::platforms::relm4::components::pages::sources::SourcesPageOutput::OpenAuthDialog => {
-                                        tracing::info!("Opening auth dialog for adding source");
-                                        MainWindowInput::Navigate("auth_dialog".to_string())
+                        // If Sources page exists in stack, pop to it instead of pushing new one
+                        if let Some(index) = sources_page_index {
+                            // Pop back to the Sources page
+                            while self.navigation_view.navigation_stack().n_items() > index + 1 {
+                                self.navigation_view.pop();
+                            }
+
+                            // If Sources page is not visible, make it visible
+                            if let Some(visible_page) = self.navigation_view.visible_page() {
+                                if visible_page.title() != "Sources" {
+                                    // Navigate to the Sources page that's already in the stack
+                                    if let Some(page) = stack.item(index) {
+                                        if let Ok(nav_page) = page.downcast::<adw::NavigationPage>()
+                                        {
+                                            // The page should now be visible after popping
+                                        }
                                     }
-                                });
+                                }
+                            }
+                        } else {
+                            // Sources page doesn't exist in stack, create and push it
 
-                            // Create the navigation page once
-                            let page = adw::NavigationPage::builder()
-                                .title("Sources")
-                                .child(sources_controller.widget())
-                                .build();
+                            // Create sources page if it doesn't exist
+                            if self.sources_page.is_none() {
+                                let sources_controller = SourcesPage::builder()
+                                    .launch(self.db.clone())
+                                    .forward(sender.input_sender(), |output| match output {
+                                        crate::platforms::relm4::components::pages::sources::SourcesPageOutput::OpenAuthDialog => {
+                                            tracing::info!("Opening auth dialog for adding source");
+                                            MainWindowInput::Navigate("auth_dialog".to_string())
+                                        }
+                                    });
 
-                            self.sources_nav_page = Some(page);
-                            self.sources_page = Some(sources_controller);
+                                // Create the navigation page once
+                                let page = adw::NavigationPage::builder()
+                                    .title("Sources")
+                                    .child(sources_controller.widget())
+                                    .build();
+
+                                self.sources_nav_page = Some(page);
+                                self.sources_page = Some(sources_controller);
+                            }
+
+                            // Push the existing navigation page
+                            if let Some(ref page) = self.sources_nav_page {
+                                self.navigation_view.push(page);
+                            }
                         }
 
-                        // Push the existing navigation page
-                        if let Some(ref page) = self.sources_nav_page {
-                            self.navigation_view.push(page);
+                        // Always set up the header button regardless of how we navigated to Sources
+                        // Add the "Add Source" button to the header
+                        tracing::info!("Adding Add Source button to header");
+                        let add_button = gtk::Button::builder()
+                            .icon_name("list-add-symbolic")
+                            .tooltip_text("Add Source")
+                            .css_classes(vec!["suggested-action"])
+                            .build();
 
-                            // Add the "Add Source" button to the header
-                            tracing::info!("Adding Add Source button to header");
-                            let add_button = gtk::Button::builder()
-                                .icon_name("list-add-symbolic")
-                                .tooltip_text("Add Source")
-                                .css_classes(vec!["suggested-action"])
-                                .build();
+                        let sender_clone = sender.input_sender().clone();
+                        add_button.connect_clicked(move |_| {
+                            tracing::info!("Add Source button clicked");
+                            sender_clone.emit(MainWindowInput::Navigate("auth_dialog".to_string()));
+                        });
 
-                            let sender_clone = sender.input_sender().clone();
-                            add_button.connect_clicked(move |_| {
-                                tracing::info!("Add Source button clicked");
-                                sender_clone
-                                    .emit(MainWindowInput::Navigate("auth_dialog".to_string()));
-                            });
+                        add_button.set_visible(true);
+                        sender.input(MainWindowInput::SetHeaderEndContent(Some(
+                            add_button.upcast(),
+                        )));
 
-                            add_button.set_visible(true);
-                            sender.input(MainWindowInput::SetHeaderEndContent(Some(
-                                add_button.upcast(),
-                            )));
-
-                            // Trigger header update
-                            sender.input(MainWindowInput::Navigate("update_header".to_string()));
-                        }
+                        // Trigger header update
+                        sender.input(MainWindowInput::Navigate("update_header".to_string()));
                     }
                     "preferences" => {
                         // Switch to content view
@@ -938,7 +1011,11 @@ impl AsyncComponent for MainWindow {
 
                 // Hide window chrome for immersive viewing
                 self.content_header.set_visible(false);
+                self.sidebar_header.set_visible(false);
+                self.split_view.set_collapsed(true);
                 self.content_toolbar
+                    .set_top_bar_style(adw::ToolbarStyle::Flat);
+                self.sidebar_toolbar
                     .set_top_bar_style(adw::ToolbarStyle::Flat);
 
                 // Create player page if not exists
@@ -995,7 +1072,11 @@ impl AsyncComponent for MainWindow {
 
                 // Hide window chrome for immersive viewing
                 self.content_header.set_visible(false);
+                self.sidebar_header.set_visible(false);
+                self.split_view.set_collapsed(true);
                 self.content_toolbar
+                    .set_top_bar_style(adw::ToolbarStyle::Flat);
+                self.sidebar_toolbar
                     .set_top_bar_style(adw::ToolbarStyle::Flat);
 
                 // Create player page if not exists
@@ -1103,7 +1184,11 @@ impl AsyncComponent for MainWindow {
 
                 // Show window chrome again
                 self.content_header.set_visible(true);
+                self.sidebar_header.set_visible(true);
+                self.split_view.set_collapsed(false);
                 self.content_toolbar
+                    .set_top_bar_style(adw::ToolbarStyle::Raised);
+                self.sidebar_toolbar
                     .set_top_bar_style(adw::ToolbarStyle::Raised);
 
                 // Restore window size and state

@@ -23,6 +23,7 @@ pub struct MediaCard {
     selected: bool,
     progress_percent: f64,
     image_loaded: bool,
+    load_failed: bool,
     watched: bool,
     #[do_not_track]
     texture: Option<gtk::gdk::Texture>,
@@ -34,6 +35,7 @@ pub enum MediaCardInput {
     SetSelected(bool),
     UpdateProgress(f64),
     ImageLoaded(gtk::gdk::Texture),
+    ImageLoadFailed,
     Play,
 }
 
@@ -57,19 +59,20 @@ impl FactoryComponent for MediaCard {
             add_css_class: "flat",
             add_css_class: "media-card",
             add_css_class: "poster-card",
-            set_width_request: 130,
-            set_height_request: 195,
+            set_width_request: 135,
+            set_height_request: 200,
 
             // Main overlay container
             gtk::Overlay {
                 add_css_class: "poster-overlay",
 
-                // Poster image
+                // Poster image with proper aspect ratio
                 #[name(poster)]
                 gtk::Picture {
-                    set_content_fit: gtk::ContentFit::Cover,
-                    set_width_request: 130,
-                    set_height_request: 195,
+                    set_content_fit: gtk::ContentFit::Contain,
+                    set_can_shrink: false,
+                    set_width_request: 135,
+                    set_height_request: 200,
                     add_css_class: "rounded-poster",
                 },
 
@@ -78,8 +81,8 @@ impl FactoryComponent for MediaCard {
                     set_orientation: gtk::Orientation::Vertical,
                     set_halign: gtk::Align::Center,
                     set_valign: gtk::Align::Center,
-                    #[track(self.changed(MediaCard::image_loaded()))]
-                    set_visible: !self.image_loaded,
+                    #[track(self.changed(MediaCard::image_loaded()) | self.changed(MediaCard::load_failed()))]
+                    set_visible: !self.image_loaded && !self.load_failed,
 
                     gtk::Spinner {
                         set_spinning: true,
@@ -162,6 +165,13 @@ impl FactoryComponent for MediaCard {
     fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
         let item_id = MediaItemId::new(init.item.id.clone());
 
+        // Debug: Creating card for item with appropriate initial state
+
+        // Check if we already have poster metadata - if no poster URL, mark as loaded with placeholder
+        let has_poster =
+            init.item.poster_url.is_some() && !init.item.poster_url.as_ref().unwrap().is_empty();
+        let image_loaded = !has_poster; // If no poster URL, consider it "loaded" to hide spinner
+
         Self {
             item: init.item,
             item_id,
@@ -169,7 +179,8 @@ impl FactoryComponent for MediaCard {
             hover: false,
             selected: false,
             progress_percent: init.progress_percent,
-            image_loaded: false,
+            image_loaded,
+            load_failed: false,
             watched: init.watched,
             texture: None,
             tracker: 0,
@@ -199,6 +210,11 @@ impl FactoryComponent for MediaCard {
                 widgets.poster.set_paintable(Some(&texture));
                 self.texture = Some(texture);
                 self.set_image_loaded(true);
+                // Image successfully loaded
+            }
+            MediaCardInput::ImageLoadFailed => {
+                self.set_load_failed(true);
+                // Image failed to load - spinner will be hidden
             }
             MediaCardInput::Play => {
                 sender

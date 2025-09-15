@@ -1,0 +1,529 @@
+/* Player OSD Controls Styling */
+
+/* Video container background */
+.video-container, .video-area {
+    background-color: black;
+}
+
+/* OSD overlay controls base style - Infuse inspired (no glassmorphism) */
+.osd {
+    background: rgba(20, 20, 22, 0.9);
+    border-radius: 10px;
+    padding: 8px;
+    margin: 6px;
+    transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* OSD circular buttons - minimalistic and perfectly round */
+.osd.circular {
+    background: rgba(30, 30, 32, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+    transition: all 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    min-width: 36px !important;
+    min-height: 36px !important;
+    width: 36px !important;
+    height: 36px !important;
+    max-width: 36px !important;
+    max-height: 36px !important;
+    padding: 8px;
+    border-radius: 50%;
+}
+
+.osd.circular:hover {
+    background: rgba(45, 45, 47, 0.9);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    transform: scale(1.04);
+}
+
+.osd.circular:active {
+    transform: scale(0.98);
+}
+
+/* OSD pill buttons (Skip Intro/Credits) - compact */
+.osd.pill {
+    background-color: rgba(0, 0, 0, 0.75);
+    border-radius: 18px;
+    padding: 8px 16px;
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 500;
+    font-size: 13px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    transition: all 200ms ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.osd.pill:hover {
+    background-color: rgba(0, 0, 0, 0.85);
+    border-color: rgba(255, 255, 255, 0.3);
+    transform: scale(1.03);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
+}
+
+/* Player controls container - compact and refined */
+.player-controls {
+    background: rgba(22, 22, 24, 0.92);
+    border-radius: 8px;
+    padding: 10px 16px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.player-controls.minimal {
+    background: rgba(22, 22, 24, 0.9);
+    border-radius: 8px;
+    padding: 8px 14px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* Progress bar - thin and refined */
+.player-controls .progress-bar {
+    min-height: 3px;
+    transition: all 200ms ease;
+}
+
+.player-controls .progress-bar trough {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 1.5px;
+    min-height: 3px;
+}
+
+.player-controls .progress-bar highlight {
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 1.5px;
+    min-height: 3px;
+}
+
+.player-controls .progress-bar slider {
+    min-width: 0;
+    min-height: 0;
+    background: rgba(255, 255, 255, 1);
+    border-radius: 50%;
+    margin: 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    opacity: 0;
+}
+
+.player-controls .progress-bar:hover {
+    min-height: 5px;
+}
+
+.player-controls .progress-bar:hover trough {
+    min-height: 5px;
+}
+
+.player-controls .progress-bar:hover highlight {
+    min-height: 5px;
+}
+
+.player-controls .progress-bar:hover slider {
+    min-width: 12px;
+    min-height: 12px;
+    margin: -4.5px 0;
+    opacity: 1;
+}
+
+/* Seek bar styling - thin and refined */
+.seek-bar {
+    opacity: 1;
+    transition: all 200ms ease;
+}
+
+.seek-bar trough {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 1.5px;
+    min-height: 3px;
+}
+
+.seek-bar:hover trough {
+    background: rgba(255, 255, 255, 0.1);
+    min-height: 5px;
+}
+
+.seek-bar highlight {
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 1.5px;
+    min-height: 3px;
+}
+
+.seek-bar:hover highlight {
+    min-height: 5px;
+}
+
+.seek-bar slider {
+    background: rgba(255, 255, 255, 1);
+    border-radius: 50%;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    opacity: 0;
+}
+
+.seek-bar:hover {
+    min-height: 5px;
+}
+
+.seek-bar:hover slider {
+    min-width: 12px;
+    min-height: 12px;
+    margin: -4.5px 0;
+    opacity: 1;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* Time labels - compact typography */
+.player-controls .dim-label {
+    font-size: 10px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.6);
+    letter-spacing: 0.2px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+}
+
+.player-controls label.numeric {
+    color: rgba(255, 255, 255, 0.75);
+    font-weight: 500;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Flat buttons in controls - compact and refined */
+.player-controls button.flat {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 4px;
+    margin: 0 1px;
+    color: rgba(255, 255, 255, 0.75);
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 6px;
+    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-controls button.flat:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.player-controls button.flat:active {
+    transform: scale(0.98);
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* Circular play/pause button - perfectly round and centered */
+.player-controls button.circular,
+button.circular {
+    border-radius: 50% !important;
+    width: 38px !important;
+    height: 38px !important;
+    min-width: 38px !important;
+    min-height: 38px !important;
+    max-width: 38px !important;
+    max-height: 38px !important;
+    padding: 0 !important;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    transition: all 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.player-controls button.circular:hover,
+button.circular:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.1);
+    transform: scale(1.06);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.player-controls button.circular:active,
+button.circular:active {
+    transform: scale(0.97);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+/* Ensure play/pause icon is centered and sized correctly */
+.player-controls button.circular image,
+button.circular image {
+    margin: 0 !important;
+    padding: 0 !important;
+    min-width: 16px;
+    min-height: 16px;
+    max-width: 16px;
+    max-height: 16px;
+}
+
+/* Fullscreen styling */
+.fullscreen {
+    background-color: black;
+}
+
+.fullscreen .video-container {
+    background-color: black;
+}
+
+.fullscreen .player-controls {
+    margin-bottom: 40px;
+    width: 80%;
+    max-width: 1200px;
+}
+
+/* Volume slider - compact and refined */
+.volume-slider {
+    min-height: 3px;
+    transition: all 200ms ease;
+}
+
+.volume-slider trough {
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 1.5px;
+    min-height: 3px;
+}
+
+.volume-slider highlight {
+    background: rgba(255, 255, 255, 0.75);
+    border-radius: 1.5px;
+    min-height: 3px;
+}
+
+.volume-slider slider {
+    min-width: 10px;
+    min-height: 10px;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 50%;
+    margin: -3.5px 0;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    transition: all 150ms ease;
+}
+
+.volume-slider:hover slider {
+    min-width: 12px;
+    min-height: 12px;
+    margin: -4.5px 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* Volume button */
+volumebutton {
+    opacity: 0.9;
+}
+
+volumebutton:hover {
+    opacity: 1.0;
+}
+
+volumebutton button {
+    background: transparent;
+    border: none;
+}
+
+volumebutton scale {
+    min-width: 100px;
+}
+
+/* OSD overlay wrapper for smooth transitions */
+.osd-overlay {
+    transition: opacity 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Smooth fade animations - simplified without blur */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeOut {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+}
+
+/* Apply animations to controls visibility */
+.osd.player-controls {
+    animation: fadeIn 250ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.osd.player-controls.hiding {
+    animation: fadeOut 200ms cubic-bezier(0.55, 0.055, 0.675, 0.19);
+}
+
+/* OSD overlay wrapper transitions - faster and simpler */
+.osd-overlay {
+    transition: opacity 250ms cubic-bezier(0.4, 0, 0.2, 1),
+                transform 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Top controls positioning - compact */
+.player-controls-top {
+    padding: 8px;
+}
+
+/* Back button and close button - minimalistic round */
+.player-controls-top button,
+.osd-top-bar button {
+    border-radius: 50% !important;
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    min-height: 32px !important;
+    max-width: 32px !important;
+    max-height: 32px !important;
+    padding: 0 !important;
+    margin: 4px;
+    background: rgba(20, 20, 22, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.8);
+    transition: all 150ms ease;
+}
+
+.player-controls-top button:hover,
+.osd-top-bar button:hover {
+    background: rgba(30, 30, 32, 0.9);
+    border-color: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.95);
+    transform: scale(1.05);
+}
+
+.player-controls-top button image,
+.osd-top-bar button image {
+    margin: 0;
+    padding: 0;
+}
+
+/* Ensure icons are visible and crisp */
+.osd button image,
+.player-controls button image,
+.player-controls menubutton image {
+    color: rgba(255, 255, 255, 0.85);
+    opacity: 1;
+}
+
+.osd button:hover image,
+.player-controls button:hover image,
+.player-controls menubutton:hover image {
+    color: rgba(255, 255, 255, 0.95);
+    opacity: 1;
+}
+
+/* Remove default button backgrounds in OSD context */
+.osd button.flat {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+/* Menu buttons styling - compact */
+.player-controls menubutton {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 4px;
+    margin: 0 1px;
+    border-radius: 6px;
+    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-controls menubutton button {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: rgba(255, 255, 255, 0.75);
+    min-width: 32px;
+    min-height: 32px;
+    padding: 4px;
+    border-radius: 6px;
+}
+
+.player-controls menubutton:hover button {
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.player-controls menubutton popover {
+    background: rgba(24, 24, 26, 0.95);
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+/* Separator styling */
+.player-controls separator {
+    background: rgba(255, 255, 255, 0.1);
+    min-width: 1px;
+}
+
+/* Loading overlay */
+.loading-overlay {
+    background: rgba(0, 0, 0, 0.85);
+    border-radius: 12px;
+    padding: 40px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+.loading-overlay spinner {
+    color: white;
+    min-width: 48px;
+    min-height: 48px;
+}
+
+/* Error overlay */
+.error-overlay {
+    background: rgba(0, 0, 0, 0.9);
+    border-radius: 12px;
+    padding: 40px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    max-width: 500px;
+}
+
+/* Auto-play overlay */
+.auto-play-overlay {
+    background-color: rgba(0, 0, 0, 0.9);
+    border-radius: 10px;
+    padding: 30px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+/* Picture-in-picture container */
+.pip-container {
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    overflow: hidden;
+    background-color: black;
+    min-width: 320px;
+    min-height: 180px;
+}
+
+/* Force all circular buttons to maintain aspect ratio */
+button.circular,
+.circular,
+.player-controls .circular {
+    aspect-ratio: 1 / 1 !important;
+    -gtk-icon-size: 16px;
+}
+
+/* Specific override for GTK button internals */
+button.circular > *,
+.circular > * {
+    min-width: inherit;
+    min-height: inherit;
+    max-width: inherit;
+    max-height: inherit;
+}

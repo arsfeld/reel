@@ -563,4 +563,23 @@ impl MediaRepositoryImpl {
             .fetch_page(offset / limit)
             .await?)
     }
+
+    /// Find media items by library ID and media type with pagination
+    pub async fn find_by_library_and_type_paginated(
+        &self,
+        library_id: &str,
+        media_type: &str,
+        offset: u64,
+        limit: u64,
+    ) -> Result<Vec<MediaItemModel>> {
+        use sea_orm::PaginatorTrait;
+
+        Ok(MediaItem::find()
+            .filter(media_items::Column::LibraryId.eq(library_id))
+            .filter(media_items::Column::MediaType.eq(media_type))
+            .order_by(media_items::Column::SortTitle, Order::Asc)
+            .paginate(self.base.db.as_ref(), limit)
+            .fetch_page(offset / limit)
+            .await?)
+    }
 }

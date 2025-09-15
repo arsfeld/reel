@@ -67,10 +67,10 @@ impl SourceGroup {
             }
 
             let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-            hbox.set_margin_top(8);
-            hbox.set_margin_bottom(8);
-            hbox.set_margin_start(8);
-            hbox.set_margin_end(8);
+            hbox.set_margin_top(2);
+            hbox.set_margin_bottom(2);
+            hbox.set_margin_start(6);
+            hbox.set_margin_end(6);
 
             // Icon based on library type
             let icon_name = match library.library_type {
@@ -84,12 +84,12 @@ impl SourceGroup {
             hbox.append(&icon);
 
             // Library info box
-            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
             vbox.set_hexpand(true);
 
             let name_label = gtk::Label::new(Some(&library.title));
             name_label.set_halign(gtk::Align::Start);
-            name_label.add_css_class("heading");
+            name_label.add_css_class("body");
             vbox.append(&name_label);
 
             // Display the actual item count from the library model
@@ -114,8 +114,8 @@ impl SourceGroup {
             row.set_activatable(false);
 
             let label = gtk::Label::new(Some("No libraries found"));
-            label.set_margin_top(12);
-            label.set_margin_bottom(12);
+            label.set_margin_top(4);
+            label.set_margin_bottom(4);
             label.add_css_class("dim-label");
             row.set_child(Some(&label));
             library_list.append(&row);
@@ -150,7 +150,7 @@ impl FactoryComponent for SourceGroup {
     view! {
         root = gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
-            set_spacing: 12,
+            set_spacing: 4,
 
             gtk::Label {
                 set_text: &self.source.name,
@@ -289,13 +289,13 @@ impl Component for Sidebar {
 
                 gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
-                    set_spacing: 12,
+                    set_spacing: 4,
 
                     // Welcome section - shown when no sources
                     #[name = "welcome_box"]
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 24,
+                        set_spacing: 16,
                         set_halign: gtk::Align::Center,
                         set_valign: gtk::Align::Center,
                         set_vexpand: true,
@@ -328,13 +328,14 @@ impl Component for Sidebar {
                         }
                     },
 
-                    // Home section - shown when sources exist
+                    // Home section - always shown
                     #[name = "home_section"]
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 12,
-                        set_visible: model.has_sources,
+                        set_spacing: 4,
+                        set_visible: true,
 
+                        #[name = "home_listbox"]
                         gtk::ListBox {
                             set_selection_mode: gtk::SelectionMode::None,
                             add_css_class: "boxed-list",
@@ -344,8 +345,8 @@ impl Component for Sidebar {
 
                                 gtk::Box {
                                     set_orientation: gtk::Orientation::Horizontal,
-                                    set_spacing: 12,
-                                    set_margin_all: 12,
+                                    set_spacing: 8,
+                                    set_margin_all: 4,
 
                                     gtk::Image {
                                         set_icon_name: Some("user-home-symbolic"),
@@ -353,13 +354,13 @@ impl Component for Sidebar {
 
                                     gtk::Box {
                                         set_orientation: gtk::Orientation::Vertical,
-                                        set_spacing: 2,
+                                        set_spacing: 0,
                                         set_hexpand: true,
 
                                         gtk::Label {
                                             set_text: "Home",
                                             set_halign: gtk::Align::Start,
-                                            add_css_class: "heading",
+                                            add_css_class: "body",
                                         },
 
                                         gtk::Label {
@@ -369,10 +370,7 @@ impl Component for Sidebar {
                                             add_css_class: "caption",
                                         }
                                     },
-
                                 },
-
-                                connect_activate => SidebarInput::NavigateHome,
                             }
                         }
                     },
@@ -381,7 +379,7 @@ impl Component for Sidebar {
                     #[local_ref]
                     sources_container -> gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 18,
+                        set_spacing: 8,
                         set_visible: model.has_sources,
                     },
 
@@ -389,8 +387,8 @@ impl Component for Sidebar {
                     #[name = "status_container"]
                     gtk::Box {
                         set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 6,
-                        set_margin_top: 6,
+                        set_spacing: 4,
+                        set_margin_top: 4,
                         set_visible: model.has_sources,
 
                         gtk::Image {
@@ -422,10 +420,10 @@ impl Component for Sidebar {
                 },
 
                 gtk::Button {
-                    set_margin_top: 12,
-                    set_margin_bottom: 12,
-                    set_margin_start: 12,
-                    set_margin_end: 12,
+                    set_margin_top: 8,
+                    set_margin_bottom: 8,
+                    set_margin_start: 8,
+                    set_margin_end: 8,
                     add_css_class: "pill",
                     connect_clicked => SidebarInput::ManageSources,
 
@@ -453,7 +451,7 @@ impl Component for Sidebar {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let source_groups = FactoryVecDeque::builder()
-            .launch(gtk::Box::new(gtk::Orientation::Vertical, 18))
+            .launch(gtk::Box::new(gtk::Orientation::Vertical, 8))
             .forward(sender.input_sender(), |output| match output {
                 SourceGroupOutput::NavigateToLibrary(library_id) => {
                     SidebarInput::NavigateToLibrary(library_id)
@@ -470,6 +468,14 @@ impl Component for Sidebar {
 
         let sources_container = model.source_groups.widget();
         let widgets = view_output!();
+
+        // Connect home listbox row activation
+        {
+            let sender = sender.clone();
+            widgets.home_listbox.connect_row_activated(move |_, _| {
+                sender.input(SidebarInput::NavigateHome);
+            });
+        }
 
         // Load initial sources
         sender.input(SidebarInput::RefreshSources);
@@ -522,7 +528,7 @@ impl Component for Sidebar {
 
                 // Update visibility based on has_sources
                 widgets.welcome_box.set_visible(!self.has_sources);
-                widgets.home_section.set_visible(self.has_sources);
+                widgets.home_section.set_visible(true); // Home button always visible
                 widgets.sources_container.set_visible(self.has_sources);
                 widgets.status_container.set_visible(self.has_sources);
 
