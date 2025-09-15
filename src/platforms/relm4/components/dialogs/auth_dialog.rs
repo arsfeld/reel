@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::backends::MediaBackend;
 use crate::backends::jellyfin::JellyfinBackend;
-use crate::backends::plex::{PlexAuth, PlexPin};
+use crate::backends::plex::{PlexAuth, PlexBackend, PlexPin};
 use crate::db::connection::DatabaseConnection;
 use crate::models::{Credentials, Source, SourceId};
 use crate::services::commands::Command;
@@ -575,7 +575,6 @@ impl AsyncComponent for AuthDialog {
                 let sender_clone = sender.clone();
                 sender.oneshot_command(async move {
                     use crate::backends::plex::{PlexBackend, PlexServer};
-                    use crate::models::{AuthProvider, SourceType};
                     use crate::services::core::auth::AuthService;
 
                     // Discover available servers
@@ -634,30 +633,6 @@ impl AsyncComponent for AuthDialog {
                         }
                     };
 
-                    // Create credentials
-                    let credentials = Credentials::Token {
-                        token: token.clone(),
-                    };
-
-                    // Create source in database first
-                    use crate::db::repository::source_repository::{
-                        SourceRepository, SourceRepositoryImpl,
-                    };
-                    use crate::models::{ConnectionInfo, Source, SourceId};
-                    use chrono::Utc;
-
-                    // Generate a unique source ID
-                    let source_id = SourceId::new(format!("plex_{}", uuid::Uuid::new_v4()));
-
-                    // Store credentials with the source ID
-                    if let Err(e) = AuthService::save_credentials(&source_id, &credentials).await {
-                        sender_clone.input(AuthDialogInput::PlexAuthError(format!(
-                            "Failed to store credentials: {}",
-                            e
-                        )));
-                        return;
-                    }
-
                     // Get the best server info for creating the source
                     let best_server = if is_manual {
                         // For manual entry, we don't have server details
@@ -671,53 +646,73 @@ impl AsyncComponent for AuthDialog {
                             .or_else(|| servers.first())
                     };
 
-                    // Convert all discovered connections to our ServerConnection model
-                    use crate::models::ServerConnections;
-                    use crate::services::core::ConnectionService;
-
-                    let all_connections = if let Some(server) = best_server {
-                        // Convert Plex connections to our model
-                        let connections =
-                            ConnectionService::from_plex_connections(server.connections.clone());
-                        let server_connections = ServerConnections::new(connections);
-                        Some(
-                            serde_json::to_value(&server_connections)
-                                .unwrap_or(serde_json::Value::Null),
-                        )
-                    } else {
-                        None
+                    // Create credentials
+                    let credentials = Credentials::Token {
+                        token: token.clone(),
                     };
 
-                    // Create the source with all connection info
-                    use crate::db::entities::SourceModel;
-                    let source_model = SourceModel {
-                        id: source_id.to_string(),
+                    // Create PlexBackend for authentication
+                    let plex_backend =
+                        PlexBackend::new_for_auth(selected_server_url.clone(), token.clone());
+
+                    // Create the source using CreateSourceCommand (which handles auth_provider_id)
+                    let command = CreateSourceCommand {
+                        db: db.clone(),
+                        backend: &plex_backend as &dyn MediaBackend,
+                        source_type: "plex".to_string(),
                         name: best_server
                             .map(|s| s.name.clone())
                             .unwrap_or_else(|| "Plex".to_string()),
-                        source_type: "plex".to_string(),
-                        auth_provider_id: None, // TODO: Create AuthProvider first
-                        connection_url: Some(selected_server_url),
-                        connections: all_connections, // Store ALL discovered connections
-                        machine_id: best_server.map(|s| s.client_identifier.clone()),
-                        is_owned: best_server.map(|s| s.owned).unwrap_or(true),
-                        is_online: true,
-                        last_sync: None,
-                        last_connection_test: Some(chrono::Utc::now().naive_utc()),
-                        connection_failure_count: 0,
-                        connection_quality: None, // Will be determined later
-                        created_at: chrono::Utc::now().naive_utc(),
-                        updated_at: chrono::Utc::now().naive_utc(),
+                        credentials,
+                        server_url: Some(selected_server_url),
                     };
 
-                    let repo = SourceRepositoryImpl::new(db.clone());
-                    use crate::db::repository::Repository;
-                    match Repository::insert(&repo, source_model.clone()).await {
-                        Ok(_) => {
-                            info!("Successfully created Plex source with all connections");
-                            sender_clone.input(AuthDialogInput::SourceCreated(SourceId::new(
-                                source_model.id,
-                            )));
+                    match command.execute().await {
+                        Ok(source) => {
+                            info!("Successfully created Plex source: {}", source.id);
+
+                            // Now update the source with additional Plex-specific metadata
+                            use crate::db::repository::Repository;
+                            use crate::db::repository::source_repository::SourceRepositoryImpl;
+                            use crate::models::ServerConnections;
+                            use crate::models::SourceId;
+                            use crate::services::core::ConnectionService;
+
+                            let repo = SourceRepositoryImpl::new(db.clone());
+
+                            // Get the created source
+                            if let Ok(Some(mut source_model)) =
+                                Repository::find_by_id(&repo, &source.id).await
+                            {
+                                // Update with Plex-specific fields
+                                if let Some(server) = best_server {
+                                    source_model.machine_id =
+                                        Some(server.client_identifier.clone());
+                                    source_model.is_owned = server.owned;
+
+                                    // Convert all discovered connections to our ServerConnection model
+                                    let connections = ConnectionService::from_plex_connections(
+                                        server.connections.clone(),
+                                    );
+                                    let server_connections = ServerConnections::new(connections);
+                                    source_model.connections = Some(
+                                        serde_json::to_value(&server_connections)
+                                            .unwrap_or(serde_json::Value::Null),
+                                    );
+                                }
+
+                                // Update the source with additional metadata
+                                if let Err(e) = Repository::update(&repo, source_model).await {
+                                    // Log error but don't fail - the source was created successfully
+                                    info!(
+                                        "Warning: Failed to update source with Plex metadata: {}",
+                                        e
+                                    );
+                                }
+                            }
+
+                            sender_clone
+                                .input(AuthDialogInput::SourceCreated(SourceId::new(source.id)));
                         }
                         Err(e) => {
                             sender_clone.input(AuthDialogInput::PlexAuthError(format!(

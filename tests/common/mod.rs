@@ -45,19 +45,25 @@ pub async fn create_test_database() -> Arc<DatabaseConnection> {
 
 pub async fn seed_test_data(db: &Arc<DatabaseConnection>) -> TestData {
     use chrono::Utc;
-    use reel::models::{MediaType, ServerType};
+    use reel::models::{LibraryType, SourceType};
 
     // Create test source
     let source = sources::ActiveModel {
         id: Set(uuid::Uuid::new_v4().to_string()),
         name: Set("Test Plex Server".to_string()),
-        server_type: Set(ServerType::Plex.to_string()),
-        address: Set("http://localhost:32400".to_string()),
-        machine_identifier: Set(Some("test_machine_123".to_string())),
-        access_token: Set(Some("test_token".to_string())),
-        is_active: Set(true),
-        created_at: Set(Utc::now().timestamp()),
-        updated_at: Set(Utc::now().timestamp()),
+        source_type: Set(SourceType::Plex.to_string()),
+        auth_provider_id: Set(None),
+        connection_url: Set(Some("http://localhost:32400".to_string())),
+        connections: Set(None),
+        machine_id: Set(Some("test_machine_123".to_string())),
+        is_owned: Set(true),
+        is_online: Set(true),
+        last_sync: Set(None),
+        last_connection_test: Set(None),
+        connection_failure_count: Set(0),
+        connection_quality: Set(Some("local".to_string())),
+        created_at: Set(Utc::now()),
+        updated_at: Set(Utc::now()),
         ..Default::default()
     };
     let source = source.insert(db.connection()).await.unwrap();
@@ -66,11 +72,12 @@ pub async fn seed_test_data(db: &Arc<DatabaseConnection>) -> TestData {
     let library = libraries::ActiveModel {
         id: Set(uuid::Uuid::new_v4().to_string()),
         source_id: Set(source.id.clone()),
-        name: Set("Test Movies".to_string()),
-        library_type: Set(MediaType::Movie.to_string()),
+        title: Set("Test Movies".to_string()),
+        library_type: Set("movies".to_string()),
+        icon: Set(None),
         item_count: Set(10),
-        created_at: Set(Utc::now().timestamp()),
-        updated_at: Set(Utc::now().timestamp()),
+        created_at: Set(Utc::now()),
+        updated_at: Set(Utc::now()),
         ..Default::default()
     };
     let library = library.insert(db.connection()).await.unwrap();
@@ -82,14 +89,22 @@ pub async fn seed_test_data(db: &Arc<DatabaseConnection>) -> TestData {
             id: Set(format!("movie_{}", i)),
             source_id: Set(source.id.clone()),
             library_id: Set(library.id.clone()),
-            media_type: Set(MediaType::Movie.to_string()),
+            media_type: Set("movie".to_string()),
             title: Set(format!("Test Movie {}", i)),
-            sort_title: Set(format!("Test Movie {}", i)),
+            sort_title: Set(Some(format!("Test Movie {}", i))),
             year: Set(Some(2020 + i)),
             duration_ms: Set(Some(120 * 60 * 1000)), // 2 hours
             rating: Set(Some(7.5 + (i as f32) * 0.2)),
-            added_at: Set(Utc::now().timestamp()),
-            updated_at: Set(Utc::now().timestamp()),
+            poster_url: Set(None),
+            backdrop_url: Set(None),
+            overview: Set(None),
+            genres: Set(None),
+            added_at: Set(Some(Utc::now())),
+            updated_at: Set(Utc::now()),
+            metadata: Set(None),
+            parent_id: Set(None),
+            season_number: Set(None),
+            episode_number: Set(None),
             ..Default::default()
         };
         let movie = movie.insert(db.connection()).await.unwrap();

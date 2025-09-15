@@ -814,7 +814,7 @@ impl MpvPlayer {
                 if let Some((_, timestamp)) = *self.inner.seek_pending.lock().unwrap()
                     && timestamp.elapsed() < Duration::from_millis(100)
                 {
-                    return Some(Duration::from_secs_f64(target_pos));
+                    return Some(Duration::from_secs_f64(target_pos.max(0.0)));
                 }
             }
         }
@@ -826,7 +826,7 @@ impl MpvPlayer {
             // Clear the last seek target since we're at the actual position now
             let mut last_target = self.inner.last_seek_target.lock().unwrap();
             *last_target = None;
-            return Some(Duration::from_secs_f64(pos));
+            return Some(Duration::from_secs_f64(pos.max(0.0)));
         }
         None
     }
@@ -835,7 +835,8 @@ impl MpvPlayer {
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
             && let Ok(dur) = mpv.get_property::<f64>("duration")
         {
-            return Some(Duration::from_secs_f64(dur));
+            // Duration should never be negative, but clamp just in case
+            return Some(Duration::from_secs_f64(dur.max(0.0)));
         }
         None
     }
