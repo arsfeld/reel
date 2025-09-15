@@ -414,7 +414,13 @@ impl AsyncComponent for LibraryPage {
 
             LibraryPageInput::ImageLoadFailed { id } => {
                 debug!("Failed to load image for item: {}", id);
-                // Remove from tracking but keep card functional without image
+                // Find the card index for this image ID and notify it of the failure
+                if let Some(&index) = self.image_requests.get(&id) {
+                    // Send failure message to the specific card in the factory
+                    self.media_factory
+                        .send(index, MediaCardInput::ImageLoadFailed);
+                }
+                // Remove from tracking
                 self.image_requests.remove(&id);
             }
         }
@@ -435,24 +441,64 @@ impl LibraryPage {
 
             relm4::spawn(async move {
                 use crate::db::repository::{
-                    MediaRepository, MediaRepositoryImpl, PlaybackRepository,
-                    PlaybackRepositoryImpl,
+                    LibraryRepository, LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl,
+                    PlaybackRepository, PlaybackRepositoryImpl, Repository,
                 };
+                let library_repo = LibraryRepositoryImpl::new(db.clone());
                 let media_repo = MediaRepositoryImpl::new(db.clone());
                 let playback_repo = PlaybackRepositoryImpl::new(db.clone());
 
                 // Calculate offset
                 let offset = page * items_per_page;
 
+                // First, get the library to determine its type
+                let library_result = library_repo.find_by_id(&library_id.to_string()).await;
+
+                let media_result = match library_result {
+                    Ok(Some(library)) => {
+                        // Determine the appropriate media type filter based on library type
+                        let media_type = match library.library_type.to_lowercase().as_str() {
+                            "movies" => Some("movie"),
+                            "shows" => Some("show"),
+                            "music" => Some("album"), // For music libraries, show albums, not individual tracks
+                            _ => None, // For mixed or unknown types, get all items (fallback to old behavior)
+                        };
+
+                        // Get items for this library with pagination and media type filter
+                        if let Some(media_type) = media_type {
+                            media_repo
+                                .find_by_library_and_type_paginated(
+                                    &library_id.to_string(),
+                                    media_type,
+                                    offset as u64,
+                                    items_per_page as u64,
+                                )
+                                .await
+                        } else {
+                            // For mixed or unknown types, get all items (fallback to old behavior)
+                            media_repo
+                                .find_by_library_paginated(
+                                    &library_id.to_string(),
+                                    offset as u64,
+                                    items_per_page as u64,
+                                )
+                                .await
+                        }
+                    }
+                    _ => {
+                        // If we can't get library info, fall back to old behavior
+                        media_repo
+                            .find_by_library_paginated(
+                                &library_id.to_string(),
+                                offset as u64,
+                                items_per_page as u64,
+                            )
+                            .await
+                    }
+                };
+
                 // Get items for this library with pagination
-                match media_repo
-                    .find_by_library_paginated(
-                        &library_id.to_string(),
-                        offset as u64,
-                        items_per_page as u64,
-                    )
-                    .await
-                {
+                match media_result {
                     Ok(items) => {
                         let has_more = items.len() == items_per_page;
 

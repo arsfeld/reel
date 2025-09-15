@@ -144,8 +144,7 @@ impl BackendService {
         db: &DatabaseConnection,
         source_id: &SourceId,
     ) -> Result<crate::backends::traits::SyncResult> {
-        use crate::db::repository::{LibraryRepository, LibraryRepositoryImpl};
-        use std::sync::Arc;
+        use crate::services::core::sync::SyncService;
 
         // Load source configuration
         let source_repo = SourceRepositoryImpl::new(db.clone());
@@ -157,77 +156,16 @@ impl BackendService {
         // Create backend and perform sync
         let backend = Self::create_backend_for_source(db, &source_entity).await?;
 
-        // Get libraries from backend
-        let libraries = backend.get_libraries().await?;
+        // Use SyncService to perform the actual sync with all content
+        let result = SyncService::sync_source(db, backend.as_ref(), source_id).await?;
 
-        // Save libraries to database
-        let library_repo = LibraryRepositoryImpl::new(db.clone());
-
-        // Get existing libraries for this source to track what needs to be deleted
-        let existing_libraries = library_repo.find_by_source(source_id.as_str()).await?;
-        let existing_ids: std::collections::HashSet<String> = existing_libraries
-            .iter()
-            .map(|lib| lib.id.clone())
-            .collect();
-
-        // Track which libraries we've seen from the backend
-        let mut seen_ids = std::collections::HashSet::new();
-
-        // Upsert libraries - update if exists, insert if new
-        let mut items_synced = 0;
-        for library in &libraries {
-            seen_ids.insert(library.id.clone());
-
-            // Check if library already exists
-            if let Some(existing) = library_repo.find_by_id(&library.id).await? {
-                // Update existing library
-                let mut updated = existing;
-                updated.title = library.title.clone();
-                updated.library_type = format!("{:?}", library.library_type).to_lowercase();
-                updated.icon = library.icon.clone();
-                updated.updated_at = chrono::Utc::now().naive_utc();
-
-                library_repo.update(updated).await?;
-            } else {
-                // Insert new library
-                let library_model = crate::db::entities::libraries::Model {
-                    id: library.id.clone(),
-                    source_id: source_id.as_str().to_string(),
-                    title: library.title.clone(),
-                    library_type: format!("{:?}", library.library_type).to_lowercase(),
-                    icon: library.icon.clone(),
-                    item_count: 0, // Will be updated when syncing media items
-                    created_at: chrono::Utc::now().naive_utc(),
-                    updated_at: chrono::Utc::now().naive_utc(),
-                };
-
-                library_repo.insert(library_model).await?;
-            }
-            items_synced += 1;
-
-            // TODO: Sync media items for each library
-            // This would involve calling backend.get_movies(library_id) or backend.get_shows(library_id)
-            // and saving those to the database as well
-        }
-
-        // Delete libraries that no longer exist on the backend
-        for existing_id in existing_ids {
-            if !seen_ids.contains(&existing_id) {
-                library_repo.delete(&existing_id).await?;
-            }
-        }
-
-        // Update source last_sync time
-        let mut source_active: crate::db::entities::sources::ActiveModel = source_entity.into();
-        source_active.last_sync = sea_orm::Set(Some(chrono::Utc::now().naive_utc()));
-        source_active.update(db.as_ref()).await?;
-
+        // Convert the SyncService result to the expected return type
         Ok(crate::backends::traits::SyncResult {
             backend_id: crate::models::BackendId::new(source_id.as_str()),
-            success: true,
-            items_synced,
-            duration: std::time::Duration::from_secs(0),
-            errors: Vec::new(),
+            success: result.errors.is_empty(),
+            items_synced: result.items_synced,
+            duration: std::time::Duration::from_secs(0), // SyncService doesn't track duration
+            errors: result.errors,
         })
     }
 
