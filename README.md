@@ -2,12 +2,13 @@
   <img src="logo.svg" alt="Reel Logo" width="128" height="128">
   
   # 🎬 Reel
-  
-  **A modern GTK4 media player for GNOME, built with Rust for performance and reliability.**
-  
+
+  **A modern reactive media player for GNOME, built with Rust and Relm4 for performance and reliability.**
+
   [![CI](https://github.com/arsfeld/reel/actions/workflows/ci.yml/badge.svg)](https://github.com/arsfeld/reel/actions/workflows/ci.yml)
   [![Rust](https://img.shields.io/badge/rust-1.89%2B-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
   [![GTK4](https://img.shields.io/badge/GTK-4.14%2B-blue.svg?style=flat-square)](https://gtk.org/)
+  [![Relm4](https://img.shields.io/badge/Relm4-0.9-ff6b6b.svg?style=flat-square)](https://relm4.org/)
   [![License](https://img.shields.io/badge/license-GPLv3-green.svg?style=flat-square)](LICENSE)
   [![Nix Flakes](https://img.shields.io/badge/nix-flakes-5277C3.svg?style=flat-square&logo=nixos&logoColor=white)](https://nixos.wiki/wiki/Flakes)
   [![libadwaita](https://img.shields.io/badge/libadwaita-1.4-purple.svg?style=flat-square)](https://gnome.pages.gitlab.gnome.org/libadwaita/)
@@ -20,11 +21,11 @@
 </div>
 
 > [!WARNING]
-> **Early Development**: Reel is actively being developed. Expect rough edges, missing features, and breaking changes as we work toward a stable release.
+> **Relm4 Migration In Progress (~85% Complete)**: Reel is being migrated to a fully reactive Relm4 architecture. Core functionality is working but expect some UI polish issues and missing features as we complete the transition.
 
 ## What is Reel?
 
-Reel is a native Linux media player that brings your Plex and Jellyfin libraries to the GNOME desktop. Written entirely in Rust, it leverages the language's performance and memory safety to deliver a fast, reliable media experience without the overhead of web technologies.
+Reel is a native Linux media player that brings your Plex and Jellyfin libraries to the GNOME desktop. Written entirely in Rust with a reactive Relm4 UI, it leverages the language's performance and memory safety to deliver a fast, reliable media experience without the overhead of web technologies.
 
 | Main Window | Show Details |
 |:---:|:---:|
@@ -39,7 +40,8 @@ Reel is a native Linux media player that brings your Plex and Jellyfin libraries
 | Feature | Description |
 |---------|-------------|
 | **🦀 Pure Rust** | Fast, memory-safe, and concurrent by design |
-| **🔌 Multi-Backend** | Supports Plex and Jellyfin, with local files planned |
+| **⚛️ Relm4 Reactive** | Component-based reactive UI with AsyncComponents and Factory patterns |
+| **🔌 Multi-Backend** | Simultaneous Plex and Jellyfin connections with automatic failover |
 | **💾 Offline-First** | SQLite caching keeps your library browsable even offline |
 | **🎨 Native GTK4** | Seamlessly integrates with modern GNOME desktops |
 | **⚡ Async Everything** | Built on Tokio for responsive, non-blocking operations |
@@ -160,64 +162,93 @@ nix run github:arsfeld/reel
 <details>
 <summary><b>Click to see architecture diagram</b></summary>
 
-Reel follows Rust best practices with a clean separation of concerns:
+Reel is migrating to a pure Relm4 reactive architecture:
 
 ```
-UI Layer (GTK4/Blueprint templates)
+Relm4 Components Layer
+├── AsyncComponents (Pages with data loading)
+├── Factory Components (Dynamic collections)
+├── Worker Components (Background tasks)
+└── MessageBroker (Inter-component communication)
     ↓
-Application State (Arc<RwLock> shared state)
+Command Pattern (Structured async operations)
     ↓
-Service Layer (Tokio async services)
+Service Layer (Stateless pure functions)
+    ↓
+Repository Layer (SeaORM/SQLite database)
     ↓
 Backend Trait (Generic MediaBackend interface)
     ↓
 Implementations (Plex, Jellyfin, Local)
 ```
 
+**Key Patterns:**
+- **AsyncComponents**: Data-heavy pages with built-in loading states
+- **Factory Pattern**: Efficient virtual scrolling for media grids
+- **Worker Components**: Isolated background tasks (sync, image loading)
+- **Command Pattern**: Type-safe async operations with proper lifecycle
+- **Tracker Pattern**: Minimal re-renders through fine-grained change tracking
+- **MessageBroker**: Replacing custom EventBus for component communication
+
 </details>
 
-The entire codebase leverages Rust's type system and ownership model to prevent common bugs at compile time, while async/await enables efficient handling of network requests and media operations.
+The entire codebase leverages Rust's type system and ownership model to prevent common bugs at compile time, while the Relm4 reactive system ensures responsive UI updates without manual state management.
 
 ## 📊 Project Status
 
 <p align="center">
+  <a href="docs/journal.md">
+    <img src="https://img.shields.io/badge/📖_Migration_Journal-docs%2Fjournal.md-purple?style=for-the-badge" alt="View Migration Progress"/>
+  </a>
   <a href="TASKS.md">
     <img src="https://img.shields.io/badge/📋_Detailed_Roadmap-TASKS.md-blue?style=for-the-badge" alt="View Full Roadmap"/>
   </a>
 </p>
 
+**Migration Progress**: ~85% complete
+
 ### ✅ What's Working
 
-- **Multi-Backend Support** - Connect to Plex and Jellyfin simultaneously
-- **Media Playback** - MPV (recommended) and GStreamer player backends
-- **Library Browsing** - Movies and TV shows with filtering and sorting
+- **Relm4 UI Foundation** - ~85% complete migration to reactive component architecture
+- **Multi-Backend Support** - Simultaneous Plex and Jellyfin with OAuth/credential auth
+- **Media Playback** - MPV and GStreamer backends with OSD controls and keyboard shortcuts
+- **Library Browsing** - Movies and TV shows with virtual scrolling and pagination
+- **Continue Watching** - Progress tracking and resume functionality
 - **Offline-First** - SQLite cache for instant startup and offline browsing
-- **Modern Architecture** - Reactive ViewModels with SeaORM database layer
-- **GNOME Integration** - Native GTK4/libadwaita UI following HIG
+- **Source Management** - Add/remove/test/sync sources with automatic connection failover
+- **GNOME Integration** - Native GTK4/libadwaita UI with proper NavigationSplitView
 
-### 🚧 Major Roadmap Items
+### 🚧 Outstanding Issues (Migration Completion)
 
-- **Search** - Backend implementations exist, UI needed
-- **Cast & Crew** - Display UI for existing backend data
-- **Local Files** - Scan and play local media libraries
-- **Advanced Filters** - Genre, year, rating, resolution
-- **Settings** - Migrate to GSettings for GNOME compliance
-- **Offline Playback** - Download and sync for offline viewing
+**UI Polish:**
+- Toast notifications for errors and status updates
+- View mode switching doesn't update layout
+- Image loading disconnected from ImageWorker
+- Person images using placeholders only
+
+**Data Persistence:**
+- Preferences not persisting to config/database
+- Cache clearing non-functional
+- Some library counts show placeholder values
+
+**Search & Discovery:**
+- Search UI implementation needed (backend ready)
+- Genres not populated in search filters
+- Cast & crew display UI needed
 
 ### ⚠️ Known Limitations
 
-- GStreamer has subtitle rendering issues (use MPV)
-- Search not yet available in UI
-- Local files backend is mostly unimplemented
+- GStreamer has subtitle color artifacts (use MPV player instead)
+- Local files backend is 10% implemented (structure only)
 - Some features require server-side support (e.g., Jellyfin chapter markers)
 
 
 ## 🛠️ Tech Stack
 
 - **Language**: Rust 2021 edition
-- **UI Framework**: GTK4 + libadwaita via [gtk-rs](https://gtk-rs.org/)
-- **Database**: SQLite with [SeaORM](https://www.sea-ql.org/SeaORM/) (reactive architecture)
-- **Async Runtime**: [Tokio](https://tokio.rs/) with channels for event broadcasting
+- **UI Framework**: [Relm4](https://relm4.org/) + GTK4 + libadwaita
+- **Database**: SQLite with [SeaORM](https://www.sea-ql.org/SeaORM/) and typed IDs
+- **Async Runtime**: [Tokio](https://tokio.rs/) with MessageBroker for component communication
 - **HTTP Client**: [Reqwest](https://github.com/seanmonstar/reqwest) with HTTP/2
 - **Video Playback**: MPV (default) via libmpv2, GStreamer (fallback) via [gstreamer-rs](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
 - **Caching**: Three-tier (Memory LRU → SQLite → Backend API)
