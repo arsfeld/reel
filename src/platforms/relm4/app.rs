@@ -289,14 +289,13 @@ impl ReelApp {
                 font-weight: 500;
             }
             .pill.suggested-action {
-                background: linear-gradient(135deg, @accent_color, shade(@accent_color, 0.9));
-                box-shadow: 0 4px 12px alpha(@accent_color, 0.3),
-                            inset 0 1px 0 alpha(white, 0.2);
+                background: @accent_bg_color;
+                color: @accent_fg_color;
+                border: none;
                 transition: all 200ms ease-in-out;
             }
             .pill.suggested-action:hover {
-                box-shadow: 0 6px 20px alpha(@accent_color, 0.4),
-                            inset 0 1px 0 alpha(white, 0.3);
+                background: shade(@accent_bg_color, 1.1);
                 transform: translateY(-1px);
             }
             .pill:not(.suggested-action) {
