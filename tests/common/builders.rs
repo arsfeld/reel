@@ -1,12 +1,13 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use reel::models::*;
+use std::time::Duration;
 
 pub struct MediaItemBuilder {
     id: String,
     title: String,
     media_type: MediaType,
-    year: Option<i32>,
-    duration_ms: Option<i64>,
+    year: Option<u32>,
+    duration: Option<Duration>,
     rating: Option<f32>,
 }
 
@@ -17,7 +18,7 @@ impl MediaItemBuilder {
             title: title.to_string(),
             media_type: MediaType::Movie,
             year: Some(2024),
-            duration_ms: Some(120 * 60 * 1000),
+            duration: Some(Duration::from_secs(120 * 60)),
             rating: Some(7.5),
         }
     }
@@ -28,7 +29,7 @@ impl MediaItemBuilder {
             title: title.to_string(),
             media_type: MediaType::Show,
             year: Some(2024),
-            duration_ms: None,
+            duration: None,
             rating: Some(8.0),
         }
     }
@@ -38,13 +39,13 @@ impl MediaItemBuilder {
         self
     }
 
-    pub fn with_year(mut self, year: i32) -> Self {
+    pub fn with_year(mut self, year: u32) -> Self {
         self.year = Some(year);
         self
     }
 
-    pub fn with_duration_ms(mut self, duration_ms: i64) -> Self {
-        self.duration_ms = Some(duration_ms);
+    pub fn with_duration(mut self, duration: Duration) -> Self {
+        self.duration = Some(duration);
         self
     }
 
@@ -56,51 +57,64 @@ impl MediaItemBuilder {
     pub fn build_movie(self) -> Movie {
         Movie {
             id: self.id,
-            source_id: "test_source".to_string(),
-            library_id: "test_library".to_string(),
-            title: self.title.clone(),
-            sort_title: self.title,
+            backend_id: "test_backend".to_string(),
+            title: self.title,
             year: self.year,
-            duration_ms: self.duration_ms,
+            duration: self.duration.unwrap_or(Duration::from_secs(120 * 60)),
             rating: self.rating,
-            added_at: Utc::now().timestamp(),
-            updated_at: Utc::now().timestamp(),
-            ..Default::default()
+            poster_url: None,
+            backdrop_url: None,
+            overview: None,
+            genres: vec![],
+            cast: vec![],
+            crew: vec![],
+            added_at: Some(Utc::now()),
+            updated_at: Some(Utc::now()),
+            watched: false,
+            view_count: 0,
+            last_watched_at: None,
+            playback_position: None,
+            intro_marker: None,
+            credits_marker: None,
         }
     }
 
     pub fn build_show(self) -> Show {
         Show {
             id: self.id,
-            source_id: "test_source".to_string(),
-            library_id: "test_library".to_string(),
-            title: self.title.clone(),
-            sort_title: self.title,
+            backend_id: "test_backend".to_string(),
+            title: self.title,
             year: self.year,
+            seasons: vec![],
             rating: self.rating,
-            season_count: 3,
-            episode_count: 30,
-            added_at: Utc::now().timestamp(),
-            updated_at: Utc::now().timestamp(),
-            ..Default::default()
+            poster_url: None,
+            backdrop_url: None,
+            overview: None,
+            genres: vec![],
+            cast: vec![],
+            added_at: Some(Utc::now()),
+            updated_at: Some(Utc::now()),
+            watched_episode_count: 0,
+            total_episode_count: 0,
+            last_watched_at: None,
         }
     }
 }
 
 pub struct LibraryBuilder {
     id: String,
-    name: String,
-    library_type: MediaType,
-    item_count: i32,
+    title: String,
+    library_type: LibraryType,
+    item_count: Option<i32>,
 }
 
 impl LibraryBuilder {
-    pub fn new(name: &str) -> Self {
+    pub fn new(title: &str) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            name: name.to_string(),
-            library_type: MediaType::Movie,
-            item_count: 0,
+            title: title.to_string(),
+            library_type: LibraryType::Movies,
+            item_count: Some(0),
         }
     }
 
@@ -109,26 +123,23 @@ impl LibraryBuilder {
         self
     }
 
-    pub fn with_type(mut self, library_type: MediaType) -> Self {
+    pub fn with_type(mut self, library_type: LibraryType) -> Self {
         self.library_type = library_type;
         self
     }
 
     pub fn with_item_count(mut self, count: i32) -> Self {
-        self.item_count = count;
+        self.item_count = Some(count);
         self
     }
 
     pub fn build(self) -> Library {
         Library {
             id: self.id,
-            source_id: "test_source".to_string(),
-            name: self.name,
+            title: self.title,
             library_type: self.library_type,
+            icon: None,
             item_count: self.item_count,
-            created_at: Utc::now().timestamp(),
-            updated_at: Utc::now().timestamp(),
-            ..Default::default()
         }
     }
 }
@@ -136,7 +147,7 @@ impl LibraryBuilder {
 pub struct SourceBuilder {
     id: String,
     name: String,
-    server_type: ServerType,
+    source_type: SourceType,
     address: String,
 }
 
@@ -145,7 +156,7 @@ impl SourceBuilder {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.to_string(),
-            server_type: ServerType::Plex,
+            source_type: SourceType::Plex,
             address: "http://localhost:32400".to_string(),
         }
     }
@@ -154,7 +165,7 @@ impl SourceBuilder {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.to_string(),
-            server_type: ServerType::Jellyfin,
+            source_type: SourceType::Jellyfin,
             address: "http://localhost:8096".to_string(),
         }
     }
@@ -171,16 +182,16 @@ impl SourceBuilder {
 
     pub fn build(self) -> Source {
         Source {
-            id: self.id,
+            id: SourceId::from(self.id),
             name: self.name,
-            server_type: self.server_type,
-            address: self.address,
-            machine_identifier: Some(uuid::Uuid::new_v4().to_string()),
-            access_token: Some("test_token".to_string()),
+            source_type: self.source_type,
+            connection_info: ConnectionInfo::Url(self.address),
+            username: None,
+            token: None,
             is_active: true,
-            created_at: Utc::now().timestamp(),
-            updated_at: Utc::now().timestamp(),
-            ..Default::default()
+            priority: 0,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         }
     }
 }
@@ -189,20 +200,20 @@ pub struct EpisodeBuilder {
     id: String,
     show_id: String,
     title: String,
-    season_number: i32,
-    episode_number: i32,
-    duration_ms: Option<i64>,
+    season_number: u32,
+    episode_number: u32,
+    duration: Option<Duration>,
 }
 
 impl EpisodeBuilder {
-    pub fn new(title: &str, season: i32, episode: i32) -> Self {
+    pub fn new(title: &str, season: u32, episode: u32) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             show_id: "test_show".to_string(),
             title: title.to_string(),
             season_number: season,
             episode_number: episode,
-            duration_ms: Some(45 * 60 * 1000), // 45 minutes
+            duration: Some(Duration::from_secs(45 * 60)), // 45 minutes
         }
     }
 
@@ -216,25 +227,28 @@ impl EpisodeBuilder {
         self
     }
 
-    pub fn with_duration_ms(mut self, duration_ms: i64) -> Self {
-        self.duration_ms = Some(duration_ms);
+    pub fn with_duration(mut self, duration: Duration) -> Self {
+        self.duration = Some(duration);
         self
     }
 
     pub fn build(self) -> Episode {
         Episode {
             id: self.id,
-            source_id: "test_source".to_string(),
-            show_id: self.show_id,
-            season_id: format!("season_{}", self.season_number),
-            title: self.title.clone(),
-            sort_title: self.title,
+            backend_id: "test_backend".to_string(),
+            show_id: ShowId::from(self.show_id),
             season_number: self.season_number,
             episode_number: self.episode_number,
-            duration_ms: self.duration_ms,
-            added_at: Utc::now().timestamp(),
-            updated_at: Utc::now().timestamp(),
-            ..Default::default()
+            title: self.title,
+            duration: self.duration.unwrap_or(Duration::from_secs(45 * 60)),
+            air_date: None,
+            overview: None,
+            still_url: None,
+            watched: false,
+            playback_position: None,
+            last_watched_at: None,
+            intro_marker: None,
+            credits_marker: None,
         }
     }
 }

@@ -1,4 +1,5 @@
 use super::builders::*;
+use reel::backends::traits::WatchStatus;
 use reel::models::*;
 
 pub struct Fixtures;
@@ -75,17 +76,17 @@ impl Fixtures {
         vec![
             LibraryBuilder::new("Movies")
                 .with_id("movies_lib")
-                .with_type(MediaType::Movie)
+                .with_type(LibraryType::Movies)
                 .with_item_count(100)
                 .build(),
             LibraryBuilder::new("TV Shows")
                 .with_id("shows_lib")
-                .with_type(MediaType::Show)
+                .with_type(LibraryType::Shows)
                 .with_item_count(50)
                 .build(),
             LibraryBuilder::new("Documentaries")
                 .with_id("docs_lib")
-                .with_type(MediaType::Movie)
+                .with_type(LibraryType::Movies)
                 .with_item_count(25)
                 .build(),
         ]
@@ -105,16 +106,11 @@ impl Fixtures {
             .build()
     }
 
-    pub fn playback_progress() -> PlaybackProgress {
-        PlaybackProgress {
-            id: uuid::Uuid::new_v4().to_string(),
-            media_item_id: "matrix".to_string(),
-            user_id: "test_user".to_string(),
-            position_ms: 45 * 60 * 1000,  // 45 minutes
-            duration_ms: 136 * 60 * 1000, // 2h 16m
-            played: false,
-            played_at: None,
-            updated_at: chrono::Utc::now().timestamp(),
+    pub fn playback_progress() -> WatchStatus {
+        WatchStatus {
+            watched: false,
+            position: Some(std::time::Duration::from_secs(45 * 60)),
+            last_watched: None,
         }
     }
 
@@ -151,17 +147,17 @@ impl Fixtures {
     }
 }
 
-pub fn generate_bulk_media(count: usize, media_type: MediaType) -> Vec<MediaItem> {
+pub fn generate_bulk_media(count: usize, media_type: LibraryType) -> Vec<MediaItem> {
     (0..count)
         .map(|i| match media_type {
-            MediaType::Movie => MediaItem::Movie(
+            LibraryType::Movies => MediaItem::Movie(
                 MediaItemBuilder::movie(&format!("Movie {}", i))
                     .with_id(&format!("movie_{}", i))
                     .with_year(2000 + (i as i32 % 24))
                     .with_rating(5.0 + (i as f32 % 50) / 10.0)
                     .build_movie(),
             ),
-            MediaType::Show => MediaItem::Show(
+            LibraryType::Shows => MediaItem::Show(
                 MediaItemBuilder::show(&format!("Show {}", i))
                     .with_id(&format!("show_{}", i))
                     .with_year(2000 + (i as i32 % 24))

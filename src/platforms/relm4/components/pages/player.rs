@@ -50,6 +50,11 @@ pub struct PlayerPage {
     window: adw::ApplicationWindow,
     // Seek bar drag state
     is_seeking: bool,
+    // Error handling
+    error_message: Option<String>,
+    retry_count: u32,
+    max_retries: u32,
+    retry_timer: Option<SourceId>,
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -90,6 +95,9 @@ pub enum PlayerInput {
     UpdateSeekPreview(Duration),
     Rewind,
     Forward,
+    RetryLoad,
+    ClearError,
+    ShowError(String),
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +115,7 @@ pub enum PlayerCommandOutput {
         duration: Option<Duration>,
         state: PlayerState,
     },
+    LoadError(String),
 }
 
 impl std::fmt::Debug for PlayerCommandOutput {
@@ -124,6 +133,7 @@ impl std::fmt::Debug for PlayerCommandOutput {
                     position, duration, state
                 )
             }
+            Self::LoadError(msg) => write!(f, "LoadError({})", msg),
         }
     }
 }
@@ -202,6 +212,53 @@ impl AsyncComponent for PlayerPage {
                 },
             },
 
+            // Error message overlay
+            add_overlay = &gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+                set_halign: gtk::Align::Center,
+                set_valign: gtk::Align::Center,
+                set_spacing: 20,
+                #[watch]
+                set_visible: model.error_message.is_some(),
+                add_css_class: "osd",
+                add_css_class: "error-overlay",
+
+                gtk::Image {
+                    set_icon_name: Some("dialog-error-symbolic"),
+                    set_pixel_size: 64,
+                    add_css_class: "error-icon",
+                },
+
+                gtk::Label {
+                    #[watch]
+                    set_label: model.error_message.as_deref().unwrap_or("An error occurred"),
+                    set_wrap: true,
+                    set_max_width_chars: 50,
+                    add_css_class: "title-2",
+                },
+
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 12,
+                    set_halign: gtk::Align::Center,
+
+                    gtk::Button {
+                        set_label: "Retry",
+                        add_css_class: "suggested-action",
+                        add_css_class: "pill",
+                        connect_clicked => PlayerInput::RetryLoad,
+                    },
+
+                    gtk::Button {
+                        set_label: "Go Back",
+                        add_css_class: "pill",
+                        connect_clicked[sender] => move |_| {
+                            sender.output(PlayerOutput::NavigateBack).unwrap();
+                        },
+                    },
+                },
+            },
+
             // Bottom controls overlay with full control layout
             add_overlay = &gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
@@ -210,9 +267,9 @@ impl AsyncComponent for PlayerPage {
                 set_margin_all: 20,
                 set_width_request: 700,
                 #[watch]
-                set_visible: model.show_controls,
+                set_visible: model.show_controls && model.error_message.is_none(),
                 #[watch]
-                set_opacity: if model.show_controls { 1.0 } else { 0.0 },
+                set_opacity: if model.show_controls && model.error_message.is_none() { 1.0 } else { 0.0 },
                 add_css_class: "osd",
                 add_css_class: "player-controls",
                 add_css_class: "minimal",
@@ -406,7 +463,8 @@ impl AsyncComponent for PlayerPage {
             let ratio = x as f64 / width;
             let max = adjustment.upper();
             let value = ratio * max;
-            let duration = Duration::from_secs_f64(value);
+            // Clamp value to ensure it's non-negative
+            let duration = Duration::from_secs_f64(value.max(0.0));
             tooltip.set_text(Some(&format_duration(duration)));
             true
         });
@@ -441,6 +499,10 @@ impl AsyncComponent for PlayerPage {
             volume_slider: volume_slider.clone(),
             window: window.clone(),
             is_seeking: false,
+            error_message: None,
+            retry_count: 0,
+            max_retries: 3,
+            retry_timer: None,
         };
 
         // Initialize the player controller
@@ -484,12 +546,8 @@ impl AsyncComponent for PlayerPage {
             }
             Err(e) => {
                 error!("Failed to initialize player controller: {}", e);
-                sender
-                    .output(PlayerOutput::Error(format!(
-                        "Failed to initialize player: {}",
-                        e
-                    )))
-                    .unwrap();
+                model.error_message = Some(format!("Failed to initialize player: {}", e));
+                model.player_state = PlayerState::Error;
             }
         }
 
@@ -512,7 +570,10 @@ impl AsyncComponent for PlayerPage {
             button_release_controller.connect_released(move |_, _, _, _| {
                 let position = seek_bar_clone.value();
                 sender_release.input(PlayerInput::StopSeeking);
-                sender_release.input(PlayerInput::Seek(Duration::from_secs_f64(position)));
+                // Ensure position is non-negative before creating Duration
+                sender_release.input(PlayerInput::Seek(Duration::from_secs_f64(
+                    position.max(0.0),
+                )));
             });
             model.seek_bar.add_controller(button_release_controller);
 
@@ -521,7 +582,8 @@ impl AsyncComponent for PlayerPage {
             let seek_bar = model.seek_bar.clone();
             seek_bar.connect_value_changed(move |scale| {
                 // Update time labels during drag for preview
-                let position = Duration::from_secs_f64(scale.value());
+                // Clamp scale value to prevent negative Duration
+                let position = Duration::from_secs_f64(scale.value().max(0.0));
                 sender_changed.input(PlayerInput::UpdateSeekPreview(position));
             });
         }
@@ -612,6 +674,8 @@ impl AsyncComponent for PlayerPage {
                 self.player_state = PlayerState::Loading;
                 // Clear context when loading without context
                 self.playlist_context = None;
+                // Clear any existing error message
+                self.error_message = None;
 
                 // Get actual media URL from backend using GetStreamUrlCommand
                 let db_clone = self.db.clone();
@@ -635,7 +699,18 @@ impl AsyncComponent for PlayerPage {
                             Ok(info) => info,
                             Err(e) => {
                                 error!("Failed to get stream URL: {}", e);
-                                return PlayerCommandOutput::StateChanged(PlayerState::Error);
+                                let user_message = match e.to_string().as_str() {
+                                    s if s.contains("network") || s.contains("connection") =>
+                                        "Network connection error. Please check your internet connection.".to_string(),
+                                    s if s.contains("unauthorized") || s.contains("401") =>
+                                        "Authentication failed. Please check your server credentials.".to_string(),
+                                    s if s.contains("not found") || s.contains("404") =>
+                                        "Media not found on server. It may have been removed.".to_string(),
+                                    s if s.contains("timeout") =>
+                                        "Server connection timed out. Please try again.".to_string(),
+                                    _ => format!("Failed to load media: {}", e)
+                                };
+                                return PlayerCommandOutput::LoadError(user_message);
                             }
                         };
 
@@ -680,7 +755,16 @@ impl AsyncComponent for PlayerPage {
                             }
                             Err(e) => {
                                 error!("Failed to load media: {}", e);
-                                PlayerCommandOutput::StateChanged(PlayerState::Error)
+                                let user_message = match e.to_string().as_str() {
+                                    s if s.contains("codec") || s.contains("decoder") =>
+                                        "Media format not supported. The file may use an incompatible codec.".to_string(),
+                                    s if s.contains("permission") || s.contains("access") =>
+                                        "Permission denied. Check file or server access rights.".to_string(),
+                                    s if s.contains("memory") =>
+                                        "Not enough memory to play this media.".to_string(),
+                                    _ => format!("Playback error: {}", e)
+                                };
+                                PlayerCommandOutput::LoadError(user_message)
                             }
                         }
                     });
@@ -690,6 +774,8 @@ impl AsyncComponent for PlayerPage {
                 self.media_item_id = Some(media_id.clone());
                 self.player_state = PlayerState::Loading;
                 self.playlist_context = Some(context);
+                // Clear any existing error message
+                self.error_message = None;
 
                 // Get actual media URL from backend using GetStreamUrlCommand
                 let db_clone = self.db.clone();
@@ -713,13 +799,18 @@ impl AsyncComponent for PlayerPage {
                             Ok(info) => info,
                             Err(e) => {
                                 error!("Failed to get stream URL: {}", e);
-                                sender_clone
-                                    .output(PlayerOutput::Error(format!(
-                                        "Failed to get stream URL: {}",
-                                        e
-                                    )))
-                                    .unwrap();
-                                return PlayerCommandOutput::StateChanged(PlayerState::Error);
+                                let user_message = match e.to_string().as_str() {
+                                    s if s.contains("network") || s.contains("connection") =>
+                                        "Network connection error. Please check your internet connection.".to_string(),
+                                    s if s.contains("unauthorized") || s.contains("401") =>
+                                        "Authentication failed. Please check your server credentials.".to_string(),
+                                    s if s.contains("not found") || s.contains("404") =>
+                                        "Media not found on server. It may have been removed.".to_string(),
+                                    s if s.contains("timeout") =>
+                                        "Server connection timed out. Please try again.".to_string(),
+                                    _ => format!("Failed to load media: {}", e)
+                                };
+                                return PlayerCommandOutput::LoadError(user_message);
                             }
                         };
 
@@ -764,7 +855,16 @@ impl AsyncComponent for PlayerPage {
                             }
                             Err(e) => {
                                 error!("Failed to load media: {}", e);
-                                PlayerCommandOutput::StateChanged(PlayerState::Error)
+                                let user_message = match e.to_string().as_str() {
+                                    s if s.contains("codec") || s.contains("decoder") =>
+                                        "Media format not supported. The file may use an incompatible codec.".to_string(),
+                                    s if s.contains("permission") || s.contains("access") =>
+                                        "Permission denied. Check file or server access rights.".to_string(),
+                                    s if s.contains("memory") =>
+                                        "Not enough memory to play this media.".to_string(),
+                                    _ => format!("Playback error: {}", e)
+                                };
+                                PlayerCommandOutput::LoadError(user_message)
                             }
                         }
                     });
@@ -981,18 +1081,82 @@ impl AsyncComponent for PlayerPage {
                 };
                 sender.input(PlayerInput::Seek(final_position));
             }
+            PlayerInput::RetryLoad => {
+                // Clear the error and retry loading the media
+                self.error_message = None;
+
+                // Check if we've exceeded max retries
+                if self.retry_count >= self.max_retries {
+                    self.error_message = Some(
+                        "Failed to load media after multiple attempts. Please check your connection and try again.".to_string()
+                    );
+                    self.retry_count = 0;
+                    return;
+                }
+
+                // Increment retry count
+                self.retry_count += 1;
+
+                // Calculate exponential backoff delay (1s, 2s, 4s)
+                let delay = Duration::from_secs(2_u64.pow(self.retry_count - 1));
+
+                // Schedule retry after delay
+                if let Some(timer) = self.retry_timer.take() {
+                    timer.remove();
+                }
+
+                let sender_clone = sender.clone();
+                let media_id = self.media_item_id.clone();
+                let context = self.playlist_context.clone();
+
+                info!("Scheduling retry #{} after {:?}", self.retry_count, delay);
+
+                self.retry_timer = Some(glib::timeout_add_local(delay, move || {
+                    if let Some(id) = &media_id {
+                        if let Some(ctx) = &context {
+                            sender_clone.input(PlayerInput::LoadMediaWithContext {
+                                media_id: id.clone(),
+                                context: ctx.clone(),
+                            });
+                        } else {
+                            sender_clone.input(PlayerInput::LoadMedia(id.clone()));
+                        }
+                    }
+                    glib::ControlFlow::Break
+                }));
+            }
+            PlayerInput::ClearError => {
+                self.error_message = None;
+                self.retry_count = 0;
+                if let Some(timer) = self.retry_timer.take() {
+                    timer.remove();
+                }
+            }
+            PlayerInput::ShowError(msg) => {
+                error!("Player error: {}", msg);
+                self.error_message = Some(msg);
+                self.player_state = PlayerState::Error;
+            }
         }
     }
 
     async fn update_cmd(
         &mut self,
         message: Self::CommandOutput,
-        _sender: AsyncComponentSender<Self>,
+        sender: AsyncComponentSender<Self>,
         _root: &Self::Root,
     ) {
         match message {
             PlayerCommandOutput::StateChanged(state) => {
-                self.player_state = state;
+                self.player_state = state.clone();
+                // Clear error on successful state change
+                if !matches!(&state, PlayerState::Error) {
+                    self.error_message = None;
+                    self.retry_count = 0;
+                }
+            }
+            PlayerCommandOutput::LoadError(error_msg) => {
+                sender.input(PlayerInput::ShowError(error_msg));
             }
             PlayerCommandOutput::PositionUpdate {
                 position,

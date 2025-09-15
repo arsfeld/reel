@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use dirs;
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -31,6 +31,10 @@ pub struct PlexBackend {
     server_info: Arc<RwLock<Option<ServerInfo>>>,
     auth_provider: Option<AuthProvider>,
     source: Option<Source>,
+    /// Cached server connections for fast failover
+    cached_connections: Arc<RwLock<Vec<PlexConnection>>>,
+    /// Last time we discovered servers
+    last_discovery: Arc<RwLock<Option<Instant>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +45,23 @@ pub struct ServerInfo {
 }
 
 impl PlexBackend {
+    /// Create a temporary PlexBackend for authentication purposes
+    pub fn new_for_auth(base_url: String, token: String) -> Self {
+        Self {
+            base_url: Arc::new(RwLock::new(Some(base_url))),
+            auth_token: Arc::new(RwLock::new(Some(token))),
+            backend_id: format!("temp_{}", uuid::Uuid::new_v4()),
+            last_sync_time: Arc::new(RwLock::new(None)),
+            api: Arc::new(RwLock::new(None)),
+            server_name: Arc::new(RwLock::new(None)),
+            server_info: Arc::new(RwLock::new(None)),
+            auth_provider: None,
+            source: None,
+            cached_connections: Arc::new(RwLock::new(Vec::new())),
+            last_discovery: Arc::new(RwLock::new(None)),
+        }
+    }
+
     /// Create a new PlexBackend from an AuthProvider and Source
     pub fn from_auth(auth_provider: AuthProvider, source: Source) -> Result<Self> {
         // Validate that this is a Plex auth provider
@@ -63,6 +84,8 @@ impl PlexBackend {
             server_info: Arc::new(RwLock::new(None)),
             auth_provider: Some(auth_provider),
             source: Some(source),
+            cached_connections: Arc::new(RwLock::new(Vec::new())),
+            last_discovery: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -115,7 +138,7 @@ impl PlexBackend {
             let future = async move {
                 let start = Instant::now();
                 let client = reqwest::Client::builder()
-                    .timeout(Duration::from_secs(3))
+                    .timeout(Duration::from_secs(2))
                     .danger_accept_invalid_certs(true) // Plex uses self-signed certs
                     .build()?;
 
@@ -175,7 +198,7 @@ impl PlexBackend {
 
                 for conn in sorted_connections {
                     let client = reqwest::Client::builder()
-                        .timeout(Duration::from_secs(10))
+                        .timeout(Duration::from_secs(5))
                         .danger_accept_invalid_certs(true)
                         .build()?;
 
@@ -196,6 +219,240 @@ impl PlexBackend {
 
                 Err(anyhow!("Failed to connect to any server endpoint"))
             }
+        }
+    }
+
+    /// Try to get a working connection from cache or rediscover
+    async fn get_working_connection(&self) -> Result<String> {
+        // First check if current base_url works with ConnectionCache
+        if let Some(current_url) = self.base_url.read().await.as_ref() {
+            use crate::models::SourceId;
+            use crate::services::core::ConnectionService;
+
+            let source_id = self.source.as_ref().map(|s| SourceId::new(s.id.clone()));
+            if let Some(ref sid) = source_id {
+                let cache = ConnectionService::cache();
+                if cache.should_skip_test(sid).await {
+                    // Recent successful connection, use it
+                    tracing::info!("Using cached connection, skipping test");
+                    return Ok(current_url.clone());
+                }
+            }
+
+            // Quick test current URL
+            if self.test_connection(current_url, 1).await {
+                if let Some(ref sid) = source_id {
+                    let cache = ConnectionService::cache();
+                    cache.update_success(sid, 100).await;
+                }
+                return Ok(current_url.clone());
+            }
+        }
+
+        // Try cached connections in parallel
+        let cached = self.cached_connections.read().await.clone();
+        if !cached.is_empty() {
+            let token = self
+                .auth_token
+                .read()
+                .await
+                .clone()
+                .ok_or_else(|| anyhow!("No auth token available"))?;
+
+            // Test all cached connections in parallel
+            match self.find_best_from_cached(&cached, &token).await {
+                Ok(conn) => {
+                    let new_url = conn.uri.clone();
+                    *self.base_url.write().await = Some(new_url.clone());
+
+                    // Update cache
+                    if let Some(source) = &self.source {
+                        use crate::services::core::ConnectionService;
+                        let sid = SourceId::new(source.id.clone());
+                        let cache = ConnectionService::cache();
+                        cache.update_success(&sid, 100).await;
+                    }
+
+                    return Ok(new_url);
+                }
+                Err(e) => {
+                    tracing::debug!("Cached connections failed: {}", e);
+                }
+            }
+        }
+
+        // Fall back to discovery if cache is stale (> 5 minutes)
+        let should_rediscover = self
+            .last_discovery
+            .read()
+            .await
+            .map(|t| t.elapsed() > Duration::from_secs(300))
+            .unwrap_or(true);
+
+        if should_rediscover {
+            tracing::info!("Rediscovering Plex servers...");
+            // This will update cached_connections
+            self.rediscover_servers().await?;
+
+            // Try again with fresh connections
+            if let Some(url) = self.base_url.read().await.as_ref() {
+                return Ok(url.clone());
+            }
+        }
+
+        Err(anyhow!("No working connection found"))
+    }
+
+    /// Test a specific connection quickly
+    async fn test_connection(&self, url: &str, timeout_secs: u64) -> bool {
+        let token = match self.auth_token.read().await.as_ref() {
+            Some(t) => t.clone(),
+            None => return false,
+        };
+
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .danger_accept_invalid_certs(true)
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+
+        match client
+            .get(format!("{}/identity", url))
+            .header("X-Plex-Token", &token)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => true,
+            _ => false,
+        }
+    }
+
+    /// Find best connection from cached list
+    async fn find_best_from_cached(
+        &self,
+        connections: &[PlexConnection],
+        token: &str,
+    ) -> Result<PlexConnection> {
+        use futures::future::select_ok;
+
+        let mut futures = Vec::new();
+        for conn in connections {
+            let uri = conn.uri.clone();
+            let token = token.to_string();
+            let conn_clone = conn.clone();
+
+            let future = async move {
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(1))
+                    .danger_accept_invalid_certs(true)
+                    .build()?;
+
+                let response = client
+                    .get(format!("{}/identity", uri))
+                    .header("X-Plex-Token", &token)
+                    .send()
+                    .await;
+
+                match response {
+                    Ok(resp) if resp.status().is_success() => Ok(conn_clone),
+                    _ => Err(anyhow!("Connection failed")),
+                }
+            };
+
+            futures.push(Box::pin(future));
+        }
+
+        match select_ok(futures).await {
+            Ok((result, _)) => Ok(result),
+            Err(_) => Err(anyhow!("All cached connections failed")),
+        }
+    }
+
+    /// Rediscover servers and update cache
+    async fn rediscover_servers(&self) -> Result<()> {
+        let token = self
+            .auth_token
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow!("No auth token available"))?;
+
+        let servers = PlexAuth::discover_servers(&token).await?;
+
+        // Find our server
+        let target_server = if let Some(ref source) = self.source {
+            if let SourceType::PlexServer { ref machine_id, .. } = source.source_type {
+                servers.iter().find(|s| &s.client_identifier == machine_id)
+            } else {
+                servers.first()
+            }
+        } else {
+            servers.first()
+        };
+
+        if let Some(server) = target_server {
+            // Cache connections
+            *self.cached_connections.write().await = server.connections.clone();
+            *self.last_discovery.write().await = Some(Instant::now());
+
+            // Find best connection
+            match self.find_best_connection(server, &token).await {
+                Ok(best_conn) => {
+                    *self.base_url.write().await = Some(best_conn.uri.clone());
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            Err(anyhow!("No matching server found"))
+        }
+    }
+
+    /// Trigger background server discovery to refresh connections
+    pub async fn refresh_connections_background(&self) {
+        // Check if we should refresh (only if last discovery is old)
+        let should_refresh = self
+            .last_discovery
+            .read()
+            .await
+            .map(|t| t.elapsed() > Duration::from_secs(60))
+            .unwrap_or(true);
+
+        if !should_refresh {
+            tracing::debug!("Skipping background refresh, recently discovered");
+            return;
+        }
+
+        // Clone necessary data for background task
+        let backend = self.clone_for_background();
+
+        // Spawn background task
+        tokio::spawn(async move {
+            tracing::info!("Starting background server discovery");
+            match backend.rediscover_servers().await {
+                Ok(()) => tracing::info!("Background server discovery completed successfully"),
+                Err(e) => tracing::warn!("Background server discovery failed: {}", e),
+            }
+        });
+    }
+
+    /// Create a minimal clone for background operations
+    fn clone_for_background(&self) -> PlexBackend {
+        PlexBackend {
+            base_url: self.base_url.clone(),
+            auth_token: self.auth_token.clone(),
+            backend_id: self.backend_id.clone(),
+            last_sync_time: self.last_sync_time.clone(),
+            api: self.api.clone(),
+            server_name: self.server_name.clone(),
+            server_info: self.server_info.clone(),
+            auth_provider: self.auth_provider.clone(),
+            source: self.source.clone(),
+            cached_connections: self.cached_connections.clone(),
+            last_discovery: self.last_discovery.clone(),
         }
     }
 
@@ -428,7 +685,7 @@ impl MediaBackend for PlexBackend {
             if should_test {
                 // Test if the URL is actually reachable
                 let test_client = reqwest::Client::builder()
-                    .timeout(Duration::from_secs(5))
+                    .timeout(Duration::from_secs(2))
                     .danger_accept_invalid_certs(true)
                     .build()?;
 
@@ -485,6 +742,41 @@ impl MediaBackend for PlexBackend {
                             || url.contains("localhost"),
                         is_relay: url.contains("plex.direct"),
                     });
+                }
+
+                // CRITICAL FIX: Populate cached_connections even when using existing URL
+                // This prevents get_working_connection() from having to rediscover servers
+                if self.cached_connections.read().await.is_empty() {
+                    tracing::info!("Populating connection cache for existing URL");
+
+                    // Try to discover all connections for this server
+                    match PlexAuth::discover_servers(&token).await {
+                        Ok(servers) => {
+                            // Find the server that matches our current URL
+                            if let Some(ref source) = self.source {
+                                if let SourceType::PlexServer { ref machine_id, .. } =
+                                    source.source_type
+                                {
+                                    if let Some(server) =
+                                        servers.iter().find(|s| &s.client_identifier == machine_id)
+                                    {
+                                        tracing::info!(
+                                            "Found {} connections for server {}",
+                                            server.connections.len(),
+                                            server.name
+                                        );
+                                        *self.cached_connections.write().await =
+                                            server.connections.clone();
+                                        *self.last_discovery.write().await = Some(Instant::now());
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!("Could not populate connection cache: {}", e);
+                            // Not critical - we can still use the single URL we have
+                        }
+                    }
                 }
             }
         }
@@ -551,6 +843,10 @@ impl MediaBackend for PlexBackend {
                                     is_local: best_conn.local,
                                     is_relay: best_conn.relay,
                                 });
+
+                                // Cache all connections for this server for fast failover
+                                *self.cached_connections.write().await = server.connections.clone();
+                                *self.last_discovery.write().await = Some(Instant::now());
 
                                 // Create and store the API client
                                 let api = PlexApi::with_backend_id(
@@ -708,8 +1004,48 @@ impl MediaBackend for PlexBackend {
             media_id
         );
 
-        let api = self.get_api().await?;
-        tracing::info!("Got API client, fetching stream URL from Plex API");
+        // Optimize: First ensure we have a working connection without full re-initialization
+        let working_url = match self.get_working_connection().await {
+            Ok(url) => {
+                tracing::info!("Got working connection quickly: {}", url);
+                url
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to get working connection: {}, falling back to API",
+                    e
+                );
+                // Fall back to existing API if available
+                let api = self.get_api().await?;
+                tracing::info!("Got API client, fetching stream URL from Plex API");
+                let result = api.get_stream_url(rating_key).await;
+                match &result {
+                    Ok(info) => tracing::info!("Successfully got stream URL: {}", info.url),
+                    Err(e) => tracing::error!("Failed to get stream URL: {}", e),
+                }
+                return result;
+            }
+        };
+
+        // Create temporary API with working URL if needed
+        let api = if let Some(existing_api) = self.api.read().await.as_ref() {
+            existing_api.clone()
+        } else {
+            // Create temporary API with the working URL
+            let token = self
+                .auth_token
+                .read()
+                .await
+                .clone()
+                .ok_or_else(|| anyhow!("No auth token available"))?;
+            let temp_api =
+                PlexApi::with_backend_id(working_url.clone(), token, self.backend_id.clone());
+            // Store it for future use
+            *self.api.write().await = Some(temp_api.clone());
+            temp_api
+        };
+
+        tracing::info!("Fetching stream URL from Plex API");
         let result = api.get_stream_url(rating_key).await;
         match &result {
             Ok(info) => tracing::info!("Successfully got stream URL: {}", info.url),
