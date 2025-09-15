@@ -1,4 +1,1 @@
-pub mod image_loader;
-
-#[cfg(feature = "gtk")]
-pub use image_loader::{ImageLoader, ImageSize};
+// image_loader module removed - Relm4 has its own implementation

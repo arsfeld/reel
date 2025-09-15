@@ -11,11 +11,10 @@ categories = ["multimedia", "gui"]
 
 [features]
 default = ["relm4"]
-gtk = ["dep:gtk4", "dep:gdk4", "dep:gdk-pixbuf", "dep:libadwaita", "dep:glib-build-tools"]
 relm4 = ["dep:relm4", "dep:relm4-components", "dep:relm4-icons", "dep:gtk4", "dep:gdk4", "dep:libadwaita", "dep:tracker"]
 
 [dependencies]
-# GTK and UI (optional for GTK feature)
+# GTK and UI (required for Relm4)
 gtk4 = { version = "0.10", features = ["v4_14"], optional = true }
 gdk4 = { version = "0.10", features = ["v4_14"], optional = true }
 gdk-pixbuf = { version = "0.21", optional = true }
