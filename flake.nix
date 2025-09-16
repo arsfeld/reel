@@ -454,6 +454,9 @@
           rpm
           fuse
           docker
+
+          # High-performance linker for faster builds
+          mold
         ] ++ lib.optionals pkgs.stdenv.isDarwin [
           # macOS-specific debugging tools
           lldb

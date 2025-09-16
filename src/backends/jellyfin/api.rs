@@ -72,6 +72,155 @@ impl JellyfinApi {
         Ok(info)
     }
 
+    pub async fn check_quick_connect_enabled(base_url: &str) -> Result<bool> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()?;
+
+        let url = format!("{}/QuickConnect/Enabled", base_url.trim_end_matches('/'));
+
+        let response = client.get(&url).send().await?;
+
+        if response.status().is_success() {
+            let enabled: bool = response.json().await?;
+            Ok(enabled)
+        } else if response.status() == 401 {
+            Ok(false)
+        } else {
+            Err(anyhow!(
+                "Failed to check Quick Connect status: {}",
+                response.status()
+            ))
+        }
+    }
+
+    pub async fn initiate_quick_connect(base_url: &str) -> Result<QuickConnectState> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()?;
+
+        let device_id = Self::get_or_create_device_id();
+        let auth_header = format!(
+            r#"MediaBrowser Client="{}", Device="Linux", DeviceId="{}", Version="{}""#,
+            JELLYFIN_CLIENT_NAME, device_id, JELLYFIN_VERSION
+        );
+
+        let url = format!("{}/QuickConnect/Initiate", base_url.trim_end_matches('/'));
+
+        info!("Initiating Quick Connect at: {}", url);
+
+        let response = client
+            .post(&url)
+            .header("X-Emby-Authorization", auth_header)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            error!(
+                "Failed to initiate Quick Connect: {} - {}",
+                status, error_text
+            );
+            return Err(anyhow!(
+                "Failed to initiate Quick Connect: {} - {}",
+                status,
+                error_text
+            ));
+        }
+
+        let state: QuickConnectState = response.json().await?;
+        info!("Quick Connect initiated with code: {}", state.code);
+        Ok(state)
+    }
+
+    pub async fn get_quick_connect_state(
+        base_url: &str,
+        secret: &str,
+    ) -> Result<QuickConnectResult> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()?;
+
+        let url = format!(
+            "{}/QuickConnect/Connect?Secret={}",
+            base_url.trim_end_matches('/'),
+            secret
+        );
+
+        debug!("Checking Quick Connect state for secret: {}", secret);
+
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            debug!(
+                "Quick Connect not yet authorized: {} - {}",
+                status, error_text
+            );
+            return Ok(QuickConnectResult {
+                authenticated: false,
+            });
+        }
+
+        let result: QuickConnectResult = response.json().await?;
+        Ok(result)
+    }
+
+    pub async fn authenticate_with_quick_connect(
+        base_url: &str,
+        secret: &str,
+    ) -> Result<AuthResponse> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
+
+        let device_id = Self::get_or_create_device_id();
+        let auth_header = format!(
+            r#"MediaBrowser Client="{}", Device="Linux", DeviceId="{}", Version="{}""#,
+            JELLYFIN_CLIENT_NAME, device_id, JELLYFIN_VERSION
+        );
+
+        let url = format!(
+            "{}/Users/AuthenticateWithQuickConnect",
+            base_url.trim_end_matches('/')
+        );
+
+        info!("Authenticating with Quick Connect secret");
+
+        let response = client
+            .post(&url)
+            .header("X-Emby-Authorization", auth_header)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "Secret": secret
+            }))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            error!(
+                "Quick Connect authentication failed: {} - {}",
+                status, error_text
+            );
+            return Err(anyhow!(
+                "Quick Connect authentication failed: {} - {}",
+                status,
+                error_text
+            ));
+        }
+
+        let auth_response: AuthResponse = response.json().await?;
+        info!(
+            "Successfully authenticated with Quick Connect as user: {}",
+            auth_response.user.name
+        );
+        Ok(auth_response)
+    }
+
     pub async fn authenticate(
         base_url: &str,
         username: &str,
@@ -139,7 +288,12 @@ impl JellyfinApi {
     }
 
     pub async fn get_user(&self) -> Result<User> {
-        let url = format!("{}/Users/{}", self.base_url, self.user_id);
+        // If user_id is empty, try to get current user via /Users/Me endpoint
+        let url = if self.user_id.is_empty() {
+            format!("{}/Users/Me", self.base_url)
+        } else {
+            format!("{}/Users/{}", self.base_url, self.user_id)
+        };
 
         let response = self
             .client
@@ -1310,6 +1464,21 @@ struct AuthRequest {
 pub struct AuthResponse {
     pub user: JellyfinUser,
     pub access_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct QuickConnectState {
+    pub authenticated: bool,
+    pub secret: String,
+    pub code: String,
+    pub date_added: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct QuickConnectResult {
+    pub authenticated: bool,
 }
 
 #[derive(Debug, Deserialize)]
