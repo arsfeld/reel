@@ -5,10 +5,12 @@ use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;
 
-use super::dialogs::{AuthDialog, AuthDialogInput, AuthDialogOutput};
+use super::dialogs::{
+    AuthDialog, AuthDialogInput, AuthDialogOutput, PreferencesDialog, PreferencesDialogInput,
+    PreferencesDialogOutput,
+};
 use super::pages::{
-    HomePage, LibraryPage, MovieDetailsPage, PlayerPage, PreferencesPage, ShowDetailsPage,
-    SourcesPage,
+    HomePage, LibraryPage, MovieDetailsPage, PlayerPage, ShowDetailsPage, SourcesPage,
 };
 use super::sidebar::{Sidebar, SidebarInput, SidebarOutput};
 use crate::db::connection::DatabaseConnection;
@@ -25,8 +27,7 @@ pub struct MainWindow {
     player_page: Option<AsyncController<PlayerPage>>,
     sources_page: Option<AsyncController<SourcesPage>>,
     sources_nav_page: Option<adw::NavigationPage>,
-    preferences_page: Option<AsyncController<PreferencesPage>>,
-    preferences_nav_page: Option<adw::NavigationPage>,
+    preferences_dialog: Option<AsyncController<PreferencesDialog>>,
     auth_dialog: AsyncController<AuthDialog>,
     navigation_view: adw::NavigationView,
     // Window chrome management
@@ -323,8 +324,7 @@ impl AsyncComponent for MainWindow {
             player_page: None,
             sources_page: None,
             sources_nav_page: None,
-            preferences_page: None,
-            preferences_nav_page: None,
+            preferences_dialog: None,
             navigation_view: adw::NavigationView::new(),
             content_header: adw::HeaderBar::new(),
             sidebar_header: adw::HeaderBar::new(),
@@ -747,37 +747,21 @@ impl AsyncComponent for MainWindow {
                             }
                         }
 
-                        // Create preferences page if it doesn't exist
-                        if self.preferences_page.is_none() {
-                            let preferences_controller = PreferencesPage::builder()
+                        // Create and show preferences dialog
+                        if self.preferences_dialog.is_none() {
+                            let preferences_controller = PreferencesDialog::builder()
                                 .launch(self.db.clone())
                                 .forward(sender.input_sender(), |output| match output {
-                                    crate::platforms::relm4::components::pages::preferences::PreferencesOutput::PreferencesSaved => {
-                                        tracing::info!("Preferences saved");
-                                        MainWindowInput::Navigate("preferences_saved".to_string())
-                                    }
-                                    crate::platforms::relm4::components::pages::preferences::PreferencesOutput::Error(msg) => {
-                                        tracing::error!("Preferences error: {}", msg);
-                                        MainWindowInput::Navigate("preferences_error".to_string())
+                                    PreferencesDialogOutput::Closed => {
+                                        tracing::info!("Preferences dialog closed");
+                                        MainWindowInput::Navigate("preferences_closed".to_string())
                                     }
                                 });
 
-                            // Create the navigation page once
-                            let page = adw::NavigationPage::builder()
-                                .title("Preferences")
-                                .child(preferences_controller.widget())
-                                .build();
-
-                            self.preferences_nav_page = Some(page);
-                            self.preferences_page = Some(preferences_controller);
-                        }
-
-                        // Push the existing navigation page
-                        if let Some(ref page) = self.preferences_nav_page {
-                            self.navigation_view.push(page);
-
-                            // Trigger header update
-                            sender.input(MainWindowInput::Navigate("update_header".to_string()));
+                            preferences_controller.widget().present(Some(root));
+                            self.preferences_dialog = Some(preferences_controller);
+                        } else if let Some(ref dialog) = self.preferences_dialog {
+                            dialog.widget().present(Some(root));
                         }
                     }
                     "auth_dialog" => {
@@ -802,39 +786,22 @@ impl AsyncComponent for MainWindow {
             }
             MainWindowInput::NavigateToPreferences => {
                 tracing::info!("Opening preferences dialog");
-
-                // Create a preferences dialog window
-                let dialog = adw::Dialog::builder()
-                    .title("Preferences")
-                    .content_width(600)
-                    .content_height(500)
-                    .build();
-
-                // Create preferences page if it doesn't exist
-                if self.preferences_page.is_none() {
-                    let preferences_controller = PreferencesPage::builder()
+                // Create and show preferences dialog
+                if self.preferences_dialog.is_none() {
+                    let preferences_controller = PreferencesDialog::builder()
                         .launch(self.db.clone())
                         .forward(sender.input_sender(), |output| match output {
-                            crate::platforms::relm4::components::pages::preferences::PreferencesOutput::PreferencesSaved => {
-                                tracing::info!("Preferences saved");
-                                MainWindowInput::Navigate("preferences_saved".to_string())
-                            }
-                            crate::platforms::relm4::components::pages::preferences::PreferencesOutput::Error(msg) => {
-                                tracing::error!("Preferences error: {}", msg);
-                                MainWindowInput::Navigate("preferences_error".to_string())
+                            PreferencesDialogOutput::Closed => {
+                                tracing::info!("Preferences dialog closed");
+                                MainWindowInput::Navigate("preferences_closed".to_string())
                             }
                         });
 
-                    self.preferences_page = Some(preferences_controller);
+                    preferences_controller.widget().present(Some(root));
+                    self.preferences_dialog = Some(preferences_controller);
+                } else if let Some(ref dialog) = self.preferences_dialog {
+                    dialog.widget().present(Some(root));
                 }
-
-                // Set the preferences page as the dialog's child
-                if let Some(ref preferences_controller) = self.preferences_page {
-                    dialog.set_child(Some(preferences_controller.widget()));
-                }
-
-                // Present the dialog
-                dialog.present(Some(root));
             }
             MainWindowInput::NavigateToSource(source_id) => {
                 tracing::info!("Navigating to source: {}", source_id);

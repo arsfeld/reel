@@ -1,0 +1,81 @@
+/* Minimal GNOME Sidebar Styling */
+
+/* Sidebar container */
+.navigation-sidebar {
+    background: @sidebar_bg_color;
+    min-width: 220px;
+}
+
+/* Home button styling */
+.home-button {
+    margin: 4px;
+    border-radius: 6px;
+}
+
+.home-button:hover {
+    background: alpha(@card_fg_color, 0.08);
+}
+
+/* Source groups - collapsible sections */
+.source-group {
+    margin: 4px;
+    background: alpha(@card_bg_color, 0.5);
+    border-radius: 8px;
+    padding: 4px;
+}
+
+.source-header {
+    border-radius: 6px;
+}
+
+.source-header:hover {
+    background: alpha(@card_fg_color, 0.08);
+}
+
+.source-expand-icon {
+    transition: transform 200ms;
+    opacity: 0.7;
+}
+
+.source-expanded .source-expand-icon {
+    transform: rotate(90deg);
+}
+
+/* Library list */
+.library-list {
+    background: transparent;
+    margin-top: 4px;
+}
+
+.library-list row {
+    padding-left: 24px;
+    margin: 2px 4px;
+    border-radius: 6px;
+}
+
+.library-list row:hover {
+    background: alpha(@card_fg_color, 0.08);
+}
+
+.library-list row.library-selected {
+    background: alpha(@accent_bg_color, 0.25);
+}
+
+/* Library items */
+.library-item {
+    padding: 8px;
+}
+
+/* Welcome screen */
+.welcome-container {
+    padding: 24px;
+}
+
+.welcome-title {
+    font-weight: bold;
+    font-size: larger;
+}
+
+.welcome-subtitle {
+    opacity: 0.7;
+}

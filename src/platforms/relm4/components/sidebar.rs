@@ -6,7 +6,7 @@ use relm4::{Component, ComponentParts, ComponentSender, gtk};
 use tracing::{debug, error};
 
 use crate::db::connection::DatabaseConnection;
-use crate::models::auth_provider::Source;
+use crate::models::auth_provider::{Source, SourceType};
 use crate::models::{Library, LibraryId, LibraryType, SourceId};
 use crate::platforms::relm4::components::shared::broker::{BROKER, BrokerMessage, SourceMessage};
 use crate::services::commands::{Command, auth_commands::LoadSourcesCommand};
@@ -49,6 +49,7 @@ pub struct SourceGroup {
     source: Source,
     libraries: Vec<Library>,
     is_loading: bool,
+    is_expanded: bool,
     db: DatabaseConnection,
 }
 
@@ -70,10 +71,7 @@ impl SourceGroup {
             }
 
             let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-            hbox.set_margin_top(2);
-            hbox.set_margin_bottom(2);
-            hbox.set_margin_start(6);
-            hbox.set_margin_end(6);
+            hbox.add_css_class("library-item");
 
             // Icon based on library type
             let icon_name = match library.library_type {
@@ -84,6 +82,7 @@ impl SourceGroup {
                 LibraryType::Mixed => "folder-symbolic",
             };
             let icon = gtk::Image::from_icon_name(icon_name);
+            icon.set_pixel_size(16);
             hbox.append(&icon);
 
             // Library info box
@@ -92,7 +91,6 @@ impl SourceGroup {
 
             let name_label = gtk::Label::new(Some(&library.title));
             name_label.set_halign(gtk::Align::Start);
-            name_label.add_css_class("body");
             vbox.append(&name_label);
 
             // Display the actual item count from the library model
@@ -104,8 +102,6 @@ impl SourceGroup {
             vbox.append(&count_label);
 
             hbox.append(&vbox);
-
-            // Remove arrow icon for cleaner look
 
             row.set_child(Some(&hbox));
             library_list.append(&row);
@@ -134,6 +130,10 @@ pub enum SourceGroupInput {
     LibrariesLoaded(Vec<Library>),
     /// Refresh this source
     Refresh,
+    /// Toggle expanded state
+    ToggleExpanded,
+    /// Reload libraries from database (e.g., after sync)
+    ReloadLibraries,
 }
 
 #[derive(Debug)]
@@ -153,19 +153,54 @@ impl FactoryComponent for SourceGroup {
     view! {
         root = gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
-            set_spacing: 4,
+            set_spacing: 0,
+            add_css_class: "source-group",
 
-            gtk::Label {
-                set_text: &self.source.name,
-                set_halign: gtk::Align::Start,
-                add_css_class: "dim-label",
-                add_css_class: "caption",
+            gtk::Button {
+                add_css_class: "flat",
+                add_css_class: "source-header",
+                connect_clicked => SourceGroupInput::ToggleExpanded,
+
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 12,
+                    set_margin_top: 8,
+                    set_margin_bottom: 8,
+                    set_margin_start: 8,
+                    set_margin_end: 8,
+
+                    gtk::Image {
+                        #[watch]
+                        set_icon_name: Some(match &self.source.source_type {
+                            SourceType::PlexServer { .. } => "network-server-symbolic",
+                            SourceType::JellyfinServer => "network-workgroup-symbolic",
+                            SourceType::LocalFolder { .. } => "folder-symbolic",
+                            SourceType::NetworkShare { .. } => "folder-remote-symbolic",
+                        }),
+                        set_pixel_size: 16,
+                    },
+
+                    gtk::Label {
+                        set_text: &self.source.name,
+                        set_halign: gtk::Align::Start,
+                        set_hexpand: true,
+                    },
+
+                    gtk::Image {
+                        set_icon_name: Some("go-next-symbolic"),
+                        set_pixel_size: 12,
+                        #[watch]
+                        add_css_class: if self.is_expanded { "source-expand-icon source-expanded" } else { "source-expand-icon" },
+                    },
+                }
             },
 
             #[local_ref]
             library_list -> gtk::ListBox {
                 set_selection_mode: gtk::SelectionMode::None,
-                add_css_class: "boxed-list",
+                add_css_class: "library-list",
+                #[watch]
+                set_visible: self.is_expanded,
             }
         }
     }
@@ -186,6 +221,9 @@ impl FactoryComponent for SourceGroup {
                         libraries.len(),
                         source_clone.name
                     );
+                    for lib in &libraries {
+                        debug!("Library '{}': item_count = {}", lib.title, lib.item_count);
+                    }
                     sender_clone.input(SourceGroupInput::LibrariesLoaded(libraries));
                 }
                 Err(e) => {
@@ -202,6 +240,7 @@ impl FactoryComponent for SourceGroup {
             source,
             libraries: Vec::new(),
             is_loading: true,
+            is_expanded: true, // Start expanded by default
             db,
         }
     }
@@ -215,7 +254,7 @@ impl FactoryComponent for SourceGroup {
     ) -> Self::Widgets {
         let library_list = gtk::ListBox::new();
         library_list.set_selection_mode(gtk::SelectionMode::None);
-        library_list.add_css_class("boxed-list");
+        library_list.add_css_class("library-list");
 
         // Connect row activation to send proper library IDs
         let sender_clone = sender.clone();
@@ -257,6 +296,47 @@ impl FactoryComponent for SourceGroup {
             }
             SourceGroupInput::Refresh => {
                 debug!("Refreshing source: {}", self.source.name);
+                // Trigger library reload
+                sender.input(SourceGroupInput::ReloadLibraries);
+            }
+            SourceGroupInput::ToggleExpanded => {
+                self.is_expanded = !self.is_expanded;
+            }
+            SourceGroupInput::ReloadLibraries => {
+                debug!("Reloading libraries for source: {}", self.source.name);
+                self.is_loading = true;
+
+                // Load libraries from database
+                let source_clone = self.source.clone();
+                let db_clone = self.db.clone();
+                let sender_clone = sender.clone();
+
+                relm4::spawn(async move {
+                    let source_id = SourceId::new(source_clone.id.clone());
+                    match MediaService::get_libraries_for_source(&db_clone, &source_id).await {
+                        Ok(libraries) => {
+                            debug!(
+                                "Reloaded {} libraries for source {}",
+                                libraries.len(),
+                                source_clone.name
+                            );
+                            for lib in &libraries {
+                                debug!(
+                                    "Reloaded library '{}': item_count = {}",
+                                    lib.title, lib.item_count
+                                );
+                            }
+                            sender_clone.input(SourceGroupInput::LibrariesLoaded(libraries));
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to reload libraries for source {}: {}",
+                                source_clone.name, e
+                            );
+                            sender_clone.input(SourceGroupInput::LibrariesLoaded(Vec::new()));
+                        }
+                    }
+                });
             }
         }
     }
@@ -270,6 +350,7 @@ pub struct Sidebar {
     has_sources: bool,
     connection_status: String,
     is_syncing: bool,
+    selected_library_id: Option<LibraryId>,
 }
 
 #[relm4::component(pub)]
@@ -292,112 +373,88 @@ impl Component for Sidebar {
 
                 gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
-                    set_spacing: 4,
+                    set_spacing: 0,
 
                     // Welcome section - shown when no sources
                     #[name = "welcome_box"]
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 16,
+                        set_spacing: 0,
                         set_halign: gtk::Align::Center,
                         set_valign: gtk::Align::Center,
                         set_vexpand: true,
                         set_visible: !model.has_sources,
+                        add_css_class: "welcome-container",
 
                         gtk::Image {
                             set_icon_name: Some("applications-multimedia-symbolic"),
-                            set_pixel_size: 128,
-                            add_css_class: "dim-label",
+                            add_css_class: "welcome-icon",
                         },
 
                         gtk::Label {
                             set_text: "Welcome to Reel",
-                            add_css_class: "title-2",
+                            add_css_class: "welcome-title",
                             set_halign: gtk::Align::Center,
                         },
 
                         gtk::Label {
                             set_text: "Connect to your media server to get started",
-                            add_css_class: "body",
+                            add_css_class: "welcome-subtitle",
                             set_halign: gtk::Align::Center,
                         },
 
                         gtk::Button {
                             set_label: "Connect to Server",
                             set_halign: gtk::Align::Center,
-                            add_css_class: "pill",
-                            add_css_class: "suggested-action",
+                            add_css_class: "welcome-button",
                             connect_clicked => SidebarInput::ManageSources,
                         }
                     },
 
-                    // Home section - shown only when sources exist
-                    #[name = "home_section"]
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 4,
+                    // Home button - shown only when sources exist
+                    #[name = "home_button"]
+                    gtk::Button {
                         set_visible: model.has_sources,
+                        add_css_class: "flat",
+                        add_css_class: "home-button",
+                        connect_clicked => SidebarInput::NavigateHome,
 
-                        #[name = "home_listbox"]
-                        gtk::ListBox {
-                            set_selection_mode: gtk::SelectionMode::None,
-                            add_css_class: "boxed-list",
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_spacing: 12,
+                            set_margin_top: 8,
+                            set_margin_bottom: 8,
+                            set_margin_start: 8,
+                            set_margin_end: 8,
 
-                            gtk::ListBoxRow {
-                                set_activatable: true,
+                            gtk::Image {
+                                set_icon_name: Some("user-home-symbolic"),
+                                set_pixel_size: 16,
+                            },
 
-                                gtk::Box {
-                                    set_orientation: gtk::Orientation::Horizontal,
-                                    set_spacing: 8,
-                                    set_margin_all: 4,
-
-                                    gtk::Image {
-                                        set_icon_name: Some("user-home-symbolic"),
-                                    },
-
-                                    gtk::Box {
-                                        set_orientation: gtk::Orientation::Vertical,
-                                        set_spacing: 0,
-                                        set_hexpand: true,
-
-                                        gtk::Label {
-                                            set_text: "Home",
-                                            set_halign: gtk::Align::Start,
-                                            add_css_class: "body",
-                                        },
-
-                                        gtk::Label {
-                                            set_text: "Recently added from all sources",
-                                            set_halign: gtk::Align::Start,
-                                            add_css_class: "dim-label",
-                                            add_css_class: "caption",
-                                        }
-                                    },
-                                },
-                            }
-                        }
+                            gtk::Label {
+                                set_text: "Home",
+                                set_halign: gtk::Align::Start,
+                                set_hexpand: true,
+                            },
+                        },
                     },
 
                     // Sources container
                     #[local_ref]
                     sources_container -> gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 8,
+                        set_spacing: 0,
                         set_visible: model.has_sources,
                     },
 
-                    // Status container
+                    // Status section (minimal, GNOME-like)
                     #[name = "status_container"]
                     gtk::Box {
                         set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 4,
-                        set_margin_top: 4,
+                        set_spacing: 6,
+                        set_margin_all: 8,
                         set_visible: model.has_sources,
-
-                        gtk::Image {
-                            set_icon_name: Some("network-transmit-receive-symbolic"),
-                            set_opacity: 0.5,
-                        },
 
                         gtk::Label {
                             set_text: &model.connection_status,
@@ -408,42 +465,17 @@ impl Component for Sidebar {
                         gtk::Spinner {
                             set_spinning: model.is_syncing,
                             set_visible: model.is_syncing,
-                            set_margin_start: 6,
                         }
                     }
                 }
             },
 
-            // Sticky Sources button at the bottom
-            gtk::Box {
-                set_orientation: gtk::Orientation::Vertical,
-
-                gtk::Separator {
-                    set_orientation: gtk::Orientation::Horizontal,
-                },
-
-                gtk::Button {
-                    set_margin_top: 8,
-                    set_margin_bottom: 8,
-                    set_margin_start: 8,
-                    set_margin_end: 8,
-                    add_css_class: "pill",
-                    connect_clicked => SidebarInput::ManageSources,
-
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 6,
-                        set_halign: gtk::Align::Center,
-
-                        gtk::Image {
-                            set_icon_name: Some("network-server-symbolic"),
-                        },
-
-                        gtk::Label {
-                            set_text: "Servers & Accounts",
-                        }
-                    }
-                }
+            // Sources button at the bottom
+            gtk::Button {
+                set_label: "Servers & Accounts",
+                set_margin_all: 8,
+                add_css_class: "pill",
+                connect_clicked => SidebarInput::ManageSources,
             }
         }
     }
@@ -467,18 +499,11 @@ impl Component for Sidebar {
             has_sources: false,
             connection_status: "No sources configured".to_string(),
             is_syncing: false,
+            selected_library_id: None,
         };
 
         let sources_container = model.source_groups.widget();
         let widgets = view_output!();
-
-        // Connect home listbox row activation
-        {
-            let sender = sender.clone();
-            widgets.home_listbox.connect_row_activated(move |_, _| {
-                sender.input(SidebarInput::NavigateHome);
-            });
-        }
 
         // Load initial sources
         sender.input(SidebarInput::RefreshSources);
@@ -486,7 +511,7 @@ impl Component for Sidebar {
         // Subscribe to broker messages for sync updates
         let broker_sender = sender.clone();
         relm4::spawn(async move {
-            let (tx, mut rx) = relm4::channel();
+            let (tx, mut rx) = relm4::channel::<BrokerMessage>();
             BROKER.subscribe("sidebar".to_string(), tx).await;
 
             while let Some(msg) = rx.recv().await {
@@ -542,7 +567,7 @@ impl Component for Sidebar {
 
                 // Update visibility based on has_sources
                 widgets.welcome_box.set_visible(!self.has_sources);
-                widgets.home_section.set_visible(self.has_sources); // Home button only when sources exist
+                widgets.home_button.set_visible(self.has_sources);
                 widgets.sources_container.set_visible(self.has_sources);
                 widgets.status_container.set_visible(self.has_sources);
 
@@ -571,6 +596,7 @@ impl Component for Sidebar {
 
             SidebarInput::NavigateToLibrary(library_id) => {
                 debug!("Navigating to library: {}", library_id);
+                self.selected_library_id = Some(library_id.clone());
                 sender.output(SidebarOutput::NavigateToLibrary(library_id));
             }
 
@@ -588,10 +614,30 @@ impl Component for Sidebar {
                     BrokerMessage::Source(SourceMessage::SyncStarted { .. }) => {
                         self.is_syncing = true;
                     }
-                    BrokerMessage::Source(SourceMessage::SyncCompleted { .. }) => {
+                    BrokerMessage::Source(SourceMessage::SyncCompleted { source_id, .. }) => {
                         self.is_syncing = false;
-                        // Refresh sources to get updated library counts
-                        sender.input(SidebarInput::RefreshSources);
+                        debug!(
+                            "Sync completed for source: {}, refreshing libraries",
+                            source_id
+                        );
+
+                        // Find the index of the source group to update
+                        let idx_to_update = {
+                            let guard = self.source_groups.guard();
+                            guard.iter().enumerate().find_map(|(idx, sg)| {
+                                if sg.source.id == source_id {
+                                    Some(idx)
+                                } else {
+                                    None
+                                }
+                            })
+                        };
+
+                        // Send reload message if we found the source
+                        if let Some(idx) = idx_to_update {
+                            self.source_groups
+                                .send(idx, SourceGroupInput::ReloadLibraries);
+                        }
                     }
                     BrokerMessage::Source(SourceMessage::SyncError { .. }) => {
                         self.is_syncing = false;

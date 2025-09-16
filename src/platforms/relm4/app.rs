@@ -24,6 +24,8 @@ impl ReelApp {
 
         // Load details page CSS
         let details_css = include_str!("styles/details.css");
+        // Load sidebar CSS
+        let sidebar_css = include_str!("styles/sidebar.css");
 
         // Set global CSS matching GTK library styles exactly
         let base_css = r#"
@@ -413,8 +415,8 @@ impl ReelApp {
             }
             "#;
 
-        // Combine base CSS with details CSS
-        let combined_css = format!("{}{}", base_css, details_css);
+        // Combine base CSS with details CSS and sidebar CSS
+        let combined_css = format!("{}{}{}", base_css, details_css, sidebar_css);
         relm4::set_global_css(&combined_css);
 
         // Initialize database in a blocking context first
