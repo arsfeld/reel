@@ -4,12 +4,13 @@ title: Simplify Plex auth tab by removing redundant content and improving layout
 status: To Do
 assignee: []
 created_date: '2025-09-16 02:24'
+updated_date: '2025-09-16 04:35'
 labels:
   - ui
   - auth
   - ux
 dependencies: []
-priority: medium
+priority: high
 ---
 
 ## Description
