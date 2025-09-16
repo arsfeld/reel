@@ -521,6 +521,36 @@ impl AsyncComponent for PlayerPage {
             .orientation(gtk::Orientation::Vertical)
             .build();
 
+        // Add drag gesture to make the window draggable by clicking on the video area
+        let drag_gesture = gtk::GestureDrag::new();
+        let window_clone = window.clone();
+        drag_gesture.connect_drag_begin(move |gesture, start_x, start_y| {
+            // Only start drag if it's a primary button (left click) and not in fullscreen
+            if let Some(event) = gesture.current_event() {
+                if event.triggers_context_menu() {
+                    return; // Don't drag on right-click
+                }
+
+                // Get the surface and start the drag
+                if !window_clone.is_fullscreen() {
+                    if let Some(surface) = window_clone.surface() {
+                        // Check if surface implements Toplevel interface
+                        use gtk::gdk::prelude::ToplevelExt;
+                        if let Some(toplevel) = surface.downcast_ref::<gtk::gdk::Toplevel>() {
+                            toplevel.begin_move(
+                                &event.device().unwrap(),
+                                gesture.current_button() as i32,
+                                start_x,
+                                start_y,
+                                event.time(),
+                            );
+                        }
+                    }
+                }
+            }
+        });
+        video_container.add_controller(drag_gesture);
+
         // Add a placeholder initially
         let placeholder = gtk::Label::new(Some("Initializing player..."));
         placeholder.add_css_class("title-1");

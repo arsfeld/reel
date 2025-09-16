@@ -3,7 +3,8 @@ use libadwaita as adw;
 use relm4::factory::FactoryVecDeque;
 use relm4::gtk;
 use relm4::prelude::*;
-use tracing::{debug, error};
+use std::time::{Duration, Instant};
+use tracing::{debug, error, trace};
 
 use crate::db::connection::DatabaseConnection;
 use crate::db::entities::MediaItemModel;
@@ -45,6 +46,15 @@ pub struct LibraryPage {
     sort_by: SortBy,
     filter_text: String,
     search_visible: bool,
+    // Viewport tracking
+    visible_start_idx: usize,
+    visible_end_idx: usize,
+    // Scroll debouncing
+    last_scroll_time: Option<Instant>,
+    scroll_debounce_handle: Option<gtk::glib::SourceId>,
+    // Image loading state
+    images_requested: std::collections::HashSet<String>, // Track which images have been requested
+    pending_image_cancels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,6 +94,12 @@ pub enum LibraryPageInput {
     },
     /// Image load failed
     ImageLoadFailed { id: String },
+    /// Viewport scrolled, update visible range
+    ViewportScrolled,
+    /// Process debounced scroll event
+    ProcessDebouncedScroll,
+    /// Load images for visible items
+    LoadVisibleImages,
 }
 
 #[derive(Debug)]
@@ -133,6 +149,14 @@ impl AsyncComponent for LibraryPage {
                 connect_edge_reached[sender] => move |_, pos| {
                     if pos == gtk::PositionType::Bottom {
                         sender.input(LibraryPageInput::LoadMoreBatch);
+                    }
+                },
+
+                // Track scroll position changes for viewport-based loading
+                #[wrap(Some)]
+                set_vadjustment = &gtk::Adjustment {
+                    connect_value_changed[sender] => move |_| {
+                        sender.input(LibraryPageInput::ViewportScrolled);
                     }
                 },
 
@@ -260,6 +284,15 @@ impl AsyncComponent for LibraryPage {
             sort_by: SortBy::Title,
             filter_text: String::new(),
             search_visible: false,
+            // Viewport tracking
+            visible_start_idx: 0,
+            visible_end_idx: 0,
+            // Scroll debouncing
+            last_scroll_time: None,
+            scroll_debounce_handle: None,
+            // Image loading state
+            images_requested: std::collections::HashSet::new(),
+            pending_image_cancels: Vec::new(),
         };
 
         let widgets = view_output!();
@@ -282,6 +315,10 @@ impl AsyncComponent for LibraryPage {
                 self.has_loaded_all = false;
                 self.media_factory.guard().clear();
                 self.image_requests.clear();
+                self.images_requested.clear();
+                self.visible_start_idx = 0;
+                self.visible_end_idx = 0;
+                self.cancel_pending_images();
                 self.load_all_items(sender.clone());
             }
 
@@ -313,6 +350,9 @@ impl AsyncComponent for LibraryPage {
                 self.total_items = filtered_items;
                 self.is_loading = false;
 
+                // Clear image requests when loading new items
+                self.images_requested.clear();
+
                 // Start rendering the first batch immediately
                 if !self.total_items.is_empty() {
                     // Render initial batch
@@ -326,45 +366,39 @@ impl AsyncComponent for LibraryPage {
                 let end_idx = (start_idx + self.batch_size).min(self.total_items.len());
 
                 if start_idx < self.total_items.len() {
-                    debug!("Rendering items {} to {}", start_idx, end_idx);
+                    debug!(
+                        "Rendering items {} to {} (no images yet)",
+                        start_idx, end_idx
+                    );
 
-                    let mut factory_guard = self.media_factory.guard();
-                    for idx in start_idx..end_idx {
-                        let item = &self.total_items[idx];
-                        let index = factory_guard.push_back(MediaCardInit {
-                            item: item.clone(),
-                            show_progress: false,
-                            watched: false,
-                            progress_percent: 0.0,
-                        });
+                    {
+                        let mut factory_guard = self.media_factory.guard();
+                        for idx in start_idx..end_idx {
+                            let item = &self.total_items[idx];
+                            let index = factory_guard.push_back(MediaCardInit {
+                                item: item.clone(),
+                                show_progress: false,
+                                watched: false,
+                                progress_percent: 0.0,
+                            });
 
-                        // Request image loading with priority based on position
-                        if let Some(poster_url) = &item.poster_url {
-                            let id = item.id.clone();
-                            self.image_requests
-                                .insert(id.clone(), index.current_index());
-
-                            // Higher priority for items closer to the top
-                            let priority = if idx < 20 {
-                                10
-                            } else if idx < 50 {
-                                5
-                            } else {
-                                1
-                            };
-
-                            self.image_loader
-                                .emit(ImageLoaderInput::LoadImage(ImageRequest {
-                                    id,
-                                    url: poster_url.clone(),
-                                    size: ImageSize::Thumbnail,
-                                    priority,
-                                }));
+                            // Store the mapping but don't request images yet
+                            if item.poster_url.is_some() {
+                                let id = item.id.clone();
+                                self.image_requests
+                                    .insert(id.clone(), index.current_index());
+                            }
                         }
-                    }
+                    } // Guard dropped here
 
                     self.loaded_count = end_idx;
                     self.has_loaded_all = end_idx >= self.total_items.len();
+
+                    // Update visible range after rendering new items
+                    self.update_visible_range(&_root);
+
+                    // Load images for visible items
+                    sender.input(LibraryPageInput::LoadVisibleImages);
                 }
 
                 self.is_loading = false;
@@ -438,11 +472,181 @@ impl AsyncComponent for LibraryPage {
                 // Remove from tracking
                 self.image_requests.remove(&id);
             }
+
+            LibraryPageInput::ViewportScrolled => {
+                // Debounce scroll events
+                self.last_scroll_time = Some(Instant::now());
+
+                // Cancel previous debounce if exists
+                if let Some(handle) = self.scroll_debounce_handle.take() {
+                    handle.remove();
+                }
+
+                // Set up new debounce timer (150ms delay)
+                let sender_clone = sender.clone();
+                self.scroll_debounce_handle = Some(gtk::glib::timeout_add_local(
+                    Duration::from_millis(150),
+                    move || {
+                        sender_clone.input(LibraryPageInput::ProcessDebouncedScroll);
+                        gtk::glib::ControlFlow::Break
+                    },
+                ));
+            }
+
+            LibraryPageInput::ProcessDebouncedScroll => {
+                self.scroll_debounce_handle = None;
+                let old_start = self.visible_start_idx;
+                self.update_visible_range(&_root);
+
+                // No need to clear tracking on viewport change anymore
+
+                sender.input(LibraryPageInput::LoadVisibleImages);
+            }
+
+            LibraryPageInput::LoadVisibleImages => {
+                self.load_images_for_visible_range();
+            }
         }
     }
 }
 
 impl LibraryPage {
+    fn update_visible_range(&mut self, root: &gtk::Overlay) {
+        // Get the scrolled window from the root widget
+        let scrolled = root
+            .first_child()
+            .and_then(|w| w.downcast::<gtk::ScrolledWindow>().ok());
+
+        if let Some(scrolled) = scrolled {
+            let adjustment = scrolled.vadjustment();
+            let scroll_pos = adjustment.value();
+            let page_size = adjustment.page_size();
+
+            // Get the flow box to determine actual item dimensions
+            let flow_box = scrolled
+                .child()
+                .and_then(|w| w.first_child())
+                .and_then(|w| w.downcast::<gtk::FlowBox>().ok());
+
+            let items_per_row = if let Some(flow_box) = flow_box {
+                // Use actual columns from flowbox
+                flow_box.min_children_per_line() as usize
+            } else {
+                4 // Default fallback
+            };
+
+            // More accurate row height accounting for reduced spacing
+            let row_height = 270.0; // Card height (180) + spacing (16)
+
+            let visible_start_row = (scroll_pos / row_height).floor() as usize;
+            let visible_end_row = ((scroll_pos + page_size) / row_height).ceil() as usize + 1; // Add 1 for partial visibility
+
+            self.visible_start_idx = visible_start_row * items_per_row;
+            self.visible_end_idx = ((visible_end_row + 1) * items_per_row).min(self.loaded_count);
+
+            trace!(
+                "Viewport updated: scroll_pos={:.0}, page_size={:.0}, items {} to {} visible",
+                scroll_pos, page_size, self.visible_start_idx, self.visible_end_idx
+            );
+        }
+    }
+
+    fn load_images_for_visible_range(&mut self) {
+        // Calculate which items need images with lookahead
+        let lookahead_items = 30; // Load 30 items ahead and behind for smoother scrolling
+        let load_start = self.visible_start_idx.saturating_sub(lookahead_items);
+        let load_end = (self.visible_end_idx + lookahead_items).min(self.loaded_count);
+
+        debug!(
+            "Loading images for items {} to {} (visible: {} to {})",
+            load_start, load_end, self.visible_start_idx, self.visible_end_idx
+        );
+
+        // Cancel images outside visible range
+        let mut to_cancel = Vec::new();
+        for idx in 0..self.loaded_count {
+            if idx < load_start || idx >= load_end {
+                if idx < self.total_items.len() {
+                    let item_id = &self.total_items[idx].id;
+                    if self.image_requests.contains_key(item_id) {
+                        to_cancel.push(item_id.clone());
+                    }
+                }
+            }
+        }
+
+        // Cancel out-of-range images
+        for id in to_cancel {
+            trace!("Cancelling image load for out-of-range item: {}", id);
+            self.image_loader
+                .emit(ImageLoaderInput::CancelLoad { id: id.clone() });
+            self.pending_image_cancels.push(id);
+        }
+
+        // Load images for items in range
+        let mut images_queued = 0;
+        for idx in load_start..load_end {
+            if idx < self.total_items.len() {
+                let item = &self.total_items[idx];
+                if let Some(poster_url) = &item.poster_url {
+                    let id = item.id.clone();
+
+                    // Skip if already requested or recently cancelled
+                    if self.images_requested.contains(&id)
+                        || self.pending_image_cancels.contains(&id)
+                    {
+                        continue;
+                    }
+
+                    // Calculate priority based on distance from current viewport
+                    let priority = if idx >= self.visible_start_idx && idx < self.visible_end_idx {
+                        0 // Highest priority for visible items
+                    } else {
+                        // Priority increases with distance from viewport
+                        let distance = if idx < self.visible_start_idx {
+                            self.visible_start_idx - idx
+                        } else {
+                            idx - self.visible_end_idx
+                        };
+                        (distance / 10).min(10) as u8
+                    };
+
+                    trace!(
+                        "Queueing image for item {} (id: {}) with priority {}",
+                        idx, id, priority
+                    );
+
+                    self.image_loader
+                        .emit(ImageLoaderInput::LoadImage(ImageRequest {
+                            id: id.clone(),
+                            url: poster_url.clone(),
+                            size: ImageSize::Thumbnail,
+                            priority,
+                        }));
+
+                    // Mark this image as requested
+                    self.images_requested.insert(id);
+                    images_queued += 1;
+                }
+            }
+        }
+
+        if images_queued > 0 {
+            debug!("Queued {} new image loads", images_queued);
+        }
+
+        // Clear pending cancels after a delay
+        self.pending_image_cancels.clear();
+    }
+
+    fn cancel_pending_images(&mut self) {
+        // Cancel all pending image loads
+        for (id, _) in self.image_requests.iter() {
+            self.image_loader
+                .emit(ImageLoaderInput::CancelLoad { id: id.clone() });
+        }
+    }
+
     fn load_all_items(&mut self, sender: AsyncComponentSender<Self>) {
         if let Some(library_id) = &self.library_id {
             self.is_loading = true;
@@ -527,6 +731,10 @@ impl LibraryPage {
         self.has_loaded_all = false;
         self.media_factory.guard().clear();
         self.image_requests.clear();
+        self.images_requested.clear();
+        self.visible_start_idx = 0;
+        self.visible_end_idx = 0;
+        self.cancel_pending_images();
         self.load_all_items(sender);
     }
 }

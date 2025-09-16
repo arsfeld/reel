@@ -231,12 +231,25 @@ impl SyncService {
             use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
             let media_repo = MediaRepositoryImpl::new(db.clone());
             if let Ok(count) = media_repo.count_by_library(&library.id).await {
+                info!(
+                    "Updating library {} item count from {} to {}",
+                    library.title, lib_entity.item_count, count
+                );
                 lib_entity.item_count = count as i32;
                 lib_entity.updated_at = chrono::Utc::now().naive_utc();
                 if let Err(e) = library_repo.update(lib_entity).await {
                     warn!("Failed to update library item count: {}", e);
+                } else {
+                    info!(
+                        "Successfully updated library {} item count to {}",
+                        library.title, count
+                    );
                 }
+            } else {
+                warn!("Failed to get count for library {}", library.id);
             }
+        } else {
+            warn!("Failed to find library {} in database", library.id);
         }
 
         debug!(
@@ -256,31 +269,29 @@ impl SyncService {
     ) -> Result<usize> {
         debug!("Syncing episodes for show: {}", show_id.as_str());
 
-        // First, get the show to find out how many seasons it has
-        let shows = MediaService::get_media_items(db, library_id, None, 0, 1000).await?;
-        let show_data = shows.into_iter().find_map(|item| match item {
-            MediaItem::Show(show) if show.id == show_id.as_str() => Some(show),
-            _ => None,
-        });
-
-        let show = match show_data {
-            Some(show) => show,
-            None => {
-                warn!(
-                    "Show {} not found in database, cannot sync episodes",
-                    show_id.as_str()
-                );
+        // Fetch seasons directly from the backend API
+        let seasons = match backend.get_seasons(show_id).await {
+            Ok(seasons) => seasons,
+            Err(e) => {
+                warn!("Failed to get seasons for show {}: {}", show_id.as_str(), e);
                 return Ok(0);
             }
         };
 
+        debug!(
+            "Found {} seasons for show {}",
+            seasons.len(),
+            show_id.as_str()
+        );
+
         let mut total_episodes_synced = 0;
 
         // Iterate through all seasons
-        for season in &show.seasons {
+        for season in &seasons {
             debug!(
                 "Syncing season {} for show {}",
-                season.season_number, show.title
+                season.season_number,
+                show_id.as_str()
             );
 
             match backend.get_episodes(show_id, season.season_number).await {
@@ -304,12 +315,16 @@ impl SyncService {
                             episode_count, season.season_number
                         );
 
+                        // Calculate estimated total episode count from seasons
+                        let total_estimate: usize =
+                            seasons.iter().map(|s| s.episode_count as usize).sum();
+
                         // Notify progress for this season
                         BROKER
                             .notify_sync_progress(
                                 source_id.to_string(),
                                 total_episodes_synced,
-                                show.total_episode_count as usize,
+                                total_estimate,
                             )
                             .await;
                     }
@@ -317,7 +332,9 @@ impl SyncService {
                 Err(e) => {
                     warn!(
                         "Failed to sync episodes for show {} season {}: {}",
-                        show.title, season.season_number, e
+                        show_id.as_str(),
+                        season.season_number,
+                        e
                     );
                 }
             }
@@ -325,7 +342,8 @@ impl SyncService {
 
         debug!(
             "Synced total of {} episodes for show {}",
-            total_episodes_synced, show.title
+            total_episodes_synced,
+            show_id.as_str()
         );
         Ok(total_episodes_synced)
     }
@@ -367,24 +385,22 @@ impl SyncService {
             }
             active_model.update(db.as_ref()).await?;
         } else {
-            // Insert new record
+            // Insert new record using start_sync which properly handles ID generation
             let repo = SyncRepositoryImpl::new(db.clone());
-            let entity = SyncStatusModel {
-                id: 0, // Will be auto-generated
-                source_id: source_id.to_string(),
-                sync_type: "full".to_string(),
-                status: status.to_string(),
-                started_at: last_sync.or_else(|| Some(chrono::Utc::now().naive_utc())),
-                completed_at: if status == SyncStatus::Completed {
-                    Some(chrono::Utc::now().naive_utc())
-                } else {
-                    None
-                },
-                items_synced: 0,
-                total_items: None,
-                error_message: None,
-            };
-            repo.insert(entity).await?;
+            let new_sync = repo
+                .start_sync(&source_id.to_string(), "full", None)
+                .await?;
+
+            // If we need to update the status immediately (e.g., to completed or failed)
+            if status != SyncStatus::InProgress {
+                let mut active_model: sync_status::ActiveModel = new_sync.into();
+                active_model.status = Set(status.to_string());
+                if status == SyncStatus::Completed {
+                    active_model.completed_at =
+                        Set(last_sync.or(Some(chrono::Utc::now().naive_utc())));
+                }
+                active_model.update(db.as_ref()).await?;
+            }
         }
 
         Ok(())

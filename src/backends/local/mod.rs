@@ -8,8 +8,8 @@ use tokio::sync::RwLock;
 
 use super::traits::{MediaBackend, SearchResults};
 use crate::models::{
-    AuthProvider, BackendId, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Show,
-    ShowId, Source, StreamInfo, User,
+    AuthProvider, BackendId, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season,
+    Show, ShowId, Source, StreamInfo, User,
 };
 // Stateful services removed during Relm4 migration
 // use crate::services::{AuthManager, DataService};
@@ -91,6 +91,11 @@ impl MediaBackend for LocalBackend {
     async fn get_shows(&self, _library_id: &LibraryId) -> Result<Vec<Show>> {
         // TODO: Scan local directory for TV shows
         todo!("Local show scanning not yet implemented")
+    }
+
+    async fn get_seasons(&self, _show_id: &ShowId) -> Result<Vec<Season>> {
+        // TODO: Scan local directory for seasons
+        todo!("Local season scanning not yet implemented")
     }
 
     async fn get_episodes(&self, _show_id: &ShowId, _season: u32) -> Result<Vec<Episode>> {

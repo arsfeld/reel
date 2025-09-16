@@ -18,7 +18,7 @@ use super::traits::{
 };
 use crate::models::{
     AuthProvider, BackendId, Credentials, Episode, HomeSection, Library, LibraryId, MediaItem,
-    MediaItemId, Movie, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
+    MediaItemId, Movie, Season, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
 };
 use crate::services::core::auth::AuthService;
 
@@ -258,9 +258,10 @@ impl MediaBackend for JellyfinBackend {
                     ..
                 } => {
                     tracing::info!(
-                        "JellyfinBackend::initialize - provider_id: {}, has_token: {}",
+                        "JellyfinBackend::initialize - provider_id: {}, has_token: {}, user_id: '{}'",
                         auth_provider.id(),
-                        !access_token.is_empty()
+                        !access_token.is_empty(),
+                        user_id
                     );
 
                     if !access_token.is_empty() {
@@ -370,9 +371,11 @@ impl MediaBackend for JellyfinBackend {
                 return Err(anyhow!("API key authentication not supported for Jellyfin"));
             }
             Credentials::Token { token } => {
-                // Check if it's the old format with base_url|api_key|user_id
+                // Check format of the token
                 let parts: Vec<&str> = token.split('|').collect();
+
                 if parts.len() == 3 {
+                    // Old format with base_url|api_key|user_id
                     let base_url = parts[0];
                     let api_key = parts[1];
                     let user_id = parts[2];
@@ -391,8 +394,34 @@ impl MediaBackend for JellyfinBackend {
                     *self.api.write().await = Some(api.clone());
 
                     return api.get_user().await;
+                } else if parts.len() == 2 {
+                    // New format from Quick Connect: token|user_id
+                    let access_token = parts[0];
+                    let user_id = parts[1];
+
+                    // We need the base_url to be already set
+                    let base_url = self
+                        .base_url
+                        .read()
+                        .await
+                        .clone()
+                        .ok_or_else(|| anyhow!("Base URL not set for token authentication"))?;
+
+                    *self.api_key.write().await = Some(access_token.to_string());
+                    *self.user_id.write().await = Some(user_id.to_string());
+
+                    let api = JellyfinApi::with_backend_id(
+                        base_url.clone(),
+                        access_token.to_string(),
+                        user_id.to_string(),
+                        self.backend_id.clone(),
+                    );
+
+                    *self.api.write().await = Some(api.clone());
+
+                    return api.get_user().await;
                 } else {
-                    // Assume it's just an access token from Quick Connect
+                    // Just an access token - need to fetch user info
                     // We need the base_url to be already set
                     let base_url = self
                         .base_url
@@ -451,6 +480,11 @@ impl MediaBackend for JellyfinBackend {
     async fn get_shows(&self, library_id: &LibraryId) -> Result<Vec<Show>> {
         let api = self.ensure_api_initialized().await?;
         api.get_shows(&library_id.to_string()).await
+    }
+
+    async fn get_seasons(&self, show_id: &ShowId) -> Result<Vec<Season>> {
+        let api = self.ensure_api_initialized().await?;
+        api.get_seasons(&show_id.to_string()).await
     }
 
     async fn get_episodes(&self, show_id: &ShowId, season: u32) -> Result<Vec<Episode>> {

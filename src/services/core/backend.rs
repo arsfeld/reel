@@ -106,8 +106,9 @@ impl BackendService {
         credentials: &Credentials,
         source: &crate::db::entities::sources::Model,
     ) -> Result<AuthProvider> {
-        let auth_provider = match credentials {
-            Credentials::Token { token } => AuthProvider::PlexAccount {
+        let auth_provider = match (credentials, source.source_type.as_str()) {
+            // Plex with token
+            (Credentials::Token { token }, "plex" | "PlexServer") => AuthProvider::PlexAccount {
                 id: source.auth_provider_id.clone().unwrap_or_default(),
                 username: String::new(),
                 email: String::new(),
@@ -115,14 +116,35 @@ impl BackendService {
                 refresh_token: None,
                 token_expiry: None,
             },
-            Credentials::UsernamePassword { username, .. } => AuthProvider::JellyfinAuth {
-                id: source.auth_provider_id.clone().unwrap_or_default(),
-                server_url: source.connection_url.clone().unwrap_or_default(),
-                username: username.clone(),
-                user_id: String::new(),
-                access_token: String::new(), // Will be populated during initialization
-            },
-            _ => return Err(anyhow::anyhow!("Unsupported credential type")),
+            // Jellyfin with token (Quick Connect)
+            (Credentials::Token { token }, "jellyfin" | "JellyfinServer") => {
+                // Parse token to check if it contains user_id (format: token|user_id)
+                let parts: Vec<&str> = token.split('|').collect();
+                let (access_token, user_id) = if parts.len() == 2 {
+                    (parts[0].to_string(), parts[1].to_string())
+                } else {
+                    (token.clone(), String::new())
+                };
+
+                AuthProvider::JellyfinAuth {
+                    id: source.auth_provider_id.clone().unwrap_or_default(),
+                    server_url: source.connection_url.clone().unwrap_or_default(),
+                    username: String::new(),
+                    user_id,
+                    access_token,
+                }
+            }
+            // Jellyfin with username/password
+            (Credentials::UsernamePassword { username, .. }, "jellyfin" | "JellyfinServer") => {
+                AuthProvider::JellyfinAuth {
+                    id: source.auth_provider_id.clone().unwrap_or_default(),
+                    server_url: source.connection_url.clone().unwrap_or_default(),
+                    username: username.clone(),
+                    user_id: String::new(),
+                    access_token: String::new(), // Will be populated during initialization
+                }
+            }
+            _ => return Err(anyhow::anyhow!("Unsupported credential type for source")),
         };
 
         Ok(auth_provider)
@@ -220,5 +242,89 @@ impl BackendService {
         // Create backend and update progress
         let backend = Self::create_backend_for_source(db, &source_entity).await?;
         backend.update_progress(media_id, position, duration).await
+    }
+
+    /// Get home sections from all active sources
+    pub async fn get_all_home_sections(
+        db: &DatabaseConnection,
+    ) -> Result<Vec<crate::models::HomeSection>> {
+        // Load all sources
+        let source_repo = SourceRepositoryImpl::new(db.clone());
+        let sources = source_repo.find_all().await?;
+
+        let mut all_sections = Vec::new();
+
+        // Get home sections from each source concurrently
+        let mut section_futures = Vec::new();
+
+        for source_entity in sources.iter() {
+            // Skip disabled or offline sources
+            if !source_entity.is_online {
+                continue;
+            }
+
+            let db_clone = db.clone();
+            let source_clone = source_entity.clone();
+
+            let future = async move {
+                match Self::create_backend_for_source(&db_clone, &source_clone).await {
+                    Ok(backend) => {
+                        match backend.get_home_sections().await {
+                            Ok(mut sections) => {
+                                // Prefix section IDs with source ID to avoid conflicts
+                                for section in &mut sections {
+                                    section.id = format!("{}::{}", source_clone.id, section.id);
+                                    // Also prefix the title with source name if multiple sources exist
+                                    if sources.len() > 1 {
+                                        section.title =
+                                            format!("{} - {}", source_clone.name, section.title);
+                                    }
+                                }
+                                Ok(sections)
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to get home sections from source {}: {}",
+                                    source_clone.id,
+                                    e
+                                );
+                                Ok(Vec::new())
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to create backend for source {}: {}",
+                            source_clone.id,
+                            e
+                        );
+                        Ok(Vec::new())
+                    }
+                }
+            };
+
+            section_futures.push(future);
+        }
+
+        // Wait for all futures to complete
+        let results = futures::future::join_all(section_futures).await;
+
+        // Collect all successful results
+        for result in results {
+            match result {
+                Ok(sections) => all_sections.extend(sections),
+                Err(e) => {
+                    tracing::error!("Error getting home sections: {}", e);
+                }
+            }
+        }
+
+        tracing::info!(
+            "Loaded {} total home sections from {} sources",
+            all_sections.len(),
+            sources.len()
+        );
+
+        Ok(all_sections)
     }
 }

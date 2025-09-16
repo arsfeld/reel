@@ -7,10 +7,11 @@ use tracing::{debug, error};
 
 use crate::db::connection::DatabaseConnection;
 use crate::db::entities::MediaItemModel;
-use crate::models::MediaItemId;
+use crate::models::{HomeSection, MediaItem, MediaItemId};
 use crate::platforms::relm4::components::factories::media_card::{
     MediaCard, MediaCardInit, MediaCardOutput,
 };
+use crate::services::core::BackendService;
 
 #[derive(Debug)]
 pub struct HomePage {
@@ -24,9 +25,11 @@ pub struct HomePage {
 pub enum HomePageInput {
     /// Load home page data
     LoadData,
-    /// Continue watching section loaded
+    /// Home sections loaded from backends
+    HomeSectionsLoaded(Vec<HomeSection>),
+    /// Continue watching section loaded (fallback)
     ContinueWatchingLoaded(Vec<MediaItemModel>),
-    /// Recently added section loaded
+    /// Recently added section loaded (fallback)
     RecentlyAddedLoaded(Vec<MediaItemModel>),
     /// Media item selected
     MediaItemSelected(MediaItemId),
