@@ -23,7 +23,7 @@ impl From<&str> for PlayerBackend {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PlayerState {
     Idle,
     Loading,
@@ -357,6 +357,62 @@ impl Player {
         match self {
             Player::GStreamer(p) => p.get_current_subtitle_track().await,
             Player::Mpv(p) => p.get_current_subtitle_track().await,
+        }
+    }
+
+    pub async fn set_playback_speed(&self, speed: f64) -> Result<()> {
+        match self {
+            Player::GStreamer(p) => p.set_playback_speed(speed).await,
+            Player::Mpv(p) => p.set_playback_speed(speed).await,
+        }
+    }
+
+    pub async fn get_playback_speed(&self) -> f64 {
+        match self {
+            Player::GStreamer(p) => p.get_playback_speed().await,
+            Player::Mpv(p) => p.get_playback_speed().await,
+        }
+    }
+
+    pub async fn frame_step_forward(&self) -> Result<()> {
+        match self {
+            Player::GStreamer(p) => p.frame_step_forward().await,
+            Player::Mpv(p) => p.frame_step_forward().await,
+        }
+    }
+
+    pub async fn frame_step_backward(&self) -> Result<()> {
+        match self {
+            Player::GStreamer(p) => p.frame_step_backward().await,
+            Player::Mpv(p) => p.frame_step_backward().await,
+        }
+    }
+
+    pub async fn toggle_mute(&self) -> Result<()> {
+        match self {
+            Player::GStreamer(p) => p.toggle_mute().await,
+            Player::Mpv(p) => p.toggle_mute().await,
+        }
+    }
+
+    pub async fn is_muted(&self) -> bool {
+        match self {
+            Player::GStreamer(p) => p.is_muted().await,
+            Player::Mpv(p) => p.is_muted().await,
+        }
+    }
+
+    pub async fn cycle_subtitle_track(&self) -> Result<()> {
+        match self {
+            Player::GStreamer(p) => p.cycle_subtitle_track().await,
+            Player::Mpv(p) => p.cycle_subtitle_track().await,
+        }
+    }
+
+    pub async fn cycle_audio_track(&self) -> Result<()> {
+        match self {
+            Player::GStreamer(p) => p.cycle_audio_track().await,
+            Player::Mpv(p) => p.cycle_audio_track().await,
         }
     }
 }

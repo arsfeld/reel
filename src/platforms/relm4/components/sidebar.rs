@@ -331,12 +331,12 @@ impl Component for Sidebar {
                         }
                     },
 
-                    // Home section - always shown
+                    // Home section - shown only when sources exist
                     #[name = "home_section"]
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
                         set_spacing: 4,
-                        set_visible: true,
+                        set_visible: model.has_sources,
 
                         #[name = "home_listbox"]
                         gtk::ListBox {
@@ -542,7 +542,7 @@ impl Component for Sidebar {
 
                 // Update visibility based on has_sources
                 widgets.welcome_box.set_visible(!self.has_sources);
-                widgets.home_section.set_visible(true); // Home button always visible
+                widgets.home_section.set_visible(self.has_sources); // Home button only when sources exist
                 widgets.sources_container.set_visible(self.has_sources);
                 widgets.status_container.set_visible(self.has_sources);
 

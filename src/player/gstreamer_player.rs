@@ -1270,4 +1270,94 @@ impl GStreamerPlayer {
             -1
         }
     }
+
+    pub async fn set_playback_speed(&self, speed: f64) -> Result<()> {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            // GStreamer uses a seek with rate to change playback speed
+            let position = playbin.query_position::<gst::ClockTime>();
+            if let Some(pos) = position {
+                playbin
+                    .seek(
+                        speed,
+                        gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                        gst::SeekType::Set,
+                        pos,
+                        gst::SeekType::None,
+                        gst::ClockTime::NONE,
+                    )
+                    .map_err(|e| anyhow::anyhow!("Failed to set playback speed: {:?}", e))?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn get_playback_speed(&self) -> f64 {
+        // GStreamer doesn't have a simple way to get current playback rate
+        // We'd need to track it separately or query the segment
+        1.0 // Default to normal speed for now
+    }
+
+    pub async fn frame_step_forward(&self) -> Result<()> {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            // GStreamer frame stepping requires pausing first and then seeking
+            // Frame stepping with Step events is complex and not well-supported
+            // Instead, we'll use a small seek forward
+            let position = playbin.query_position::<gst::ClockTime>();
+            if let Some(pos) = position {
+                let new_pos = pos + gst::ClockTime::from_mseconds(40); // ~1 frame at 25fps
+                playbin
+                    .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, new_pos)
+                    .map_err(|e| anyhow::anyhow!("Failed to step forward: {:?}", e))?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn frame_step_backward(&self) -> Result<()> {
+        // GStreamer doesn't natively support backward frame stepping
+        // We'd need to implement this with seeking
+        Err(anyhow::anyhow!(
+            "Backward frame stepping not supported in GStreamer"
+        ))
+    }
+
+    pub async fn toggle_mute(&self) -> Result<()> {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            let current_mute = playbin.property::<bool>("mute");
+            playbin.set_property("mute", !current_mute);
+        }
+        Ok(())
+    }
+
+    pub async fn is_muted(&self) -> bool {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            playbin.property::<bool>("mute")
+        } else {
+            false
+        }
+    }
+
+    pub async fn cycle_subtitle_track(&self) -> Result<()> {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            let n_text = playbin.property::<i32>("n-text");
+            if n_text > 0 {
+                let current = playbin.property::<i32>("current-text");
+                let next = (current + 1) % n_text;
+                playbin.set_property("current-text", next);
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn cycle_audio_track(&self) -> Result<()> {
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            let n_audio = playbin.property::<i32>("n-audio");
+            if n_audio > 0 {
+                let current = playbin.property::<i32>("current-audio");
+                let next = (current + 1) % n_audio;
+                playbin.set_property("current-audio", next);
+            }
+        }
+        Ok(())
+    }
 }

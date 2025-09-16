@@ -86,6 +86,35 @@ pub enum PlayerCommand {
         mode: UpscalingMode,
         respond_to: oneshot::Sender<Result<()>>,
     },
+    /// Set playback speed
+    SetPlaybackSpeed {
+        speed: f64,
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Get playback speed
+    GetPlaybackSpeed { respond_to: oneshot::Sender<f64> },
+    /// Frame step forward
+    FrameStepForward {
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Frame step backward
+    FrameStepBackward {
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Toggle mute
+    ToggleMute {
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Check if muted
+    IsMuted { respond_to: oneshot::Sender<bool> },
+    /// Cycle subtitle track
+    CycleSubtitleTrack {
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Cycle audio track
+    CycleAudioTrack {
+        respond_to: oneshot::Sender<Result<()>>,
+    },
     /// Shutdown the player controller
     Shutdown,
 }
@@ -217,6 +246,44 @@ impl PlayerController {
                             ))
                         }
                     };
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::SetPlaybackSpeed { speed, respond_to } => {
+                    debug!("🎮 PlayerController: Setting playback speed to {}", speed);
+                    let result = self.player.set_playback_speed(speed).await;
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::GetPlaybackSpeed { respond_to } => {
+                    let speed = self.player.get_playback_speed().await;
+                    let _ = respond_to.send(speed);
+                }
+                PlayerCommand::FrameStepForward { respond_to } => {
+                    debug!("🎮 PlayerController: Frame stepping forward");
+                    let result = self.player.frame_step_forward().await;
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::FrameStepBackward { respond_to } => {
+                    debug!("🎮 PlayerController: Frame stepping backward");
+                    let result = self.player.frame_step_backward().await;
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::ToggleMute { respond_to } => {
+                    debug!("🎮 PlayerController: Toggling mute");
+                    let result = self.player.toggle_mute().await;
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::IsMuted { respond_to } => {
+                    let is_muted = self.player.is_muted().await;
+                    let _ = respond_to.send(is_muted);
+                }
+                PlayerCommand::CycleSubtitleTrack { respond_to } => {
+                    debug!("🎮 PlayerController: Cycling subtitle track");
+                    let result = self.player.cycle_subtitle_track().await;
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::CycleAudioTrack { respond_to } => {
+                    debug!("🎮 PlayerController: Cycling audio track");
+                    let result = self.player.cycle_audio_track().await;
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::Shutdown => {
@@ -447,6 +514,94 @@ impl PlayerHandle {
         let (respond_to, response) = oneshot::channel();
         self.sender
             .send(PlayerCommand::SetUpscalingMode { mode, respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Set playback speed
+    pub async fn set_playback_speed(&self, speed: f64) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::SetPlaybackSpeed { speed, respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Get playback speed
+    pub async fn get_playback_speed(&self) -> Result<f64> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::GetPlaybackSpeed { respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))
+    }
+
+    /// Frame step forward
+    pub async fn frame_step_forward(&self) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::FrameStepForward { respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Frame step backward
+    pub async fn frame_step_backward(&self) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::FrameStepBackward { respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Toggle mute
+    pub async fn toggle_mute(&self) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::ToggleMute { respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Check if muted
+    pub async fn is_muted(&self) -> Result<bool> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::IsMuted { respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))
+    }
+
+    /// Cycle subtitle track
+    pub async fn cycle_subtitle_track(&self) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::CycleSubtitleTrack { respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Cycle audio track
+    pub async fn cycle_audio_track(&self) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::CycleAudioTrack { respond_to })
             .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
         response
             .await
