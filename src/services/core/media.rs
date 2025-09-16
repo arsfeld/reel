@@ -342,6 +342,40 @@ impl MediaService {
         Ok(items)
     }
 
+    /// Get episodes for a show, optionally filtered by season
+    pub async fn get_episodes_for_show(
+        db: &DatabaseConnection,
+        show_id: &ShowId,
+        season_number: Option<u32>,
+    ) -> Result<Vec<MediaItem>> {
+        let repo = MediaRepositoryImpl::new(db.clone());
+
+        let models = if let Some(season) = season_number {
+            // Get episodes for specific season
+            repo.find_episodes_by_season(show_id.as_str(), season as i32)
+                .await
+                .context("Failed to get episodes from database")?
+        } else {
+            // Get all episodes for the show
+            repo.find_episodes_by_show(show_id.as_str())
+                .await
+                .context("Failed to get episodes from database")?
+        };
+
+        // Convert models to MediaItem::Episode
+        let mut episodes = Vec::new();
+        for model in models {
+            match MediaItem::try_from(model) {
+                Ok(item) => episodes.push(item),
+                Err(e) => {
+                    warn!("Failed to convert episode model: {}", e);
+                }
+            }
+        }
+
+        Ok(episodes)
+    }
+
     /// Clear all media for a library
     pub async fn clear_library(db: &DatabaseConnection, library_id: &LibraryId) -> Result<()> {
         let repo = MediaRepositoryImpl::new(db.clone());

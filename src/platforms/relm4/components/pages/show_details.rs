@@ -84,20 +84,22 @@ impl AsyncComponent for ShowDetailsPage {
             gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
 
-                // Hero Section with full-bleed backdrop
+                // Hero Section with full-bleed backdrop and Ken Burns effect
                 gtk::Overlay {
-                    set_height_request: 550,  // Taller for more immersive feel
+                    set_height_request: 600,  // Even taller for cinematic feel
+                    add_css_class: "hero-section",
 
-                    // Backdrop image - full bleed
+                    // Backdrop image with Ken Burns animation
                     gtk::Picture {
                         set_content_fit: gtk::ContentFit::Cover,
+                        add_css_class: "hero-backdrop",
                         #[watch]
                         set_paintable: model.backdrop_texture.as_ref(),
                     },
 
-                    // Stronger gradient overlay for better text contrast
+                    // Enhanced gradient overlay with glass morphism
                     add_overlay = &gtk::Box {
-                        add_css_class: "hero-gradient",
+                        add_css_class: "hero-gradient-modern",
                         set_valign: gtk::Align::End,
 
                         gtk::Box {
@@ -105,12 +107,13 @@ impl AsyncComponent for ShowDetailsPage {
                             set_margin_all: 32,
                             set_spacing: 32,
 
-                            // Larger poster
+                            // Premium poster with depth effect
                             gtk::Picture {
-                                set_width_request: 300,  // Increased from 200
-                                set_height_request: 450, // Increased from 300
+                                set_width_request: 300,
+                                set_height_request: 450,
                                 add_css_class: "card",
-                                add_css_class: "poster-shadow",
+                                add_css_class: "poster-premium",
+                                add_css_class: "fade-in-scale",
                                 #[watch]
                                 set_paintable: model.poster_texture.as_ref(),
                             },
@@ -122,42 +125,59 @@ impl AsyncComponent for ShowDetailsPage {
                                 set_spacing: 12,
                                 set_hexpand: true,
 
-                                // Title
+                                // Title with hero typography
                                 gtk::Label {
                                     set_halign: gtk::Align::Start,
-                                    add_css_class: "title-1",
+                                    add_css_class: "title-hero",
+                                    add_css_class: "fade-in-up",
                                     set_wrap: true,
                                     #[watch]
                                     set_label: &model.show.as_ref().map(|s| s.title.clone()).unwrap_or_default(),
                                 },
 
-                                // Metadata row
+                                // Metadata row with modern styling
                                 gtk::Box {
                                     set_orientation: gtk::Orientation::Horizontal,
                                     set_spacing: 12,
+                                    add_css_class: "stagger-animation",
 
-                                    // Year
-                                    gtk::Label {
-                                        add_css_class: "dim-label",
+                                    // Year pill
+                                    gtk::Box {
+                                        add_css_class: "metadata-pill-modern",
+                                        add_css_class: "interactive-element",
                                         #[watch]
                                         set_visible: model.show.as_ref().and_then(|s| s.year).is_some(),
-                                        #[watch]
-                                        set_label: &model.show.as_ref()
-                                            .and_then(|s| s.year.map(|y| y.to_string()))
-                                            .unwrap_or_default(),
+
+                                        gtk::Label {
+                                            set_margin_start: 12,
+                                            set_margin_end: 12,
+                                            set_margin_top: 6,
+                                            set_margin_bottom: 6,
+                                            #[watch]
+                                            set_label: &model.show.as_ref()
+                                                .and_then(|s| s.year.map(|y| y.to_string()))
+                                                .unwrap_or_default(),
+                                        },
                                     },
 
-                                    // Rating
+                                    // Rating pill with star gradient
                                     gtk::Box {
+                                        add_css_class: "metadata-pill-modern",
+                                        add_css_class: "rating-pill",
+                                        add_css_class: "interactive-element",
                                         set_spacing: 6,
                                         #[watch]
                                         set_visible: model.show.as_ref().and_then(|s| s.rating).is_some(),
 
                                         gtk::Image {
                                             set_icon_name: Some("starred-symbolic"),
+                                            set_margin_start: 12,
                                         },
 
                                         gtk::Label {
+                                            set_margin_end: 12,
+                                            set_margin_top: 6,
+                                            set_margin_bottom: 6,
                                             #[watch]
                                             set_label: &model.show.as_ref()
                                                 .and_then(|s| s.rating.map(|r| format!("{:.1}", r)))
@@ -165,13 +185,20 @@ impl AsyncComponent for ShowDetailsPage {
                                         }
                                     },
 
-                                    // Episode count
-                                    gtk::Label {
-                                        add_css_class: "dim-label",
-                                        #[watch]
-                                        set_label: &model.show.as_ref()
-                                            .map(|s| format!("{} episodes", s.total_episode_count))
-                                            .unwrap_or_default(),
+                                    // Episode count pill
+                                    gtk::Box {
+                                        add_css_class: "metadata-pill-modern",
+                                        add_css_class: "interactive-element",
+                                        gtk::Label {
+                                            set_margin_start: 12,
+                                            set_margin_end: 12,
+                                            set_margin_top: 6,
+                                            set_margin_bottom: 6,
+                                            #[watch]
+                                            set_label: &model.show.as_ref()
+                                                .map(|s| format!("{} episodes", s.total_episode_count))
+                                                .unwrap_or_default(),
+                                        },
                                     },
                                 },
 
@@ -227,16 +254,18 @@ impl AsyncComponent for ShowDetailsPage {
                     },
                 },
 
-                // Content section
+                // Content section with animations
                 gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
-                    set_margin_all: 24,
-                    set_spacing: 24,
+                    set_margin_all: 32,
+                    set_spacing: 32,
+                    add_css_class: "fade-in-up",
 
-                    // Overview
+                    // Overview with glass card
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 12,
+                        set_spacing: 16,
+                        add_css_class: "glass-card",
                         #[watch]
                         set_visible: model.show.as_ref().and_then(|s| s.overview.as_ref()).is_some(),
 
@@ -250,6 +279,7 @@ impl AsyncComponent for ShowDetailsPage {
                             set_halign: gtk::Align::Start,
                             set_wrap: true,
                             set_selectable: true,
+                            add_css_class: "overview-text",
                             #[watch]
                             set_label: &model.show.as_ref()
                                 .and_then(|s| s.overview.clone())
@@ -663,9 +693,9 @@ fn create_episode_card(
 ) -> gtk::Box {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
-        .width_request(200)
-        .css_classes(["card"])
+        .spacing(0)
+        .width_request(220)
+        .css_classes(["episode-card-modern", "interactive-element"])
         .build();
 
     // Make the card clickable
@@ -680,74 +710,78 @@ fn create_episode_card(
     card.set_cursor_from_name(Some("pointer"));
 
     // Episode thumbnail with number overlay
-    let overlay = gtk::Overlay::new();
+    let overlay = gtk::Overlay::builder()
+        .css_classes(["episode-thumbnail"])
+        .build();
 
     let picture = gtk::Picture::builder()
-        .width_request(200)
-        .height_request(112)
+        .width_request(220)
+        .height_request(124)
         .content_fit(gtk::ContentFit::Cover)
         .build();
 
-    if let Some(thumbnail_url) = &episode.thumbnail_url {
-        if let Ok(pixbuf) = gtk::gdk_pixbuf::Pixbuf::from_file_at_size(thumbnail_url, 200, 112) {
-            let texture = gtk::gdk::Texture::for_pixbuf(&pixbuf);
-            picture.set_paintable(Some(&texture));
-        }
-    }
-
     overlay.set_child(Some(&picture));
 
-    // Episode number badge
+    // Episode number badge with modern styling
     let badge = gtk::Label::builder()
         .label(&format!("E{}", episode.episode_number))
         .css_classes(["osd", "pill"])
         .halign(gtk::Align::Start)
         .valign(gtk::Align::Start)
-        .margin_top(6)
-        .margin_start(6)
+        .margin_top(8)
+        .margin_start(8)
         .build();
     overlay.add_overlay(&badge);
 
-    // Progress bar if partially watched
+    // Modern progress bar if partially watched
     if let Some(position) = episode.playback_position {
         if position.as_secs() > 0 && !episode.watched {
-            let progress = gtk::ProgressBar::builder()
+            let progress_container = gtk::Box::builder()
+                .css_classes(["episode-progress-bar"])
                 .valign(gtk::Align::End)
-                .css_classes(["osd"])
-                .fraction(position.as_secs_f64() / episode.duration.as_secs_f64())
                 .build();
-            overlay.add_overlay(&progress);
+
+            let progress = gtk::Box::builder()
+                .css_classes(["progress"])
+                .width_request(
+                    (220.0 * position.as_secs_f64() / episode.duration.as_secs_f64()) as i32,
+                )
+                .build();
+
+            progress_container.append(&progress);
+            overlay.add_overlay(&progress_container);
         }
     }
 
-    // Watched indicator
+    // Watched indicator with modern styling
     if episode.watched {
         let check = gtk::Image::builder()
             .icon_name("object-select-symbolic")
-            .css_classes(["osd"])
+            .css_classes(["osd", "fade-in-scale"])
             .halign(gtk::Align::End)
             .valign(gtk::Align::Start)
-            .margin_top(6)
-            .margin_end(6)
+            .margin_top(8)
+            .margin_end(8)
+            .pixel_size(20)
             .build();
         overlay.add_overlay(&check);
     }
 
-    // Episode info
+    // Episode info with glass effect
     let info_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(3)
-        .margin_top(6)
-        .margin_bottom(6)
-        .margin_start(6)
-        .margin_end(6)
+        .spacing(4)
+        .margin_top(12)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
         .build();
 
     let title = gtk::Label::builder()
         .label(&episode.title)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .xalign(0.0)
-        .css_classes(["caption-heading"])
+        .css_classes(["subtitle-hero", "caption-heading"])
         .build();
 
     let duration = episode.duration.as_secs() / 60;
@@ -755,6 +789,7 @@ fn create_episode_card(
         .label(&format!("{}m", duration))
         .xalign(0.0)
         .css_classes(["dim-label", "caption"])
+        .opacity(0.8)
         .build();
 
     info_box.append(&title);

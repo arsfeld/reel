@@ -61,33 +61,40 @@ impl AsyncComponent for MovieDetailsPage {
             gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
 
-                // Hero Section with full-bleed backdrop
+                // Hero Section with full-bleed backdrop and Ken Burns effect
                 gtk::Overlay {
-                    set_height_request: 550,  // Taller for more immersive feel
+                    set_height_request: 600,  // Even taller for cinematic feel
+                    add_css_class: "hero-section",
 
-                    // Backdrop image - full bleed
+                    // Backdrop image with Ken Burns animation
                     gtk::Picture {
                         set_content_fit: gtk::ContentFit::Cover,
+                        add_css_class: "hero-backdrop",
                         #[watch]
                         set_paintable: model.backdrop_texture.as_ref(),
+                        #[watch]
+                        set_visible: !model.loading,
                     },
 
-                    // Stronger gradient overlay for better text contrast
+                    // Enhanced gradient overlay with glass morphism
                     add_overlay = &gtk::Box {
-                        add_css_class: "hero-gradient",
+                        add_css_class: "hero-gradient-modern",
                         set_valign: gtk::Align::End,
+                        #[watch]
+                        set_visible: !model.loading,
 
                         gtk::Box {
                             set_orientation: gtk::Orientation::Horizontal,
                             set_margin_all: 32,
                             set_spacing: 32,
 
-                            // Larger poster
+                            // Premium poster with depth effect
                             gtk::Picture {
-                                set_width_request: 300,  // Increased from 200
-                                set_height_request: 450, // Increased from 300
+                                set_width_request: 300,
+                                set_height_request: 450,
                                 add_css_class: "card",
-                                add_css_class: "poster-shadow",
+                                add_css_class: "poster-premium",
+                                add_css_class: "fade-in-scale",
                                 #[watch]
                                 set_paintable: model.poster_texture.as_ref(),
                             },
@@ -99,23 +106,26 @@ impl AsyncComponent for MovieDetailsPage {
                                 set_spacing: 12,
                                 set_hexpand: true,
 
-                                // Title
+                                // Title with hero typography
                                 gtk::Label {
                                     set_halign: gtk::Align::Start,
-                                    add_css_class: "title-1",
+                                    add_css_class: "title-hero",
+                                    add_css_class: "fade-in-up",
                                     set_wrap: true,
                                     #[watch]
                                     set_label: &model.movie.as_ref().map(|m| m.title.clone()).unwrap_or_default(),
                                 },
 
-                                // Metadata pills row
+                                // Metadata pills row with modern styling
                                 gtk::Box {
                                     set_orientation: gtk::Orientation::Horizontal,
-                                    set_spacing: 8,
+                                    set_spacing: 12,
+                                    add_css_class: "stagger-animation",
 
-                                    // Year pill
+                                    // Year pill with modern glass effect
                                     gtk::Box {
-                                        add_css_class: "metadata-pill",
+                                        add_css_class: "metadata-pill-modern",
+                                        add_css_class: "interactive-element",
                                         #[watch]
                                         set_visible: model.movie.as_ref().and_then(|m| m.year).is_some(),
 
@@ -131,9 +141,11 @@ impl AsyncComponent for MovieDetailsPage {
                                         },
                                     },
 
-                                    // Rating pill
+                                    // Rating pill with star gradient
                                     gtk::Box {
-                                        add_css_class: "metadata-pill",
+                                        add_css_class: "metadata-pill-modern",
+                                        add_css_class: "rating-pill",
+                                        add_css_class: "interactive-element",
                                         set_spacing: 6,
                                         #[watch]
                                         set_visible: model.movie.as_ref().and_then(|m| m.rating).is_some(),
@@ -154,9 +166,10 @@ impl AsyncComponent for MovieDetailsPage {
                                         }
                                     },
 
-                                    // Duration pill
+                                    // Duration pill with modern effect
                                     gtk::Box {
-                                        add_css_class: "metadata-pill",
+                                        add_css_class: "metadata-pill-modern",
+                                        add_css_class: "interactive-element",
                                         #[watch]
                                         set_visible: model.movie.is_some(),
 
@@ -188,8 +201,8 @@ impl AsyncComponent for MovieDetailsPage {
                                     set_spacing: 12,
 
                                     gtk::Button {
-                                        add_css_class: "suggested-action",
-                                        add_css_class: "pill",
+                                        add_css_class: "action-button-primary",
+                                        add_css_class: "ripple",
                                         set_can_focus: true,
 
                                         adw::ButtonContent {
@@ -209,7 +222,8 @@ impl AsyncComponent for MovieDetailsPage {
                                     },
 
                                     gtk::Button {
-                                        add_css_class: "flat",
+                                        add_css_class: "action-button-secondary",
+                                        add_css_class: "interactive-element",
 
                                         gtk::Image {
                                             #[watch]
@@ -230,11 +244,14 @@ impl AsyncComponent for MovieDetailsPage {
                     },
                 },
 
-                // Content section
+                // Content section with animations
                 gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
-                    set_margin_all: 24,
-                    set_spacing: 24,
+                    set_margin_all: 32,
+                    set_spacing: 32,
+                    add_css_class: "fade-in-up",
+                    #[watch]
+                    set_visible: !model.loading,
 
                     // Genres
                     gtk::Box {
@@ -246,10 +263,11 @@ impl AsyncComponent for MovieDetailsPage {
                         append: &model.genre_box,
                     },
 
-                    // Overview
+                    // Overview with glass card
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 12,
+                        set_spacing: 16,
+                        add_css_class: "glass-card",
                         #[watch]
                         set_visible: model.movie.as_ref().and_then(|m| m.overview.as_ref()).is_some(),
 
@@ -263,6 +281,7 @@ impl AsyncComponent for MovieDetailsPage {
                             set_halign: gtk::Align::Start,
                             set_wrap: true,
                             set_selectable: true,
+                            add_css_class: "overview-text",
                             #[watch]
                             set_label: &model.movie.as_ref()
                                 .and_then(|m| m.overview.clone())
@@ -302,11 +321,13 @@ impl AsyncComponent for MovieDetailsPage {
     ) -> AsyncComponentParts<Self> {
         let genre_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
+            .spacing(8)
+            .css_classes(["stagger-animation"])
             .build();
         let cast_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
+            .spacing(16)
+            .css_classes(["stagger-animation"])
             .build();
 
         let model = Self {
@@ -413,10 +434,17 @@ impl AsyncComponent for MovieDetailsPage {
                             }
 
                             for genre in &movie.genres {
-                                let pill = gtk::Label::builder()
-                                    .label(genre)
-                                    .css_classes(["pill"])
+                                let pill = gtk::Box::builder()
+                                    .css_classes(["metadata-pill-modern", "interactive-element"])
                                     .build();
+                                let label = gtk::Label::builder()
+                                    .label(genre)
+                                    .margin_start(12)
+                                    .margin_end(12)
+                                    .margin_top(6)
+                                    .margin_bottom(6)
+                                    .build();
+                                pill.append(&label);
                                 self.genre_box.append(&pill);
                             }
 
@@ -507,42 +535,57 @@ async fn load_image_from_url(
 fn create_person_card(person: &Person) -> gtk::Box {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
-        .width_request(100)
-        .css_classes(["card"])
+        .spacing(0)
+        .width_request(120)
+        .css_classes(["cast-card-modern", "interactive-element"])
         .build();
 
     // Person image or placeholder
     let picture = gtk::Picture::builder()
-        .width_request(100)
-        .height_request(100)
+        .width_request(120)
+        .height_request(120)
         .content_fit(gtk::ContentFit::Cover)
         .build();
 
     if let Some(image_url) = &person.image_url {
-        if let Ok(pixbuf) = gtk::gdk_pixbuf::Pixbuf::from_file_at_size(image_url, 100, 100) {
+        if let Ok(pixbuf) = gtk::gdk_pixbuf::Pixbuf::from_file_at_size(image_url, 120, 120) {
             let texture = gtk::gdk::Texture::for_pixbuf(&pixbuf);
             picture.set_paintable(Some(&texture));
         }
     }
 
+    // Info container with gradient background
+    let info_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .css_classes(["cast-info"])
+        .margin_start(8)
+        .margin_end(8)
+        .margin_top(8)
+        .margin_bottom(8)
+        .build();
+
     let name = gtk::Label::builder()
         .label(&person.name)
         .ellipsize(gtk::pango::EllipsizeMode::End)
-        .css_classes(["caption"])
+        .css_classes(["caption-heading"])
+        .xalign(0.0)
         .build();
 
     let role = gtk::Label::builder()
         .label(person.role.as_deref().unwrap_or(""))
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .css_classes(["dim-label", "caption"])
+        .xalign(0.0)
         .build();
 
-    card.append(&picture);
-    card.append(&name);
+    info_box.append(&name);
     if person.role.is_some() {
-        card.append(&role);
+        info_box.append(&role);
     }
+
+    card.append(&picture);
+    card.append(&info_box);
 
     card
 }

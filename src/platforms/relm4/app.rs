@@ -22,9 +22,11 @@ impl ReelApp {
         let style_manager = adw::StyleManager::default();
         style_manager.set_color_scheme(adw::ColorScheme::ForceDark);
 
+        // Load details page CSS
+        let details_css = include_str!("styles/details.css");
+
         // Set global CSS matching GTK library styles exactly
-        relm4::set_global_css(
-            r#"
+        let base_css = r#"
             /* Typography Classes from GTK */
             .title-1 {
                 font-size: 32pt;
@@ -372,8 +374,48 @@ impl ReelApp {
                 background-color: black;
                 padding: 0;
             }
-            "#,
-        );
+
+            /* Hero Section Gradient Overlay */
+            .hero-gradient {
+                background: linear-gradient(to bottom,
+                            transparent 0%,
+                            transparent 30%,
+                            rgba(0, 0, 0, 0.1) 40%,
+                            rgba(0, 0, 0, 0.3) 50%,
+                            rgba(0, 0, 0, 0.5) 60%,
+                            rgba(0, 0, 0, 0.7) 70%,
+                            rgba(0, 0, 0, 0.85) 80%,
+                            rgba(0, 0, 0, 0.95) 90%,
+                            rgba(0, 0, 0, 0.98) 100%);
+                min-height: 100%;
+            }
+
+            /* Enhanced Poster Shadow for Details Page */
+            .poster-shadow {
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8),
+                           0 5px 20px rgba(0, 0, 0, 0.6),
+                           0 2px 8px rgba(0, 0, 0, 0.4),
+                           inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            }
+
+            /* Metadata Pills Styling */
+            .metadata-pill {
+                background: rgba(255, 255, 255, 0.1);
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 999px;
+                transition: all 200ms ease-in-out;
+            }
+
+            .metadata-pill:hover {
+                background: rgba(255, 255, 255, 0.15);
+                transform: translateY(-1px);
+            }
+            "#;
+
+        // Combine base CSS with details CSS
+        let combined_css = format!("{}{}", base_css, details_css);
+        relm4::set_global_css(&combined_css);
 
         // Initialize database in a blocking context first
         let db = tokio::runtime::Runtime::new().unwrap().block_on(async {
