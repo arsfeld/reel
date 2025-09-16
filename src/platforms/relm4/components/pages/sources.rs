@@ -59,6 +59,7 @@ pub enum SourcesPageOutput {
 pub struct SourceListItem {
     source: Source,
     is_syncing: bool,
+    sync_progress: Option<(usize, usize)>,
 }
 
 #[derive(Debug)]
@@ -204,6 +205,7 @@ impl FactoryComponent for SourceListItem {
         Self {
             source,
             is_syncing: false,
+            sync_progress: None,
         }
     }
 
@@ -503,13 +505,32 @@ impl AsyncComponent for SourcesPage {
 
             SourcesPageInput::BrokerMsg(msg) => {
                 match msg {
-                    BrokerMessage::Source(SourceMessage::SyncStarted { source_id, .. }) => {
+                    BrokerMessage::Source(SourceMessage::SyncStarted {
+                        source_id,
+                        total_items,
+                    }) => {
                         info!("Sync started for source: {}", source_id);
                         // Update UI to show sync in progress
                         let mut factory_guard = self.sources_factory.guard();
                         for item in factory_guard.iter_mut() {
                             if item.source.id == source_id {
                                 item.is_syncing = true;
+                                if let Some(total) = total_items {
+                                    item.sync_progress = Some((0, total));
+                                }
+                            }
+                        }
+                    }
+                    BrokerMessage::Source(SourceMessage::SyncProgress {
+                        source_id,
+                        current,
+                        total,
+                    }) => {
+                        // Update sync progress
+                        let mut factory_guard = self.sources_factory.guard();
+                        for item in factory_guard.iter_mut() {
+                            if item.source.id == source_id {
+                                item.sync_progress = Some((current, total));
                             }
                         }
                     }
@@ -520,6 +541,7 @@ impl AsyncComponent for SourcesPage {
                         for item in factory_guard.iter_mut() {
                             if item.source.id == source_id {
                                 item.is_syncing = false;
+                                item.sync_progress = None;
                             }
                         }
                         // Reload sources to get updated data

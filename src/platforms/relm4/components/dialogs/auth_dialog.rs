@@ -476,11 +476,11 @@ impl AsyncComponent for AuthDialog {
                 info!("Showing auth dialog");
                 self.is_visible = true;
 
-                // Try to get the application and window
+                // Try to get the application and window to make dialog modal
                 if let Some(app) = relm4::main_application().downcast_ref::<adw::Application>() {
-                    info!("Got application");
                     if let Some(window) = app.active_window() {
-                        info!("Got active window, presenting dialog");
+                        info!("Got active window, presenting dialog as modal");
+                        // Present as modal dialog attached to main window
                         self.dialog.present(Some(&window));
                     } else {
                         info!("No active window found, presenting without parent");

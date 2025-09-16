@@ -109,14 +109,32 @@ impl AuthService {
 
         // Use the provided server URL
 
+        // Create source type enum first (before moving source_type)
+        // Note: For Plex, the machine_id will be updated later during discovery
+        // because we don't have the server's client_identifier at this point
+        let source_type_enum = match source_type.as_str() {
+            "plex" => SourceType::PlexServer {
+                machine_id: String::new(), // Will be populated during discovery
+                owned: true,
+            },
+            "jellyfin" => SourceType::JellyfinServer,
+            "local" => SourceType::LocalFolder {
+                path: std::path::PathBuf::from("/"),
+            },
+            _ => SourceType::PlexServer {
+                machine_id: String::new(),
+                owned: true,
+            },
+        };
+
         // Save to database
         let repo = SourceRepositoryImpl::new(db.clone());
         let entity = SourceModel {
             id: source_id.to_string(),
-            name,
+            name: name.clone(),
             source_type,
             auth_provider_id: Some(user.id.clone()),
-            connection_url: server_url,
+            connection_url: server_url.clone(),
             connections: None, // Will be populated later by connection discovery
             machine_id: None,  // Will be set for Plex servers
             is_owned: true,    // Default to owned
@@ -129,14 +147,10 @@ impl AuthService {
             updated_at: chrono::Utc::now().naive_utc(),
         };
 
-        // Create source model for return
         let source = Source {
             id: source_id.to_string(),
             name: entity.name.clone(),
-            source_type: SourceType::PlexServer {
-                machine_id: user.id.clone(),
-                owned: true,
-            },
+            source_type: source_type_enum,
             auth_provider_id: entity.auth_provider_id.clone(),
             connection_info: ConnectionInfo {
                 primary_url: entity.connection_url.clone(),

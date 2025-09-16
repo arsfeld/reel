@@ -217,9 +217,62 @@
     background: rgba(255, 255, 255, 0.15);
 }
 
-/* Circular play/pause button - perfectly round and centered */
-.player-controls button.circular,
-button.circular {
+/* Play/pause button container - enforces square aspect ratio */
+.play-pause-container {
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+    min-height: 40px !important;
+    max-width: 40px !important;
+    max-height: 40px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+/* Play/pause button - perfectly circular */
+.play-pause-button {
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+    min-height: 40px !important;
+    max-width: 40px !important;
+    max-height: 40px !important;
+    border-radius: 20px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    transition: all 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.play-pause-button:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.1);
+    transform: scale(1.06);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.play-pause-button:active {
+    transform: scale(0.97);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+/* Ensure play/pause icon is centered */
+.play-pause-button image {
+    margin: 0 !important;
+    padding: 0 !important;
+    min-width: 16px;
+    min-height: 16px;
+    max-width: 16px;
+    max-height: 16px;
+}
+
+/* Other circular buttons (not play/pause) */
+.player-controls button.circular:not(.play-pause-button),
+button.circular:not(.play-pause-button) {
     border-radius: 50% !important;
     width: 38px !important;
     height: 38px !important;
@@ -235,8 +288,8 @@ button.circular {
     color: rgba(255, 255, 255, 0.85);
 }
 
-.player-controls button.circular:hover,
-button.circular:hover {
+.player-controls button.circular:not(.play-pause-button):hover,
+button.circular:not(.play-pause-button):hover {
     background: rgba(255, 255, 255, 0.12);
     border-color: rgba(255, 255, 255, 0.1);
     transform: scale(1.06);
@@ -244,15 +297,15 @@ button.circular:hover {
     color: rgba(255, 255, 255, 0.95);
 }
 
-.player-controls button.circular:active,
-button.circular:active {
+.player-controls button.circular:not(.play-pause-button):active,
+button.circular:not(.play-pause-button):active {
     transform: scale(0.97);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
-/* Ensure play/pause icon is centered and sized correctly */
-.player-controls button.circular image,
-button.circular image {
+/* Ensure other circular button icons are centered */
+.player-controls button.circular:not(.play-pause-button) image,
+button.circular:not(.play-pause-button) image {
     margin: 0 !important;
     padding: 0 !important;
     min-width: 16px;
