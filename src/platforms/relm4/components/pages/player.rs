@@ -65,6 +65,8 @@ pub struct PlayerPage {
     config_auto_resume: bool,
     config_resume_threshold_seconds: u64,
     config_progress_update_interval_seconds: u64,
+    // Playback state
+    playback_speed: f64,
 }
 
 impl PlayerPage {
@@ -138,6 +140,24 @@ pub enum PlayerInput {
     ShowError(String),
     EscapePressed,
     NavigateBack,
+    // Speed controls
+    SpeedUp,
+    SpeedDown,
+    SpeedReset,
+    // Frame stepping
+    FrameStepForward,
+    FrameStepBackward,
+    // Audio controls
+    ToggleMute,
+    VolumeUp,
+    VolumeDown,
+    // Track cycling
+    CycleSubtitleTrack,
+    CycleAudioTrack,
+    // Control visibility
+    ToggleControlsVisibility,
+    // Relative seeking
+    SeekRelative(i64), // Positive for forward, negative for backward
 }
 
 #[derive(Debug, Clone)]
@@ -576,6 +596,7 @@ impl AsyncComponent for PlayerPage {
                 .playback
                 .progress_update_interval_seconds
                 as u64,
+            playback_speed: 1.0,
         };
 
         // Initialize the player controller
@@ -686,19 +707,130 @@ impl AsyncComponent for PlayerPage {
             let sender_for_escape = sender.clone();
             let sender_for_fullscreen_check = sender.clone();
             let key_controller = gtk::EventControllerKey::new();
-            key_controller.connect_key_pressed(move |_, key, _, _| {
+            key_controller.connect_key_pressed(move |controller, key, _keycode, modifiers| {
+                use gtk::gdk::ModifierType;
+
+                // Check modifier keys
+                let shift_pressed = modifiers.contains(ModifierType::SHIFT_MASK);
+                let ctrl_pressed = modifiers.contains(ModifierType::CONTROL_MASK);
+
                 match key {
+                    // Fullscreen controls
                     gtk::gdk::Key::F11 | gtk::gdk::Key::f => {
                         sender.input(PlayerInput::ToggleFullscreen);
                         glib::Propagation::Stop
                     }
+                    // Playback controls
                     gtk::gdk::Key::space => {
                         sender.input(PlayerInput::PlayPause);
                         glib::Propagation::Stop
                     }
-                    gtk::gdk::Key::Escape => {
-                        // ESC key behavior: exit fullscreen if fullscreen, otherwise go back
+                    // Quit/Stop
+                    gtk::gdk::Key::Escape | gtk::gdk::Key::q => {
                         sender_for_fullscreen_check.input(PlayerInput::EscapePressed);
+                        glib::Propagation::Stop
+                    }
+                    // Seeking controls
+                    gtk::gdk::Key::Left => {
+                        if ctrl_pressed {
+                            // Ctrl+Left: seek back 10s
+                            sender.input(PlayerInput::SeekRelative(-10));
+                        } else if shift_pressed {
+                            // Shift+Left: seek back 1s
+                            sender.input(PlayerInput::SeekRelative(-1));
+                        } else {
+                            // Left: seek back 5s (default)
+                            sender.input(PlayerInput::SeekRelative(-5));
+                        }
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::Right => {
+                        if ctrl_pressed {
+                            // Ctrl+Right: seek forward 10s
+                            sender.input(PlayerInput::SeekRelative(10));
+                        } else if shift_pressed {
+                            // Shift+Right: seek forward 1s
+                            sender.input(PlayerInput::SeekRelative(1));
+                        } else {
+                            // Right: seek forward 5s (default)
+                            sender.input(PlayerInput::SeekRelative(5));
+                        }
+                        glib::Propagation::Stop
+                    }
+                    // Speed controls
+                    gtk::gdk::Key::bracketleft => {
+                        // [ key: speed down
+                        sender.input(PlayerInput::SpeedDown);
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::bracketright => {
+                        // ] key: speed up
+                        sender.input(PlayerInput::SpeedUp);
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::BackSpace => {
+                        // Backspace: reset speed
+                        sender.input(PlayerInput::SpeedReset);
+                        glib::Propagation::Stop
+                    }
+                    // Volume controls
+                    gtk::gdk::Key::_9 => {
+                        // 9: volume down by 10%
+                        sender.input(PlayerInput::VolumeDown);
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::_0 => {
+                        // 0: volume up by 10%
+                        sender.input(PlayerInput::VolumeUp);
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::m => {
+                        // m: toggle mute
+                        sender.input(PlayerInput::ToggleMute);
+                        glib::Propagation::Stop
+                    }
+                    // Frame stepping
+                    gtk::gdk::Key::period => {
+                        // . key: frame step forward
+                        sender.input(PlayerInput::FrameStepForward);
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::comma => {
+                        // , key: frame step backward
+                        sender.input(PlayerInput::FrameStepBackward);
+                        glib::Propagation::Stop
+                    }
+                    // Subtitle controls
+                    gtk::gdk::Key::v => {
+                        // v: cycle subtitles
+                        sender.input(PlayerInput::CycleSubtitleTrack);
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::j => {
+                        if shift_pressed {
+                            // Shift+J: cycle subtitle track backward (same as v for simplicity)
+                            sender.input(PlayerInput::CycleSubtitleTrack);
+                        } else {
+                            // j: cycle subtitle track forward
+                            sender.input(PlayerInput::CycleSubtitleTrack);
+                        }
+                        glib::Propagation::Stop
+                    }
+                    // Audio track cycling
+                    gtk::gdk::Key::numbersign => {
+                        // # key: cycle audio track
+                        sender.input(PlayerInput::CycleAudioTrack);
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::_3 if shift_pressed => {
+                        // Shift+3 (also #): cycle audio track
+                        sender.input(PlayerInput::CycleAudioTrack);
+                        glib::Propagation::Stop
+                    }
+                    // Controls visibility
+                    gtk::gdk::Key::Tab => {
+                        // Tab: toggle controls visibility
+                        sender.input(PlayerInput::ToggleControlsVisibility);
                         glib::Propagation::Stop
                     }
                     _ => glib::Propagation::Proceed,
@@ -1269,6 +1401,142 @@ impl AsyncComponent for PlayerPage {
                     new_position
                 };
                 sender.input(PlayerInput::Seek(final_position));
+            }
+            PlayerInput::SeekRelative(seconds) => {
+                // Relative seeking: positive for forward, negative for backward
+                let duration = if seconds >= 0 {
+                    Duration::from_secs(seconds as u64)
+                } else {
+                    Duration::from_secs((-seconds) as u64)
+                };
+
+                let new_position = if seconds >= 0 {
+                    // Forward seek
+                    let pos = self.position + duration;
+                    // Clamp to duration
+                    if pos > self.duration {
+                        self.duration
+                    } else {
+                        pos
+                    }
+                } else {
+                    // Backward seek
+                    self.position.saturating_sub(duration)
+                };
+
+                sender.input(PlayerInput::Seek(new_position));
+            }
+            PlayerInput::SpeedUp => {
+                // Increase playback speed by 10%
+                self.playback_speed = (self.playback_speed * 1.1).min(4.0); // Cap at 4x speed
+                if let Some(player) = &self.player {
+                    let player_handle = player.clone();
+                    let speed = self.playback_speed;
+                    sender.oneshot_command(async move {
+                        player_handle.set_playback_speed(speed).await.ok();
+                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    });
+                }
+            }
+            PlayerInput::SpeedDown => {
+                // Decrease playback speed by 10%
+                self.playback_speed = (self.playback_speed * 0.9).max(0.25); // Min 0.25x speed
+                if let Some(player) = &self.player {
+                    let player_handle = player.clone();
+                    let speed = self.playback_speed;
+                    sender.oneshot_command(async move {
+                        player_handle.set_playback_speed(speed).await.ok();
+                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    });
+                }
+            }
+            PlayerInput::SpeedReset => {
+                // Reset playback speed to normal
+                self.playback_speed = 1.0;
+                if let Some(player) = &self.player {
+                    let player_handle = player.clone();
+                    sender.oneshot_command(async move {
+                        player_handle.set_playback_speed(1.0).await.ok();
+                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    });
+                }
+            }
+            PlayerInput::FrameStepForward => {
+                // Step one frame forward (while paused)
+                if self.player_state == PlayerState::Paused {
+                    if let Some(player) = &self.player {
+                        let player_handle = player.clone();
+                        sender.oneshot_command(async move {
+                            player_handle.frame_step_forward().await.ok();
+                            PlayerCommandOutput::StateChanged(PlayerState::Paused)
+                        });
+                    }
+                }
+            }
+            PlayerInput::FrameStepBackward => {
+                // Step one frame backward (while paused)
+                if self.player_state == PlayerState::Paused {
+                    if let Some(player) = &self.player {
+                        let player_handle = player.clone();
+                        sender.oneshot_command(async move {
+                            player_handle.frame_step_backward().await.ok();
+                            PlayerCommandOutput::StateChanged(PlayerState::Paused)
+                        });
+                    }
+                }
+            }
+            PlayerInput::ToggleMute => {
+                // Toggle mute state
+                if let Some(player) = &self.player {
+                    let player_handle = player.clone();
+                    sender.oneshot_command(async move {
+                        player_handle.toggle_mute().await.ok();
+                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    });
+                }
+            }
+            PlayerInput::VolumeUp => {
+                // Increase volume by 10%
+                let new_volume = (self.volume + 0.1).min(1.0);
+                self.volume = new_volume;
+                self.volume_slider.set_value(new_volume);
+                sender.input(PlayerInput::SetVolume(new_volume));
+            }
+            PlayerInput::VolumeDown => {
+                // Decrease volume by 10%
+                let new_volume = (self.volume - 0.1).max(0.0);
+                self.volume = new_volume;
+                self.volume_slider.set_value(new_volume);
+                sender.input(PlayerInput::SetVolume(new_volume));
+            }
+            PlayerInput::CycleSubtitleTrack => {
+                // Cycle through available subtitle tracks
+                if let Some(player) = &self.player {
+                    let player_handle = player.clone();
+                    sender.oneshot_command(async move {
+                        player_handle.cycle_subtitle_track().await.ok();
+                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    });
+                }
+            }
+            PlayerInput::CycleAudioTrack => {
+                // Cycle through available audio tracks
+                if let Some(player) = &self.player {
+                    let player_handle = player.clone();
+                    sender.oneshot_command(async move {
+                        player_handle.cycle_audio_track().await.ok();
+                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    });
+                }
+            }
+            PlayerInput::ToggleControlsVisibility => {
+                // Toggle controls visibility
+                self.show_controls = !self.show_controls;
+                if self.show_controls {
+                    // Reset timer when showing controls
+                    sender.input(PlayerInput::ResetControlsTimer);
+                    sender.input(PlayerInput::ResetCursorTimer);
+                }
             }
             PlayerInput::RetryLoad => {
                 // Clear the error and retry loading the media
