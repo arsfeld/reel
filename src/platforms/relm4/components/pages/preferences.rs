@@ -88,134 +88,135 @@ impl AsyncComponent for PreferencesPage {
                             }
                         },
 
-                        // Hardware Acceleration
-                        add = &adw::ActionRow {
-                            set_title: "Hardware Acceleration",
-                            set_subtitle: "Enable GPU acceleration for video playback",
+                        // Hardware Acceleration - HIDDEN
+                        // add = &adw::ActionRow {
+                        //     set_title: "Hardware Acceleration",
+                        //     set_subtitle: "Enable GPU acceleration for video playback",
 
-                            add_suffix = &gtk::Switch {
-                                set_active: model.hardware_acceleration,
-                                set_valign: gtk::Align::Center,
-                                connect_active_notify[sender] => move |switch| {
-                                    sender.input(PreferencesInput::SetHardwareAcceleration(switch.is_active()));
-                                }
-                            }
-                        },
+                        //     add_suffix = &gtk::Switch {
+                        //         set_active: model.hardware_acceleration,
+                        //         set_valign: gtk::Align::Center,
+                        //         connect_active_notify[sender] => move |switch| {
+                        //             sender.input(PreferencesInput::SetHardwareAcceleration(switch.is_active()));
+                        //         }
+                        //     }
+                        // },
                     },
 
 
-                    // Library Settings Group
-                    adw::PreferencesGroup {
-                        set_title: "Library",
-                        set_description: Some("Configure library display settings"),
+                    // Library Settings Group - HIDDEN
+                    // adw::PreferencesGroup {
+                    //     set_title: "Library",
+                    //     set_description: Some("Configure library display settings"),
 
-                        // Items Per Page
-                        add = &adw::ActionRow {
-                            set_title: "Items Per Page",
-                            set_subtitle: "Number of items to load at once",
+                    //     // Items Per Page
+                    //     add = &adw::ActionRow {
+                    //         set_title: "Items Per Page",
+                    //         set_subtitle: "Number of items to load at once",
 
-                            add_suffix = &gtk::Box {
-                                set_orientation: gtk::Orientation::Horizontal,
-                                set_spacing: 6,
-                                set_valign: gtk::Align::Center,
+                    //         add_suffix = &gtk::Box {
+                    //             set_orientation: gtk::Orientation::Horizontal,
+                    //             set_spacing: 6,
+                    //             set_valign: gtk::Align::Center,
 
-                                gtk::SpinButton {
-                                    set_adjustment: &gtk::Adjustment::new(
-                                        model.items_per_page as f64,
-                                        12.0,
-                                        100.0,
-                                        12.0,
-                                        12.0,
-                                        0.0,
-                                    ),
-                                    set_value: model.items_per_page as f64,
-                                    connect_value_changed[sender] => move |spin| {
-                                        sender.input(PreferencesInput::SetItemsPerPage(spin.value() as i32));
-                                    }
-                                }
-                            }
-                        },
-                    },
+                    //             gtk::SpinButton {
+                    //                 set_adjustment: &gtk::Adjustment::new(
+                    //                     model.items_per_page as f64,
+                    //                     12.0,
+                    //                     100.0,
+                    //                     12.0,
+                    //                     12.0,
+                    //                     0.0,
+                    //                 ),
+                    //                 set_value: model.items_per_page as f64,
+                    //                 connect_value_changed[sender] => move |spin| {
+                    //                     sender.input(PreferencesInput::SetItemsPerPage(spin.value() as i32));
+                    //                 }
+                    //             }
+                    //         }
+                    //     },
+                    // },
 
-                    // Data & Storage Settings Group
-                    adw::PreferencesGroup {
-                        set_title: "Data & Storage",
-                        set_description: Some("Manage cache and offline content"),
+                    // Data & Storage Settings Group - HIDDEN
+                    // adw::PreferencesGroup {
+                    //     set_title: "Data & Storage",
+                    //     set_description: Some("Manage cache and offline content"),
 
-                        // Cache Size
-                        add = &adw::ActionRow {
-                            set_title: "Cache Size Limit",
-                            set_subtitle: &format!("Currently using {} MB", model.cache_size_mb),
+                    //     // Cache Size
+                    //     add = &adw::ActionRow {
+                    //         set_title: "Cache Size Limit",
+                    //         set_subtitle: &format!("Currently using {} MB", model.cache_size_mb),
 
-                            add_suffix = &gtk::Box {
-                                set_orientation: gtk::Orientation::Horizontal,
-                                set_spacing: 6,
-                                set_valign: gtk::Align::Center,
+                    //         add_suffix = &gtk::Box {
+                    //             set_orientation: gtk::Orientation::Horizontal,
+                    //             set_spacing: 6,
+                    //             set_valign: gtk::Align::Center,
 
-                                gtk::SpinButton {
-                                    set_adjustment: &gtk::Adjustment::new(
-                                        model.cache_size_mb as f64,
-                                        100.0,
-                                        10000.0,
-                                        100.0,
-                                        500.0,
-                                        0.0,
-                                    ),
-                                    set_value: model.cache_size_mb as f64,
-                                    connect_value_changed[sender] => move |spin| {
-                                        sender.input(PreferencesInput::SetCacheSize(spin.value() as i32));
-                                    }
-                                },
+                    //             gtk::SpinButton {
+                    //                 set_adjustment: &gtk::Adjustment::new(
+                    //                     model.cache_size_mb as f64,
+                    //                     100.0,
+                    //                     10000.0,
+                    //                     100.0,
+                    //                     500.0,
+                    //                     0.0,
+                    //                 ),
+                    //                 set_value: model.cache_size_mb as f64,
+                    //                 connect_value_changed[sender] => move |spin| {
+                    //                     sender.input(PreferencesInput::SetCacheSize(spin.value() as i32));
+                    //                 }
+                    //             },
 
-                                gtk::Label {
-                                    set_label: "MB",
-                                    add_css_class: "dim-label",
-                                }
-                            }
-                        },
+                    //             gtk::Label {
+                    //                 set_label: "MB",
+                    //                 add_css_class: "dim-label",
+                    //             }
+                    //         }
+                    //     },
 
-                        // Auto Clean Cache
-                        add = &adw::ActionRow {
-                            set_title: "Auto-clean Cache",
-                            set_subtitle: "Automatically remove old cached data",
+                    //     // Auto Clean Cache
+                    //     add = &adw::ActionRow {
+                    //         set_title: "Auto-clean Cache",
+                    //         set_subtitle: "Automatically remove old cached data",
 
-                            add_suffix = &gtk::Switch {
-                                set_active: model.auto_clean_cache,
-                                set_valign: gtk::Align::Center,
-                                connect_active_notify[sender] => move |switch| {
-                                    sender.input(PreferencesInput::SetAutoCleanCache(switch.is_active()));
-                                }
-                            }
-                        },
+                    //         add_suffix = &gtk::Switch {
+                    //             set_active: model.auto_clean_cache,
+                    //             set_valign: gtk::Align::Center,
+                    //             connect_active_notify[sender] => move |switch| {
+                    //                 sender.input(PreferencesInput::SetAutoCleanCache(switch.is_active()));
+                    //             }
+                    //         }
+                    //     },
 
-                        // Clear Cache Button
-                        add = &adw::ActionRow {
-                            set_title: "Clear Cache",
-                            set_subtitle: "Remove all cached images and data",
+                    //     // Clear Cache Button
+                    //     add = &adw::ActionRow {
+                    //         set_title: "Clear Cache",
+                    //         set_subtitle: "Remove all cached images and data",
 
-                            add_suffix = &gtk::Button {
-                                set_label: "Clear Now",
-                                add_css_class: "destructive-action",
-                                set_valign: gtk::Align::Center,
-                                connect_clicked[sender] => move |_| {
-                                    // TODO: Implement cache clearing
-                                    tracing::info!("Clear cache requested");
-                                }
-                            }
-                        },
-                    },
+                    //         add_suffix = &gtk::Button {
+                    //             set_label: "Clear Now",
+                    //             add_css_class: "destructive-action",
+                    //             set_valign: gtk::Align::Center,
+                    //             connect_clicked[sender] => move |_| {
+                    //                 // TODO: Implement cache clearing
+                    //                 tracing::info!("Clear cache requested");
+                    //             }
+                    //         }
+                    //     },
+                    // },
 
-                    // Actions
+                    // Actions - Keep the save button for player backend preference
                     gtk::Box {
                         set_orientation: gtk::Orientation::Horizontal,
                         set_spacing: 12,
                         set_halign: gtk::Align::End,
                         set_margin_top: 24,
 
-                        gtk::Button {
-                            set_label: "Restore Defaults",
-                            connect_clicked => PreferencesInput::RestoreDefaults,
-                        },
+                        // Restore Defaults button - HIDDEN
+                        // gtk::Button {
+                        //     set_label: "Restore Defaults",
+                        //     connect_clicked => PreferencesInput::RestoreDefaults,
+                        // },
 
                         gtk::Button {
                             set_label: "Save",

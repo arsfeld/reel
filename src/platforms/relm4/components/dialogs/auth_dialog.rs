@@ -2,7 +2,7 @@ use gtk4::{glib, prelude::*};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use relm4::component::{AsyncComponent, AsyncComponentParts, AsyncComponentSender};
-use tracing::info;
+use tracing::{error, info};
 
 use crate::backends::MediaBackend;
 use crate::backends::jellyfin::JellyfinBackend;
@@ -33,6 +33,11 @@ pub enum AuthDialogInput {
     RetryPlexAuth,
     OpenPlexLink,
     // Jellyfin inputs
+    UpdateJellyfinUrl(String),
+    UpdateJellyfinUsername(String),
+    UpdateJellyfinPassword(String),
+    ConfirmJellyfinUrl,
+    ChangeJellyfinUrl,
     ConnectJellyfin,
     JellyfinAuthError(String),
     RetryJellyfin,
@@ -72,6 +77,7 @@ pub struct AuthDialog {
 
     // Jellyfin state
     jellyfin_url: String,
+    jellyfin_url_confirmed: bool,
     jellyfin_username: String,
     jellyfin_password: String,
     jellyfin_auth_in_progress: bool,
@@ -125,7 +131,7 @@ impl AsyncComponent for AuthDialog {
         #[name = "dialog"]
         adw::Dialog {
             set_title: "Add Media Source",
-            set_content_width: 500,
+            set_content_width: 700,
             set_content_height: 650,
             set_follows_content_size: true,
             #[wrap(Some)]
@@ -160,7 +166,7 @@ impl AsyncComponent for AuthDialog {
                         set_margin_start: 12,
                         set_margin_end: 12,
 
-                        // Initial state - start button
+                        // Initial state - clean and simple
                         gtk4::Box {
                             set_orientation: gtk4::Orientation::Vertical,
                             set_spacing: 24,
@@ -171,22 +177,27 @@ impl AsyncComponent for AuthDialog {
 
                             adw::StatusPage {
                                 set_icon_name: Some("network-server-symbolic"),
-                                set_title: "Connect to Plex",
-                                set_description: Some("Authenticate with your Plex account to access your media libraries"),
-                            },
+                                set_title: "Connect Your Plex Account",
+                                #[wrap(Some)]
+                                set_child = &gtk4::Box {
+                                    set_orientation: gtk4::Orientation::Vertical,
+                                    set_spacing: 24,
 
-                            gtk4::Box {
-                                set_orientation: gtk4::Orientation::Horizontal,
-                                set_halign: gtk4::Align::Center,
-                                set_spacing: 12,
+                                    gtk4::Label {
+                                        set_label: "Authenticate with Plex to access your media libraries",
+                                        add_css_class: "dim-label",
+                                        set_wrap: true,
+                                        set_justify: gtk4::Justification::Center,
+                                    },
 
-                                gtk4::Button {
-                                    set_label: "Sign in with Plex",
-                                    add_css_class: "suggested-action",
-                                    add_css_class: "pill",
-                                    connect_clicked => AuthDialogInput::StartPlexAuth,
+                                    gtk4::Button {
+                                        set_label: "Sign in with Plex",
+                                        add_css_class: "suggested-action",
+                                        add_css_class: "pill",
+                                        set_halign: gtk4::Align::Center,
+                                        connect_clicked => AuthDialogInput::StartPlexAuth,
+                                    },
                                 },
-
                             },
                         },
 
@@ -267,64 +278,82 @@ impl AsyncComponent for AuthDialog {
 
                         // Manual setup expander
                         adw::PreferencesGroup {
-                            set_title: "Advanced Options",
-                            set_description: Some("Manual server configuration"),
+                            set_title: "Manual Configuration",
+                            set_description: Some("Connect using server URL and auth token"),
                             #[watch]
                             set_visible: !model.plex_auth_in_progress && !model.plex_auth_success && model.plex_auth_error.is_none(),
                             set_margin_top: 24,
 
-                            #[name = "server_url_entry"]
-                            add = &adw::EntryRow {
-                                set_title: "Server URL (optional)",
-                                set_text: &model.plex_server_url,
-                            },
+                            add = &adw::ExpanderRow {
+                                set_title: "Advanced Options",
+                                set_expanded: false,
+                                set_show_enable_switch: false,
 
-                            #[name = "token_entry"]
-                            add = &adw::PasswordEntryRow {
-                                set_title: "Auth Token",
-                                set_text: &model.plex_token,
-                            },
+                                #[name = "server_url_entry"]
+                                add_row = &adw::EntryRow {
+                                    set_title: "Server URL (optional)",
+                                    set_text: &model.plex_server_url,
+                                },
 
-                            add = &adw::ActionRow {
-                                set_title: "Token Location",
-                                set_subtitle: "Find your auth token at plex.tv/api/v2/user",
-                            },
+                                #[name = "token_entry"]
+                                add_row = &adw::PasswordEntryRow {
+                                    set_title: "Auth Token",
+                                    set_text: &model.plex_token,
+                                },
 
-                            add = &adw::ActionRow {
-                                #[wrap(Some)]
-                                set_child = &gtk4::Button {
-                                    set_label: "Connect with Token",
-                                    set_valign: gtk4::Align::Center,
-                                    add_css_class: "suggested-action",
-                                    connect_clicked => AuthDialogInput::ConnectManualPlex,
+                                add_row = &adw::ActionRow {
+                                    set_title: "Token Location",
+                                    set_subtitle: "Find your auth token at plex.tv/api/v2/user",
+                                },
+
+                                add_row = &adw::ActionRow {
+                                    #[wrap(Some)]
+                                    set_child = &gtk4::Button {
+                                        set_label: "Connect with Token",
+                                        set_valign: gtk4::Align::Center,
+                                        add_css_class: "suggested-action",
+                                        connect_clicked => AuthDialogInput::ConnectManualPlex,
+                                    },
                                 },
                             },
                         },
                     },
 
-                    // Jellyfin page with server login
+                    // Jellyfin page - simplified single-step interface
                     add_titled[Some("jellyfin"), "Jellyfin"] = &gtk4::Box {
                         set_orientation: gtk4::Orientation::Vertical,
-                        set_spacing: 12,
+                        set_spacing: 24,
                         set_margin_top: 12,
                         set_margin_bottom: 12,
                         set_margin_start: 12,
                         set_margin_end: 12,
 
-                        // Login form
+                        // Main form - always visible
                         gtk4::Box {
                             set_orientation: gtk4::Orientation::Vertical,
-                            set_spacing: 12,
+                            set_spacing: 24,
                             #[watch]
                             set_visible: !model.jellyfin_auth_in_progress && !model.jellyfin_auth_success && model.jellyfin_auth_error.is_none() && !model.jellyfin_quick_connect_in_progress,
 
+                            // Server URL - always editable
                             adw::PreferencesGroup {
-                                set_title: "Jellyfin Server",
+                                set_title: "Server Configuration",
+                                set_description: Some("Enter your Jellyfin server address"),
 
                                 #[name = "jellyfin_url_entry"]
                                 add = &adw::EntryRow {
                                     set_title: "Server URL",
                                     set_text: &model.jellyfin_url,
+                                    set_input_hints: gtk4::InputHints::NO_SPELLCHECK,
+                                    connect_changed[sender] => move |entry| {
+                                        sender.input(AuthDialogInput::UpdateJellyfinUrl(entry.text().to_string()));
+                                    },
+                                },
+
+                                add = &adw::ActionRow {
+                                    set_title: "Example",
+                                    set_subtitle: "http://192.168.1.100:8096 or https://jellyfin.example.com",
+                                    add_css_class: "property",
                                 },
                             },
 
@@ -333,16 +362,18 @@ impl AsyncComponent for AuthDialog {
                                 set_title: "Quick Connect",
                                 set_description: Some("Sign in without entering username/password"),
                                 #[watch]
-                                set_visible: !model.jellyfin_url.is_empty(),
+                                set_sensitive: !model.jellyfin_url.is_empty(),
 
                                 add = &adw::ActionRow {
-                                    set_title: "Use Quick Connect",
-                                    set_subtitle: "Get a code to authorize from another device",
-                                    #[wrap(Some)]
-                                    set_child = &gtk4::Button {
+                                    set_title: "Authorize with Quick Connect",
+                                    set_subtitle: "Get a code to enter in your Jellyfin dashboard",
+
+                                    add_suffix = &gtk4::Button {
                                         set_label: "Get Code",
                                         set_valign: gtk4::Align::Center,
                                         add_css_class: "suggested-action",
+                                        #[watch]
+                                        set_sensitive: !model.jellyfin_url.is_empty(),
                                         connect_clicked => AuthDialogInput::StartJellyfinQuickConnect,
                                     },
                                 },
@@ -350,36 +381,44 @@ impl AsyncComponent for AuthDialog {
 
                             // Username/Password option
                             adw::PreferencesGroup {
-                                set_title: "Standard Login",
-                                set_description: Some("Sign in with username and password"),
+                                set_title: "Username & Password",
+                                set_description: Some("Traditional login with your Jellyfin credentials"),
                                 #[watch]
-                                set_visible: !model.jellyfin_url.is_empty(),
+                                set_sensitive: !model.jellyfin_url.is_empty(),
 
                                 #[name = "jellyfin_username_entry"]
                                 add = &adw::EntryRow {
                                     set_title: "Username",
                                     set_text: &model.jellyfin_username,
+                                    connect_changed[sender] => move |entry| {
+                                        sender.input(AuthDialogInput::UpdateJellyfinUsername(entry.text().to_string()));
+                                    },
                                 },
 
                                 #[name = "jellyfin_password_entry"]
                                 add = &adw::PasswordEntryRow {
                                     set_title: "Password",
                                     set_text: &model.jellyfin_password,
+                                    connect_changed[sender] => move |entry| {
+                                        sender.input(AuthDialogInput::UpdateJellyfinPassword(entry.text().to_string()));
+                                    },
                                 },
 
                                 add = &adw::ActionRow {
                                     #[wrap(Some)]
                                     set_child = &gtk4::Button {
-                                        set_label: "Connect",
+                                        set_label: "Sign In",
                                         set_valign: gtk4::Align::Center,
                                         add_css_class: "suggested-action",
+                                        #[watch]
+                                        set_sensitive: !model.jellyfin_url.is_empty() && !model.jellyfin_username.is_empty() && !model.jellyfin_password.is_empty() && !model.jellyfin_auth_in_progress,
                                         connect_clicked => AuthDialogInput::ConnectJellyfin,
                                     },
                                 },
                             },
                         },
 
-                        // Quick Connect Code Display
+                        // Quick Connect Code Display - matching Plex PIN style
                         gtk4::Box {
                             set_orientation: gtk4::Orientation::Vertical,
                             set_spacing: 24,
@@ -390,23 +429,51 @@ impl AsyncComponent for AuthDialog {
 
                             adw::StatusPage {
                                 set_icon_name: Some("dialog-password-symbolic"),
-                                set_title: "Enter this code in Jellyfin",
-                                set_description: Some("Sign in on another device and authorize this code"),
+                                set_title: "Quick Connect Code",
                                 #[wrap(Some)]
                                 set_child = &gtk4::Box {
                                     set_orientation: gtk4::Orientation::Vertical,
-                                    set_spacing: 12,
+                                    set_spacing: 20,
+
+                                    gtk4::Label {
+                                        set_label: "Enter this code in your Jellyfin dashboard:",
+                                        add_css_class: "dim-label",
+                                        set_wrap: true,
+                                        set_justify: gtk4::Justification::Center,
+                                    },
 
                                     #[name = "jellyfin_quick_connect_code_label"]
                                     gtk4::Label {
                                         add_css_class: "title-1",
+                                        add_css_class: "accent",
                                         #[watch]
                                         set_label: &model.jellyfin_quick_connect_code.as_ref().unwrap_or(&String::new()),
                                     },
 
-                                    gtk4::Label {
-                                        set_label: "Waiting for authorization...",
-                                        add_css_class: "dim-label",
+                                    gtk4::Box {
+                                        set_orientation: gtk4::Orientation::Vertical,
+                                        set_spacing: 8,
+
+                                        gtk4::Label {
+                                            set_markup: "1. Go to your Jellyfin server's <b>Dashboard → Users</b>",
+                                            add_css_class: "dim-label",
+                                            add_css_class: "caption",
+                                            set_halign: gtk4::Align::Start,
+                                        },
+
+                                        gtk4::Label {
+                                            set_markup: "2. Click on <b>Quick Connect</b>",
+                                            add_css_class: "dim-label",
+                                            add_css_class: "caption",
+                                            set_halign: gtk4::Align::Start,
+                                        },
+
+                                        gtk4::Label {
+                                            set_markup: "3. Enter the code above and <b>Authorize</b>",
+                                            add_css_class: "dim-label",
+                                            add_css_class: "caption",
+                                            set_halign: gtk4::Align::Start,
+                                        },
                                     },
 
                                     #[name = "jellyfin_quick_connect_progress"]
@@ -414,6 +481,12 @@ impl AsyncComponent for AuthDialog {
                                         set_margin_top: 24,
                                         #[watch]
                                         set_pulse_step: if model.jellyfin_quick_connect_in_progress { 0.1 } else { 0.0 },
+                                    },
+
+                                    gtk4::Label {
+                                        set_label: "Waiting for authorization...",
+                                        add_css_class: "dim-label",
+                                        add_css_class: "caption",
                                     },
 
                                     gtk4::Button {
@@ -501,6 +574,7 @@ impl AsyncComponent for AuthDialog {
 
             // Jellyfin state
             jellyfin_url: String::new(),
+            jellyfin_url_confirmed: false,
             jellyfin_username: String::new(),
             jellyfin_password: String::new(),
             jellyfin_auth_in_progress: false,
@@ -856,11 +930,29 @@ impl AsyncComponent for AuthDialog {
                 );
             }
 
+            AuthDialogInput::UpdateJellyfinUrl(url) => {
+                self.jellyfin_url = url;
+            }
+
+            AuthDialogInput::UpdateJellyfinUsername(username) => {
+                self.jellyfin_username = username;
+            }
+
+            AuthDialogInput::UpdateJellyfinPassword(password) => {
+                self.jellyfin_password = password;
+            }
+
+            AuthDialogInput::ConfirmJellyfinUrl => {
+                // No longer used in simplified interface
+            }
+
+            AuthDialogInput::ChangeJellyfinUrl => {
+                // No longer used in simplified interface
+            }
+
             AuthDialogInput::ConnectJellyfin => {
                 info!("Connecting to Jellyfin");
-                self.jellyfin_url = self.jellyfin_url_entry.text().to_string();
-                self.jellyfin_username = self.jellyfin_username_entry.text().to_string();
-                self.jellyfin_password = self.jellyfin_password_entry.text().to_string();
+                // Model fields are already updated via UpdateJellyfin* messages
 
                 if self.jellyfin_url.is_empty()
                     || self.jellyfin_username.is_empty()
@@ -942,41 +1034,52 @@ impl AsyncComponent for AuthDialog {
                 info!("Retrying Jellyfin auth");
                 self.jellyfin_auth_error = None;
                 self.jellyfin_auth_success = false;
+                self.jellyfin_auth_in_progress = false;
+                // Keep all fields so user can retry or modify them
             }
 
             AuthDialogInput::StartJellyfinQuickConnect => {
-                info!("Starting Jellyfin Quick Connect");
-                self.jellyfin_url = self.jellyfin_url_entry.text().to_string();
+                info!("Starting Jellyfin Quick Connect - button clicked");
+                info!("Current URL: '{}'", self.jellyfin_url);
 
+                // URL is already in model from UpdateJellyfinUrl messages
                 if self.jellyfin_url.is_empty() {
+                    info!("URL is empty, showing error");
                     self.jellyfin_auth_error = Some("Please enter a server URL".to_string());
                     return;
                 }
 
+                info!("Setting quick connect in progress");
                 self.jellyfin_quick_connect_in_progress = true;
                 self.jellyfin_auth_error = None;
 
                 let url = self.jellyfin_url.clone();
                 let sender_clone = sender.clone();
 
+                info!("Launching oneshot command to check Quick Connect");
                 // First check if Quick Connect is enabled, then initiate
                 sender.oneshot_command(async move {
                     use crate::backends::jellyfin::api::JellyfinApi;
+                    use tracing::{info, error};
 
+                    info!("Checking if Quick Connect is enabled at: {}", url);
                     // Check if Quick Connect is enabled
                     match JellyfinApi::check_quick_connect_enabled(&url).await {
                         Ok(enabled) => {
+                            info!("Quick Connect enabled check result: {}", enabled);
                             if !enabled {
+                                info!("Quick Connect is disabled on the server");
                                 sender_clone.input(AuthDialogInput::JellyfinQuickConnectFailed(
-                                    "Quick Connect is disabled on this server".to_string(),
+                                    "Quick Connect is disabled on this server. Please enable it in the Jellyfin admin dashboard.".to_string(),
                                 ));
                                 return;
                             }
 
+                            info!("Quick Connect is enabled, initiating...");
                             // Initiate Quick Connect
                             match JellyfinApi::initiate_quick_connect(&url).await {
                                 Ok(state) => {
-                                    info!("Quick Connect initiated with code: {}", state.code);
+                                    info!("Quick Connect initiated successfully with code: {}", state.code);
                                     sender_clone.input(
                                         AuthDialogInput::JellyfinQuickConnectInitiated {
                                             code: state.code,
@@ -985,9 +1088,10 @@ impl AsyncComponent for AuthDialog {
                                     );
                                 }
                                 Err(e) => {
+                                    error!("Failed to initiate Quick Connect: {}", e);
                                     sender_clone.input(
                                         AuthDialogInput::JellyfinQuickConnectFailed(format!(
-                                            "Failed to initiate Quick Connect: {}",
+                                            "Failed to initiate Quick Connect: {}\n\nMake sure your server URL is correct and the server is accessible.",
                                             e
                                         )),
                                     );
@@ -995,8 +1099,9 @@ impl AsyncComponent for AuthDialog {
                             }
                         }
                         Err(e) => {
+                            error!("Failed to check Quick Connect status: {}", e);
                             sender_clone.input(AuthDialogInput::JellyfinQuickConnectFailed(
-                                format!("Failed to check Quick Connect status: {}", e),
+                                format!("Failed to check Quick Connect status: {}\n\nPlease verify your server URL and network connection.", e),
                             ));
                         }
                     }
@@ -1034,8 +1139,10 @@ impl AsyncComponent for AuthDialog {
                                     // Now authenticate with the secret
                                     match JellyfinApi::authenticate_with_quick_connect(&url, &secret).await {
                                         Ok(auth_response) => {
+                                            // Pass both token and user_id as a combined string
+                                            let combined = format!("{}|{}", auth_response.access_token, auth_response.user.id);
                                             sender_clone.input(AuthDialogInput::JellyfinQuickConnectAuthenticated(
-                                                auth_response.access_token
+                                                combined
                                             ));
                                         }
                                         Err(e) => {
@@ -1056,7 +1163,7 @@ impl AsyncComponent for AuthDialog {
                 }
             }
 
-            AuthDialogInput::JellyfinQuickConnectAuthenticated(token) => {
+            AuthDialogInput::JellyfinQuickConnectAuthenticated(combined_data) => {
                 info!("Quick Connect authentication successful");
 
                 // Stop polling
@@ -1066,6 +1173,15 @@ impl AsyncComponent for AuthDialog {
 
                 self.jellyfin_quick_connect_in_progress = false;
                 self.jellyfin_auth_success = true;
+
+                // Parse the combined token and user_id
+                let parts: Vec<&str> = combined_data.split('|').collect();
+                let (token, user_id) = if parts.len() == 2 {
+                    (parts[0].to_string(), parts[1].to_string())
+                } else {
+                    // Fallback to old format if just token
+                    (combined_data.clone(), String::new())
+                };
 
                 // Create the source with the token
                 let url = self.jellyfin_url.clone();
@@ -1079,9 +1195,10 @@ impl AsyncComponent for AuthDialog {
                     // Set the base URL first
                     jellyfin_backend.set_base_url(url.clone()).await;
 
-                    // Create credentials with Quick Connect token
+                    // Create credentials with Quick Connect token including user_id
+                    // Format: token|user_id for Jellyfin to parse
                     let credentials = Credentials::Token {
-                        token: token.clone(),
+                        token: format!("{}|{}", token, user_id),
                     };
 
                     // Authenticate with the token

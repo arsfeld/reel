@@ -17,7 +17,7 @@ use tracing::info;
 use super::traits::{MediaBackend, SearchResults};
 use crate::models::{
     AuthProvider, BackendId, ChapterMarker, Credentials, Episode, Library, LibraryId, MediaItemId,
-    Movie, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
+    Movie, Season, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
 };
 use crate::services::core::auth::AuthService;
 
@@ -986,6 +986,11 @@ impl MediaBackend for PlexBackend {
     async fn get_shows(&self, library_id: &LibraryId) -> Result<Vec<Show>> {
         let api = self.get_api().await?;
         api.get_shows(&library_id.to_string()).await
+    }
+
+    async fn get_seasons(&self, show_id: &ShowId) -> Result<Vec<Season>> {
+        let api = self.get_api().await?;
+        api.get_seasons(&show_id.to_string()).await
     }
 
     async fn get_episodes(&self, show_id: &ShowId, season_number: u32) -> Result<Vec<Episode>> {

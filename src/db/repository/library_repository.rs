@@ -69,10 +69,23 @@ impl Repository<LibraryModel> for LibraryRepositoryImpl {
     }
 
     async fn update(&self, entity: LibraryModel) -> Result<LibraryModel> {
+        tracing::debug!(
+            "Updating library {}: item_count = {}",
+            entity.id,
+            entity.item_count
+        );
         let mut active_model: LibraryActiveModel = entity.clone().into();
+        // Explicitly set the item_count field to ensure it's updated
+        active_model.item_count = Set(entity.item_count);
         active_model.updated_at = Set(chrono::Utc::now().naive_utc());
 
-        Ok(active_model.update(self.base.db.as_ref()).await?)
+        let updated = active_model.update(self.base.db.as_ref()).await?;
+        tracing::debug!(
+            "Library {} updated successfully: item_count = {}",
+            updated.id,
+            updated.item_count
+        );
+        Ok(updated)
     }
 
     async fn delete(&self, id: &str) -> Result<()> {

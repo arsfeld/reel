@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::models::{
     BackendId, ChapterMarker, Credentials, Episode, HomeSection, Library, LibraryId, MediaItem,
-    MediaItemId, Movie, MusicAlbum, MusicTrack, Photo, Show, ShowId, StreamInfo, User,
+    MediaItemId, Movie, MusicAlbum, MusicTrack, Photo, Season, Show, ShowId, StreamInfo, User,
 };
 
 #[async_trait]
@@ -35,6 +35,8 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     async fn get_movies(&self, library_id: &LibraryId) -> Result<Vec<Movie>>;
 
     async fn get_shows(&self, library_id: &LibraryId) -> Result<Vec<Show>>;
+
+    async fn get_seasons(&self, show_id: &ShowId) -> Result<Vec<Season>>;
 
     async fn get_episodes(&self, show_id: &ShowId, season: u32) -> Result<Vec<Episode>>;
 

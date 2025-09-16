@@ -577,10 +577,33 @@ impl MediaRepositoryImpl {
     pub async fn count_by_library(&self, library_id: &str) -> Result<i64> {
         use sea_orm::PaginatorTrait;
 
-        let count = MediaItem::find()
-            .filter(media_items::Column::LibraryId.eq(library_id))
-            .count(self.base.db.as_ref())
-            .await?;
+        // First get the library to check its type
+        use crate::db::repository::{LibraryRepository, LibraryRepositoryImpl};
+        let library_repo = LibraryRepositoryImpl::new(self.base.db.clone());
+
+        let library = library_repo.find_by_id(library_id).await?;
+
+        let mut query = MediaItem::find().filter(media_items::Column::LibraryId.eq(library_id));
+
+        // For TV show libraries, count shows (not episodes)
+        // For movie libraries, count movies
+        if let Some(lib) = library {
+            match lib.library_type.as_str() {
+                "shows" => {
+                    query = query.filter(media_items::Column::MediaType.eq("show"));
+                }
+                "movies" => {
+                    query = query.filter(media_items::Column::MediaType.eq("movie"));
+                }
+                _ => {
+                    // For other library types, count all items
+                }
+            }
+        }
+
+        let count = query.count(self.base.db.as_ref()).await?;
+
+        tracing::debug!("Counted {} items for library {}", count, library_id);
         Ok(count as i64)
     }
 

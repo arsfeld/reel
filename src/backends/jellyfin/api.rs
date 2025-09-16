@@ -78,18 +78,43 @@ impl JellyfinApi {
             .build()?;
 
         let url = format!("{}/QuickConnect/Enabled", base_url.trim_end_matches('/'));
+        info!("Checking Quick Connect status at: {}", url);
 
-        let response = client.get(&url).send().await?;
+        let response = match client.get(&url).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                error!("Failed to send request to check Quick Connect: {}", e);
+                return Err(anyhow!("Failed to connect to server: {}", e));
+            }
+        };
+
+        let status = response.status();
+        info!("Quick Connect check response status: {}", status);
 
         if response.status().is_success() {
-            let enabled: bool = response.json().await?;
-            Ok(enabled)
+            match response.json::<bool>().await {
+                Ok(enabled) => {
+                    info!("Quick Connect enabled status: {}", enabled);
+                    Ok(enabled)
+                }
+                Err(e) => {
+                    error!("Failed to parse Quick Connect response: {}", e);
+                    Err(anyhow!("Failed to parse Quick Connect response: {}", e))
+                }
+            }
         } else if response.status() == 401 {
+            info!("Quick Connect check returned 401 - assuming disabled");
             Ok(false)
         } else {
+            let error_body = response.text().await.unwrap_or_default();
+            error!(
+                "Quick Connect check failed with status {}: {}",
+                status, error_body
+            );
             Err(anyhow!(
-                "Failed to check Quick Connect status: {}",
-                response.status()
+                "Failed to check Quick Connect status: {} - {}",
+                status,
+                error_body
             ))
         }
     }
@@ -108,15 +133,27 @@ impl JellyfinApi {
         let url = format!("{}/QuickConnect/Initiate", base_url.trim_end_matches('/'));
 
         info!("Initiating Quick Connect at: {}", url);
+        info!("Using device ID: {}", device_id);
+        info!("Auth header: {}", auth_header);
 
-        let response = client
+        let response = match client
             .post(&url)
             .header("X-Emby-Authorization", auth_header)
+            .header("Content-Type", "application/json")
             .send()
-            .await?;
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                error!("Failed to send Quick Connect initiate request: {}", e);
+                return Err(anyhow!("Failed to connect to server: {}", e));
+            }
+        };
+
+        let status = response.status();
+        info!("Quick Connect initiate response status: {}", status);
 
         if !response.status().is_success() {
-            let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             error!(
                 "Failed to initiate Quick Connect: {} - {}",
@@ -129,9 +166,19 @@ impl JellyfinApi {
             ));
         }
 
-        let state: QuickConnectState = response.json().await?;
-        info!("Quick Connect initiated with code: {}", state.code);
-        Ok(state)
+        match response.json::<QuickConnectState>().await {
+            Ok(state) => {
+                info!(
+                    "Quick Connect initiated successfully with code: {}",
+                    state.code
+                );
+                Ok(state)
+            }
+            Err(e) => {
+                error!("Failed to parse Quick Connect response: {}", e);
+                Err(anyhow!("Failed to parse Quick Connect response: {}", e))
+            }
+        }
     }
 
     pub async fn get_quick_connect_state(
@@ -324,6 +371,9 @@ impl JellyfinApi {
     pub async fn get_libraries(&self) -> Result<Vec<Library>> {
         let url = format!("{}/Users/{}/Views", self.base_url, self.user_id);
 
+        info!("Getting libraries from URL: {}", url);
+        info!("Using user_id: '{}'", self.user_id);
+
         let response = self
             .client
             .get(&url)
@@ -332,6 +382,12 @@ impl JellyfinApi {
             .await?;
 
         if !response.status().is_success() {
+            error!(
+                "Failed to get libraries - Status: {}, URL: {}, user_id: '{}'",
+                response.status(),
+                url,
+                self.user_id
+            );
             return Err(anyhow!("Failed to get libraries: {}", response.status()));
         }
 
