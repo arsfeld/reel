@@ -36,6 +36,14 @@ pub enum AuthDialogInput {
     ConnectJellyfin,
     JellyfinAuthError(String),
     RetryJellyfin,
+    // Jellyfin Quick Connect inputs
+    StartJellyfinQuickConnect,
+    JellyfinQuickConnectInitiated { code: String, secret: String },
+    JellyfinQuickConnectAuthenticated(String), // token
+    JellyfinQuickConnectFailed(String),
+    CancelJellyfinQuickConnect,
+    RetryJellyfinQuickConnect,
+    CheckJellyfinQuickConnectStatus,
     // Manual Plex inputs
     ConnectManualPlex,
 }
@@ -50,9 +58,11 @@ pub enum AuthDialogOutput {
 pub struct AuthDialog {
     db: DatabaseConnection,
     backend_type: BackendType,
+    parent_window: Option<gtk4::Window>,
 
     // UI state
     is_visible: bool,
+    dialog_position: Option<(i32, i32)>,
 
     // Plex OAuth state
     plex_pin: Option<PlexPin>,
@@ -67,6 +77,12 @@ pub struct AuthDialog {
     jellyfin_auth_in_progress: bool,
     jellyfin_auth_success: bool,
     jellyfin_auth_error: Option<String>,
+    // Jellyfin Quick Connect state
+    jellyfin_quick_connect_enabled: bool,
+    jellyfin_quick_connect_in_progress: bool,
+    jellyfin_quick_connect_code: Option<String>,
+    jellyfin_quick_connect_secret: Option<String>,
+    jellyfin_quick_connect_check_handle: Option<glib::SourceId>,
 
     // Manual Plex state
     plex_server_url: String,
@@ -89,6 +105,8 @@ pub struct AuthDialog {
     jellyfin_progress: gtk4::ProgressBar,
     jellyfin_success: adw::StatusPage,
     jellyfin_error: adw::StatusPage,
+    jellyfin_quick_connect_code_label: gtk4::Label,
+    jellyfin_quick_connect_progress: gtk4::ProgressBar,
 
     // Manual Plex widgets
     server_url_entry: adw::EntryRow,
@@ -99,7 +117,7 @@ pub struct AuthDialog {
 impl AsyncComponent for AuthDialog {
     type Input = AuthDialogInput;
     type Output = AuthDialogOutput;
-    type Init = DatabaseConnection;
+    type Init = (DatabaseConnection, Option<gtk4::Window>);
     type CommandOutput = ();
 
     view! {
@@ -108,33 +126,32 @@ impl AsyncComponent for AuthDialog {
         adw::Dialog {
             set_title: "Add Media Source",
             set_content_width: 500,
-            set_content_height: 600,
+            set_content_height: 650,
+            set_follows_content_size: true,
             #[wrap(Some)]
-            set_child = &gtk4::Box {
-                set_orientation: gtk4::Orientation::Vertical,
-
-                // Header with backend selector
-                adw::HeaderBar {
-                    set_show_end_title_buttons: false,
-
-                    pack_start = &gtk4::Button {
-                        set_label: "Cancel",
-                        connect_clicked => AuthDialogInput::Hide,
-                    },
-
-                    #[wrap(Some)]
-                    set_title_widget = &adw::ViewSwitcher {
-                        set_stack: Some(&view_stack),
-                        set_policy: adw::ViewSwitcherPolicy::Wide,
-                    },
+            set_child = &adw::ToolbarView {
+                // Top toolbar with proper draggable header
+                add_top_bar = &adw::HeaderBar {
+                    set_title_widget: Some(&gtk4::Label::new(Some("Add Media Source"))),
+                    set_show_end_title_buttons: true,
                 },
 
-                // Content stack
-                #[name = "view_stack"]
-                adw::ViewStack {
-                    set_vexpand: true,
+                // ViewSwitcherBar below the header for backend selection
+                add_top_bar = &adw::ViewSwitcherBar {
+                    set_stack: Some(&view_stack),
+                    set_reveal: true,
+                },
 
-                    // Plex OAuth page
+                #[wrap(Some)]
+                set_content = &gtk4::Box {
+                    set_orientation: gtk4::Orientation::Vertical,
+
+                    // Content stack
+                    #[name = "view_stack"]
+                    adw::ViewStack {
+                        set_vexpand: true,
+
+                    // Plex page with OAuth and manual options
                     add_titled[Some("plex"), "Plex"] = &gtk4::Box {
                         set_orientation: gtk4::Orientation::Vertical,
                         set_spacing: 12,
@@ -170,11 +187,6 @@ impl AsyncComponent for AuthDialog {
                                     connect_clicked => AuthDialogInput::StartPlexAuth,
                                 },
 
-                                gtk4::Button {
-                                    set_label: "Manual Setup",
-                                    add_css_class: "pill",
-                                    connect_clicked => AuthDialogInput::SelectBackend(BackendType::Plex),
-                                },
                             },
                         },
 
@@ -252,9 +264,45 @@ impl AsyncComponent for AuthDialog {
                                 connect_clicked => AuthDialogInput::RetryPlexAuth,
                             },
                         },
+
+                        // Manual setup expander
+                        adw::PreferencesGroup {
+                            set_title: "Advanced Options",
+                            set_description: Some("Manual server configuration"),
+                            #[watch]
+                            set_visible: !model.plex_auth_in_progress && !model.plex_auth_success && model.plex_auth_error.is_none(),
+                            set_margin_top: 24,
+
+                            #[name = "server_url_entry"]
+                            add = &adw::EntryRow {
+                                set_title: "Server URL (optional)",
+                                set_text: &model.plex_server_url,
+                            },
+
+                            #[name = "token_entry"]
+                            add = &adw::PasswordEntryRow {
+                                set_title: "Auth Token",
+                                set_text: &model.plex_token,
+                            },
+
+                            add = &adw::ActionRow {
+                                set_title: "Token Location",
+                                set_subtitle: "Find your auth token at plex.tv/api/v2/user",
+                            },
+
+                            add = &adw::ActionRow {
+                                #[wrap(Some)]
+                                set_child = &gtk4::Button {
+                                    set_label: "Connect with Token",
+                                    set_valign: gtk4::Align::Center,
+                                    add_css_class: "suggested-action",
+                                    connect_clicked => AuthDialogInput::ConnectManualPlex,
+                                },
+                            },
+                        },
                     },
 
-                    // Jellyfin page
+                    // Jellyfin page with server login
                     add_titled[Some("jellyfin"), "Jellyfin"] = &gtk4::Box {
                         set_orientation: gtk4::Orientation::Vertical,
                         set_spacing: 12,
@@ -268,7 +316,7 @@ impl AsyncComponent for AuthDialog {
                             set_orientation: gtk4::Orientation::Vertical,
                             set_spacing: 12,
                             #[watch]
-                            set_visible: !model.jellyfin_auth_in_progress && !model.jellyfin_auth_success && model.jellyfin_auth_error.is_none(),
+                            set_visible: !model.jellyfin_auth_in_progress && !model.jellyfin_auth_success && model.jellyfin_auth_error.is_none() && !model.jellyfin_quick_connect_in_progress,
 
                             adw::PreferencesGroup {
                                 set_title: "Jellyfin Server",
@@ -277,11 +325,35 @@ impl AsyncComponent for AuthDialog {
                                 add = &adw::EntryRow {
                                     set_title: "Server URL",
                                     set_text: &model.jellyfin_url,
-                                    connect_changed[sender] => move |entry| {
-                                        let text = entry.text().to_string();
-                                        sender.input(AuthDialogInput::ConnectJellyfin);
+                                },
+                            },
+
+                            // Quick Connect option
+                            adw::PreferencesGroup {
+                                set_title: "Quick Connect",
+                                set_description: Some("Sign in without entering username/password"),
+                                #[watch]
+                                set_visible: !model.jellyfin_url.is_empty(),
+
+                                add = &adw::ActionRow {
+                                    set_title: "Use Quick Connect",
+                                    set_subtitle: "Get a code to authorize from another device",
+                                    #[wrap(Some)]
+                                    set_child = &gtk4::Button {
+                                        set_label: "Get Code",
+                                        set_valign: gtk4::Align::Center,
+                                        add_css_class: "suggested-action",
+                                        connect_clicked => AuthDialogInput::StartJellyfinQuickConnect,
                                     },
                                 },
+                            },
+
+                            // Username/Password option
+                            adw::PreferencesGroup {
+                                set_title: "Standard Login",
+                                set_description: Some("Sign in with username and password"),
+                                #[watch]
+                                set_visible: !model.jellyfin_url.is_empty(),
 
                                 #[name = "jellyfin_username_entry"]
                                 add = &adw::EntryRow {
@@ -294,14 +366,62 @@ impl AsyncComponent for AuthDialog {
                                     set_title: "Password",
                                     set_text: &model.jellyfin_password,
                                 },
-                            },
 
-                            gtk4::Button {
-                                set_label: "Connect",
-                                set_halign: gtk4::Align::Center,
-                                add_css_class: "suggested-action",
-                                add_css_class: "pill",
-                                connect_clicked => AuthDialogInput::ConnectJellyfin,
+                                add = &adw::ActionRow {
+                                    #[wrap(Some)]
+                                    set_child = &gtk4::Button {
+                                        set_label: "Connect",
+                                        set_valign: gtk4::Align::Center,
+                                        add_css_class: "suggested-action",
+                                        connect_clicked => AuthDialogInput::ConnectJellyfin,
+                                    },
+                                },
+                            },
+                        },
+
+                        // Quick Connect Code Display
+                        gtk4::Box {
+                            set_orientation: gtk4::Orientation::Vertical,
+                            set_spacing: 24,
+                            set_valign: gtk4::Align::Center,
+                            set_vexpand: true,
+                            #[watch]
+                            set_visible: model.jellyfin_quick_connect_in_progress,
+
+                            adw::StatusPage {
+                                set_icon_name: Some("dialog-password-symbolic"),
+                                set_title: "Enter this code in Jellyfin",
+                                set_description: Some("Sign in on another device and authorize this code"),
+                                #[wrap(Some)]
+                                set_child = &gtk4::Box {
+                                    set_orientation: gtk4::Orientation::Vertical,
+                                    set_spacing: 12,
+
+                                    #[name = "jellyfin_quick_connect_code_label"]
+                                    gtk4::Label {
+                                        add_css_class: "title-1",
+                                        #[watch]
+                                        set_label: &model.jellyfin_quick_connect_code.as_ref().unwrap_or(&String::new()),
+                                    },
+
+                                    gtk4::Label {
+                                        set_label: "Waiting for authorization...",
+                                        add_css_class: "dim-label",
+                                    },
+
+                                    #[name = "jellyfin_quick_connect_progress"]
+                                    gtk4::ProgressBar {
+                                        set_margin_top: 24,
+                                        #[watch]
+                                        set_pulse_step: if model.jellyfin_quick_connect_in_progress { 0.1 } else { 0.0 },
+                                    },
+
+                                    gtk4::Button {
+                                        set_label: "Cancel",
+                                        set_margin_top: 12,
+                                        connect_clicked => AuthDialogInput::CancelJellyfinQuickConnect,
+                                    },
+                                },
                             },
                         },
 
@@ -355,46 +475,6 @@ impl AsyncComponent for AuthDialog {
                             },
                         },
                     },
-
-                    // Manual Plex page
-                    add_titled[Some("plex-manual"), "Plex (Manual)"] = &gtk4::Box {
-                        set_orientation: gtk4::Orientation::Vertical,
-                        set_spacing: 12,
-                        set_margin_top: 12,
-                        set_margin_bottom: 12,
-                        set_margin_start: 12,
-                        set_margin_end: 12,
-
-                        adw::PreferencesGroup {
-                            set_title: "Manual Plex Setup",
-                            set_description: Some("Connect using server URL and authentication token"),
-
-                            #[name = "server_url_entry"]
-                            add = &adw::EntryRow {
-                                set_title: "Server URL",
-                                set_text: &model.plex_server_url,
-                            },
-
-                            #[name = "token_entry"]
-                            add = &adw::PasswordEntryRow {
-                                set_title: "Auth Token",
-                                set_text: &model.plex_token,
-                            },
-                        },
-
-                        gtk4::Label {
-                            set_text: "You can find your auth token at plex.tv/api/v2/user",
-                            set_wrap: true,
-                            add_css_class: "dim-label",
-                        },
-
-                        gtk4::Button {
-                            set_label: "Connect",
-                            set_halign: gtk4::Align::Center,
-                            add_css_class: "suggested-action",
-                            add_css_class: "pill",
-                            connect_clicked => AuthDialogInput::ConnectManualPlex,
-                        },
                     },
                 },
             },
@@ -402,14 +482,16 @@ impl AsyncComponent for AuthDialog {
     }
 
     async fn init(
-        db: Self::Init,
+        (db, parent_window): Self::Init,
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
         let mut model = AuthDialog {
             db,
             backend_type: BackendType::Plex,
+            parent_window,
             is_visible: false,
+            dialog_position: None,
 
             // Plex OAuth state
             plex_pin: None,
@@ -424,6 +506,12 @@ impl AsyncComponent for AuthDialog {
             jellyfin_auth_in_progress: false,
             jellyfin_auth_success: false,
             jellyfin_auth_error: None,
+            // Jellyfin Quick Connect state
+            jellyfin_quick_connect_enabled: false,
+            jellyfin_quick_connect_in_progress: false,
+            jellyfin_quick_connect_code: None,
+            jellyfin_quick_connect_secret: None,
+            jellyfin_quick_connect_check_handle: None,
 
             // Manual Plex state
             plex_server_url: String::new(),
@@ -442,6 +530,8 @@ impl AsyncComponent for AuthDialog {
             jellyfin_progress: gtk4::ProgressBar::new(),
             jellyfin_success: adw::StatusPage::new(),
             jellyfin_error: adw::StatusPage::new(),
+            jellyfin_quick_connect_code_label: gtk4::Label::new(None),
+            jellyfin_quick_connect_progress: gtk4::ProgressBar::new(),
             server_url_entry: adw::EntryRow::new(),
             token_entry: adw::PasswordEntryRow::new(),
         };
@@ -455,9 +545,11 @@ impl AsyncComponent for AuthDialog {
         glib::timeout_add_local(std::time::Duration::from_millis(100), {
             let auth_progress = model.auth_progress.clone();
             let jellyfin_progress = model.jellyfin_progress.clone();
+            let jellyfin_quick_connect_progress = model.jellyfin_quick_connect_progress.clone();
             move || {
                 auth_progress.pulse();
                 jellyfin_progress.pulse();
+                jellyfin_quick_connect_progress.pulse();
                 glib::ControlFlow::Continue
             }
         });
@@ -473,21 +565,12 @@ impl AsyncComponent for AuthDialog {
     ) {
         match msg {
             AuthDialogInput::Show => {
-                info!("Showing auth dialog");
+                info!("Showing auth dialog as modal");
                 self.is_visible = true;
-
-                // Try to get the application and window to make dialog modal
-                if let Some(app) = relm4::main_application().downcast_ref::<adw::Application>() {
-                    if let Some(window) = app.active_window() {
-                        info!("Got active window, presenting dialog as modal");
-                        // Present as modal dialog attached to main window
-                        self.dialog.present(Some(&window));
-                    } else {
-                        info!("No active window found, presenting without parent");
-                        self.dialog.present(None::<&gtk4::Window>);
-                    }
+                // Present as modal dialog attached to the parent window
+                if let Some(ref parent) = self.parent_window {
+                    self.dialog.present(Some(parent));
                 } else {
-                    info!("Could not get application, presenting without parent");
                     self.dialog.present(None::<&gtk4::Window>);
                 }
             }
@@ -655,7 +738,33 @@ impl AsyncComponent for AuthDialog {
                     let plex_backend =
                         PlexBackend::new_for_auth(selected_server_url.clone(), token.clone());
 
-                    // Create the source using CreateSourceCommand (which handles auth_provider_id)
+                    // For manual auth or when best_server is None, fetch machine_id
+                    let machine_id_to_use = if let Some(server) = best_server {
+                        Some(server.client_identifier.clone())
+                    } else if is_manual {
+                        // Fetch machine_id from the server for manual auth
+                        use crate::backends::plex::PlexApi;
+                        let api = PlexApi::with_backend_id(
+                            selected_server_url.clone(),
+                            token.clone(),
+                            "temp".to_string(),
+                        );
+
+                        match api.get_machine_id().await {
+                            Ok(machine_id) => {
+                                info!("Fetched machine_id for manual auth: {}", machine_id);
+                                Some(machine_id)
+                            }
+                            Err(e) => {
+                                info!("Failed to fetch machine_id for manual auth: {}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Create the source using CreateSourceCommand with machine_id
                     let command = CreateSourceCommand {
                         db: db.clone(),
                         backend: &plex_backend as &dyn MediaBackend,
@@ -665,49 +774,43 @@ impl AsyncComponent for AuthDialog {
                             .unwrap_or_else(|| "Plex".to_string()),
                         credentials,
                         server_url: Some(selected_server_url),
+                        machine_id: machine_id_to_use,
+                        is_owned: best_server.map(|s| s.owned),
                     };
 
                     match command.execute().await {
                         Ok(source) => {
-                            info!("Successfully created Plex source: {}", source.id);
+                            info!(
+                                "Successfully created Plex source: {} with machine_id",
+                                source.id
+                            );
 
-                            // Now update the source with additional Plex-specific metadata
-                            use crate::db::repository::Repository;
-                            use crate::db::repository::source_repository::SourceRepositoryImpl;
-                            use crate::models::ServerConnections;
-                            use crate::models::SourceId;
-                            use crate::services::core::ConnectionService;
+                            // Update connections if we have them
+                            if let Some(server) = best_server {
+                                use crate::db::repository::source_repository::{
+                                    SourceRepository, SourceRepositoryImpl,
+                                };
+                                use crate::models::ServerConnections;
+                                use crate::services::core::ConnectionService;
 
-                            let repo = SourceRepositoryImpl::new(db.clone());
+                                let repo = SourceRepositoryImpl::new(db.clone());
 
-                            // Get the created source
-                            if let Ok(Some(mut source_model)) =
-                                Repository::find_by_id(&repo, &source.id).await
-                            {
-                                // Update with Plex-specific fields
-                                if let Some(server) = best_server {
-                                    source_model.machine_id =
-                                        Some(server.client_identifier.clone());
-                                    source_model.is_owned = server.owned;
+                                // Convert all discovered connections to our ServerConnection model
+                                let connections = ConnectionService::from_plex_connections(
+                                    server.connections.clone(),
+                                );
+                                let server_connections = ServerConnections::new(connections);
 
-                                    // Convert all discovered connections to our ServerConnection model
-                                    let connections = ConnectionService::from_plex_connections(
-                                        server.connections.clone(),
-                                    );
-                                    let server_connections = ServerConnections::new(connections);
-                                    source_model.connections = Some(
-                                        serde_json::to_value(&server_connections)
-                                            .unwrap_or(serde_json::Value::Null),
-                                    );
-                                }
-
-                                // Update the source with additional metadata
-                                if let Err(e) = Repository::update(&repo, source_model).await {
-                                    // Log error but don't fail - the source was created successfully
-                                    info!(
-                                        "Warning: Failed to update source with Plex metadata: {}",
-                                        e
-                                    );
+                                // Update just the connections
+                                if let Err(e) = SourceRepository::update_connections(
+                                    &repo,
+                                    &source.id,
+                                    serde_json::to_value(&server_connections)
+                                        .unwrap_or(serde_json::Value::Null),
+                                )
+                                .await
+                                {
+                                    info!("Warning: Failed to update source connections: {}", e);
                                 }
                             }
 
@@ -803,6 +906,8 @@ impl AsyncComponent for AuthDialog {
                                 name: format!("Jellyfin - {}", username),
                                 credentials,
                                 server_url: Some(url),
+                                machine_id: None, // Not used for Jellyfin
+                                is_owned: None,   // Not used for Jellyfin
                             };
 
                             match command.execute().await {
@@ -837,6 +942,225 @@ impl AsyncComponent for AuthDialog {
                 info!("Retrying Jellyfin auth");
                 self.jellyfin_auth_error = None;
                 self.jellyfin_auth_success = false;
+            }
+
+            AuthDialogInput::StartJellyfinQuickConnect => {
+                info!("Starting Jellyfin Quick Connect");
+                self.jellyfin_url = self.jellyfin_url_entry.text().to_string();
+
+                if self.jellyfin_url.is_empty() {
+                    self.jellyfin_auth_error = Some("Please enter a server URL".to_string());
+                    return;
+                }
+
+                self.jellyfin_quick_connect_in_progress = true;
+                self.jellyfin_auth_error = None;
+
+                let url = self.jellyfin_url.clone();
+                let sender_clone = sender.clone();
+
+                // First check if Quick Connect is enabled, then initiate
+                sender.oneshot_command(async move {
+                    use crate::backends::jellyfin::api::JellyfinApi;
+
+                    // Check if Quick Connect is enabled
+                    match JellyfinApi::check_quick_connect_enabled(&url).await {
+                        Ok(enabled) => {
+                            if !enabled {
+                                sender_clone.input(AuthDialogInput::JellyfinQuickConnectFailed(
+                                    "Quick Connect is disabled on this server".to_string(),
+                                ));
+                                return;
+                            }
+
+                            // Initiate Quick Connect
+                            match JellyfinApi::initiate_quick_connect(&url).await {
+                                Ok(state) => {
+                                    info!("Quick Connect initiated with code: {}", state.code);
+                                    sender_clone.input(
+                                        AuthDialogInput::JellyfinQuickConnectInitiated {
+                                            code: state.code,
+                                            secret: state.secret,
+                                        },
+                                    );
+                                }
+                                Err(e) => {
+                                    sender_clone.input(
+                                        AuthDialogInput::JellyfinQuickConnectFailed(format!(
+                                            "Failed to initiate Quick Connect: {}",
+                                            e
+                                        )),
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            sender_clone.input(AuthDialogInput::JellyfinQuickConnectFailed(
+                                format!("Failed to check Quick Connect status: {}", e),
+                            ));
+                        }
+                    }
+                });
+            }
+
+            AuthDialogInput::JellyfinQuickConnectInitiated { code, secret } => {
+                info!("Quick Connect code received: {}", code);
+                self.jellyfin_quick_connect_code = Some(code);
+                self.jellyfin_quick_connect_secret = Some(secret);
+
+                // Start polling for authentication status every 2 seconds
+                let sender_clone = sender.clone();
+                let handle =
+                    glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+                        sender_clone.input(AuthDialogInput::CheckJellyfinQuickConnectStatus);
+                        glib::ControlFlow::Continue
+                    });
+                self.jellyfin_quick_connect_check_handle = Some(handle);
+            }
+
+            AuthDialogInput::CheckJellyfinQuickConnectStatus => {
+                if let Some(secret) = &self.jellyfin_quick_connect_secret {
+                    let url = self.jellyfin_url.clone();
+                    let secret = secret.clone();
+                    let sender_clone = sender.clone();
+
+                    sender.oneshot_command(async move {
+                        use crate::backends::jellyfin::api::JellyfinApi;
+
+                        match JellyfinApi::get_quick_connect_state(&url, &secret).await {
+                            Ok(result) => {
+                                if result.authenticated {
+                                    info!("Quick Connect authenticated!");
+                                    // Now authenticate with the secret
+                                    match JellyfinApi::authenticate_with_quick_connect(&url, &secret).await {
+                                        Ok(auth_response) => {
+                                            sender_clone.input(AuthDialogInput::JellyfinQuickConnectAuthenticated(
+                                                auth_response.access_token
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            sender_clone.input(AuthDialogInput::JellyfinQuickConnectFailed(
+                                                format!("Failed to authenticate with Quick Connect: {}", e)
+                                            ));
+                                        }
+                                    }
+                                }
+                                // If not authenticated yet, polling continues
+                            }
+                            Err(e) => {
+                                // Don't fail on polling errors, just log them
+                                info!("Quick Connect polling error (will retry): {}", e);
+                            }
+                        }
+                    });
+                }
+            }
+
+            AuthDialogInput::JellyfinQuickConnectAuthenticated(token) => {
+                info!("Quick Connect authentication successful");
+
+                // Stop polling
+                if let Some(handle) = self.jellyfin_quick_connect_check_handle.take() {
+                    handle.remove();
+                }
+
+                self.jellyfin_quick_connect_in_progress = false;
+                self.jellyfin_auth_success = true;
+
+                // Create the source with the token
+                let url = self.jellyfin_url.clone();
+                let db = self.db.clone();
+                let sender_clone = sender.clone();
+
+                sender.oneshot_command(async move {
+                    // Create the backend with the server URL
+                    let jellyfin_backend = JellyfinBackend::new();
+
+                    // Set the base URL first
+                    jellyfin_backend.set_base_url(url.clone()).await;
+
+                    // Create credentials with Quick Connect token
+                    let credentials = Credentials::Token {
+                        token: token.clone(),
+                    };
+
+                    // Authenticate with the token
+                    match jellyfin_backend.authenticate(credentials.clone()).await {
+                        Ok(user) => {
+                            info!("Quick Connect user authenticated: {}", user.username);
+
+                            // Create the source
+                            let command = CreateSourceCommand {
+                                db,
+                                backend: &jellyfin_backend as &dyn MediaBackend,
+                                source_type: "jellyfin".to_string(),
+                                name: format!("Jellyfin - {}", user.username),
+                                credentials,
+                                server_url: Some(url),
+                                machine_id: None,
+                                is_owned: None,
+                            };
+
+                            match command.execute().await {
+                                Ok(source) => {
+                                    info!(
+                                        "Created Jellyfin source via Quick Connect: {}",
+                                        source.id
+                                    );
+                                    sender_clone.input(AuthDialogInput::SourceCreated(
+                                        SourceId::new(source.id),
+                                    ));
+                                }
+                                Err(e) => {
+                                    sender_clone.input(
+                                        AuthDialogInput::JellyfinQuickConnectFailed(format!(
+                                            "Failed to create source: {}",
+                                            e
+                                        )),
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            sender_clone.input(AuthDialogInput::JellyfinQuickConnectFailed(
+                                format!("Failed to authenticate with token: {}", e),
+                            ));
+                        }
+                    }
+                });
+            }
+
+            AuthDialogInput::JellyfinQuickConnectFailed(error) => {
+                info!("Quick Connect failed: {}", error);
+
+                // Stop polling if active
+                if let Some(handle) = self.jellyfin_quick_connect_check_handle.take() {
+                    handle.remove();
+                }
+
+                self.jellyfin_quick_connect_in_progress = false;
+                self.jellyfin_quick_connect_code = None;
+                self.jellyfin_quick_connect_secret = None;
+                self.jellyfin_auth_error = Some(error);
+            }
+
+            AuthDialogInput::CancelJellyfinQuickConnect => {
+                info!("Cancelling Jellyfin Quick Connect");
+
+                // Stop polling
+                if let Some(handle) = self.jellyfin_quick_connect_check_handle.take() {
+                    handle.remove();
+                }
+
+                self.jellyfin_quick_connect_in_progress = false;
+                self.jellyfin_quick_connect_code = None;
+                self.jellyfin_quick_connect_secret = None;
+            }
+
+            AuthDialogInput::RetryJellyfinQuickConnect => {
+                info!("Retrying Jellyfin Quick Connect");
+                self.jellyfin_auth_error = None;
+                sender.input(AuthDialogInput::StartJellyfinQuickConnect);
             }
 
             AuthDialogInput::ConnectManualPlex => {

@@ -13,7 +13,6 @@ pub struct PreferencesPage {
     default_player: String,
     hardware_acceleration: bool,
     // Display preferences
-    default_view_mode: String,
     items_per_page: i32,
     // Cache preferences
     cache_size_mb: i32,
@@ -24,7 +23,6 @@ pub struct PreferencesPage {
 pub enum PreferencesInput {
     SetDefaultPlayer(String),
     SetHardwareAcceleration(bool),
-    SetDefaultViewMode(String),
     SetItemsPerPage(i32),
     SetCacheSize(i32),
     SetAutoCleanCache(bool),
@@ -110,31 +108,6 @@ impl AsyncComponent for PreferencesPage {
                     adw::PreferencesGroup {
                         set_title: "Library",
                         set_description: Some("Configure library display settings"),
-
-                        // Default View Mode
-                        add = &adw::ActionRow {
-                            set_title: "Default View Mode",
-                            set_subtitle: "Choose how media items are displayed",
-
-                            add_suffix = &gtk::Box {
-                                set_orientation: gtk::Orientation::Horizontal,
-                                set_spacing: 6,
-                                set_valign: gtk::Align::Center,
-
-                                gtk::DropDown {
-                                    set_model: Some(&gtk::StringList::new(&[
-                                        "Grid View",
-                                        "List View",
-                                    ])),
-                                    set_selected: if model.default_view_mode == "grid" { 0 } else { 1 },
-                                    connect_selected_notify[sender] => move |dropdown| {
-                                        let selected = dropdown.selected();
-                                        let mode = if selected == 0 { "grid" } else { "list" };
-                                        sender.input(PreferencesInput::SetDefaultViewMode(mode.to_string()));
-                                    }
-                                }
-                            }
-                        },
 
                         // Items Per Page
                         add = &adw::ActionRow {
@@ -273,7 +246,6 @@ impl AsyncComponent for PreferencesPage {
             db,
             default_player: config.playback.player_backend,
             hardware_acceleration: config.playback.hardware_acceleration,
-            default_view_mode: "grid".to_string(), // These would need to be added to config
             items_per_page: 48,
             cache_size_mb: config.playback.mpv_cache_size_mb as i32,
             auto_clean_cache: true,
@@ -298,10 +270,6 @@ impl AsyncComponent for PreferencesPage {
             PreferencesInput::SetHardwareAcceleration(enabled) => {
                 self.hardware_acceleration = enabled;
                 tracing::info!("Hardware acceleration: {}", enabled);
-            }
-            PreferencesInput::SetDefaultViewMode(mode) => {
-                self.default_view_mode = mode;
-                tracing::info!("Default view mode set to: {}", self.default_view_mode);
             }
             PreferencesInput::SetItemsPerPage(count) => {
                 self.items_per_page = count;
@@ -330,7 +298,7 @@ impl AsyncComponent for PreferencesPage {
                 // Update config with current preferences
                 config.playback.player_backend = self.default_player.clone();
                 config.playback.hardware_acceleration = self.hardware_acceleration;
-                // Note: view_mode and items_per_page would need to be added to config struct
+                // Note: items_per_page would need to be added to config struct
                 // For now we'll just save what we can
 
                 // Save config to file
@@ -351,7 +319,6 @@ impl AsyncComponent for PreferencesPage {
                 // Reset to default values
                 self.default_player = "mpv".to_string();
                 self.hardware_acceleration = true;
-                self.default_view_mode = "grid".to_string();
                 self.items_per_page = 48;
                 self.cache_size_mb = 1000;
                 self.auto_clean_cache = true;

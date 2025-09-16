@@ -125,6 +125,8 @@ impl AsyncComponent for MainWindow {
                                 set_icon_name: "open-menu-symbolic",
                                 set_tooltip_text: Some("Main Menu"),
                                 add_css_class: "flat",
+                                set_primary: true,
+                                set_direction: gtk::ArrowType::Down,
                             }
                         },
 
@@ -220,47 +222,56 @@ impl AsyncComponent for MainWindow {
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
-        // Set up application actions
+        // Set up window actions - we'll add them to the window instead of the app
+        // to ensure they're available when the menu is created
+
+        // Preferences action
+        let preferences_action = gio::SimpleAction::new("preferences", None);
+        preferences_action.set_enabled(true);
+        let sender_clone = sender.clone();
+        preferences_action.connect_activate(move |_, _| {
+            tracing::info!("Preferences action activated from menu");
+            sender_clone.input(MainWindowInput::NavigateToPreferences);
+        });
+        root.add_action(&preferences_action);
+        tracing::info!("Preferences action registered on window");
+
+        // About action
+        let about_action = gio::SimpleAction::new("about", None);
+        about_action.set_enabled(true);
+        let window_clone = root.clone();
+        about_action.connect_activate(move |_, _| {
+            let about_dialog = adw::AboutDialog::builder()
+                .application_name("Reel")
+                .application_icon("media-reel")
+                .version(env!("CARGO_PKG_VERSION"))
+                .comments("A native media player for Plex and Jellyfin")
+                .website("https://github.com/arosenfeld/gnome-reel")
+                .issue_url("https://github.com/arosenfeld/gnome-reel/issues")
+                .license_type(gtk::License::Gpl30)
+                .developers(vec!["Aaron Rosenfeld"])
+                .build();
+
+            about_dialog.present(Some(&window_clone));
+        });
+        root.add_action(&about_action);
+
+        // Quit action
+        let quit_action = gio::SimpleAction::new("quit", None);
+        quit_action.set_enabled(true);
+        let root_clone = root.clone();
+        quit_action.connect_activate(move |_, _| {
+            if let Some(app) = root_clone.application() {
+                app.quit();
+            }
+        });
+        root.add_action(&quit_action);
+
+        // Set keyboard shortcuts at the application level if available
         if let Some(app) = root.application() {
             if let Some(adw_app) = app.downcast_ref::<adw::Application>() {
-                // Preferences action
-                let preferences_action = gio::SimpleAction::new("preferences", None);
-                let sender_clone = sender.clone();
-                preferences_action.connect_activate(move |_, _| {
-                    sender_clone.input(MainWindowInput::NavigateToPreferences);
-                });
-                adw_app.add_action(&preferences_action);
-
-                // About action
-                let about_action = gio::SimpleAction::new("about", None);
-                let window_clone = root.clone();
-                about_action.connect_activate(move |_, _| {
-                    let about_dialog = adw::AboutDialog::builder()
-                        .application_name("Reel")
-                        .application_icon("media-reel")
-                        .version(env!("CARGO_PKG_VERSION"))
-                        .comments("A native media player for Plex and Jellyfin")
-                        .website("https://github.com/arosenfeld/gnome-reel")
-                        .issue_url("https://github.com/arosenfeld/gnome-reel/issues")
-                        .license_type(gtk::License::Gpl30)
-                        .developers(vec!["Aaron Rosenfeld"])
-                        .build();
-
-                    about_dialog.present(Some(&window_clone));
-                });
-                adw_app.add_action(&about_action);
-
-                // Quit action
-                let quit_action = gio::SimpleAction::new("quit", None);
-                let app_clone = adw_app.clone();
-                quit_action.connect_activate(move |_, _| {
-                    app_clone.quit();
-                });
-                adw_app.add_action(&quit_action);
-
-                // Set keyboard shortcuts
-                adw_app.set_accels_for_action("app.preferences", &["<primary>comma"]);
-                adw_app.set_accels_for_action("app.quit", &["<primary>q"]);
+                adw_app.set_accels_for_action("win.preferences", &["<primary>comma"]);
+                adw_app.set_accels_for_action("win.quit", &["<primary>q"]);
                 adw_app.set_accels_for_action("window.close", &["<primary>w"]);
             }
         }
@@ -286,21 +297,20 @@ impl AsyncComponent for MainWindow {
                 }
             });
 
-        // Initialize the auth dialog
-        let auth_dialog =
-            AuthDialog::builder()
-                .launch(db.clone())
-                .forward(sender.input_sender(), |output| match output {
-                    AuthDialogOutput::SourceAdded(source_id) => {
-                        tracing::info!("Source added: {:?}", source_id);
-                        // Trigger a sync of the new source
-                        MainWindowInput::SyncSource(source_id)
-                    }
-                    AuthDialogOutput::Cancelled => {
-                        tracing::info!("Auth dialog cancelled");
-                        MainWindowInput::Navigate("sources".to_string())
-                    }
-                });
+        // Initialize the auth dialog with parent window
+        let auth_dialog = AuthDialog::builder()
+            .launch((db.clone(), Some(root.clone().upcast())))
+            .forward(sender.input_sender(), |output| match output {
+                AuthDialogOutput::SourceAdded(source_id) => {
+                    tracing::info!("Source added: {:?}", source_id);
+                    // Trigger a sync of the new source
+                    MainWindowInput::SyncSource(source_id)
+                }
+                AuthDialogOutput::Cancelled => {
+                    tracing::info!("Auth dialog cancelled");
+                    MainWindowInput::Navigate("sources".to_string())
+                }
+            });
 
         let mut model = Self {
             db,
@@ -343,18 +353,44 @@ impl AsyncComponent for MainWindow {
 
         // First section with preferences
         let section1 = gio::Menu::new();
-        section1.append(Some("_Preferences"), Some("app.preferences"));
+        section1.append(Some("_Preferences"), Some("win.preferences"));
         primary_menu.append_section(None, &section1);
 
         // Second section with about
         let section2 = gio::Menu::new();
-        section2.append(Some("_About Reel"), Some("app.about"));
+        section2.append(Some("_About Reel"), Some("win.about"));
         primary_menu.append_section(None, &section2);
 
-        // Set the menu on the MenuButton
-        widgets
-            .primary_menu_button
-            .set_menu_model(Some(&primary_menu));
+        // Third section with quit
+        let section3 = gio::Menu::new();
+        section3.append(Some("_Quit"), Some("win.quit"));
+        primary_menu.append_section(None, &section3);
+
+        // Create a popover menu from the menu model
+        let popover_menu = gtk::PopoverMenu::from_model(Some(&primary_menu));
+
+        // Set the popover on the MenuButton instead of the menu model
+        widgets.primary_menu_button.set_popover(Some(&popover_menu));
+
+        // Verify actions are registered on the window
+        let has_preferences = root.lookup_action("preferences").is_some();
+        let has_about = root.lookup_action("about").is_some();
+        let has_quit = root.lookup_action("quit").is_some();
+        tracing::info!(
+            "Window actions status - Preferences: {}, About: {}, Quit: {}",
+            has_preferences,
+            has_about,
+            has_quit
+        );
+
+        // Also verify the actions are enabled
+        if let Some(pref_action) = root.lookup_action("preferences") {
+            if let Some(simple_action) = pref_action.downcast_ref::<gio::SimpleAction>() {
+                tracing::info!("Preferences action enabled: {}", simple_action.is_enabled());
+            }
+        }
+
+        tracing::info!("Primary menu configured with Preferences, About, and Quit actions");
 
         // Store references to widgets for later use
         model.navigation_view.clone_from(&widgets.navigation_view);
@@ -1209,6 +1245,13 @@ impl AsyncComponent for MainWindow {
                     .set_top_bar_style(adw::ToolbarStyle::Raised);
                 self.sidebar_toolbar
                     .set_top_bar_style(adw::ToolbarStyle::Raised);
+
+                // Restore cursor visibility when leaving player
+                if let Some(surface) = root.surface() {
+                    if let Some(cursor) = gtk::gdk::Cursor::from_name("default", None) {
+                        surface.set_cursor(Some(&cursor));
+                    }
+                }
 
                 // Restore window size and state
                 if let Some((width, height)) = self.saved_window_size {

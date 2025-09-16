@@ -37,8 +37,6 @@ pub enum SourcesPageInput {
     RemoveSource(SourceId),
     /// Source removed successfully
     SourceRemoved(SourceId),
-    /// Test connection for a source
-    TestConnection(SourceId),
     /// Sync a source
     SyncSource(SourceId),
     /// Sync completed
@@ -65,7 +63,6 @@ pub struct SourceListItem {
 #[derive(Debug)]
 pub enum SourceListItemInput {
     Sync,
-    TestConnection,
     Remove,
 }
 
@@ -94,15 +91,14 @@ impl FactoryComponent for SourceListItem {
                         SourceType::JellyfinServer => "folder-videos-symbolic",
                         _ => "folder-symbolic",
                     }),
-                    set_pixel_size: 40,
-                    add_css_class: "dim-label",
+                    set_pixel_size: 32,
                 },
 
                 // Source info
                 gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
                     set_hexpand: true,
-                    set_spacing: 4,
+                    set_spacing: 2,
 
                     gtk::Label {
                         set_text: &self.source.name,
@@ -110,49 +106,41 @@ impl FactoryComponent for SourceListItem {
                         add_css_class: "heading",
                     },
 
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 8,
-
-                        gtk::Label {
-                            set_text: &format!("{} • {}",
-                                format!("{:?}", self.source.source_type).to_uppercase(),
-                                self.source.connection_info.primary_url.as_ref().unwrap_or(&"No URL".to_string())
-                            ),
-                            set_halign: gtk::Align::Start,
-                            add_css_class: "dim-label",
-                            add_css_class: "caption",
-                        },
-
-                        // Connection status
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Horizontal,
-                            set_spacing: 4,
-
-                            gtk::Image {
-                                set_icon_name: Some(if self.source.connection_info.is_online {
-                                    "emblem-ok-symbolic"
-                                } else {
-                                    "network-offline-symbolic"
-                                }),
-                                set_pixel_size: 16,
-                                add_css_class: if self.source.connection_info.is_online {
-                                    "success"
-                                } else {
-                                    "error"
-                                },
+                    gtk::Label {
+                        set_text: &format!("{} • {}",
+                            match self.source.source_type {
+                                SourceType::PlexServer { .. } => "Plex",
+                                SourceType::JellyfinServer => "Jellyfin",
+                                _ => "Local",
                             },
+                            self.source.connection_info.primary_url.as_ref()
+                                .and_then(|url| url.split("://").nth(1))
+                                .and_then(|url| url.split('/').next())
+                                .unwrap_or("No URL")
+                        ),
+                        set_halign: gtk::Align::Start,
+                        add_css_class: "dim-label",
+                        add_css_class: "caption",
+                    },
+                },
 
-                            gtk::Label {
-                                set_text: if self.source.connection_info.is_online { "Connected" } else { "Offline" },
-                                add_css_class: "caption",
-                                add_css_class: if self.source.connection_info.is_online {
-                                    "success"
-                                } else {
-                                    "error"
-                                },
-                            },
-                        },
+                // Connection status indicator
+                gtk::Image {
+                    set_icon_name: Some(if self.source.connection_info.is_online {
+                        "emblem-ok-symbolic"
+                    } else {
+                        "network-offline-symbolic"
+                    }),
+                    set_pixel_size: 16,
+                    set_tooltip_text: Some(if self.source.connection_info.is_online {
+                        "Connected"
+                    } else {
+                        "Offline"
+                    }),
+                    add_css_class: if self.source.connection_info.is_online {
+                        "success"
+                    } else {
+                        "dim-label"
                     },
                 },
 
@@ -164,9 +152,8 @@ impl FactoryComponent for SourceListItem {
                     // Sync button
                     gtk::Button {
                         set_icon_name: "view-refresh-symbolic",
-                        set_tooltip_text: Some("Sync Source"),
+                        set_tooltip_text: Some("Sync Library"),
                         add_css_class: "flat",
-                        add_css_class: "circular",
                         #[watch]
                         set_sensitive: !self.is_syncing,
                         #[watch]
@@ -178,22 +165,11 @@ impl FactoryComponent for SourceListItem {
                         connect_clicked => SourceListItemInput::Sync,
                     },
 
-                    // Test connection button
-                    gtk::Button {
-                        set_icon_name: "network-transmit-receive-symbolic",
-                        set_tooltip_text: Some("Test Connection"),
-                        add_css_class: "flat",
-                        add_css_class: "circular",
-                        connect_clicked => SourceListItemInput::TestConnection,
-                    },
-
                     // Remove button
                     gtk::Button {
                         set_icon_name: "user-trash-symbolic",
-                        set_tooltip_text: Some("Remove Source"),
+                        set_tooltip_text: Some("Remove"),
                         add_css_class: "flat",
-                        add_css_class: "circular",
-                        add_css_class: "error",
                         connect_clicked => SourceListItemInput::Remove,
                     },
                 },
@@ -218,13 +194,6 @@ impl FactoryComponent for SourceListItem {
                     )))
                     .unwrap();
             }
-            SourceListItemInput::TestConnection => {
-                sender
-                    .output(SourceItemAction::TestConnection(SourceId::from(
-                        self.source.id.clone(),
-                    )))
-                    .unwrap();
-            }
             SourceListItemInput::Remove => {
                 sender
                     .output(SourceItemAction::Remove(SourceId::from(
@@ -239,7 +208,6 @@ impl FactoryComponent for SourceListItem {
 #[derive(Debug)]
 pub enum SourceItemAction {
     Sync(SourceId),
-    TestConnection(SourceId),
     Remove(SourceId),
 }
 
@@ -293,27 +261,6 @@ impl AsyncComponent for SourcesPage {
                             add_css_class: "boxed-list",
                             set_selection_mode: gtk::SelectionMode::None,
                         },
-
-                        // Info box
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Vertical,
-                            set_spacing: 12,
-                            set_margin_all: 12,
-                            add_css_class: "card",
-
-                            gtk::Label {
-                                set_text: "About Sources",
-                                set_halign: gtk::Align::Start,
-                                add_css_class: "heading",
-                            },
-
-                            gtk::Label {
-                                set_text: "Sources are your media servers like Plex or Jellyfin. You can connect to multiple servers and sync their libraries for offline access.",
-                                set_wrap: true,
-                                set_halign: gtk::Align::Start,
-                                add_css_class: "dim-label",
-                            },
-                        },
                     },
                 },
             },
@@ -364,7 +311,6 @@ impl AsyncComponent for SourcesPage {
             .launch(sources_list.clone())
             .forward(sender.input_sender(), |output| match output {
                 SourceItemAction::Sync(id) => SourcesPageInput::SyncSource(id),
-                SourceItemAction::TestConnection(id) => SourcesPageInput::TestConnection(id),
                 SourceItemAction::Remove(id) => SourcesPageInput::RemoveSource(id),
             });
 
@@ -474,33 +420,6 @@ impl AsyncComponent for SourcesPage {
                 if let Some(index) = index_to_remove {
                     factory_guard.remove(index);
                 }
-            }
-
-            SourcesPageInput::TestConnection(source_id) => {
-                info!("Testing connection for source: {}", source_id);
-
-                let db = self.db.clone();
-                let source_id_clone = source_id.clone();
-
-                sender.oneshot_command(async move {
-                    use crate::services::core::backend::BackendService;
-
-                    // Test connection using the BackendService
-                    match BackendService::test_connection(&db, &source_id_clone).await {
-                        Ok(true) => {
-                            info!("Connection test successful");
-                            SourcesPageInput::Error("✓ Connection successful".to_string())
-                        }
-                        Ok(false) => {
-                            info!("Connection test failed");
-                            SourcesPageInput::Error("✗ Connection failed".to_string())
-                        }
-                        Err(e) => {
-                            error!("Connection test error: {}", e);
-                            SourcesPageInput::Error(format!("✗ Connection error: {}", e))
-                        }
-                    }
-                });
             }
 
             SourcesPageInput::BrokerMsg(msg) => {

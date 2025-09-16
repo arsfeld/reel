@@ -1,9 +1,11 @@
 ---
 id: task-019
 title: Implement FlowBox layout updates for library view mode changes
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2025-09-15 02:34'
+updated_date: '2025-09-16 01:31'
 labels:
   - relm4
   - ui

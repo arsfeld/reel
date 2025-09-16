@@ -9,7 +9,7 @@ use tracing::{debug, error};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImageSize {
-    Thumbnail, // 150x225
+    Thumbnail, // 180x270
     Card,      // 300x450
     Full,      // Original size
     Custom(u32, u32),
@@ -18,7 +18,7 @@ pub enum ImageSize {
 impl ImageSize {
     pub fn dimensions(&self) -> (u32, u32) {
         match self {
-            ImageSize::Thumbnail => (150, 225),
+            ImageSize::Thumbnail => (180, 270),
             ImageSize::Card => (300, 450),
             ImageSize::Full => (0, 0), // No resize
             ImageSize::Custom(w, h) => (*w, *h),

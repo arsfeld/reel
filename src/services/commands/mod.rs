@@ -5,7 +5,7 @@ pub mod sync_commands;
 // Re-export commonly used commands
 pub use media_commands::{
     GetContinueWatchingCommand, GetLibrariesCommand, GetMediaItemCommand, GetMediaItemsCommand,
-    GetRecentlyAddedCommand, UpdatePlaybackProgressCommand,
+    GetPlaybackProgressCommand, GetRecentlyAddedCommand, UpdatePlaybackProgressCommand,
 };
 
 use anyhow::Result;

@@ -971,6 +971,19 @@ impl GStreamerPlayer {
     }
 
     pub async fn get_state(&self) -> PlayerState {
+        // Query GStreamer for the actual state instead of relying on cached state
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
+
+            match current {
+                gst::State::Playing => return PlayerState::Playing,
+                gst::State::Paused => return PlayerState::Paused,
+                gst::State::Ready | gst::State::Null => return PlayerState::Stopped,
+                _ => {}
+            }
+        }
+
+        // Fall back to cached state if playbin is not available
         self.state.read().await.clone()
     }
 

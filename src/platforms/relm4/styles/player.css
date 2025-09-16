@@ -5,38 +5,43 @@
     background-color: black;
 }
 
-/* OSD overlay controls base style - Infuse inspired (no glassmorphism) */
+/* OSD overlay controls base style - Ultra minimal */
 .osd {
-    background: rgba(20, 20, 22, 0.9);
-    border-radius: 10px;
-    padding: 8px;
-    margin: 6px;
+    background: rgba(10, 10, 10, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 8px;
+    padding: 6px;
+    margin: 4px;
     transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.03);
 }
 
-/* OSD circular buttons - minimalistic and perfectly round */
+/* OSD circular buttons - compact and minimal */
 .osd.circular {
-    background: rgba(30, 30, 32, 0.85);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-    transition: all 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
-    min-width: 36px !important;
-    min-height: 36px !important;
-    width: 36px !important;
-    height: 36px !important;
-    max-width: 36px !important;
-    max-height: 36px !important;
-    padding: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+    transition: all 150ms ease;
+    min-width: 32px !important;
+    min-height: 32px !important;
+    width: 32px !important;
+    height: 32px !important;
+    max-width: 32px !important;
+    max-height: 32px !important;
+    padding: 6px;
     border-radius: 50%;
+    color: rgba(255, 255, 255, 0.8);
 }
 
 .osd.circular:hover {
-    background: rgba(45, 45, 47, 0.9);
-    border-color: rgba(255, 255, 255, 0.12);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-    transform: scale(1.04);
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    transform: scale(1.05);
 }
 
 .osd.circular:active {
@@ -63,38 +68,43 @@
     box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
 }
 
-/* Player controls container - compact and refined */
+/* Player controls container - ultra compact */
 .player-controls {
-    background: rgba(22, 22, 24, 0.92);
-    border-radius: 8px;
-    padding: 10px 16px;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(12, 12, 12, 0.85);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: 10px;
+    padding: 8px 12px;
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .player-controls.minimal {
-    background: rgba(22, 22, 24, 0.9);
+    background: rgba(10, 10, 10, 0.8);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     border-radius: 8px;
-    padding: 8px 14px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    padding: 6px 10px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
 }
 
-/* Progress bar - thin and refined */
+/* Progress bar - ultra thin */
 .player-controls .progress-bar {
-    min-height: 3px;
+    min-height: 2px;
     transition: all 200ms ease;
+    margin: 2px 0;
 }
 
 .player-controls .progress-bar trough {
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 1.5px;
-    min-height: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 1px;
+    min-height: 2px;
 }
 
 .player-controls .progress-bar highlight {
-    background: rgba(255, 255, 255, 0.85);
-    border-radius: 1.5px;
-    min-height: 3px;
+    background: rgba(255, 255, 255, 0.8);
+    border-radius: 1px;
+    min-height: 2px;
 }
 
 .player-controls .progress-bar slider {
@@ -109,15 +119,17 @@
 }
 
 .player-controls .progress-bar:hover {
-    min-height: 5px;
+    min-height: 4px;
 }
 
 .player-controls .progress-bar:hover trough {
-    min-height: 5px;
+    min-height: 4px;
+    background: rgba(255, 255, 255, 0.08);
 }
 
 .player-controls .progress-bar:hover highlight {
-    min-height: 5px;
+    min-height: 4px;
+    background: rgba(255, 255, 255, 0.85);
 }
 
 .player-controls .progress-bar:hover slider {
@@ -127,31 +139,32 @@
     opacity: 1;
 }
 
-/* Seek bar styling - thin and refined */
+/* Seek bar styling - ultra thin */
 .seek-bar {
     opacity: 1;
     transition: all 200ms ease;
 }
 
 .seek-bar trough {
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 1.5px;
-    min-height: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 1px;
+    min-height: 2px;
 }
 
 .seek-bar:hover trough {
-    background: rgba(255, 255, 255, 0.1);
-    min-height: 5px;
+    background: rgba(255, 255, 255, 0.08);
+    min-height: 4px;
 }
 
 .seek-bar highlight {
-    background: rgba(255, 255, 255, 0.85);
-    border-radius: 1.5px;
-    min-height: 3px;
+    background: rgba(255, 255, 255, 0.8);
+    border-radius: 1px;
+    min-height: 2px;
 }
 
 .seek-bar:hover highlight {
-    min-height: 5px;
+    min-height: 4px;
+    background: rgba(255, 255, 255, 0.85);
 }
 
 .seek-bar slider {
@@ -160,107 +173,111 @@
     min-width: 0;
     min-height: 0;
     margin: 0;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    transition: all 150ms ease;
     opacity: 0;
 }
 
 .seek-bar:hover {
-    min-height: 5px;
+    min-height: 4px;
 }
 
 .seek-bar:hover slider {
-    min-width: 12px;
-    min-height: 12px;
-    margin: -4.5px 0;
+    min-width: 10px;
+    min-height: 10px;
+    margin: -4px 0;
     opacity: 1;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
-/* Time labels - compact typography */
+/* Time labels - readable typography */
 .player-controls .dim-label {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 500;
-    color: rgba(255, 255, 255, 0.6);
-    letter-spacing: 0.2px;
+    color: rgba(255, 255, 255, 0.65);
+    letter-spacing: 0.3px;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
 }
 
 .player-controls label.numeric {
-    color: rgba(255, 255, 255, 0.75);
+    color: rgba(255, 255, 255, 0.8);
     font-weight: 500;
-    font-size: 11px;
+    font-size: 13px;
     font-variant-numeric: tabular-nums;
 }
 
-/* Flat buttons in controls - compact and refined */
+/* Flat buttons in controls - ultra minimal */
 .player-controls button.flat {
-    min-width: 32px;
-    min-height: 32px;
+    min-width: 28px;
+    min-height: 28px;
     padding: 4px;
     margin: 0 1px;
-    color: rgba(255, 255, 255, 0.75);
+    color: rgba(255, 255, 255, 0.7);
     background: transparent;
     border: none;
     box-shadow: none;
     border-radius: 6px;
-    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: all 120ms ease;
+    opacity: 0.8;
 }
 
 .player-controls button.flat:hover {
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.05);
     color: rgba(255, 255, 255, 0.9);
+    opacity: 1;
 }
 
 .player-controls button.flat:active {
     transform: scale(0.98);
-    background: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.1);
 }
 
 /* Play/pause button container - enforces square aspect ratio */
 .play-pause-container {
-    width: 40px !important;
-    height: 40px !important;
-    min-width: 40px !important;
-    min-height: 40px !important;
-    max-width: 40px !important;
-    max-height: 40px !important;
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    min-height: 36px !important;
+    max-width: 36px !important;
+    max-height: 36px !important;
     padding: 0 !important;
     margin: 0 !important;
 }
 
-/* Play/pause button - perfectly circular */
+/* Play/pause button - sleek and minimal */
 .play-pause-button {
-    width: 40px !important;
-    height: 40px !important;
-    min-width: 40px !important;
-    min-height: 40px !important;
-    max-width: 40px !important;
-    max-height: 40px !important;
-    border-radius: 20px !important;
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    min-height: 36px !important;
+    max-width: 36px !important;
+    max-height: 36px !important;
+    border-radius: 50% !important;
     padding: 0 !important;
     margin: 0 !important;
     background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    transition: all 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
-    color: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: none;
+    transition: all 150ms ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    color: rgba(255, 255, 255, 0.9);
 }
 
 .play-pause-button:hover {
     background: rgba(255, 255, 255, 0.12);
-    border-color: rgba(255, 255, 255, 0.1);
-    transform: scale(1.06);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    transform: scale(1.05);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
     color: rgba(255, 255, 255, 0.95);
 }
 
 .play-pause-button:active {
-    transform: scale(0.97);
+    transform: scale(0.98);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    background: rgba(255, 255, 255, 0.06);
 }
 
-/* Ensure play/pause icon is centered */
+/* Ensure play/pause icon is centered and properly sized */
 .play-pause-button image {
     margin: 0 !important;
     padding: 0 !important;
@@ -274,33 +291,35 @@
 .player-controls button.circular:not(.play-pause-button),
 button.circular:not(.play-pause-button) {
     border-radius: 50% !important;
-    width: 38px !important;
-    height: 38px !important;
-    min-width: 38px !important;
-    min-height: 38px !important;
-    max-width: 38px !important;
-    max-height: 38px !important;
+    width: 34px !important;
+    height: 34px !important;
+    min-width: 34px !important;
+    min-height: 34px !important;
+    max-width: 34px !important;
+    max-height: 34px !important;
     padding: 0 !important;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    transition: all 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+    background: rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: none;
+    transition: all 150ms ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
     color: rgba(255, 255, 255, 0.85);
 }
 
 .player-controls button.circular:not(.play-pause-button):hover,
 button.circular:not(.play-pause-button):hover {
-    background: rgba(255, 255, 255, 0.12);
-    border-color: rgba(255, 255, 255, 0.1);
-    transform: scale(1.06);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    background: rgba(255, 255, 255, 0.1);
+    transform: scale(1.05);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
     color: rgba(255, 255, 255, 0.95);
 }
 
 .player-controls button.circular:not(.play-pause-button):active,
 button.circular:not(.play-pause-button):active {
-    transform: scale(0.97);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    transform: scale(0.98);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+    background: rgba(255, 255, 255, 0.05);
 }
 
 /* Ensure other circular button icons are centered */
@@ -329,39 +348,39 @@ button.circular:not(.play-pause-button) image {
     max-width: 1200px;
 }
 
-/* Volume slider - compact and refined */
+/* Volume slider - ultra compact */
 .volume-slider {
-    min-height: 3px;
-    transition: all 200ms ease;
-}
-
-.volume-slider trough {
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: 1.5px;
-    min-height: 3px;
-}
-
-.volume-slider highlight {
-    background: rgba(255, 255, 255, 0.75);
-    border-radius: 1.5px;
-    min-height: 3px;
-}
-
-.volume-slider slider {
-    min-width: 10px;
-    min-height: 10px;
-    background: rgba(255, 255, 255, 0.9);
-    border-radius: 50%;
-    margin: -3.5px 0;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    min-height: 2px;
     transition: all 150ms ease;
 }
 
+.volume-slider trough {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 1px;
+    min-height: 2px;
+}
+
+.volume-slider highlight {
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 1px;
+    min-height: 2px;
+}
+
+.volume-slider slider {
+    min-width: 8px;
+    min-height: 8px;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 50%;
+    margin: -3px 0;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    transition: all 120ms ease;
+}
+
 .volume-slider:hover slider {
-    min-width: 12px;
-    min-height: 12px;
-    margin: -4.5px 0;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    min-width: 10px;
+    min-height: 10px;
+    margin: -4px 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
 /* Volume button */
@@ -387,11 +406,11 @@ volumebutton scale {
     transition: opacity 300ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Smooth fade animations - simplified without blur */
+/* Smooth fade animations - subtle and quick */
 @keyframes fadeIn {
     from {
         opacity: 0;
-        transform: translateY(8px);
+        transform: translateY(4px);
     }
     to {
         opacity: 1;
@@ -406,23 +425,23 @@ volumebutton scale {
     }
     to {
         opacity: 0;
-        transform: translateY(4px);
+        transform: translateY(2px);
     }
 }
 
 /* Apply animations to controls visibility */
 .osd.player-controls {
-    animation: fadeIn 250ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    animation: fadeIn 200ms ease-out;
 }
 
 .osd.player-controls.hiding {
-    animation: fadeOut 200ms cubic-bezier(0.55, 0.055, 0.675, 0.19);
+    animation: fadeOut 150ms ease-in;
 }
 
-/* OSD overlay wrapper transitions - faster and simpler */
+/* OSD overlay wrapper transitions - quick and smooth */
 .osd-overlay {
-    transition: opacity 250ms cubic-bezier(0.4, 0, 0.2, 1),
-                transform 250ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: opacity 200ms ease,
+                transform 200ms ease;
 }
 
 /* Top controls positioning - compact */

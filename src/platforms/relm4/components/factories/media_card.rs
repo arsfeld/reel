@@ -59,8 +59,8 @@ impl FactoryComponent for MediaCard {
             add_css_class: "flat",
             add_css_class: "media-card",
             add_css_class: "poster-card",
-            set_width_request: 150,
-            set_height_request: 225,
+            set_width_request: 180,
+            set_height_request: 270,
 
             // Main overlay container
             gtk::Overlay {
@@ -70,28 +70,14 @@ impl FactoryComponent for MediaCard {
                 #[name(poster)]
                 gtk::Picture {
                     set_content_fit: gtk::ContentFit::Cover,
-                    set_can_shrink: false,
-                    set_width_request: 150,
-                    set_height_request: 225,
+                    set_can_shrink: true,
+                    set_width_request: 180,
+                    set_height_request: 270,
                     add_css_class: "rounded-poster",
                     #[track(self.changed(MediaCard::image_loaded()))]
                     add_css_class: if self.image_loaded { "poster-fade-in" } else { "poster-skeleton" },
                 },
 
-                // Loading spinner overlay
-                add_overlay = &gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    set_halign: gtk::Align::Center,
-                    set_valign: gtk::Align::Center,
-                    #[track(self.changed(MediaCard::image_loaded()) | self.changed(MediaCard::load_failed()))]
-                    set_visible: !self.image_loaded && !self.load_failed,
-
-                    gtk::Spinner {
-                        set_spinning: true,
-                        set_width_request: 24,
-                        set_height_request: 24,
-                    }
-                },
 
                 // Info gradient at bottom
                 add_overlay = &gtk::Box {
@@ -103,10 +89,10 @@ impl FactoryComponent for MediaCard {
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
                         set_spacing: 2,
-                        set_margin_bottom: 8,
-                        set_margin_start: 8,
-                        set_margin_end: 8,
-                        set_margin_top: 8,
+                        set_margin_bottom: 4,
+                        set_margin_start: 4,
+                        set_margin_end: 4,
+                        set_margin_top: 4,
                         add_css_class: "media-card-info",
 
                         gtk::Label {
@@ -134,15 +120,15 @@ impl FactoryComponent for MediaCard {
                     set_orientation: gtk::Orientation::Horizontal,
                     set_halign: gtk::Align::End,
                     set_valign: gtk::Align::Start,
-                    set_margin_top: 8,
-                    set_margin_end: 8,
+                    set_margin_top: 4,
+                    set_margin_end: 4,
                     #[track(self.changed(MediaCard::item()))]
                     set_visible: !self.is_watched(),
                     add_css_class: "unwatched-indicator",
 
                     gtk::Box {
-                        set_width_request: 14,
-                        set_height_request: 14,
+                        set_width_request: 8,
+                        set_height_request: 8,
                         add_css_class: "unwatched-glow-dot",
                     }
                 },

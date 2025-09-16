@@ -68,6 +68,8 @@ pub struct CreateSourceCommand<'a> {
     pub name: String,
     pub credentials: Credentials,
     pub server_url: Option<String>,
+    pub machine_id: Option<String>, // For Plex servers
+    pub is_owned: Option<bool>,     // For Plex servers
 }
 
 #[async_trait]
@@ -80,6 +82,8 @@ impl<'a> Command<Source> for CreateSourceCommand<'a> {
             self.name.clone(),
             self.credentials.clone(),
             self.server_url.clone(),
+            self.machine_id.clone(),
+            self.is_owned,
         )
         .await
     }
