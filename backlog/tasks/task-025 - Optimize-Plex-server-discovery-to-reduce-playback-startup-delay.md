@@ -1,11 +1,11 @@
 ---
 id: task-025
 title: Optimize Plex server discovery to reduce playback startup delay
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-09-15 03:43'
-updated_date: '2025-09-15 22:17'
+updated_date: '2025-09-15 22:32'
 labels:
   - performance
   - plex
@@ -95,6 +95,19 @@ This fix ensures that:
 1. First connection uses the saved URL if it works
 2. Subsequent connections can use all discovered URLs from cache
 3. No more 5+ second delays for server discovery on every playback
+
+
+## Fixed URL Persistence Issue
+
+The root cause of the persistent wrong URL issue was that the PlexBackend would discover better connections but never save them back to the database. The fix involved:
+
+1. Added tracking of URL changes in PlexBackend with original_url field
+2. Added has_url_changed() method to detect when a better URL is found
+3. Updated BackendService to save the new URL to database after initialization
+4. Ensured the best discovered URL is persisted for future use
+
+This ensures that once a working URL is found, it will be saved and used for subsequent connections, preventing the 5+ second discovery delay on every playback.
+
 
 ## Issue Still Occurring
 

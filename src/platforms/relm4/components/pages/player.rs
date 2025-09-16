@@ -36,6 +36,9 @@ pub struct PlayerPage {
     video_placeholder: Option<gtk::Label>,
     // Playlist context
     playlist_context: Option<PlaylistContext>,
+    // Navigation state
+    can_go_previous: bool,
+    can_go_next: bool,
     // UI state
     show_controls: bool,
     is_fullscreen: bool,
@@ -46,6 +49,7 @@ pub struct PlayerPage {
     position_label: gtk::Label,
     duration_label: gtk::Label,
     volume_slider: gtk::Scale,
+    playlist_position_label: gtk::Label,
     // Window reference for cursor management
     window: adw::ApplicationWindow,
     // Seek bar drag state
@@ -55,6 +59,34 @@ pub struct PlayerPage {
     retry_count: u32,
     max_retries: u32,
     retry_timer: Option<SourceId>,
+}
+
+impl PlayerPage {
+    fn update_playlist_position_label(&self, context: &PlaylistContext) {
+        match context {
+            PlaylistContext::SingleItem => {
+                self.playlist_position_label.set_text("");
+            }
+            PlaylistContext::TvShow {
+                show_title,
+                current_index,
+                episodes,
+                ..
+            } => {
+                if let Some(current_episode) = episodes.get(*current_index) {
+                    let text = format!(
+                        "{} - S{}E{} - Episode {} of {}",
+                        show_title,
+                        current_episode.season_number,
+                        current_episode.episode_number,
+                        current_index + 1,
+                        episodes.len()
+                    );
+                    self.playlist_position_label.set_text(&text);
+                }
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -98,6 +130,7 @@ pub enum PlayerInput {
     RetryLoad,
     ClearError,
     ShowError(String),
+    EscapePressed,
 }
 
 #[derive(Debug, Clone)]
@@ -274,6 +307,12 @@ impl AsyncComponent for PlayerPage {
                 add_css_class: "player-controls",
                 add_css_class: "minimal",
 
+                // Playlist position indicator
+                model.playlist_position_label.clone() {
+                    add_css_class: "dim-label",
+                    set_margin_bottom: 4,
+                },
+
                 // Progress bar with time labels
                 gtk::Box {
                     set_orientation: gtk::Orientation::Horizontal,
@@ -335,6 +374,8 @@ impl AsyncComponent for PlayerPage {
                             set_icon_name: "media-skip-backward-symbolic",
                             add_css_class: "flat",
                             set_tooltip_text: Some("Previous"),
+                            #[watch]
+                            set_sensitive: model.can_go_previous,
                             connect_clicked => PlayerInput::Previous,
                         },
 
@@ -347,16 +388,24 @@ impl AsyncComponent for PlayerPage {
                         },
 
                         // Play/pause button (center, slightly larger)
-                        gtk::Button {
-                            #[watch]
-                            set_icon_name: if matches!(model.player_state, PlayerState::Playing) {
-                                "media-playback-pause-symbolic"
-                            } else {
-                                "media-playback-start-symbolic"
-                            },
-                            add_css_class: "circular",
+                        gtk::Box {
                             set_size_request: (40, 40),
-                            connect_clicked => PlayerInput::PlayPause,
+                            set_halign: gtk::Align::Center,
+                            set_valign: gtk::Align::Center,
+                            add_css_class: "play-pause-container",
+
+                            gtk::Button {
+                                #[watch]
+                                set_icon_name: if matches!(model.player_state, PlayerState::Playing) {
+                                    "media-playback-pause-symbolic"
+                                } else {
+                                    "media-playback-start-symbolic"
+                                },
+                                add_css_class: "circular",
+                                add_css_class: "play-pause-button",
+                                set_can_shrink: false,
+                                connect_clicked => PlayerInput::PlayPause,
+                            },
                         },
 
                         // Forward button (seek forward 10s)
@@ -372,6 +421,8 @@ impl AsyncComponent for PlayerPage {
                             set_icon_name: "media-skip-forward-symbolic",
                             add_css_class: "flat",
                             set_tooltip_text: Some("Next"),
+                            #[watch]
+                            set_sensitive: model.can_go_next,
                             connect_clicked => PlayerInput::Next,
                         },
                     },
@@ -472,6 +523,7 @@ impl AsyncComponent for PlayerPage {
         // Create time labels
         let position_label = gtk::Label::new(Some("0:00"));
         let duration_label = gtk::Label::new(Some("0:00"));
+        let playlist_position_label = gtk::Label::new(None);
 
         // Create volume slider
         let volume_slider = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
@@ -489,6 +541,8 @@ impl AsyncComponent for PlayerPage {
             video_container: video_container.clone(),
             video_placeholder: Some(placeholder.clone()),
             playlist_context: None,
+            can_go_previous: false,
+            can_go_next: false,
             show_controls: true,
             is_fullscreen: false,
             controls_timer: None,
@@ -497,6 +551,7 @@ impl AsyncComponent for PlayerPage {
             position_label: position_label.clone(),
             duration_label: duration_label.clone(),
             volume_slider: volume_slider.clone(),
+            playlist_position_label: playlist_position_label.clone(),
             window: window.clone(),
             is_seeking: false,
             error_message: None,
@@ -612,7 +667,7 @@ impl AsyncComponent for PlayerPage {
         {
             let sender = sender.clone();
             let sender_for_escape = sender.clone();
-            let is_fullscreen = model.is_fullscreen;
+            let sender_for_fullscreen_check = sender.clone();
             let key_controller = gtk::EventControllerKey::new();
             key_controller.connect_key_pressed(move |_, key, _, _| {
                 match key {
@@ -626,11 +681,7 @@ impl AsyncComponent for PlayerPage {
                     }
                     gtk::gdk::Key::Escape => {
                         // ESC key behavior: exit fullscreen if fullscreen, otherwise go back
-                        // We need to check the actual state, not the captured value
-                        // Send navigate back - MainWindow will handle chrome restoration
-                        sender_for_escape
-                            .output(PlayerOutput::NavigateBack)
-                            .unwrap();
+                        sender_for_fullscreen_check.input(PlayerInput::EscapePressed);
                         glib::Propagation::Stop
                     }
                     _ => glib::Propagation::Proceed,
@@ -674,6 +725,11 @@ impl AsyncComponent for PlayerPage {
                 self.player_state = PlayerState::Loading;
                 // Clear context when loading without context
                 self.playlist_context = None;
+                // No navigation available for single items
+                self.can_go_previous = false;
+                self.can_go_next = false;
+                // Clear playlist position label
+                self.playlist_position_label.set_text("");
                 // Clear any existing error message
                 self.error_message = None;
 
@@ -773,6 +829,14 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::LoadMediaWithContext { media_id, context } => {
                 self.media_item_id = Some(media_id.clone());
                 self.player_state = PlayerState::Loading;
+
+                // Update navigation state based on context
+                self.can_go_previous = context.has_previous();
+                self.can_go_next = context.has_next();
+
+                // Update playlist position label
+                self.update_playlist_position_label(&context);
+
                 self.playlist_context = Some(context);
                 // Clear any existing error message
                 self.error_message = None;
@@ -1136,6 +1200,15 @@ impl AsyncComponent for PlayerPage {
                 error!("Player error: {}", msg);
                 self.error_message = Some(msg);
                 self.player_state = PlayerState::Error;
+            }
+            PlayerInput::EscapePressed => {
+                // ESC key behavior: exit fullscreen if in fullscreen, otherwise navigate back
+                if self.is_fullscreen {
+                    sender.input(PlayerInput::ToggleFullscreen);
+                } else {
+                    // Navigate back if not in fullscreen
+                    sender.output(PlayerOutput::NavigateBack).unwrap();
+                }
             }
         }
     }

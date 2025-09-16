@@ -48,6 +48,8 @@ pub struct MainWindow {
     was_fullscreen: bool,
     // Current navigation state
     current_library_id: Option<LibraryId>,
+    // Toast overlay for notifications
+    toast_overlay: adw::ToastOverlay,
 }
 
 #[derive(Debug)]
@@ -71,6 +73,7 @@ pub enum MainWindowInput {
     SetHeaderStartContent(Option<gtk::Widget>),
     SetHeaderEndContent(Option<gtk::Widget>),
     ClearHeaderContent,
+    ShowToast(String),
 }
 
 #[derive(Debug)]
@@ -83,7 +86,7 @@ impl AsyncComponent for MainWindow {
     type Init = DatabaseConnection;
     type Input = MainWindowInput;
     type Output = MainWindowOutput;
-    type CommandOutput = ();
+    type CommandOutput = (bool, usize, Option<String>);
 
     view! {
         #[root]
@@ -93,8 +96,11 @@ impl AsyncComponent for MainWindow {
             set_default_height: 800,
 
             #[wrap(Some)]
-            #[name(split_view)]
-            set_content = &adw::NavigationSplitView {
+            #[name(toast_overlay)]
+            set_content = &adw::ToastOverlay {
+                #[wrap(Some)]
+                #[name(split_view)]
+                set_child = &adw::NavigationSplitView {
                 set_sidebar_width_fraction: 0.25,
                 set_min_sidebar_width: 280.0,
                 set_max_sidebar_width: 400.0,
@@ -203,6 +209,7 @@ impl AsyncComponent for MainWindow {
                             },
                         },
                     },
+                },
                 },
             },
         }
@@ -323,6 +330,7 @@ impl AsyncComponent for MainWindow {
             was_maximized: false,
             was_fullscreen: false,
             current_library_id: None,
+            toast_overlay: adw::ToastOverlay::new(),
         };
 
         let widgets = view_output!();
@@ -496,6 +504,8 @@ impl AsyncComponent for MainWindow {
                                     );
                                 }
                             }
+                            // Return a dummy value since this is just startup sync
+                            (true, 0, None)
                         });
 
                         // Schedule a delayed sidebar refresh since sources might sync
@@ -1147,6 +1157,11 @@ impl AsyncComponent for MainWindow {
             MainWindowInput::SyncSource(source_id) => {
                 tracing::info!("Syncing new source: {:?}", source_id);
 
+                // Show toast notification for sync start
+                sender.input(MainWindowInput::ShowToast(
+                    "Source added successfully. Starting sync...".to_string(),
+                ));
+
                 // Trigger sync in background
                 let db = self.db.clone();
                 let source_id_clone = source_id.clone();
@@ -1161,9 +1176,13 @@ impl AsyncComponent for MainWindow {
                                 "Source sync completed: {} items synced",
                                 sync_result.items_synced
                             );
+                            // Return the result to be handled in the command output
+                            (true, sync_result.items_synced, None)
                         }
                         Err(e) => {
                             tracing::error!("Failed to sync source: {}", e);
+                            // Return the error to be handled in the command output
+                            (false, 0, Some(e.to_string()))
                         }
                     }
                 });
@@ -1254,6 +1273,31 @@ impl AsyncComponent for MainWindow {
                     self.header_end_box.remove(&child);
                 }
             }
+            MainWindowInput::ShowToast(message) => {
+                let toast = adw::Toast::new(&message);
+                toast.set_timeout(3);
+                self.toast_overlay.add_toast(toast);
+            }
+        }
+    }
+
+    async fn update_cmd(
+        &mut self,
+        message: Self::CommandOutput,
+        sender: AsyncComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
+        let (success, items_synced, error) = message;
+        if success {
+            sender.input(MainWindowInput::ShowToast(format!(
+                "Sync completed! {} items added to your library",
+                items_synced
+            )));
+        } else if let Some(error_msg) = error {
+            sender.input(MainWindowInput::ShowToast(format!(
+                "Sync failed: {}",
+                error_msg
+            )));
         }
     }
 }

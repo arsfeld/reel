@@ -92,8 +92,10 @@ impl ReelApp {
             .poster-card {
                 border-radius: 8px;
                 transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
-                width: 130px;
-                height: 195px;
+                width: 150px;
+                height: 225px;
+                min-width: 150px;
+                min-height: 225px;
             }
 
             .poster-card:hover {
@@ -111,8 +113,10 @@ impl ReelApp {
                             rgba(255, 255, 255, 0.02) 0%,
                             transparent 50%,
                             rgba(0, 0, 0, 0.03) 100%);
-                width: 130px;
-                height: 195px;
+                width: 150px;
+                height: 225px;
+                min-width: 150px;
+                min-height: 225px;
             }
 
             /* Rounded Poster Image */
@@ -157,12 +161,41 @@ impl ReelApp {
             /* Poster Background Gradient */
             .poster-card picture {
                 background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                min-width: 150px;
+                min-height: 225px;
+            }
+
+            /* Skeleton loading placeholder */
+            .poster-skeleton {
+                background: linear-gradient(90deg,
+                    rgba(255, 255, 255, 0.05) 0%,
+                    rgba(255, 255, 255, 0.1) 50%,
+                    rgba(255, 255, 255, 0.05) 100%);
+                background-size: 200% 100%;
+                animation: skeleton-shimmer 1.5s ease-in-out infinite;
+            }
+
+            @keyframes skeleton-shimmer {
+                0% { background-position: -200% 0; }
+                100% { background-position: 200% 0; }
+            }
+
+            /* Smooth image fade-in */
+            .poster-fade-in {
+                animation: poster-fade 0.3s ease-in;
+            }
+
+            @keyframes poster-fade {
+                from { opacity: 0; }
+                to { opacity: 1; }
             }
 
             /* Flow Box Child Sizing */
             flowboxchild {
-                width: 130px;
-                height: 195px;
+                width: 150px;
+                height: 225px;
+                min-width: 150px;
+                min-height: 225px;
             }
 
             /* Badge Styles */

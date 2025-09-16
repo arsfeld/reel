@@ -8,6 +8,7 @@ use tracing::{debug, error};
 use crate::db::connection::DatabaseConnection;
 use crate::models::auth_provider::Source;
 use crate::models::{Library, LibraryId, LibraryType, SourceId};
+use crate::platforms::relm4::components::shared::broker::{BROKER, BrokerMessage, SourceMessage};
 use crate::services::commands::{Command, auth_commands::LoadSourcesCommand};
 use crate::services::core::media::MediaService;
 
@@ -28,6 +29,8 @@ pub enum SidebarInput {
     ManageSources,
     /// Update connection status
     UpdateConnectionStatus(String),
+    /// Broker message received
+    BrokerMsg(BrokerMessage),
 }
 
 #[derive(Debug)]
@@ -480,6 +483,17 @@ impl Component for Sidebar {
         // Load initial sources
         sender.input(SidebarInput::RefreshSources);
 
+        // Subscribe to broker messages for sync updates
+        let broker_sender = sender.clone();
+        relm4::spawn(async move {
+            let (tx, mut rx) = relm4::channel();
+            BROKER.subscribe("sidebar".to_string(), tx).await;
+
+            while let Some(msg) = rx.recv().await {
+                broker_sender.input(SidebarInput::BrokerMsg(msg));
+            }
+        });
+
         ComponentParts { model, widgets }
     }
 
@@ -567,6 +581,23 @@ impl Component for Sidebar {
 
             SidebarInput::UpdateConnectionStatus(status) => {
                 self.connection_status = status;
+            }
+
+            SidebarInput::BrokerMsg(msg) => {
+                match msg {
+                    BrokerMessage::Source(SourceMessage::SyncStarted { .. }) => {
+                        self.is_syncing = true;
+                    }
+                    BrokerMessage::Source(SourceMessage::SyncCompleted { .. }) => {
+                        self.is_syncing = false;
+                        // Refresh sources to get updated library counts
+                        sender.input(SidebarInput::RefreshSources);
+                    }
+                    BrokerMessage::Source(SourceMessage::SyncError { .. }) => {
+                        self.is_syncing = false;
+                    }
+                    _ => {}
+                }
             }
         }
     }
