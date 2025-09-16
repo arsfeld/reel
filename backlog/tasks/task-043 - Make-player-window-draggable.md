@@ -4,12 +4,13 @@ title: Make player window draggable
 status: To Do
 assignee: []
 created_date: '2025-09-16 01:06'
+updated_date: '2025-09-16 04:34'
 labels:
   - ui
   - player
   - ux
 dependencies: []
-priority: medium
+priority: high
 ---
 
 ## Description

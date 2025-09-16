@@ -4,12 +4,13 @@ title: Optimize image loading to match batch rendering in library page
 status: To Do
 assignee: []
 created_date: '2025-09-16 04:00'
+updated_date: '2025-09-16 04:35'
 labels:
   - performance
   - optimization
   - ui
 dependencies: []
-priority: medium
+priority: high
 ---
 
 ## Description

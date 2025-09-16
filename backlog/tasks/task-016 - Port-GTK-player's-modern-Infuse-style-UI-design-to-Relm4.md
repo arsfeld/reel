@@ -1,9 +1,10 @@
 ---
 id: task-016
 title: Port GTK player's modern Infuse-style UI design to Relm4
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-15 02:12'
+updated_date: '2025-09-16 04:34'
 labels:
   - ui
   - player

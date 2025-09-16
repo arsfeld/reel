@@ -4,12 +4,13 @@ title: Implement MPV keyboard shortcuts in player page for both backends
 status: To Do
 assignee: []
 created_date: '2025-09-16 00:34'
+updated_date: '2025-09-16 04:34'
 labels:
   - ui
   - player
   - enhancement
 dependencies: []
-priority: medium
+priority: high
 ---
 
 ## Description
