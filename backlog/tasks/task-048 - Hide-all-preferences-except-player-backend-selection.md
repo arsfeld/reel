@@ -4,10 +4,11 @@ title: Hide all preferences except player backend selection
 status: To Do
 assignee: []
 created_date: '2025-09-16 02:31'
+updated_date: '2025-09-16 04:35'
 labels:
   - preferences
 dependencies: []
-priority: medium
+priority: high
 ---
 
 ## Description
