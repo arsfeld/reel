@@ -9,7 +9,7 @@ use relm4::gtk;
 use relm4::prelude::*;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 fn format_duration(duration: Duration) -> String {
     let total_secs = duration.as_secs();
@@ -59,6 +59,12 @@ pub struct PlayerPage {
     retry_count: u32,
     max_retries: u32,
     retry_timer: Option<SourceId>,
+    // Progress save tracking
+    last_progress_save: std::time::Instant,
+    // Cached config values to avoid reloading config file every second
+    config_auto_resume: bool,
+    config_resume_threshold_seconds: u64,
+    config_progress_update_interval_seconds: u64,
 }
 
 impl PlayerPage {
@@ -131,6 +137,7 @@ pub enum PlayerInput {
     ClearError,
     ShowError(String),
     EscapePressed,
+    NavigateBack,
 }
 
 #[derive(Debug, Clone)]
@@ -214,7 +221,7 @@ impl AsyncComponent for PlayerPage {
                     add_css_class: "osd",
                     add_css_class: "circular",
                     connect_clicked[sender] => move |_| {
-                        sender.output(PlayerOutput::NavigateBack).unwrap();
+                        sender.input(PlayerInput::NavigateBack);
                     },
                 },
             },
@@ -286,7 +293,7 @@ impl AsyncComponent for PlayerPage {
                         set_label: "Go Back",
                         add_css_class: "pill",
                         connect_clicked[sender] => move |_| {
-                            sender.output(PlayerOutput::NavigateBack).unwrap();
+                            sender.input(PlayerInput::NavigateBack);
                         },
                     },
                 },
@@ -387,9 +394,9 @@ impl AsyncComponent for PlayerPage {
                             connect_clicked => PlayerInput::Rewind,
                         },
 
-                        // Play/pause button (center, slightly larger)
+                        // Play/pause button (center, compact)
                         gtk::Box {
-                            set_size_request: (40, 40),
+                            set_size_request: (36, 36),
                             set_halign: gtk::Align::Center,
                             set_valign: gtk::Align::Center,
                             add_css_class: "play-pause-container",
@@ -530,6 +537,9 @@ impl AsyncComponent for PlayerPage {
         volume_slider.set_value(1.0);
         volume_slider.set_draw_value(false);
 
+        // Load config once at initialization
+        let config = Config::load().unwrap_or_default();
+
         let mut model = Self {
             media_item_id,
             player: None,
@@ -558,10 +568,17 @@ impl AsyncComponent for PlayerPage {
             retry_count: 0,
             max_retries: 3,
             retry_timer: None,
+            last_progress_save: std::time::Instant::now(),
+            // Cache config values to avoid reloading every second
+            config_auto_resume: config.playback.auto_resume,
+            config_resume_threshold_seconds: config.playback.resume_threshold_seconds as u64,
+            config_progress_update_interval_seconds: config
+                .playback
+                .progress_update_interval_seconds
+                as u64,
         };
 
         // Initialize the player controller
-        let config = Config::default();
         match PlayerController::new(&config) {
             Ok((handle, controller)) => {
                 info!("Player controller initialized successfully");
@@ -736,7 +753,11 @@ impl AsyncComponent for PlayerPage {
                 // Get actual media URL from backend using GetStreamUrlCommand
                 let db_clone = self.db.clone();
                 let media_id = id.clone();
+                let media_id_for_resume = media_id.clone();
                 let sender_clone = sender.clone();
+                // Capture cached config values to avoid reloading config in async closure
+                let auto_resume = self.config_auto_resume;
+                let resume_threshold_seconds = self.config_resume_threshold_seconds;
 
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
@@ -777,6 +798,33 @@ impl AsyncComponent for PlayerPage {
                             Ok(_) => {
                                 info!("Media loaded successfully");
 
+                                // Check for saved playback progress and resume if configured
+                                use crate::services::commands::GetPlaybackProgressCommand;
+
+                                // Use cached config values
+                                if auto_resume {
+                                    // Get saved progress
+                                    if let Ok(Some((position_ms, _duration_ms))) =
+                                        (GetPlaybackProgressCommand {
+                                            db: db_clone.as_ref().clone(),
+                                            media_id: media_id_for_resume.clone(),
+                                            user_id: "default".to_string(), // TODO: Get actual user ID
+                                        }).execute().await
+                                    {
+                                        // Only resume if we've watched more than the threshold
+                                        let threshold_ms = (resume_threshold_seconds as i64) * 1000;
+                                        if position_ms > threshold_ms {
+                                            let resume_position = std::time::Duration::from_millis(position_ms as u64);
+                                            info!("Resuming playback from {:?}", resume_position);
+
+                                            // Seek to saved position
+                                            if let Err(e) = player_handle.seek(resume_position).await {
+                                                warn!("Failed to seek to saved position: {}", e);
+                                            }
+                                        }
+                                    }
+                                }
+
                                 // Try to get video dimensions and calculate appropriate window size
                                 if let Ok(Some((width, height))) =
                                     player_handle.get_video_dimensions().await
@@ -807,7 +855,12 @@ impl AsyncComponent for PlayerPage {
                                     }
                                 }
 
-                                PlayerCommandOutput::StateChanged(PlayerState::Idle)
+                                // Get the actual state from the player after loading
+                                let actual_state = player_handle
+                                    .get_state()
+                                    .await
+                                    .unwrap_or(PlayerState::Idle);
+                                PlayerCommandOutput::StateChanged(actual_state)
                             }
                             Err(e) => {
                                 error!("Failed to load media: {}", e);
@@ -844,7 +897,11 @@ impl AsyncComponent for PlayerPage {
                 // Get actual media URL from backend using GetStreamUrlCommand
                 let db_clone = self.db.clone();
                 let media_id_clone = media_id.clone();
+                let media_id_for_resume = media_id_clone.clone();
                 let sender_clone = sender.clone();
+                // Capture cached config values to avoid reloading config in async closure
+                let auto_resume = self.config_auto_resume;
+                let resume_threshold_seconds = self.config_resume_threshold_seconds;
 
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
@@ -885,6 +942,33 @@ impl AsyncComponent for PlayerPage {
                             Ok(_) => {
                                 info!("Media loaded successfully with playlist context");
 
+                                // Check for saved playback progress and resume if configured
+                                use crate::services::commands::GetPlaybackProgressCommand;
+
+                                // Use cached config values
+                                if auto_resume {
+                                    // Get saved progress
+                                    if let Ok(Some((position_ms, _duration_ms))) =
+                                        (GetPlaybackProgressCommand {
+                                            db: db_clone.as_ref().clone(),
+                                            media_id: media_id_for_resume.clone(),
+                                            user_id: "default".to_string(), // TODO: Get actual user ID
+                                        }).execute().await
+                                    {
+                                        // Only resume if we've watched more than the threshold
+                                        let threshold_ms = (resume_threshold_seconds as i64) * 1000;
+                                        if position_ms > threshold_ms {
+                                            let resume_position = std::time::Duration::from_millis(position_ms as u64);
+                                            info!("Resuming playback from {:?}", resume_position);
+
+                                            // Seek to saved position
+                                            if let Err(e) = player_handle.seek(resume_position).await {
+                                                warn!("Failed to seek to saved position: {}", e);
+                                            }
+                                        }
+                                    }
+                                }
+
                                 // Try to get video dimensions and calculate appropriate window size
                                 if let Ok(Some((width, height))) =
                                     player_handle.get_video_dimensions().await
@@ -915,7 +999,12 @@ impl AsyncComponent for PlayerPage {
                                     }
                                 }
 
-                                PlayerCommandOutput::StateChanged(PlayerState::Idle)
+                                // Get the actual state from the player after loading
+                                let actual_state = player_handle
+                                    .get_state()
+                                    .await
+                                    .unwrap_or(PlayerState::Idle);
+                                PlayerCommandOutput::StateChanged(actual_state)
                             }
                             Err(e) => {
                                 error!("Failed to load media: {}", e);
@@ -940,26 +1029,62 @@ impl AsyncComponent for PlayerPage {
                     let current_state = self.player_state.clone();
 
                     sender.oneshot_command(async move {
-                        let result = match current_state {
+                        // Execute the play/pause command based on current state
+                        match current_state {
                             PlayerState::Playing => {
                                 player_handle.pause().await.ok();
-                                PlayerCommandOutput::StateChanged(PlayerState::Paused)
                             }
                             _ => {
                                 player_handle.play().await.ok();
-                                PlayerCommandOutput::StateChanged(PlayerState::Playing)
                             }
                         };
-                        result
+
+                        // Get the actual state from the player after the command
+                        let actual_state = player_handle
+                            .get_state()
+                            .await
+                            .unwrap_or(PlayerState::Error);
+
+                        PlayerCommandOutput::StateChanged(actual_state)
                     });
                 }
             }
             PlayerInput::Stop => {
+                // Save current progress before stopping
+                if let Some(media_id) = &self.media_item_id {
+                    let db = (*self.db).clone();
+                    let media_id = media_id.clone();
+                    let position_ms = self.position.as_millis() as i64;
+                    let duration_ms = self.duration.as_millis() as i64;
+                    let watched = position_ms as f64 / duration_ms as f64 > 0.9;
+
+                    relm4::spawn(async move {
+                        use crate::services::commands::{Command, UpdatePlaybackProgressCommand};
+
+                        let command = UpdatePlaybackProgressCommand {
+                            db,
+                            media_id,
+                            position_ms,
+                            duration_ms,
+                            watched,
+                        };
+
+                        if let Err(e) = command.execute().await {
+                            debug!("Failed to save final playback progress: {}", e);
+                        }
+                    });
+                }
+
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
                         player_handle.stop().await.ok();
-                        PlayerCommandOutput::StateChanged(PlayerState::Stopped)
+                        // Get the actual state from the player after stopping
+                        let actual_state = player_handle
+                            .get_state()
+                            .await
+                            .unwrap_or(PlayerState::Stopped);
+                        PlayerCommandOutput::StateChanged(actual_state)
                     });
                 }
             }
@@ -968,12 +1093,12 @@ impl AsyncComponent for PlayerPage {
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
                         player_handle.seek(position).await.ok();
-                        // Return current state after seek
-                        let state = player_handle
+                        // Get the actual state from the player after seeking
+                        let actual_state = player_handle
                             .get_state()
                             .await
                             .unwrap_or(PlayerState::Error);
-                        PlayerCommandOutput::StateChanged(state)
+                        PlayerCommandOutput::StateChanged(actual_state)
                     });
                 }
             }
@@ -983,12 +1108,12 @@ impl AsyncComponent for PlayerPage {
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
                         player_handle.set_volume(volume).await.ok();
-                        // Return current state after volume change
-                        let state = player_handle
+                        // Get the actual state from the player after volume change
+                        let actual_state = player_handle
                             .get_state()
                             .await
                             .unwrap_or(PlayerState::Error);
-                        PlayerCommandOutput::StateChanged(state)
+                        PlayerCommandOutput::StateChanged(actual_state)
                     });
                 }
             }
@@ -1206,9 +1331,20 @@ impl AsyncComponent for PlayerPage {
                 if self.is_fullscreen {
                     sender.input(PlayerInput::ToggleFullscreen);
                 } else {
-                    // Navigate back if not in fullscreen
-                    sender.output(PlayerOutput::NavigateBack).unwrap();
+                    sender.input(PlayerInput::NavigateBack);
                 }
+            }
+            PlayerInput::NavigateBack => {
+                // Clear cursor timer and show cursor before navigating back
+                if let Some(timer) = self.cursor_timer.take() {
+                    timer.remove();
+                }
+                if let Some(timer) = self.controls_timer.take() {
+                    timer.remove();
+                }
+                sender.input(PlayerInput::ShowCursor);
+                // Navigate back
+                sender.output(PlayerOutput::NavigateBack).unwrap();
             }
         }
     }
@@ -1246,33 +1382,43 @@ impl AsyncComponent for PlayerPage {
                         self.seek_bar.set_value(pos.as_secs_f64());
                     }
 
-                    // Save playback progress to database
+                    // Save playback progress to database at configured interval
                     if let (Some(media_id), Some(dur)) = (&self.media_item_id, duration) {
-                        let db = (*self.db).clone();
-                        let media_id = media_id.clone();
-                        let position_ms = pos.as_millis() as i64;
-                        let duration_ms = dur.as_millis() as i64;
+                        // Use cached config value instead of reloading config file
+                        let save_interval_secs = self.config_progress_update_interval_seconds;
 
-                        relm4::spawn(async move {
-                            use crate::services::commands::{
-                                Command, UpdatePlaybackProgressCommand,
-                            };
+                        // Check if enough time has passed since last save
+                        let elapsed = self.last_progress_save.elapsed().as_secs();
 
-                            // Mark as watched if we're past 90% of the duration
-                            let watched = position_ms as f64 / duration_ms as f64 > 0.9;
+                        // Always save if watched (>90%) or if interval has passed
+                        let watched = pos.as_secs_f64() / dur.as_secs_f64() > 0.9;
 
-                            let command = UpdatePlaybackProgressCommand {
-                                db,
-                                media_id,
-                                position_ms,
-                                duration_ms,
-                                watched,
-                            };
+                        if watched || elapsed >= save_interval_secs {
+                            self.last_progress_save = std::time::Instant::now();
 
-                            if let Err(e) = command.execute().await {
-                                debug!("Failed to save playback progress: {}", e);
-                            }
-                        });
+                            let db = (*self.db).clone();
+                            let media_id = media_id.clone();
+                            let position_ms = pos.as_millis() as i64;
+                            let duration_ms = dur.as_millis() as i64;
+
+                            relm4::spawn(async move {
+                                use crate::services::commands::{
+                                    Command, UpdatePlaybackProgressCommand,
+                                };
+
+                                let command = UpdatePlaybackProgressCommand {
+                                    db,
+                                    media_id,
+                                    position_ms,
+                                    duration_ms,
+                                    watched,
+                                };
+
+                                if let Err(e) = command.execute().await {
+                                    debug!("Failed to save playback progress: {}", e);
+                                }
+                            });
+                        }
                     }
                 }
                 if let Some(dur) = duration {

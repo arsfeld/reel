@@ -1,4 +1,4 @@
-mod api;
+pub mod api;
 
 pub use api::JellyfinApi;
 
@@ -174,6 +174,10 @@ impl JellyfinBackend {
 
         info!("Credentials saved to file for {}", self.backend_id);
         Ok(())
+    }
+
+    pub async fn set_base_url(&self, base_url: String) {
+        *self.base_url.write().await = Some(base_url);
     }
 
     pub async fn authenticate_with_credentials(
@@ -366,6 +370,7 @@ impl MediaBackend for JellyfinBackend {
                 return Err(anyhow!("API key authentication not supported for Jellyfin"));
             }
             Credentials::Token { token } => {
+                // Check if it's the old format with base_url|api_key|user_id
                 let parts: Vec<&str> = token.split('|').collect();
                 if parts.len() == 3 {
                     let base_url = parts[0];
@@ -386,8 +391,46 @@ impl MediaBackend for JellyfinBackend {
                     *self.api.write().await = Some(api.clone());
 
                     return api.get_user().await;
+                } else {
+                    // Assume it's just an access token from Quick Connect
+                    // We need the base_url to be already set
+                    let base_url = self
+                        .base_url
+                        .read()
+                        .await
+                        .clone()
+                        .ok_or_else(|| anyhow!("Base URL not set for token authentication"))?;
+
+                    // Get user info first to extract user_id
+                    let temp_api = JellyfinApi::with_backend_id(
+                        base_url.clone(),
+                        token.clone(),
+                        String::new(), // We don't have user_id yet
+                        self.backend_id.clone(),
+                    );
+
+                    // Get user info to extract user_id
+                    match temp_api.get_user().await {
+                        Ok(user) => {
+                            *self.api_key.write().await = Some(token.clone());
+                            *self.user_id.write().await = Some(user.id.clone());
+
+                            let api = JellyfinApi::with_backend_id(
+                                base_url,
+                                token,
+                                user.id.clone(),
+                                self.backend_id.clone(),
+                            );
+
+                            *self.api.write().await = Some(api);
+
+                            return Ok(user);
+                        }
+                        Err(e) => {
+                            return Err(anyhow!("Failed to authenticate with token: {}", e));
+                        }
+                    }
                 }
-                return Err(anyhow!("Invalid token format"));
             }
         }
 

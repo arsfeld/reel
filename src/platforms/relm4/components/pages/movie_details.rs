@@ -18,6 +18,8 @@ pub struct MovieDetailsPage {
     loading: bool,
     genre_box: gtk::Box,
     cast_box: gtk::Box,
+    poster_texture: Option<gtk::gdk::Texture>,
+    backdrop_texture: Option<gtk::gdk::Texture>,
 }
 
 #[derive(Debug)]
@@ -36,6 +38,10 @@ pub enum MovieDetailsOutput {
 #[derive(Debug)]
 pub enum MovieDetailsCommand {
     LoadDetails,
+    LoadPosterImage { url: String },
+    LoadBackdropImage { url: String },
+    PosterImageLoaded { texture: gtk::gdk::Texture },
+    BackdropImageLoaded { texture: gtk::gdk::Texture },
 }
 
 #[relm4::component(pub, async)]
@@ -63,14 +69,7 @@ impl AsyncComponent for MovieDetailsPage {
                     gtk::Picture {
                         set_content_fit: gtk::ContentFit::Cover,
                         #[watch]
-                        set_paintable: model.movie.as_ref()
-                            .and_then(|m| m.backdrop_url.as_ref())
-                            .and_then(|url| {
-                                gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, -1, 550)
-                                    .ok()
-                                    .map(|pb| gtk::gdk::Texture::for_pixbuf(&pb))
-                            })
-                            .as_ref(),
+                        set_paintable: model.backdrop_texture.as_ref(),
                     },
 
                     // Stronger gradient overlay for better text contrast
@@ -90,14 +89,7 @@ impl AsyncComponent for MovieDetailsPage {
                                 add_css_class: "card",
                                 add_css_class: "poster-shadow",
                                 #[watch]
-                                set_paintable: model.movie.as_ref()
-                                    .and_then(|m| m.poster_url.as_ref())
-                                    .and_then(|url| {
-                                        gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, 300, 450)
-                                            .ok()
-                                            .map(|pb| gtk::gdk::Texture::for_pixbuf(&pb))
-                                    })
-                                    .as_ref(),
+                                set_paintable: model.poster_texture.as_ref(),
                             },
 
                             // Movie info
@@ -324,6 +316,8 @@ impl AsyncComponent for MovieDetailsPage {
             loading: true,
             genre_box: genre_box.clone(),
             cast_box: cast_box.clone(),
+            poster_texture: None,
+            backdrop_texture: None,
         };
 
         let widgets = view_output!();
@@ -344,6 +338,8 @@ impl AsyncComponent for MovieDetailsPage {
                 self.item_id = item_id;
                 self.movie = None;
                 self.loading = true;
+                self.poster_texture = None;
+                self.backdrop_texture = None;
                 sender.oneshot_command(async { MovieDetailsCommand::LoadDetails });
             }
             MovieDetailsInput::PlayMovie => {
@@ -398,6 +394,19 @@ impl AsyncComponent for MovieDetailsPage {
                             self.movie = Some(movie.clone());
                             self.loading = false;
 
+                            // Load poster and backdrop images
+                            if let Some(poster_url) = movie.poster_url.clone() {
+                                sender.oneshot_command(async move {
+                                    MovieDetailsCommand::LoadPosterImage { url: poster_url }
+                                });
+                            }
+
+                            if let Some(backdrop_url) = movie.backdrop_url.clone() {
+                                sender.oneshot_command(async move {
+                                    MovieDetailsCommand::LoadBackdropImage { url: backdrop_url }
+                                });
+                            }
+
                             // Update genre pills
                             while let Some(child) = self.genre_box.first_child() {
                                 self.genre_box.remove(&child);
@@ -428,8 +437,71 @@ impl AsyncComponent for MovieDetailsPage {
                     }
                 }
             }
+            MovieDetailsCommand::LoadPosterImage { url } => {
+                // Spawn async task to download and create texture
+                let sender_clone = sender.clone();
+                relm4::spawn(async move {
+                    match load_image_from_url(&url, 300, 450).await {
+                        Ok(texture) => {
+                            sender_clone.oneshot_command(async move {
+                                MovieDetailsCommand::PosterImageLoaded { texture }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to load poster image: {}", e);
+                        }
+                    }
+                });
+            }
+            MovieDetailsCommand::LoadBackdropImage { url } => {
+                // Spawn async task to download and create texture
+                let sender_clone = sender.clone();
+                relm4::spawn(async move {
+                    match load_image_from_url(&url, -1, 550).await {
+                        Ok(texture) => {
+                            sender_clone.oneshot_command(async move {
+                                MovieDetailsCommand::BackdropImageLoaded { texture }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to load backdrop image: {}", e);
+                        }
+                    }
+                });
+            }
+            MovieDetailsCommand::PosterImageLoaded { texture } => {
+                self.poster_texture = Some(texture);
+            }
+            MovieDetailsCommand::BackdropImageLoaded { texture } => {
+                self.backdrop_texture = Some(texture);
+            }
         }
     }
+}
+
+async fn load_image_from_url(
+    url: &str,
+    _width: i32,
+    _height: i32,
+) -> Result<gtk::gdk::Texture, String> {
+    // Download the image
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| format!("Failed to download image: {}", e))?;
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read bytes: {}", e))?;
+
+    // Create texture from bytes
+    let glib_bytes = gtk::glib::Bytes::from(&bytes[..]);
+    let texture = gtk::gdk::Texture::from_bytes(&glib_bytes)
+        .map_err(|e| format!("Failed to create texture: {}", e))?;
+
+    // If width and height are specified (not -1), we could resize here
+    // For now, just return the texture as is
+    Ok(texture)
 }
 
 fn create_person_card(person: &Person) -> gtk::Box {

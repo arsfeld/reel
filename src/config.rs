@@ -92,6 +92,21 @@ pub struct PlaybackConfig {
         skip_serializing_if = "is_default_cache_secs"
     )]
     pub mpv_cache_secs: u32,
+
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub auto_resume: bool,
+
+    #[serde(
+        default = "default_resume_threshold",
+        skip_serializing_if = "is_default_resume_threshold"
+    )]
+    pub resume_threshold_seconds: u32,
+
+    #[serde(
+        default = "default_progress_update_interval",
+        skip_serializing_if = "is_default_progress_update_interval"
+    )]
+    pub progress_update_interval_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -364,6 +379,9 @@ impl Default for PlaybackConfig {
             mpv_cache_size_mb: default_cache_size_mb(),
             mpv_cache_backbuffer_mb: default_cache_backbuffer_mb(),
             mpv_cache_secs: default_cache_secs(),
+            auto_resume: default_true(),
+            resume_threshold_seconds: default_resume_threshold(),
+            progress_update_interval_seconds: default_progress_update_interval(),
         }
     }
 }
@@ -428,6 +446,14 @@ fn default_cache_secs() -> u32 {
     1800 // 30 minutes default
 }
 
+fn default_resume_threshold() -> u32 {
+    30 // Resume if watched more than 30 seconds
+}
+
+fn default_progress_update_interval() -> u32 {
+    10 // Update progress every 10 seconds
+}
+
 // Skip serializing helper functions
 fn is_default_theme(value: &str) -> bool {
     value == default_theme()
@@ -487,6 +513,14 @@ fn is_default_cache_backbuffer_mb(value: &u32) -> bool {
 
 fn is_default_cache_secs(value: &u32) -> bool {
     *value == default_cache_secs()
+}
+
+fn is_default_resume_threshold(value: &u32) -> bool {
+    *value == default_resume_threshold()
+}
+
+fn is_default_progress_update_interval(value: &u32) -> bool {
+    *value == default_progress_update_interval()
 }
 
 // is_default implementations for structs

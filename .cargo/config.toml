@@ -1,0 +1,35 @@
+# Cargo build configuration
+
+[target.x86_64-unknown-linux-gnu]
+# Use mold linker for significantly faster link times on Linux
+# This will only be used if mold is available in the system
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+# Use mold linker for ARM64 Linux as well
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# Build settings
+[build]
+# Number of parallel jobs - defaults to number of logical CPUs
+# jobs = 8
+
+# Incremental compilation
+[profile.dev]
+# Enable incremental compilation for faster rebuilds
+incremental = true
+
+[profile.release]
+# Keep incremental compilation disabled for release builds to ensure optimal output
+incremental = false
+
+# Registry configuration
+[registries.crates-io]
+protocol = "sparse"
+
+# Network configuration
+[net]
+retry = 2
+git-fetch-with-cli = false

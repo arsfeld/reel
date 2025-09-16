@@ -11,6 +11,21 @@ use crate::models::{
     MediaItem, Movie, QualityOption, Resolution, Season, Show, StreamInfo,
 };
 
+// Plex Identity response for getting server machine ID
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct PlexIdentityResponse {
+    media_container: PlexIdentityContainer,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlexIdentityContainer {
+    machine_identifier: String,
+    #[serde(default)]
+    version: String,
+}
+
 #[derive(Clone)]
 pub struct PlexApi {
     client: reqwest::Client,
@@ -32,6 +47,34 @@ impl PlexApi {
             auth_token,
             backend_id,
         }
+    }
+
+    /// Get the machine identifier (machine_id) for the Plex server
+    pub async fn get_machine_id(&self) -> Result<String> {
+        let url = format!("{}/identity", self.base_url);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("X-Plex-Token", &self.auth_token)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "Failed to get server identity: {}",
+                response.status()
+            ));
+        }
+
+        let identity_response: PlexIdentityResponse = response.json().await?;
+
+        info!(
+            "Got Plex server machine_id: {}",
+            identity_response.media_container.machine_identifier
+        );
+        Ok(identity_response.media_container.machine_identifier)
     }
 
     /// Get all libraries from the Plex server

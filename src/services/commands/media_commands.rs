@@ -142,6 +142,25 @@ impl Command<Vec<MediaItem>> for GetContinueWatchingCommand {
     }
 }
 
+/// Get playback progress for a media item
+pub struct GetPlaybackProgressCommand {
+    pub db: DatabaseConnection,
+    pub media_id: MediaItemId,
+    pub user_id: String,
+}
+
+#[async_trait]
+impl Command<Option<(i64, i64)>> for GetPlaybackProgressCommand {
+    async fn execute(&self) -> Result<Option<(i64, i64)>> {
+        use crate::services::core::playback::PlaybackService;
+
+        let progress =
+            PlaybackService::get_progress(&self.db, &self.user_id, &self.media_id).await?;
+
+        Ok(progress.map(|p| (p.position_ms, p.duration_ms)))
+    }
+}
+
 /// Update playback progress
 pub struct UpdatePlaybackProgressCommand {
     pub db: DatabaseConnection,

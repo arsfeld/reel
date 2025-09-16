@@ -21,10 +21,9 @@ impl std::fmt::Debug for LibraryPage {
         f.debug_struct("LibraryPage")
             .field("library_id", &self.library_id)
             .field("is_loading", &self.is_loading)
-            .field("current_page", &self.current_page)
-            .field("items_per_page", &self.items_per_page)
-            .field("has_more", &self.has_more)
-            .field("view_mode", &self.view_mode)
+            .field("loaded_count", &self.loaded_count)
+            .field("batch_size", &self.batch_size)
+            .field("has_loaded_all", &self.has_loaded_all)
             .field("sort_by", &self.sort_by)
             .field("filter_text", &self.filter_text)
             .field("search_visible", &self.search_visible)
@@ -39,19 +38,13 @@ pub struct LibraryPage {
     image_loader: relm4::WorkerController<ImageLoader>,
     image_requests: std::collections::HashMap<String, usize>,
     is_loading: bool,
-    current_page: usize,
-    items_per_page: usize,
-    has_more: bool,
-    view_mode: ViewMode,
+    loaded_count: usize,
+    batch_size: usize,
+    total_items: Vec<MediaItemModel>,
+    has_loaded_all: bool,
     sort_by: SortBy,
     filter_text: String,
     search_visible: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ViewMode {
-    Grid,
-    List,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,22 +59,14 @@ pub enum SortBy {
 pub enum LibraryPageInput {
     /// Set the library to display
     SetLibrary(LibraryId),
-    /// Load the next page of items
-    LoadMore,
-    /// Media items loaded
-    MediaItemsLoaded {
-        items: Vec<MediaItemModel>,
-        has_more: bool,
-    },
-    /// Media items loaded with progress
-    MediaItemsLoadedWithProgress {
-        items: Vec<(MediaItemModel, bool, f64)>,
-        has_more: bool,
-    },
+    /// Load more items into view
+    LoadMoreBatch,
+    /// All media items loaded from database
+    AllItemsLoaded { items: Vec<MediaItemModel> },
+    /// Render next batch of items
+    RenderBatch,
     /// Media item selected
     MediaItemSelected(MediaItemId),
-    /// Change view mode
-    SetViewMode(ViewMode),
     /// Change sort order
     SetSortBy(SortBy),
     /// Filter by text
@@ -138,10 +123,18 @@ impl AsyncComponent for LibraryPage {
             },
 
             // Main content
+            #[name = "scrolled_window"]
             gtk::ScrolledWindow {
                 set_vexpand: true,
                 set_hscrollbar_policy: gtk::PolicyType::Never,
                 set_vscrollbar_policy: gtk::PolicyType::Automatic,
+
+                // Connect to edge-reached signal for infinite scrolling
+                connect_edge_reached[sender] => move |_, pos| {
+                    if pos == gtk::PositionType::Bottom {
+                        sender.input(LibraryPageInput::LoadMoreBatch);
+                    }
+                },
 
                 gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
@@ -168,7 +161,7 @@ impl AsyncComponent for LibraryPage {
                         set_halign: gtk::Align::Center,
                         set_margin_all: 12,
                         #[watch]
-                        set_visible: model.is_loading,
+                        set_visible: model.is_loading && model.loaded_count > 0,
 
                         gtk::Spinner {
                             set_spinning: true,
@@ -260,10 +253,10 @@ impl AsyncComponent for LibraryPage {
             image_loader,
             image_requests: std::collections::HashMap::new(),
             is_loading: false,
-            current_page: 0,
-            items_per_page: 50,
-            has_more: false,
-            view_mode: ViewMode::Grid,
+            loaded_count: 0,
+            batch_size: 50, // Number of items to render at once
+            total_items: Vec::new(),
+            has_loaded_all: false,
             sort_by: SortBy::Title,
             filter_text: String::new(),
             search_visible: false,
@@ -284,80 +277,96 @@ impl AsyncComponent for LibraryPage {
             LibraryPageInput::SetLibrary(library_id) => {
                 debug!("Setting library: {}", library_id);
                 self.library_id = Some(library_id.clone());
-                self.current_page = 0;
+                self.loaded_count = 0;
+                self.total_items.clear();
+                self.has_loaded_all = false;
                 self.media_factory.guard().clear();
-                self.load_page(sender.clone());
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
             }
 
-            LibraryPageInput::LoadMore => {
-                if !self.is_loading && self.has_more {
-                    debug!("Loading more items");
-                    self.current_page += 1;
-                    self.load_page(sender.clone());
+            LibraryPageInput::LoadMoreBatch => {
+                if !self.is_loading && !self.has_loaded_all && !self.total_items.is_empty() {
+                    debug!("Loading more items into view");
+                    sender.input(LibraryPageInput::RenderBatch);
                 }
             }
 
-            LibraryPageInput::MediaItemsLoaded { items, has_more } => {
-                debug!("Loaded {} items", items.len());
+            LibraryPageInput::AllItemsLoaded { items } => {
+                debug!("Loaded all {} items from database", items.len());
 
-                let mut factory_guard = self.media_factory.guard();
-                for item in items {
-                    let index = factory_guard.push_back(MediaCardInit {
-                        item: item.clone(),
-                        show_progress: false,
-                        watched: false,
-                        progress_percent: 0.0,
-                    });
+                // Apply filtering if needed
+                let filtered_items: Vec<MediaItemModel> = if self.filter_text.is_empty() {
+                    items
+                } else {
+                    items
+                        .into_iter()
+                        .filter(|item| {
+                            item.title
+                                .to_lowercase()
+                                .contains(&self.filter_text.to_lowercase())
+                        })
+                        .collect()
+                };
 
-                    // Request image loading if poster URL exists
-                    if let Some(poster_url) = &item.poster_url {
-                        let id = item.id.clone();
-                        self.image_requests
-                            .insert(id.clone(), index.current_index());
-
-                        self.image_loader
-                            .emit(ImageLoaderInput::LoadImage(ImageRequest {
-                                id,
-                                url: poster_url.clone(),
-                                size: ImageSize::Card,
-                                priority: 5,
-                            }));
-                    }
-                }
-
-                self.has_more = has_more;
+                // Store filtered items
+                self.total_items = filtered_items;
                 self.is_loading = false;
+
+                // Start rendering the first batch immediately
+                if !self.total_items.is_empty() {
+                    // Render initial batch
+                    sender.input(LibraryPageInput::RenderBatch);
+                }
             }
 
-            LibraryPageInput::MediaItemsLoadedWithProgress { items, has_more } => {
-                debug!("Loaded {} items with progress", items.len());
+            LibraryPageInput::RenderBatch => {
+                // This message triggers rendering of the next batch of items
+                let start_idx = self.loaded_count;
+                let end_idx = (start_idx + self.batch_size).min(self.total_items.len());
 
-                let mut factory_guard = self.media_factory.guard();
-                for (item, watched, progress_percent) in items {
-                    let index = factory_guard.push_back(MediaCardInit {
-                        item: item.clone(),
-                        show_progress: progress_percent > 0.0 && progress_percent < 0.9,
-                        watched,
-                        progress_percent,
-                    });
+                if start_idx < self.total_items.len() {
+                    debug!("Rendering items {} to {}", start_idx, end_idx);
 
-                    // Request image loading if poster URL exists
-                    if let Some(poster_url) = &item.poster_url {
-                        let id = item.id.clone();
-                        self.image_requests
-                            .insert(id.clone(), index.current_index());
+                    let mut factory_guard = self.media_factory.guard();
+                    for idx in start_idx..end_idx {
+                        let item = &self.total_items[idx];
+                        let index = factory_guard.push_back(MediaCardInit {
+                            item: item.clone(),
+                            show_progress: false,
+                            watched: false,
+                            progress_percent: 0.0,
+                        });
 
-                        self.image_loader
-                            .emit(ImageLoaderInput::LoadImage(ImageRequest {
-                                id,
-                                url: poster_url.clone(),
-                                size: ImageSize::Card,
-                                priority: 5,
-                            }));
+                        // Request image loading with priority based on position
+                        if let Some(poster_url) = &item.poster_url {
+                            let id = item.id.clone();
+                            self.image_requests
+                                .insert(id.clone(), index.current_index());
+
+                            // Higher priority for items closer to the top
+                            let priority = if idx < 20 {
+                                10
+                            } else if idx < 50 {
+                                5
+                            } else {
+                                1
+                            };
+
+                            self.image_loader
+                                .emit(ImageLoaderInput::LoadImage(ImageRequest {
+                                    id,
+                                    url: poster_url.clone(),
+                                    size: ImageSize::Thumbnail,
+                                    priority,
+                                }));
+                        }
                     }
+
+                    self.loaded_count = end_idx;
+                    self.has_loaded_all = end_idx >= self.total_items.len();
                 }
 
-                self.has_more = has_more;
                 self.is_loading = false;
             }
 
@@ -366,12 +375,6 @@ impl AsyncComponent for LibraryPage {
                 sender
                     .output(LibraryPageOutput::NavigateToMediaItem(item_id))
                     .unwrap();
-            }
-
-            LibraryPageInput::SetViewMode(mode) => {
-                debug!("Setting view mode: {:?}", mode);
-                self.view_mode = mode;
-                // TODO: Update FlowBox layout based on view mode
             }
 
             LibraryPageInput::SetSortBy(sort_by) => {
@@ -383,7 +386,19 @@ impl AsyncComponent for LibraryPage {
             LibraryPageInput::SetFilter(filter) => {
                 debug!("Setting filter: {}", filter);
                 self.filter_text = filter;
-                self.refresh(sender.clone());
+                // Re-filter and re-render from the beginning
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+
+                // If we have items loaded, just re-filter and render
+                if !self.total_items.is_empty() {
+                    sender.input(LibraryPageInput::AllItemsLoaded {
+                        items: self.total_items.clone(),
+                    });
+                } else {
+                    self.load_all_items(sender.clone());
+                }
             }
 
             LibraryPageInput::Refresh => {
@@ -428,28 +443,21 @@ impl AsyncComponent for LibraryPage {
 }
 
 impl LibraryPage {
-    fn load_page(&mut self, sender: AsyncComponentSender<Self>) {
+    fn load_all_items(&mut self, sender: AsyncComponentSender<Self>) {
         if let Some(library_id) = &self.library_id {
             self.is_loading = true;
 
             let db = self.db.clone();
             let library_id = library_id.clone();
-            let page = self.current_page;
-            let items_per_page = self.items_per_page;
             let sort_by = self.sort_by;
-            let filter = self.filter_text.clone();
 
             relm4::spawn(async move {
                 use crate::db::repository::{
                     LibraryRepository, LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl,
-                    PlaybackRepository, PlaybackRepositoryImpl, Repository,
+                    Repository,
                 };
                 let library_repo = LibraryRepositoryImpl::new(db.clone());
                 let media_repo = MediaRepositoryImpl::new(db.clone());
-                let playback_repo = PlaybackRepositoryImpl::new(db.clone());
-
-                // Calculate offset
-                let offset = page * items_per_page;
 
                 // First, get the library to determine its type
                 let library_result = library_repo.find_by_id(&library_id.to_string()).await;
@@ -461,89 +469,52 @@ impl LibraryPage {
                             "movies" => Some("movie"),
                             "shows" => Some("show"),
                             "music" => Some("album"), // For music libraries, show albums, not individual tracks
-                            _ => None, // For mixed or unknown types, get all items (fallback to old behavior)
+                            _ => None,                // For mixed or unknown types, get all items
                         };
 
-                        // Get items for this library with pagination and media type filter
+                        // Get ALL items for this library without pagination
                         if let Some(media_type) = media_type {
                             media_repo
-                                .find_by_library_and_type_paginated(
-                                    &library_id.to_string(),
-                                    media_type,
-                                    offset as u64,
-                                    items_per_page as u64,
-                                )
+                                .find_by_library_and_type(&library_id.to_string(), media_type)
                                 .await
                         } else {
-                            // For mixed or unknown types, get all items (fallback to old behavior)
-                            media_repo
-                                .find_by_library_paginated(
-                                    &library_id.to_string(),
-                                    offset as u64,
-                                    items_per_page as u64,
-                                )
-                                .await
+                            // For mixed or unknown types, get all items
+                            media_repo.find_by_library(&library_id.to_string()).await
                         }
                     }
                     _ => {
-                        // If we can't get library info, fall back to old behavior
-                        media_repo
-                            .find_by_library_paginated(
-                                &library_id.to_string(),
-                                offset as u64,
-                                items_per_page as u64,
-                            )
-                            .await
+                        // If we can't get library info, get all items
+                        media_repo.find_by_library(&library_id.to_string()).await
                     }
                 };
 
-                // Get items for this library with pagination
                 match media_result {
-                    Ok(items) => {
-                        let has_more = items.len() == items_per_page;
-
-                        // Apply client-side filtering if needed
-                        let mut filtered_items = if filter.is_empty() {
-                            items
-                        } else {
-                            items
-                                .into_iter()
-                                .filter(|item| {
-                                    item.title.to_lowercase().contains(&filter.to_lowercase())
-                                })
-                                .collect()
-                        };
-
-                        // Load playback progress for each item
-                        let items_with_progress: Vec<(MediaItemModel, bool, f64)> = {
-                            let mut result = Vec::new();
-                            for item in filtered_items {
-                                let progress = playback_repo
-                                    .find_by_media_id(&item.id)
-                                    .await
-                                    .ok()
-                                    .flatten();
-                                let watched = progress.as_ref().map(|p| p.watched).unwrap_or(false);
-                                let progress_percent = progress
-                                    .as_ref()
-                                    .map(|p| p.get_progress_percentage() as f64)
-                                    .unwrap_or(0.0);
-                                result.push((item, watched, progress_percent));
+                    Ok(mut items) => {
+                        // Sort items based on sort criteria
+                        match sort_by {
+                            SortBy::Title => {
+                                items.sort_by(|a, b| a.sort_title.cmp(&b.sort_title));
                             }
-                            result
-                        };
+                            SortBy::Year => {
+                                items.sort_by(|a, b| b.year.cmp(&a.year));
+                            }
+                            SortBy::DateAdded => {
+                                items.sort_by(|a, b| b.added_at.cmp(&a.added_at));
+                            }
+                            SortBy::Rating => {
+                                items.sort_by(|a, b| {
+                                    b.rating
+                                        .partial_cmp(&a.rating)
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                            }
+                        }
 
-                        sender.input(LibraryPageInput::MediaItemsLoadedWithProgress {
-                            items: items_with_progress,
-                            has_more,
-                        });
+                        sender.input(LibraryPageInput::AllItemsLoaded { items });
                     }
                     Err(e) => {
                         error!("Failed to load library items: {}", e);
-                        sender.input(LibraryPageInput::MediaItemsLoadedWithProgress {
-                            items: Vec::new(),
-                            has_more: false,
-                        });
+                        sender.input(LibraryPageInput::AllItemsLoaded { items: Vec::new() });
                     }
                 }
             });
@@ -551,8 +522,11 @@ impl LibraryPage {
     }
 
     fn refresh(&mut self, sender: AsyncComponentSender<Self>) {
-        self.current_page = 0;
+        self.loaded_count = 0;
+        self.total_items.clear();
+        self.has_loaded_all = false;
         self.media_factory.guard().clear();
-        self.load_page(sender);
+        self.image_requests.clear();
+        self.load_all_items(sender);
     }
 }

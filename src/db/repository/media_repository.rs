@@ -15,6 +15,13 @@ pub trait MediaRepository: Repository<MediaItemModel> {
     /// Find media items by library
     async fn find_by_library(&self, library_id: &str) -> Result<Vec<MediaItemModel>>;
 
+    /// Find media items by library and type
+    async fn find_by_library_and_type(
+        &self,
+        library_id: &str,
+        media_type: &str,
+    ) -> Result<Vec<MediaItemModel>>;
+
     /// Find media items by source
     async fn find_by_source(&self, source_id: &str) -> Result<Vec<MediaItemModel>>;
 
@@ -252,6 +259,35 @@ impl MediaRepository for MediaRepositoryImpl {
         let elapsed = start.elapsed();
         tracing::warn!(
             "[PERF] MediaRepository::find_by_library: Query completed in {:?} ({} items)",
+            elapsed,
+            result.len()
+        );
+
+        Ok(result)
+    }
+
+    async fn find_by_library_and_type(
+        &self,
+        library_id: &str,
+        media_type: &str,
+    ) -> Result<Vec<MediaItemModel>> {
+        let start = std::time::Instant::now();
+        tracing::info!(
+            "[PERF] MediaRepository::find_by_library_and_type: Starting query for library {} type {}",
+            library_id,
+            media_type
+        );
+
+        let result = MediaItem::find()
+            .filter(media_items::Column::LibraryId.eq(library_id))
+            .filter(media_items::Column::MediaType.eq(media_type))
+            .order_by(media_items::Column::SortTitle, Order::Asc)
+            .all(self.base.db.as_ref())
+            .await?;
+
+        let elapsed = start.elapsed();
+        tracing::warn!(
+            "[PERF] MediaRepository::find_by_library_and_type: Query completed in {:?} ({} items)",
             elapsed,
             result.len()
         );

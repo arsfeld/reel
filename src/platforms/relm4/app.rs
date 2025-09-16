@@ -90,18 +90,24 @@ impl ReelApp {
 
             /* Movie Poster Card Styles - GTK Library Exact Match */
             .poster-card {
-                border-radius: 8px;
+                border-radius: 6px;
                 transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
-                width: 150px;
-                height: 225px;
-                min-width: 150px;
-                min-height: 225px;
+                width: 180px;
+                height: 270px;
+                min-width: 180px;
+                min-height: 270px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3),
+                           0 4px 16px rgba(0, 0, 0, 0.15),
+                           inset 0 1px 0 rgba(255, 255, 255, 0.05),
+                           inset 0 -1px 0 rgba(0, 0, 0, 0.2);
             }
 
             .poster-card:hover {
-                transform: scale(1.03) translateY(-2px);
-                box-shadow: 0 10px 20px rgba(0, 0, 0, 0.25),
-                            0 4px 8px rgba(0, 0, 0, 0.15);
+                transform: scale(1.05) translateY(-3px);
+                box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4),
+                           0 12px 35px rgba(0, 0, 0, 0.2),
+                           inset 0 1px 0 rgba(255, 255, 255, 0.08),
+                           inset 0 -1px 0 rgba(0, 0, 0, 0.3);
             }
 
             /* Poster Overlay Container */
@@ -113,15 +119,16 @@ impl ReelApp {
                             rgba(255, 255, 255, 0.02) 0%,
                             transparent 50%,
                             rgba(0, 0, 0, 0.03) 100%);
-                width: 150px;
-                height: 225px;
-                min-width: 150px;
-                min-height: 225px;
+                width: 180px;
+                height: 270px;
+                min-width: 180px;
+                min-height: 270px;
             }
 
             /* Rounded Poster Image */
             .rounded-poster {
-                border-radius: 8px;
+                border-radius: 6px;
+                overflow: hidden;
             }
 
             /* Info Gradient at Bottom of Poster */
@@ -130,11 +137,12 @@ impl ReelApp {
                             rgba(0, 0, 0, 0.95) 0%,
                             rgba(0, 0, 0, 0.7) 50%,
                             rgba(0, 0, 0, 0) 100%);
-                padding: 6px 8px;
-                padding-bottom: 8px;
+                padding: 4px 4px;
+                padding-bottom: 4px;
                 border-bottom-left-radius: 6px;
                 border-bottom-right-radius: 6px;
-                min-height: 50px;
+                min-height: 30px;
+                box-shadow: inset 0 -1px 2px rgba(0, 0, 0, 0.4);
             }
 
             /* Text on Poster */
@@ -155,14 +163,16 @@ impl ReelApp {
             .poster-card spinner {
                 background: rgba(0, 0, 0, 0.5);
                 border-radius: 50%;
-                padding: 6px;
+                padding: 3px;
             }
 
             /* Poster Background Gradient */
             .poster-card picture {
                 background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-                min-width: 150px;
-                min-height: 225px;
+                min-width: 75px;
+                min-height: 112px;
+                box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3),
+                           inset 0 -1px 1px rgba(255, 255, 255, 0.02);
             }
 
             /* Skeleton loading placeholder */
@@ -173,6 +183,7 @@ impl ReelApp {
                     rgba(255, 255, 255, 0.05) 100%);
                 background-size: 200% 100%;
                 animation: skeleton-shimmer 1.5s ease-in-out infinite;
+                box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
             }
 
             @keyframes skeleton-shimmer {
@@ -192,10 +203,12 @@ impl ReelApp {
 
             /* Flow Box Child Sizing */
             flowboxchild {
-                width: 150px;
-                height: 225px;
-                min-width: 150px;
-                min-height: 225px;
+                width: 180px;
+                height: 270px;
+                min-width: 180px;
+                min-height: 270px;
+                max-width: 180px;
+                max-height: 270px;
             }
 
             /* Badge Styles */

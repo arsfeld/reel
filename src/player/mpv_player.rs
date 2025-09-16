@@ -864,6 +864,27 @@ impl MpvPlayer {
     }
 
     pub async fn get_state(&self) -> PlayerState {
+        // Query MPV for the actual state instead of relying on cached state
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
+            // Check if MPV is actually paused or playing
+            if let Ok(paused) = mpv.get_property::<bool>("pause") {
+                if paused {
+                    return PlayerState::Paused;
+                } else {
+                    // Check if we're actually playing something
+                    if let Ok(idle) = mpv.get_property::<bool>("idle-active") {
+                        if idle {
+                            return PlayerState::Idle;
+                        } else {
+                            return PlayerState::Playing;
+                        }
+                    }
+                    return PlayerState::Playing;
+                }
+            }
+        }
+
+        // Fall back to cached state if MPV is not available
         self.inner.state.read().await.clone()
     }
 

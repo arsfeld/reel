@@ -21,6 +21,8 @@ pub struct ShowDetailsPage {
     loading: bool,
     episode_grid: gtk::FlowBox,
     season_dropdown: gtk::DropDown,
+    poster_texture: Option<gtk::gdk::Texture>,
+    backdrop_texture: Option<gtk::gdk::Texture>,
 }
 
 #[derive(Debug)]
@@ -46,6 +48,18 @@ pub enum ShowDetailsOutput {
 pub enum ShowDetailsCommand {
     LoadDetails,
     LoadEpisodes(String, u32),
+    LoadPosterImage {
+        url: String,
+    },
+    LoadBackdropImage {
+        url: String,
+    },
+    PosterImageLoaded {
+        texture: gtk::gdk::Texture,
+    },
+    BackdropImageLoaded {
+        texture: gtk::gdk::Texture,
+    },
     PlayWithContext {
         episode_id: MediaItemId,
         context: PlaylistContext,
@@ -78,14 +92,7 @@ impl AsyncComponent for ShowDetailsPage {
                     gtk::Picture {
                         set_content_fit: gtk::ContentFit::Cover,
                         #[watch]
-                        set_paintable: model.show.as_ref()
-                            .and_then(|s| s.backdrop_url.as_ref())
-                            .and_then(|url| {
-                                gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, -1, 550)
-                                    .ok()
-                                    .map(|pb| gtk::gdk::Texture::for_pixbuf(&pb))
-                            })
-                            .as_ref(),
+                        set_paintable: model.backdrop_texture.as_ref(),
                     },
 
                     // Stronger gradient overlay for better text contrast
@@ -105,14 +112,7 @@ impl AsyncComponent for ShowDetailsPage {
                                 add_css_class: "card",
                                 add_css_class: "poster-shadow",
                                 #[watch]
-                                set_paintable: model.show.as_ref()
-                                    .and_then(|s| s.poster_url.as_ref())
-                                    .and_then(|url| {
-                                        gtk::gdk_pixbuf::Pixbuf::from_file_at_size(url, 300, 450)
-                                            .ok()
-                                            .map(|pb| gtk::gdk::Texture::for_pixbuf(&pb))
-                                    })
-                                    .as_ref(),
+                                set_paintable: model.poster_texture.as_ref(),
                             },
 
                             // Show info
@@ -299,7 +299,9 @@ impl AsyncComponent for ShowDetailsPage {
             let sender = sender.clone();
             season_dropdown.connect_selected_notify(move |dropdown| {
                 let selected = dropdown.selected();
-                sender.input(ShowDetailsInput::SelectSeason(selected as u32 + 1));
+                // Use checked_add to prevent overflow, default to season 1 if overflow occurs
+                let season_num = (selected as u32).checked_add(1).unwrap_or(1);
+                sender.input(ShowDetailsInput::SelectSeason(season_num));
             });
         }
 
@@ -312,6 +314,8 @@ impl AsyncComponent for ShowDetailsPage {
             loading: true,
             episode_grid,
             season_dropdown,
+            poster_texture: None,
+            backdrop_texture: None,
         };
 
         let widgets = view_output!();
@@ -333,6 +337,8 @@ impl AsyncComponent for ShowDetailsPage {
                 self.show = None;
                 self.episodes.clear();
                 self.loading = true;
+                self.poster_texture = None;
+                self.backdrop_texture = None;
                 sender.oneshot_command(async { ShowDetailsCommand::LoadDetails });
             }
             ShowDetailsInput::SelectSeason(season_num) => {
@@ -424,6 +430,19 @@ impl AsyncComponent for ShowDetailsPage {
                             self.show = Some(show.clone());
                             self.loading = false;
 
+                            // Load poster and backdrop images
+                            if let Some(poster_url) = show.poster_url.clone() {
+                                sender.oneshot_command(async move {
+                                    ShowDetailsCommand::LoadPosterImage { url: poster_url }
+                                });
+                            }
+
+                            if let Some(backdrop_url) = show.backdrop_url.clone() {
+                                sender.oneshot_command(async move {
+                                    ShowDetailsCommand::LoadBackdropImage { url: backdrop_url }
+                                });
+                            }
+
                             // Update season dropdown
                             let seasons: Vec<String> = show
                                 .seasons
@@ -498,8 +517,71 @@ impl AsyncComponent for ShowDetailsPage {
                     .output(ShowDetailsOutput::PlayMedia(episode_id))
                     .unwrap();
             }
+            ShowDetailsCommand::LoadPosterImage { url } => {
+                // Spawn async task to download and create texture
+                let sender_clone = sender.clone();
+                relm4::spawn(async move {
+                    match load_image_from_url(&url, 300, 450).await {
+                        Ok(texture) => {
+                            sender_clone.oneshot_command(async move {
+                                ShowDetailsCommand::PosterImageLoaded { texture }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to load poster image: {}", e);
+                        }
+                    }
+                });
+            }
+            ShowDetailsCommand::LoadBackdropImage { url } => {
+                // Spawn async task to download and create texture
+                let sender_clone = sender.clone();
+                relm4::spawn(async move {
+                    match load_image_from_url(&url, -1, 550).await {
+                        Ok(texture) => {
+                            sender_clone.oneshot_command(async move {
+                                ShowDetailsCommand::BackdropImageLoaded { texture }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to load backdrop image: {}", e);
+                        }
+                    }
+                });
+            }
+            ShowDetailsCommand::PosterImageLoaded { texture } => {
+                self.poster_texture = Some(texture);
+            }
+            ShowDetailsCommand::BackdropImageLoaded { texture } => {
+                self.backdrop_texture = Some(texture);
+            }
         }
     }
+}
+
+async fn load_image_from_url(
+    url: &str,
+    _width: i32,
+    _height: i32,
+) -> Result<gtk::gdk::Texture, String> {
+    // Download the image
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| format!("Failed to download image: {}", e))?;
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read bytes: {}", e))?;
+
+    // Create texture from bytes
+    let glib_bytes = gtk::glib::Bytes::from(&bytes[..]);
+    let texture = gtk::gdk::Texture::from_bytes(&glib_bytes)
+        .map_err(|e| format!("Failed to create texture: {}", e))?;
+
+    // If width and height are specified (not -1), we could resize here
+    // For now, just return the texture as is
+    Ok(texture)
 }
 
 impl ShowDetailsPage {

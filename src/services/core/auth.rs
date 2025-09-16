@@ -100,6 +100,8 @@ impl AuthService {
         name: String,
         credentials: Credentials,
         server_url: Option<String>,
+        machine_id: Option<String>,
+        is_owned: Option<bool>,
     ) -> Result<Source> {
         // Authenticate first
         let user = backend.authenticate(credentials.clone()).await?;
@@ -109,21 +111,19 @@ impl AuthService {
 
         // Use the provided server URL
 
-        // Create source type enum first (before moving source_type)
-        // Note: For Plex, the machine_id will be updated later during discovery
-        // because we don't have the server's client_identifier at this point
+        // Create source type enum with provided machine_id if available
         let source_type_enum = match source_type.as_str() {
             "plex" => SourceType::PlexServer {
-                machine_id: String::new(), // Will be populated during discovery
-                owned: true,
+                machine_id: machine_id.clone().unwrap_or_default(),
+                owned: is_owned.unwrap_or(true),
             },
             "jellyfin" => SourceType::JellyfinServer,
             "local" => SourceType::LocalFolder {
                 path: std::path::PathBuf::from("/"),
             },
             _ => SourceType::PlexServer {
-                machine_id: String::new(),
-                owned: true,
+                machine_id: machine_id.clone().unwrap_or_default(),
+                owned: is_owned.unwrap_or(true),
             },
         };
 
@@ -136,8 +136,8 @@ impl AuthService {
             auth_provider_id: Some(user.id.clone()),
             connection_url: server_url.clone(),
             connections: None, // Will be populated later by connection discovery
-            machine_id: None,  // Will be set for Plex servers
-            is_owned: true,    // Default to owned
+            machine_id: machine_id, // Set the machine_id if provided
+            is_owned: is_owned.unwrap_or(true), // Use provided value or default to owned
             is_online: true,
             last_sync: None,
             last_connection_test: None,
