@@ -1,0 +1,548 @@
+/* Modern Details Page Styling - Netflix/Disney+/Apple TV+ Inspired */
+
+/* ============================================
+   Hero Section & Backdrop Effects
+   ============================================ */
+
+/* Ken Burns effect for hero backdrop */
+@keyframes kenBurns {
+    0% {
+        transform: scale(1.0) translateY(0);
+        filter: brightness(0.9);
+    }
+    50% {
+        transform: scale(1.05) translateY(-10px);
+        filter: brightness(1);
+    }
+    100% {
+        transform: scale(1.0) translateY(0);
+        filter: brightness(0.9);
+    }
+}
+
+/* Parallax container */
+.hero-section {
+    position: relative;
+    overflow: hidden;
+    min-height: 600px;
+    background: linear-gradient(180deg,
+        transparent 0%,
+        rgba(0, 0, 0, 0.2) 40%,
+        rgba(0, 0, 0, 0.9) 100%);
+}
+
+.hero-backdrop {
+    animation: kenBurns 30s ease-in-out infinite;
+    transform-origin: center center;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Enhanced gradient with multiple stops for better depth */
+.hero-gradient-modern {
+    background: linear-gradient(to bottom,
+                transparent 0%,
+                transparent 15%,
+                rgba(0, 0, 0, 0.03) 25%,
+                rgba(0, 0, 0, 0.1) 35%,
+                rgba(0, 0, 0, 0.25) 45%,
+                rgba(0, 0, 0, 0.45) 55%,
+                rgba(0, 0, 0, 0.65) 65%,
+                rgba(0, 0, 0, 0.8) 75%,
+                rgba(0, 0, 0, 0.92) 85%,
+                rgba(0, 0, 0, 0.98) 95%,
+                #000000 100%);
+    min-height: 100%;
+    backdrop-filter: blur(0.5px);
+    -webkit-backdrop-filter: blur(0.5px);
+}
+
+/* Premium poster styling with depth */
+.poster-premium {
+    box-shadow:
+        0 50px 100px -20px rgba(0, 0, 0, 0.9),
+        0 30px 60px -30px rgba(0, 0, 0, 0.8),
+        0 20px 40px -20px rgba(0, 0, 0, 0.7),
+        0 10px 20px -10px rgba(0, 0, 0, 0.6),
+        0 5px 10px -5px rgba(0, 0, 0, 0.5),
+        0 0 0 1px rgba(255, 255, 255, 0.1),
+        inset 0 2px 4px rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    transform: perspective(1000px) rotateY(-2deg);
+}
+
+.poster-premium:hover {
+    transform: perspective(1000px) rotateY(0deg) scale(1.02);
+    box-shadow:
+        0 60px 120px -20px rgba(0, 0, 0, 1),
+        0 40px 80px -30px rgba(0, 0, 0, 0.9),
+        0 30px 60px -20px rgba(0, 0, 0, 0.8),
+        0 15px 30px -10px rgba(0, 0, 0, 0.7),
+        0 8px 16px -5px rgba(0, 0, 0, 0.6),
+        0 0 0 1px rgba(255, 255, 255, 0.15),
+        inset 0 2px 4px rgba(255, 255, 255, 0.1);
+}
+
+/* ============================================
+   Metadata Pills & Badges - Modern Style
+   ============================================ */
+
+.metadata-pill-modern {
+    background: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 100px;
+    padding: 8px 16px;
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.3px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2),
+                inset 0 1px 2px rgba(255, 255, 255, 0.05);
+    position: relative;
+    overflow: hidden;
+}
+
+.metadata-pill-modern::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg,
+                transparent,
+                rgba(255, 255, 255, 0.1),
+                transparent);
+    transition: left 0.5s ease;
+}
+
+.metadata-pill-modern:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: translateY(-2px) scale(1.05);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3),
+                inset 0 1px 3px rgba(255, 255, 255, 0.1);
+}
+
+.metadata-pill-modern:hover::before {
+    left: 100%;
+}
+
+/* Rating pill with star */
+.rating-pill {
+    background: linear-gradient(135deg, #FFD700, #FFA500);
+    color: #000;
+    font-weight: 700;
+    border: none;
+    box-shadow: 0 2px 12px rgba(255, 215, 0, 0.4),
+                inset 0 1px 2px rgba(255, 255, 255, 0.3);
+}
+
+.rating-pill:hover {
+    background: linear-gradient(135deg, #FFE44D, #FFB84D);
+    box-shadow: 0 4px 20px rgba(255, 215, 0, 0.5),
+                inset 0 1px 3px rgba(255, 255, 255, 0.4);
+}
+
+/* ============================================
+   Glass Morphism Cards & Overlays
+   ============================================ */
+
+.glass-card {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(40px) saturate(200%);
+    -webkit-backdrop-filter: blur(40px) saturate(200%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3),
+                inset 0 2px 4px rgba(255, 255, 255, 0.05);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+    transform: translateY(-4px);
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4),
+                inset 0 2px 6px rgba(255, 255, 255, 0.08);
+}
+
+/* ============================================
+   Loading Skeletons - Premium Feel
+   ============================================ */
+
+@keyframes shimmer {
+    0% {
+        background-position: -468px 0;
+    }
+    100% {
+        background-position: 468px 0;
+    }
+}
+
+.skeleton {
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.05) 25%,
+        rgba(255, 255, 255, 0.1) 37%,
+        rgba(255, 255, 255, 0.05) 63%
+    );
+    background-size: 468px 104px;
+    animation: shimmer 1.5s ease-in-out infinite;
+    border-radius: 8px;
+}
+
+.skeleton-poster {
+    width: 300px;
+    height: 450px;
+    border-radius: 12px;
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.03) 25%,
+        rgba(255, 255, 255, 0.08) 37%,
+        rgba(255, 255, 255, 0.03) 63%
+    );
+    background-size: 468px 450px;
+    animation: shimmer 2s ease-in-out infinite;
+}
+
+.skeleton-text {
+    height: 20px;
+    margin: 10px 0;
+    border-radius: 4px;
+}
+
+.skeleton-title {
+    height: 48px;
+    width: 70%;
+    margin: 20px 0;
+    border-radius: 6px;
+}
+
+/* ============================================
+   Smooth Animations & Transitions
+   ============================================ */
+
+/* Fade in animation for content */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeInScale {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.fade-in-up {
+    animation: fadeInUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.fade-in-scale {
+    animation: fadeInScale 0.5s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+/* Staggered animations for lists */
+.stagger-animation > * {
+    animation: fadeInUp 0.5s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.stagger-animation > *:nth-child(1) { animation-delay: 0.1s; }
+.stagger-animation > *:nth-child(2) { animation-delay: 0.15s; }
+.stagger-animation > *:nth-child(3) { animation-delay: 0.2s; }
+.stagger-animation > *:nth-child(4) { animation-delay: 0.25s; }
+.stagger-animation > *:nth-child(5) { animation-delay: 0.3s; }
+.stagger-animation > *:nth-child(6) { animation-delay: 0.35s; }
+.stagger-animation > *:nth-child(7) { animation-delay: 0.4s; }
+.stagger-animation > *:nth-child(8) { animation-delay: 0.45s; }
+
+/* ============================================
+   Action Buttons - Premium Style
+   ============================================ */
+
+.action-button-primary {
+    background: linear-gradient(135deg, @accent_bg_color, shade(@accent_bg_color, 0.9));
+    color: @accent_fg_color;
+    border: none;
+    border-radius: 100px;
+    padding: 12px 32px;
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    box-shadow: 0 4px 20px rgba(53, 132, 228, 0.3),
+                inset 0 1px 3px rgba(255, 255, 255, 0.1);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+.action-button-primary::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    transform: translate(-50%, -50%);
+    transition: width 0.6s ease, height 0.6s ease;
+}
+
+.action-button-primary:hover {
+    transform: translateY(-2px) scale(1.02);
+    box-shadow: 0 6px 30px rgba(53, 132, 228, 0.4),
+                inset 0 1px 4px rgba(255, 255, 255, 0.15);
+}
+
+.action-button-primary:hover::before {
+    width: 300px;
+    height: 300px;
+}
+
+.action-button-primary:active {
+    transform: translateY(0) scale(0.98);
+    box-shadow: 0 2px 10px rgba(53, 132, 228, 0.3),
+                inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* Secondary action buttons */
+.action-button-secondary {
+    background: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 100px;
+    padding: 12px 24px;
+    font-weight: 600;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.9);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+.action-button-secondary:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.25);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* ============================================
+   Cast & Crew Cards - Modern Layout
+   ============================================ */
+
+.cast-card-modern {
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+    padding: 0;
+    overflow: hidden;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: pointer;
+    position: relative;
+    min-width: 120px;
+}
+
+.cast-card-modern:hover {
+    background: rgba(255, 255, 255, 0.06);
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.cast-card-modern picture {
+    border-radius: 12px 12px 0 0;
+    overflow: hidden;
+}
+
+.cast-card-modern .cast-info {
+    padding: 12px;
+    background: linear-gradient(to bottom,
+                rgba(0, 0, 0, 0.6),
+                rgba(0, 0, 0, 0.8));
+}
+
+/* ============================================
+   Episode Cards - Netflix Style
+   ============================================ */
+
+.episode-card-modern {
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: pointer;
+    position: relative;
+}
+
+.episode-card-modern:hover {
+    background: rgba(255, 255, 255, 0.05);
+    transform: scale(1.03);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    z-index: 10;
+}
+
+.episode-card-modern .episode-thumbnail {
+    position: relative;
+    overflow: hidden;
+}
+
+.episode-card-modern:hover .episode-thumbnail picture {
+    transform: scale(1.05);
+    filter: brightness(1.1);
+}
+
+.episode-card-modern .episode-thumbnail picture {
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.episode-progress-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: rgba(0, 0, 0, 0.3);
+}
+
+.episode-progress-bar .progress {
+    height: 100%;
+    background: linear-gradient(90deg, #3584e4, #1c71d8);
+    border-radius: 0 2px 2px 0;
+    box-shadow: 0 0 8px rgba(53, 132, 228, 0.5);
+}
+
+/* ============================================
+   Typography Improvements
+   ============================================ */
+
+.title-hero {
+    font-size: 48px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    text-shadow: 0 4px 20px rgba(0, 0, 0, 0.8),
+                 0 2px 10px rgba(0, 0, 0, 0.6);
+    line-height: 1.1;
+}
+
+.subtitle-hero {
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+    color: rgba(255, 255, 255, 0.8);
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+.overview-text {
+    font-size: 15px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.85);
+    letter-spacing: 0.1px;
+    font-weight: 400;
+}
+
+/* ============================================
+   Responsive Adjustments
+   ============================================ */
+
+@media (max-width: 768px) {
+    .hero-section {
+        min-height: 400px;
+    }
+
+    .poster-premium {
+        width: 200px;
+        height: 300px;
+    }
+
+    .title-hero {
+        font-size: 32px;
+    }
+
+    .metadata-pill-modern {
+        font-size: 12px;
+        padding: 6px 12px;
+    }
+}
+
+@media (max-width: 480px) {
+    .hero-section {
+        min-height: 300px;
+    }
+
+    .poster-premium {
+        width: 150px;
+        height: 225px;
+    }
+
+    .title-hero {
+        font-size: 24px;
+    }
+}
+
+/* ============================================
+   Micro-interactions & Hover Effects
+   ============================================ */
+
+.interactive-element {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.interactive-element:hover {
+    transform: translateY(-2px);
+}
+
+.interactive-element:active {
+    transform: translateY(0) scale(0.98);
+}
+
+/* Ripple effect for buttons */
+@keyframes ripple {
+    0% {
+        transform: scale(0);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(4);
+        opacity: 0;
+    }
+}
+
+.ripple {
+    position: relative;
+    overflow: hidden;
+}
+
+.ripple::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.5);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
+.ripple:active::after {
+    width: 100px;
+    height: 100px;
+    animation: ripple 0.6s ease-out;
+}

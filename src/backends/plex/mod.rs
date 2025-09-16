@@ -1001,7 +1001,16 @@ impl MediaBackend for PlexBackend {
             .ok_or_else(|| anyhow!("Season {} not found for show {}", season_number, show_id))?;
 
         // Now get the episodes for the correct season
-        api.get_episodes(&season.id).await
+        let mut episodes = api.get_episodes(&season.id).await?;
+
+        // Ensure show_id is set correctly for all episodes
+        for episode in &mut episodes {
+            if episode.show_id.is_none() {
+                episode.show_id = Some(show_id.to_string());
+            }
+        }
+
+        Ok(episodes)
     }
 
     async fn get_stream_url(&self, media_id: &MediaItemId) -> Result<StreamInfo> {

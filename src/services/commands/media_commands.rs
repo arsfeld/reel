@@ -242,30 +242,15 @@ pub struct GetEpisodesCommand {
 #[async_trait]
 impl Command<Vec<Episode>> for GetEpisodesCommand {
     async fn execute(&self) -> Result<Vec<Episode>> {
-        // For now, return episodes from the database
-        // In the future, this could fetch from the backend if needed
-        let items = MediaService::get_media_items(
-            &self.db,
-            &LibraryId::new("episodes"),
-            Some(MediaType::Show),
-            0,
-            50,
-        )
-        .await?;
+        // Use the new MediaService method to get episodes
+        let items =
+            MediaService::get_episodes_for_show(&self.db, &self.show_id, self.season_number)
+                .await?;
 
         let mut episodes = Vec::new();
         for item in items {
             if let MediaItem::Episode(episode) = item {
-                // Filter by show_id and season if specified
-                if episode.show_id.as_ref().map(|s| s.as_str()) == Some(self.show_id.as_str()) {
-                    if let Some(season) = self.season_number {
-                        if episode.season_number == season {
-                            episodes.push(episode);
-                        }
-                    } else {
-                        episodes.push(episode);
-                    }
-                }
+                episodes.push(episode);
             }
         }
 
