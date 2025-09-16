@@ -1138,6 +1138,79 @@ impl MpvPlayer {
         info!("Upscaling mode changed to: {}", mode.to_string());
         Ok(())
     }
+
+    pub async fn set_playback_speed(&self, speed: f64) -> Result<()> {
+        let inner = self.inner.clone();
+        if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
+            mpv.set_property("speed", speed)
+                .map_err(|e| anyhow::anyhow!("Failed to set playback speed: {:?}", e))?;
+        }
+        Ok(())
+    }
+
+    pub async fn get_playback_speed(&self) -> f64 {
+        let inner = self.inner.clone();
+        if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
+            mpv.get_property::<f64>("speed").unwrap_or(1.0)
+        } else {
+            1.0
+        }
+    }
+
+    pub async fn frame_step_forward(&self) -> Result<()> {
+        let inner = self.inner.clone();
+        if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
+            mpv.command("frame-step", &[])
+                .map_err(|e| anyhow::anyhow!("Failed to step forward: {:?}", e))?;
+        }
+        Ok(())
+    }
+
+    pub async fn frame_step_backward(&self) -> Result<()> {
+        let inner = self.inner.clone();
+        if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
+            mpv.command("frame-back-step", &[])
+                .map_err(|e| anyhow::anyhow!("Failed to step backward: {:?}", e))?;
+        }
+        Ok(())
+    }
+
+    pub async fn toggle_mute(&self) -> Result<()> {
+        let inner = self.inner.clone();
+        if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
+            let muted = mpv.get_property::<bool>("mute").unwrap_or(false);
+            mpv.set_property("mute", !muted)
+                .map_err(|e| anyhow::anyhow!("Failed to toggle mute: {:?}", e))?;
+        }
+        Ok(())
+    }
+
+    pub async fn is_muted(&self) -> bool {
+        let inner = self.inner.clone();
+        if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
+            mpv.get_property::<bool>("mute").unwrap_or(false)
+        } else {
+            false
+        }
+    }
+
+    pub async fn cycle_subtitle_track(&self) -> Result<()> {
+        let inner = self.inner.clone();
+        if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
+            mpv.command("cycle", &["sub"])
+                .map_err(|e| anyhow::anyhow!("Failed to cycle subtitle track: {:?}", e))?;
+        }
+        Ok(())
+    }
+
+    pub async fn cycle_audio_track(&self) -> Result<()> {
+        let inner = self.inner.clone();
+        if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
+            mpv.command("cycle", &["audio"])
+                .map_err(|e| anyhow::anyhow!("Failed to cycle audio track: {:?}", e))?;
+        }
+        Ok(())
+    }
 }
 
 impl MpvPlayerInner {
