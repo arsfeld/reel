@@ -458,7 +458,16 @@ impl MediaBackend for JellyfinBackend {
 
         let seasons = api.get_seasons(&show_id.to_string()).await?;
         if let Some(season_info) = seasons.iter().find(|s| s.season_number == season) {
-            return api.get_episodes(&season_info.id).await;
+            let mut episodes = api.get_episodes(&season_info.id).await?;
+
+            // Ensure show_id is set correctly for all episodes
+            for episode in &mut episodes {
+                if episode.show_id.is_none() {
+                    episode.show_id = Some(show_id.to_string());
+                }
+            }
+
+            return Ok(episodes);
         }
 
         Err(anyhow!("Failed to get seasons"))

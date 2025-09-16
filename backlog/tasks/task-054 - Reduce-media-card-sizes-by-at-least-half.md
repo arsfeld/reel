@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2025-09-16 02:59'
-updated_date: '2025-09-16 03:34'
+updated_date: '2025-09-16 03:57'
 labels:
   - ui
   - ux
@@ -55,3 +55,11 @@ Additional fix required:
 - Changed ImageSize::Card to ImageSize::Thumbnail in library.rs
 - Set can_shrink to true on gtk::Picture widget
 - Images are now properly sized at 75x112 pixels
+
+Final dimensions implemented:
+- Card size: 180x270 pixels (2:3 aspect ratio for proper movie poster proportions)
+- Font sizes: 0.85em for titles, 0.75em for subtitles
+- Removed loading spinner overlay
+- Added sophisticated drop shadows for depth and texture
+- Fixed image loading to use Thumbnail size instead of Card size
+- Set can_shrink to true on gtk::Picture widget for proper scaling

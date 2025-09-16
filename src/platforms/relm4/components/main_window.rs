@@ -978,73 +978,66 @@ impl AsyncComponent for MainWindow {
             MainWindowInput::NavigateToMovie(item_id) => {
                 tracing::info!("Navigating to movie: {}", item_id);
 
-                // Create movie details page if not exists
-                if self.movie_details_page.is_none() {
-                    let db = std::sync::Arc::new(self.db.clone());
-                    self.movie_details_page = Some(
-                        MovieDetailsPage::builder()
-                            .launch((item_id.clone(), db))
-                            .forward(sender.input_sender(), |output| match output {
-                                crate::platforms::relm4::components::pages::movie_details::MovieDetailsOutput::PlayMedia(id) => {
-                                    tracing::info!("Playing media: {}", id);
-                                    MainWindowInput::NavigateToPlayer(id)
-                                }
-                                crate::platforms::relm4::components::pages::movie_details::MovieDetailsOutput::NavigateBack => {
-                                    MainWindowInput::Navigate("back".to_string())
-                                }
-                            }),
-                    );
-                } else if let Some(ref movie_page) = self.movie_details_page {
-                    // Update existing page with new item
-                    movie_page.sender().send(crate::platforms::relm4::components::pages::movie_details::MovieDetailsInput::LoadMovie(item_id.clone())).unwrap();
-                }
+                // Always recreate the movie details page to avoid widget parent conflicts
+                // This ensures the widget isn't already attached to another navigation page
+                let db = std::sync::Arc::new(self.db.clone());
+                let movie_controller = MovieDetailsPage::builder()
+                    .launch((item_id.clone(), db))
+                    .forward(sender.input_sender(), |output| match output {
+                        crate::platforms::relm4::components::pages::movie_details::MovieDetailsOutput::PlayMedia(id) => {
+                            tracing::info!("Playing media: {}", id);
+                            MainWindowInput::NavigateToPlayer(id)
+                        }
+                        crate::platforms::relm4::components::pages::movie_details::MovieDetailsOutput::NavigateBack => {
+                            MainWindowInput::Navigate("back".to_string())
+                        }
+                    });
+
+                // Create navigation page with the new controller's widget
+                let page = adw::NavigationPage::builder()
+                    .title("Movie Details")
+                    .child(movie_controller.widget())
+                    .build();
+
+                // Store the controller for later use
+                self.movie_details_page = Some(movie_controller);
 
                 // Push the page to navigation
-                if let Some(ref movie_page) = self.movie_details_page {
-                    let page = adw::NavigationPage::builder()
-                        .title("Movie Details")
-                        .child(movie_page.widget())
-                        .build();
-                    self.navigation_view.push(&page);
-                }
+                self.navigation_view.push(&page);
             }
             MainWindowInput::NavigateToShow(item_id) => {
                 tracing::info!("Navigating to show: {}", item_id);
 
-                // Create show details page if not exists
-                if self.show_details_page.is_none() {
-                    let db = std::sync::Arc::new(self.db.clone());
-                    let sender_clone = sender.clone();
-                    self.show_details_page = Some(
-                        ShowDetailsPage::builder()
-                            .launch((item_id.clone(), db))
-                            .forward(sender.input_sender(), move |output| match output {
-                                crate::platforms::relm4::components::pages::show_details::ShowDetailsOutput::PlayMedia(id) => {
-                                    tracing::info!("Playing episode: {}", id);
-                                    MainWindowInput::NavigateToPlayer(id)
-                                }
-                                crate::platforms::relm4::components::pages::show_details::ShowDetailsOutput::PlayMediaWithContext { media_id, context } => {
-                                    tracing::info!("Playing episode with context: {}", media_id);
-                                    MainWindowInput::NavigateToPlayerWithContext { media_id, context }
-                                }
-                                crate::platforms::relm4::components::pages::show_details::ShowDetailsOutput::NavigateBack => {
-                                    MainWindowInput::Navigate("back".to_string())
-                                }
-                            }),
-                    );
-                } else if let Some(ref show_page) = self.show_details_page {
-                    // Update existing page with new item
-                    show_page.sender().send(crate::platforms::relm4::components::pages::show_details::ShowDetailsInput::LoadShow(item_id.clone())).unwrap();
-                }
+                // Always recreate the show details page to avoid widget parent conflicts
+                // This ensures the widget isn't already attached to another navigation page
+                let db = std::sync::Arc::new(self.db.clone());
+                let show_controller = ShowDetailsPage::builder()
+                    .launch((item_id.clone(), db))
+                    .forward(sender.input_sender(), move |output| match output {
+                        crate::platforms::relm4::components::pages::show_details::ShowDetailsOutput::PlayMedia(id) => {
+                            tracing::info!("Playing episode: {}", id);
+                            MainWindowInput::NavigateToPlayer(id)
+                        }
+                        crate::platforms::relm4::components::pages::show_details::ShowDetailsOutput::PlayMediaWithContext { media_id, context } => {
+                            tracing::info!("Playing episode with context: {}", media_id);
+                            MainWindowInput::NavigateToPlayerWithContext { media_id, context }
+                        }
+                        crate::platforms::relm4::components::pages::show_details::ShowDetailsOutput::NavigateBack => {
+                            MainWindowInput::Navigate("back".to_string())
+                        }
+                    });
+
+                // Create navigation page with the new controller's widget
+                let page = adw::NavigationPage::builder()
+                    .title("Show Details")
+                    .child(show_controller.widget())
+                    .build();
+
+                // Store the controller for later use
+                self.show_details_page = Some(show_controller);
 
                 // Push the page to navigation
-                if let Some(ref show_page) = self.show_details_page {
-                    let page = adw::NavigationPage::builder()
-                        .title("Show Details")
-                        .child(show_page.widget())
-                        .build();
-                    self.navigation_view.push(&page);
-                }
+                self.navigation_view.push(&page);
             }
             MainWindowInput::NavigateToPlayer(media_id) => {
                 tracing::info!("Navigating to player for media: {}", media_id);
