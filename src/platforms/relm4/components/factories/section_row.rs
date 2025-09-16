@@ -70,7 +70,7 @@ impl FactoryComponent for SectionRow {
             gtk::ScrolledWindow {
                 set_hscrollbar_policy: gtk::PolicyType::Automatic,
                 set_vscrollbar_policy: gtk::PolicyType::Never,
-                set_height_request: 360,
+                set_height_request: 260,
 
                 #[wrap(Some)]
                 set_child = &gtk::Box {

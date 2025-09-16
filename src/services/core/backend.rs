@@ -65,6 +65,23 @@ impl BackendService {
                 let backend = PlexBackend::from_auth(auth_provider, source)
                     .context("Failed to create Plex backend")?;
                 backend.initialize().await?;
+
+                // Update the source with the best connection URL if it changed
+                if backend.has_url_changed().await {
+                    if let Some(new_url) = backend.get_current_url().await {
+                        tracing::info!(
+                            "Updating source {} with new URL: {}",
+                            source_entity.id,
+                            new_url
+                        );
+                        let source_repo = SourceRepositoryImpl::new(db.clone());
+                        source_repo
+                            .update_connection_url(&source_entity.id, Some(new_url))
+                            .await
+                            .context("Failed to update source URL")?;
+                    }
+                }
+
                 Box::new(backend)
             }
             "jellyfin" | "JellyfinServer" => {

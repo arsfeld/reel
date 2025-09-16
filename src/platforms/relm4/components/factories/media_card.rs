@@ -59,8 +59,8 @@ impl FactoryComponent for MediaCard {
             add_css_class: "flat",
             add_css_class: "media-card",
             add_css_class: "poster-card",
-            set_width_request: 135,
-            set_height_request: 200,
+            set_width_request: 150,
+            set_height_request: 225,
 
             // Main overlay container
             gtk::Overlay {
@@ -69,11 +69,13 @@ impl FactoryComponent for MediaCard {
                 // Poster image with proper aspect ratio
                 #[name(poster)]
                 gtk::Picture {
-                    set_content_fit: gtk::ContentFit::Contain,
+                    set_content_fit: gtk::ContentFit::Cover,
                     set_can_shrink: false,
-                    set_width_request: 135,
-                    set_height_request: 200,
+                    set_width_request: 150,
+                    set_height_request: 225,
                     add_css_class: "rounded-poster",
+                    #[track(self.changed(MediaCard::image_loaded()))]
+                    add_css_class: if self.image_loaded { "poster-fade-in" } else { "poster-skeleton" },
                 },
 
                 // Loading spinner overlay

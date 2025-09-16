@@ -35,6 +35,8 @@ pub struct PlexBackend {
     cached_connections: Arc<RwLock<Vec<PlexConnection>>>,
     /// Last time we discovered servers
     last_discovery: Arc<RwLock<Option<Instant>>>,
+    /// Track the original URL to detect changes
+    original_url: Arc<RwLock<Option<String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,8 +49,9 @@ pub struct ServerInfo {
 impl PlexBackend {
     /// Create a temporary PlexBackend for authentication purposes
     pub fn new_for_auth(base_url: String, token: String) -> Self {
+        let url = Some(base_url);
         Self {
-            base_url: Arc::new(RwLock::new(Some(base_url))),
+            base_url: Arc::new(RwLock::new(url.clone())),
             auth_token: Arc::new(RwLock::new(Some(token))),
             backend_id: format!("temp_{}", uuid::Uuid::new_v4()),
             last_sync_time: Arc::new(RwLock::new(None)),
@@ -59,6 +62,7 @@ impl PlexBackend {
             source: None,
             cached_connections: Arc::new(RwLock::new(Vec::new())),
             last_discovery: Arc::new(RwLock::new(None)),
+            original_url: Arc::new(RwLock::new(url)),
         }
     }
 
@@ -74,8 +78,9 @@ impl PlexBackend {
             return Err(anyhow!("Invalid source type for Plex backend"));
         }
 
+        let original_url = source.connection_info.primary_url.clone();
         Ok(Self {
-            base_url: Arc::new(RwLock::new(source.connection_info.primary_url.clone())),
+            base_url: Arc::new(RwLock::new(original_url.clone())),
             auth_token: Arc::new(RwLock::new(None)), // Will be loaded from AuthProvider
             backend_id: source.id.clone(),
             last_sync_time: Arc::new(RwLock::new(None)),
@@ -86,7 +91,20 @@ impl PlexBackend {
             source: Some(source),
             cached_connections: Arc::new(RwLock::new(Vec::new())),
             last_discovery: Arc::new(RwLock::new(None)),
+            original_url: Arc::new(RwLock::new(original_url)),
         })
+    }
+
+    /// Get the current base URL being used
+    pub async fn get_current_url(&self) -> Option<String> {
+        self.base_url.read().await.clone()
+    }
+
+    /// Check if the URL has changed from the original
+    pub async fn has_url_changed(&self) -> bool {
+        let current = self.base_url.read().await.clone();
+        let original = self.original_url.read().await.clone();
+        current != original
     }
 
     /// Check if the server is reachable without blocking for too long
@@ -453,6 +471,7 @@ impl PlexBackend {
             source: self.source.clone(),
             cached_connections: self.cached_connections.clone(),
             last_discovery: self.last_discovery.clone(),
+            original_url: self.original_url.clone(),
         }
     }
 
@@ -662,6 +681,11 @@ impl MediaBackend for PlexBackend {
 
         // Store the token
         *self.auth_token.write().await = Some(token.to_string());
+
+        // Store the original URL if not already set
+        if self.original_url.read().await.is_none() {
+            *self.original_url.write().await = self.base_url.read().await.clone();
+        }
 
         // Check if we already have a URL from the source
         let existing_url = self.base_url.read().await.clone();
