@@ -3,11 +3,11 @@ id: task-093
 title: >-
   Integrate backend HomeSection API with HomePage component to load all
   Plex/Jellyfin sections
-status: In Progress
+status: To Do
 assignee:
   - '@claude'
 created_date: '2025-09-16 19:29'
-updated_date: '2025-09-16 19:30'
+updated_date: '2025-09-16 19:39'
 labels:
   - home
   - plex
@@ -28,6 +28,7 @@ The HomePage component currently only loads Continue Watching and Recently Added
 - [ ] #4 Sections properly handle empty results and error states
 - [ ] #5 Multiple backend sections are merged properly without conflicts
 <!-- AC:END -->
+
 
 ## Implementation Plan
 

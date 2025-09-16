@@ -348,6 +348,20 @@ impl AsyncComponent for HomePage {
                     .output(HomePageOutput::NavigateToMediaItem(item_id))
                     .unwrap();
             }
+
+            HomePageInput::HomeSectionsLoaded(sections) => {
+                debug!("Home sections loaded: {} sections", sections.len());
+                // TODO: Implement dynamic section loading from Plex hubs
+                // For now, just log the sections
+                for section in sections {
+                    debug!(
+                        "Section: {} with {} items",
+                        section.title,
+                        section.items.len()
+                    );
+                }
+                self.is_loading = false;
+            }
         }
     }
 }

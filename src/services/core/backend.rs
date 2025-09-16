@@ -6,8 +6,8 @@ use crate::db::repository::{
     source_repository::{SourceRepository, SourceRepositoryImpl},
 };
 use crate::models::{
-    AuthProvider, ConnectionInfo, Credentials, MediaItemId, Source, SourceId, SourceType,
-    StreamInfo,
+    AuthProvider, ConnectionInfo, Credentials, HomeSection, MediaItemId, Source, SourceId,
+    SourceType, StreamInfo,
 };
 use crate::services::core::auth::AuthService;
 use anyhow::{Context, Result};
@@ -251,6 +251,7 @@ impl BackendService {
         // Load all sources
         let source_repo = SourceRepositoryImpl::new(db.clone());
         let sources = source_repo.find_all().await?;
+        let sources_count = sources.len();
 
         let mut all_sections = Vec::new();
 
@@ -275,12 +276,12 @@ impl BackendService {
                                 for section in &mut sections {
                                     section.id = format!("{}::{}", source_clone.id, section.id);
                                     // Also prefix the title with source name if multiple sources exist
-                                    if sources.len() > 1 {
+                                    if sources_count > 1 {
                                         section.title =
                                             format!("{} - {}", source_clone.name, section.title);
                                     }
                                 }
-                                Ok(sections)
+                                Ok::<Vec<HomeSection>, anyhow::Error>(sections)
                             }
                             Err(e) => {
                                 tracing::warn!(
