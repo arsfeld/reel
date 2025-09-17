@@ -184,6 +184,7 @@ impl MediaService {
         source_id: &SourceId,
     ) -> Result<()> {
         let repo = MediaRepositoryImpl::new(db.clone());
+        let playback_repo = PlaybackRepositoryImpl::new(db.clone());
 
         // Convert to entity using the new mapper
         let entity = item.to_model(source_id.as_str(), Some(library_id.to_string()));
@@ -194,6 +195,86 @@ impl MediaService {
         } else {
             repo.insert(entity).await?;
             debug!("Created media item: {}", item.id());
+        }
+
+        // Save playback progress if the item has been watched
+        match &item {
+            MediaItem::Movie(movie) => {
+                if movie.watched || movie.view_count > 0 || movie.playback_position.is_some() {
+                    let position_ms = movie
+                        .playback_position
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    let duration_ms = movie.duration.as_millis() as i64;
+
+                    // Check if we already have playback progress for this item
+                    if let Some(mut existing) = playback_repo.find_by_media_id(&movie.id).await? {
+                        // Update existing record with latest data from backend
+                        existing.watched = movie.watched;
+                        existing.view_count = movie.view_count as i32;
+                        if position_ms > 0 {
+                            existing.position_ms = position_ms;
+                        }
+                        existing.duration_ms = duration_ms;
+                        existing.last_watched_at = movie.last_watched_at.map(|dt| dt.naive_utc());
+                        playback_repo.update(existing).await?;
+                    } else {
+                        // Create new playback progress
+                        let progress = crate::db::entities::PlaybackProgressModel {
+                            id: 0, // Will be auto-generated
+                            media_id: movie.id.clone(),
+                            user_id: None,
+                            position_ms,
+                            duration_ms,
+                            watched: movie.watched,
+                            view_count: movie.view_count as i32,
+                            last_watched_at: movie.last_watched_at.map(|dt| dt.naive_utc()),
+                            updated_at: chrono::Utc::now().naive_utc(),
+                        };
+                        playback_repo.insert(progress).await?;
+                    }
+                }
+            }
+            MediaItem::Episode(episode) => {
+                if episode.watched || episode.view_count > 0 || episode.playback_position.is_some()
+                {
+                    let position_ms = episode
+                        .playback_position
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    let duration_ms = episode.duration.as_millis() as i64;
+
+                    // Check if we already have playback progress for this item
+                    if let Some(mut existing) = playback_repo.find_by_media_id(&episode.id).await? {
+                        // Update existing record with latest data from backend
+                        existing.watched = episode.watched;
+                        existing.view_count = episode.view_count as i32;
+                        if position_ms > 0 {
+                            existing.position_ms = position_ms;
+                        }
+                        existing.duration_ms = duration_ms;
+                        existing.last_watched_at = episode.last_watched_at.map(|dt| dt.naive_utc());
+                        playback_repo.update(existing).await?;
+                    } else {
+                        // Create new playback progress
+                        let progress = crate::db::entities::PlaybackProgressModel {
+                            id: 0, // Will be auto-generated
+                            media_id: episode.id.clone(),
+                            user_id: None,
+                            position_ms,
+                            duration_ms,
+                            watched: episode.watched,
+                            view_count: episode.view_count as i32,
+                            last_watched_at: episode.last_watched_at.map(|dt| dt.naive_utc()),
+                            updated_at: chrono::Utc::now().naive_utc(),
+                        };
+                        playback_repo.insert(progress).await?;
+                    }
+                }
+            }
+            _ => {
+                // Other media types don't have watched status
+            }
         }
 
         Ok(())
@@ -314,6 +395,40 @@ impl MediaService {
         // TODO: Implement proper trending algorithm based on watch history
         // For now, use recently added items as trending
         Self::get_recently_added(db, limit).await
+    }
+
+    /// Get playback progress for a media item
+    pub async fn get_playback_progress(
+        db: &DatabaseConnection,
+        media_id: &str,
+    ) -> Result<Option<crate::db::entities::PlaybackProgressModel>> {
+        let playback_repo = PlaybackRepositoryImpl::new(db.clone());
+        playback_repo
+            .find_by_media_id(media_id)
+            .await
+            .context("Failed to get playback progress")
+    }
+
+    /// Get playback progress for multiple media items in batch
+    pub async fn get_playback_progress_batch(
+        db: &DatabaseConnection,
+        media_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, crate::db::entities::PlaybackProgressModel>> {
+        use crate::db::entities::{PlaybackProgress, playback_progress};
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+        let progress_records = PlaybackProgress::find()
+            .filter(playback_progress::Column::MediaId.is_in(media_ids.to_vec()))
+            .all(db.as_ref())
+            .await
+            .context("Failed to fetch playback progress batch")?;
+
+        let mut progress_map = std::collections::HashMap::new();
+        for record in progress_records {
+            progress_map.insert(record.media_id.clone(), record);
+        }
+
+        Ok(progress_map)
     }
 
     /// Get continue watching items
