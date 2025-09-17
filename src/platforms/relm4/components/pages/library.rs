@@ -523,15 +523,48 @@ impl AsyncComponent for LibraryPage {
                         start_idx, end_idx
                     );
 
+                    // Collect media IDs for this batch
+                    let batch_media_ids: Vec<String> = self.total_items[start_idx..end_idx]
+                        .iter()
+                        .map(|item| item.id.clone())
+                        .collect();
+
+                    // Batch fetch playback progress for this batch
+                    let playback_progress_map = if !batch_media_ids.is_empty() {
+                        match crate::services::core::MediaService::get_playback_progress_batch(
+                            &self.db,
+                            &batch_media_ids,
+                        )
+                        .await
+                        {
+                            Ok(map) => map,
+                            Err(e) => {
+                                debug!("Failed to fetch playback progress: {}", e);
+                                std::collections::HashMap::new()
+                            }
+                        }
+                    } else {
+                        std::collections::HashMap::new()
+                    };
+
                     {
                         let mut factory_guard = self.media_factory.guard();
                         for idx in start_idx..end_idx {
                             let item = &self.total_items[idx];
+
+                            // Use the pre-fetched playback progress data
+                            let (watched, progress_percent) =
+                                if let Some(progress) = playback_progress_map.get(&item.id) {
+                                    (progress.watched, progress.get_progress_percentage() as f64)
+                                } else {
+                                    (false, 0.0) // No progress record means unwatched
+                                };
+
                             let index = factory_guard.push_back(MediaCardInit {
                                 item: item.clone(),
                                 show_progress: false,
-                                watched: false,
-                                progress_percent: 0.0,
+                                watched,
+                                progress_percent,
                             });
 
                             // Store the mapping but don't request images yet
