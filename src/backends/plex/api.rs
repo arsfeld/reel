@@ -567,12 +567,158 @@ impl PlexApi {
         Ok(())
     }
 
-    /// Get homepage sections (On Deck, Recently Added, etc.)
+    /// Get homepage sections using the dynamic /hubs/home/refresh endpoint
     pub async fn get_home_sections(&self) -> Result<Vec<HomeSection>> {
+        info!(
+            "PlexApi::get_home_sections() - Starting to fetch homepage data from /hubs/home/refresh"
+        );
+
+        // Try to use the new /hubs/home/refresh endpoint first
+        match self.fetch_home_hubs().await {
+            Ok(sections) if !sections.is_empty() => {
+                info!(
+                    "Successfully fetched {} sections from /hubs/home/refresh",
+                    sections.len()
+                );
+                return Ok(sections);
+            }
+            Ok(_) => {
+                info!(
+                    "No sections returned from /hubs/home/refresh, falling back to legacy method"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to fetch from /hubs/home/refresh: {}, falling back to legacy method",
+                    e
+                );
+            }
+        }
+
+        // Fallback to the legacy method if the new endpoint fails or returns no data
+        self.get_home_sections_legacy().await
+    }
+
+    /// Fetch home sections from the /hubs/home/refresh endpoint (Plex's dynamic home hubs)
+    async fn fetch_home_hubs(&self) -> Result<Vec<HomeSection>> {
+        let url = format!("{}/hubs/home/refresh", self.base_url);
+
+        debug!("Fetching home hubs from: {}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("X-Plex-Token", &self.auth_token)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "Failed to fetch home hubs: HTTP {}",
+                response.status()
+            ));
+        }
+
+        let plex_response: PlexHubsResponse = response.json().await?;
+        let mut sections = Vec::new();
+
+        for hub in plex_response.media_container.hub {
+            if hub.metadata.is_empty() {
+                debug!("Skipping empty hub: {}", hub.title);
+                continue;
+            }
+
+            // Parse media items from hub metadata
+            let mut items = Vec::new();
+            for meta in &hub.metadata {
+                if let Ok(item) = self.parse_media_item(meta.clone()) {
+                    items.push(item);
+                }
+            }
+
+            if items.is_empty() {
+                continue;
+            }
+
+            // Respect hub size limits if specified
+            if let Some(size) = hub.size {
+                items.truncate(size as usize);
+            }
+
+            // Map hub context/type to HomeSectionType
+            let section_type = self.map_hub_to_section_type(&hub);
+
+            // Create the home section
+            let section = HomeSection {
+                id: hub
+                    .hub_identifier
+                    .clone()
+                    .unwrap_or_else(|| hub.title.clone()),
+                title: hub.title.clone(),
+                section_type,
+                items,
+            };
+
+            info!(
+                "Added hub section '{}' with {} items (style: {:?}, type: {:?})",
+                section.title,
+                section.items.len(),
+                hub.style,
+                hub.hub_type
+            );
+
+            sections.push(section);
+        }
+
+        Ok(sections)
+    }
+
+    /// Map Plex hub metadata to HomeSectionType
+    fn map_hub_to_section_type(&self, hub: &PlexHub) -> HomeSectionType {
+        // First check the context field for specific hub types
+        if let Some(context) = &hub.context {
+            let context_lower = context.to_lowercase();
+            if context_lower.contains("continue") || context_lower.contains("ondeck") {
+                return HomeSectionType::ContinueWatching;
+            } else if context_lower.contains("recentlyadded") {
+                return HomeSectionType::RecentlyAdded;
+            } else if context_lower.contains("recentlyplayed")
+                || context_lower.contains("recentlyviewed")
+            {
+                return HomeSectionType::RecentlyPlayed;
+            } else if context_lower.contains("toprated") {
+                return HomeSectionType::TopRated;
+            } else if context_lower.contains("popular") || context_lower.contains("trending") {
+                return HomeSectionType::Trending;
+            }
+        }
+
+        // Fallback to title-based detection
+        let title_lower = hub.title.to_lowercase();
+        if title_lower.contains("continue") || title_lower.contains("on deck") {
+            HomeSectionType::ContinueWatching
+        } else if title_lower.contains("recently added") {
+            HomeSectionType::RecentlyAdded
+        } else if title_lower.contains("recently played") || title_lower.contains("recently viewed")
+        {
+            HomeSectionType::RecentlyPlayed
+        } else if title_lower.contains("top rated") {
+            HomeSectionType::TopRated
+        } else if title_lower.contains("popular") || title_lower.contains("trending") {
+            HomeSectionType::Trending
+        } else {
+            // Use Custom type for any unrecognized hub
+            HomeSectionType::Custom(hub.title.clone())
+        }
+    }
+
+    /// Legacy method for getting homepage sections (fallback)
+    async fn get_home_sections_legacy(&self) -> Result<Vec<HomeSection>> {
         let mut sections = Vec::new();
         let mut all_item_ids = HashSet::new();
 
-        info!("PlexApi::get_home_sections() - Starting to fetch homepage data");
+        info!("PlexApi::get_home_sections_legacy() - Using legacy hub fetching method");
 
         // First, make a single batched API call to get all hub data
         let hubs_data = self.get_all_hubs_batched().await?;
@@ -1106,7 +1252,7 @@ struct PlexMovieMetadata {
     view_count: Option<u32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct PlexTag {
     tag: String,
 }
@@ -1231,7 +1377,7 @@ struct PlexPart {
 }
 
 // Generic metadata structure that can handle movies, shows, and episodes
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlexGenericMetadata {
     rating_key: String,
@@ -1295,6 +1441,13 @@ struct PlexHubsContainer {
 #[serde(rename_all = "camelCase")]
 struct PlexHub {
     title: String,
+    #[serde(rename = "type")]
+    hub_type: Option<String>, // e.g., "movie", "show", "mixed", "clip"
+    hub_identifier: Option<String>, // Unique identifier for the hub
+    context: Option<String>,        // e.g., "hub.home.recentlyAdded", "hub.home.continue"
+    size: Option<u32>,              // Number of items to display
+    style: Option<String>,          // Display style: "shelf", "hero", "grid"
+    promoted: Option<bool>,         // Whether this is a promoted hub
     #[serde(rename = "Metadata", default)]
     metadata: Vec<PlexGenericMetadata>,
 }

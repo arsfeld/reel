@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use sea_orm::{ConnectionTrait, TransactionTrait};
+use sea_orm::ConnectionTrait;
 use tracing::{debug, error, info, warn};
 
 use crate::db::{
@@ -197,7 +197,7 @@ impl MediaService {
         Ok(())
     }
 
-    /// Batch save media items in a transaction
+    /// Batch save media items
     pub async fn save_media_items_batch(
         db: &DatabaseConnection,
         items: Vec<MediaItem>,
@@ -216,8 +216,8 @@ impl MediaService {
             return Ok(());
         }
 
-        let txn = db.begin().await?;
-
+        // Process items without holding a transaction lock
+        // This prevents blocking other database operations during sync
         for (index, item) in items.iter().enumerate() {
             debug!(
                 "Saving item {}/{}: {} ({})",
@@ -234,12 +234,9 @@ impl MediaService {
                 }
             );
 
-            // Use the db connection directly for now
-            // TODO: Properly implement transaction support
             Self::save_media_item(db, item.clone(), library_id, source_id).await?;
         }
 
-        txn.commit().await?;
         info!("Successfully saved {} media items", items.len());
         Ok(())
     }

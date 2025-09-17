@@ -6,6 +6,7 @@ use relm4::prelude::*;
 use tracing::{debug, error, info};
 
 use crate::db::connection::DatabaseConnection;
+use crate::db::entities::sync_status::SyncStatusType;
 use crate::models::{
     SourceId,
     auth_provider::{ConnectionInfo, Source, SourceType},
@@ -58,6 +59,8 @@ pub struct SourceListItem {
     source: Source,
     is_syncing: bool,
     sync_progress: Option<(usize, usize)>,
+    sync_error: Option<String>,
+    last_sync_status: Option<SyncStatusType>,
 }
 
 #[derive(Debug)]
@@ -124,23 +127,85 @@ impl FactoryComponent for SourceListItem {
                     },
                 },
 
-                // Connection status indicator
-                gtk::Image {
-                    set_icon_name: Some(if self.source.connection_info.is_online {
-                        "emblem-ok-symbolic"
-                    } else {
-                        "network-offline-symbolic"
-                    }),
-                    set_pixel_size: 16,
-                    set_tooltip_text: Some(if self.source.connection_info.is_online {
-                        "Connected"
-                    } else {
-                        "Offline"
-                    }),
-                    add_css_class: if self.source.connection_info.is_online {
-                        "success"
-                    } else {
-                        "dim-label"
+                // Sync status section
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 4,
+                    set_valign: gtk::Align::Center,
+
+                    // Connection and sync status row
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 6,
+
+                        // Connection status indicator
+                        gtk::Image {
+                            set_icon_name: Some(if self.source.connection_info.is_online {
+                                "emblem-ok-symbolic"
+                            } else {
+                                "network-offline-symbolic"
+                            }),
+                            set_pixel_size: 16,
+                            set_tooltip_text: Some(if self.source.connection_info.is_online {
+                                "Connected"
+                            } else {
+                                "Offline"
+                            }),
+                            add_css_class: if self.source.connection_info.is_online {
+                                "success"
+                            } else {
+                                "dim-label"
+                            },
+                        },
+
+                        // Sync status text
+                        gtk::Label {
+                            #[watch]
+                            set_text: &if self.is_syncing {
+                                if let Some((current, total)) = self.sync_progress {
+                                    format!("Syncing... {}/{}", current, total)
+                                } else {
+                                    "Syncing...".to_string()
+                                }
+                            } else if let Some(ref error) = self.sync_error {
+                                "Sync failed".to_string()
+                            } else if let Some(ref last_sync) = self.source.last_sync {
+                                use chrono::{DateTime, Utc};
+                                let now = Utc::now();
+                                let duration = now.signed_duration_since(last_sync.clone());
+                                if duration.num_hours() < 1 {
+                                    format!("{}m ago", duration.num_minutes())
+                                } else if duration.num_days() < 1 {
+                                    format!("{}h ago", duration.num_hours())
+                                } else {
+                                    format!("{}d ago", duration.num_days())
+                                }
+                            } else {
+                                "Never synced".to_string()
+                            },
+                            add_css_class: "dim-label",
+                            add_css_class: "caption",
+                            #[watch]
+                            set_tooltip_text: self.sync_error.as_ref().map(|e| e.as_str()),
+                        },
+                    },
+
+                    // Progress bar (shown only when syncing)
+                    gtk::ProgressBar {
+                        #[watch]
+                        set_visible: self.is_syncing && self.sync_progress.is_some(),
+                        #[watch]
+                        set_fraction: if let Some((current, total)) = self.sync_progress {
+                            if total > 0 {
+                                current as f64 / total as f64
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        },
+                        set_height_request: 4,
+                        add_css_class: "osd",
                     },
                 },
 
@@ -182,6 +247,8 @@ impl FactoryComponent for SourceListItem {
             source,
             is_syncing: false,
             sync_progress: None,
+            sync_error: None,
+            last_sync_status: None,
         }
     }
 
@@ -434,8 +501,11 @@ impl AsyncComponent for SourcesPage {
                         for item in factory_guard.iter_mut() {
                             if item.source.id == source_id {
                                 item.is_syncing = true;
+                                item.sync_error = None; // Clear any previous errors
                                 if let Some(total) = total_items {
                                     item.sync_progress = Some((0, total));
+                                } else {
+                                    item.sync_progress = None; // Indeterminate progress
                                 }
                             }
                         }
@@ -453,14 +523,24 @@ impl AsyncComponent for SourcesPage {
                             }
                         }
                     }
-                    BrokerMessage::Source(SourceMessage::SyncCompleted { source_id, .. }) => {
-                        info!("Sync completed for source: {}", source_id);
+                    BrokerMessage::Source(SourceMessage::SyncCompleted {
+                        source_id,
+                        items_synced,
+                    }) => {
+                        info!(
+                            "Sync completed for source: {} with {} items",
+                            source_id, items_synced
+                        );
                         // Update UI to show sync completed
                         let mut factory_guard = self.sources_factory.guard();
                         for item in factory_guard.iter_mut() {
                             if item.source.id == source_id {
                                 item.is_syncing = false;
                                 item.sync_progress = None;
+                                item.sync_error = None;
+                                item.last_sync_status = Some(SyncStatusType::Completed);
+                                // Update last_sync time
+                                item.source.last_sync = Some(chrono::Utc::now());
                             }
                         }
                         // Reload sources to get updated data
@@ -473,9 +553,12 @@ impl AsyncComponent for SourcesPage {
                         for item in factory_guard.iter_mut() {
                             if item.source.id == source_id {
                                 item.is_syncing = false;
+                                item.sync_progress = None;
+                                item.sync_error = Some(error.clone());
+                                item.last_sync_status = Some(SyncStatusType::Failed);
                             }
                         }
-                        sender.input(SourcesPageInput::Error(format!("Sync failed: {}", error)));
+                        // Don't show global error, it's now displayed per-source
                     }
                     _ => {}
                 }

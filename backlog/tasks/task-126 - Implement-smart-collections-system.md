@@ -4,10 +4,12 @@ title: Implement smart collections system
 status: To Do
 assignee: []
 created_date: '2025-09-17 02:55'
+updated_date: '2025-09-17 03:09'
 labels:
   - feature
   - collections
-dependencies: []
+dependencies:
+  - task-072
 priority: medium
 ---
 
