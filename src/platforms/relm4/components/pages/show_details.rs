@@ -299,8 +299,10 @@ impl AsyncComponent for ShowDetailsPage {
                         },
 
                         gtk::ScrolledWindow {
-                            set_vscrollbar_policy: gtk::PolicyType::Automatic,
-                            set_min_content_height: 300,
+                            set_hscrollbar_policy: gtk::PolicyType::Automatic,
+                            set_vscrollbar_policy: gtk::PolicyType::Never,
+                            set_height_request: 220,  // Fixed height for episode cards
+                            set_overlay_scrolling: true,
 
                             set_child: Some(&model.episode_grid),
                         },
@@ -319,8 +321,11 @@ impl AsyncComponent for ShowDetailsPage {
             .orientation(gtk::Orientation::Horizontal)
             .column_spacing(12)
             .row_spacing(12)
-            .homogeneous(true)
+            .homogeneous(false) // Changed to false to allow proper sizing
             .selection_mode(gtk::SelectionMode::None)
+            .min_children_per_line(100) // Force single row by setting high min
+            .max_children_per_line(100) // Match max to min
+            .valign(gtk::Align::Start)
             .build();
 
         let season_dropdown = gtk::DropDown::builder().enable_search(false).build();
@@ -457,6 +462,18 @@ impl AsyncComponent for ShowDetailsPage {
                 match Command::execute(&cmd).await {
                     Ok(item) => {
                         if let MediaItem::Show(show) = item {
+                            // Debug log the show data
+                            tracing::debug!("Loaded show: {:?}", show.title);
+                            tracing::debug!("Show has {} seasons", show.seasons.len());
+                            tracing::debug!("Total episode count: {}", show.total_episode_count);
+                            for (idx, season) in show.seasons.iter().enumerate() {
+                                tracing::debug!(
+                                    "Season {}: number={}, episodes={}",
+                                    idx,
+                                    season.season_number,
+                                    season.episode_count
+                                );
+                            }
                             self.show = Some(show.clone());
                             self.loading = false;
 
@@ -474,11 +491,25 @@ impl AsyncComponent for ShowDetailsPage {
                             }
 
                             // Update season dropdown
-                            let seasons: Vec<String> = show
-                                .seasons
-                                .iter()
-                                .map(|s| format!("Season {}", s.season_number))
-                                .collect();
+                            let seasons: Vec<String> = if show.seasons.is_empty() {
+                                // If no seasons data (shouldn't happen after proper sync), show placeholder
+                                tracing::warn!(
+                                    "Show {} has no seasons data in database",
+                                    show.title
+                                );
+                                vec!["Season 1".to_string()]
+                            } else {
+                                show.seasons
+                                    .iter()
+                                    .map(|s| {
+                                        if s.season_number == 0 {
+                                            "Specials".to_string()
+                                        } else {
+                                            format!("Season {}", s.season_number)
+                                        }
+                                    })
+                                    .collect()
+                            };
 
                             let model = gtk::StringList::new(
                                 &seasons.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
@@ -501,9 +532,8 @@ impl AsyncComponent for ShowDetailsPage {
                             self.current_season = season_to_select;
 
                             // Load episodes for the selected season
-                            if !show.seasons.is_empty() {
-                                sender.input(ShowDetailsInput::LoadEpisodes);
-                            }
+                            // Always try to load episodes, even if seasons is empty
+                            sender.input(ShowDetailsInput::LoadEpisodes);
                         }
                     }
                     Err(e) => {
@@ -719,6 +749,17 @@ fn create_episode_card(
         .height_request(124)
         .content_fit(gtk::ContentFit::Cover)
         .build();
+
+    // Load thumbnail image if available
+    if let Some(thumbnail_url) = &episode.thumbnail_url {
+        let url = thumbnail_url.clone();
+        let picture_clone = picture.clone();
+        gtk::glib::spawn_future_local(async move {
+            if let Ok(texture) = load_image_from_url(&url, 220, 124).await {
+                picture_clone.set_paintable(Some(&texture));
+            }
+        });
+    }
 
     overlay.set_child(Some(&picture));
 
