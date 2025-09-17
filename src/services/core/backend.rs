@@ -12,6 +12,8 @@ use crate::models::{
 use crate::services::core::auth::AuthService;
 use anyhow::{Context, Result};
 use sea_orm::{ActiveModelTrait, Set};
+// Import the mapper for MediaItem::to_model()
+use crate::mapper::media_item_mapper;
 
 /// Stateless backend service following Relm4's pure function pattern
 /// All backend operations are pure functions that take dependencies as parameters
@@ -332,7 +334,10 @@ impl BackendService {
     /// Get home sections per source with individual error handling
     pub async fn get_home_sections_per_source(
         db: &DatabaseConnection,
-    ) -> Vec<(crate::models::SourceId, Result<Vec<HomeSection>>)> {
+    ) -> Vec<(
+        crate::models::SourceId,
+        Result<Vec<crate::models::HomeSectionWithModels>>,
+    )> {
         use std::time::Duration;
         use tokio::time::timeout;
 
@@ -366,8 +371,12 @@ impl BackendService {
                         Ok(backend) => {
                             match backend.get_home_sections().await {
                                 Ok(mut sections) => {
-                                    // Prefix section IDs with source ID to avoid conflicts
-                                    for section in &mut sections {
+                                    // Convert MediaItem to MediaItemModel and save to database
+                                    let media_repo = MediaRepositoryImpl::new(db_clone.clone());
+                                    let mut converted_sections = Vec::new();
+
+                                    for mut section in sections {
+                                        // Prefix section IDs with source ID to avoid conflicts
                                         section.id = format!("{}::{}", source_clone.id, section.id);
                                         // Also prefix the title with source name if multiple sources exist
                                         if sources_count > 1 {
@@ -376,8 +385,58 @@ impl BackendService {
                                                 source_clone.name, section.title
                                             );
                                         }
+
+                                        // Convert items to MediaItemModel
+                                        let mut db_items = Vec::new();
+                                        for item in section.items {
+                                            // Convert MediaItem to database model using the mapper
+                                            let db_model = item.to_model(
+                                                &source_clone.id,
+                                                None // library_id - we'll fetch it if needed
+                                            );
+
+                                            // Save or update in database
+                                            // Check if item exists first
+                                            let saved_model = match media_repo.find_by_id(&db_model.id).await {
+                                                Ok(Some(_)) => {
+                                                    // Update existing
+                                                    match media_repo.update(db_model.clone()).await {
+                                                        Ok(model) => model,
+                                                        Err(e) => {
+                                                            tracing::warn!("Failed to update media item {}: {}", db_model.id, e);
+                                                            db_model
+                                                        }
+                                                    }
+                                                }
+                                                Ok(None) => {
+                                                    // Insert new
+                                                    match media_repo.insert(db_model.clone()).await {
+                                                        Ok(model) => model,
+                                                        Err(e) => {
+                                                            tracing::warn!("Failed to insert media item {}: {}", db_model.id, e);
+                                                            db_model
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!("Failed to check media item {}: {}", db_model.id, e);
+                                                    db_model
+                                                }
+                                            };
+                                            db_items.push(saved_model);
+                                        }
+
+                                        // Create new section with MediaItemModel
+                                        let converted_section = crate::models::HomeSectionWithModels {
+                                            id: section.id,
+                                            title: section.title,
+                                            section_type: section.section_type,
+                                            items: db_items,
+                                        };
+                                        converted_sections.push(converted_section);
                                     }
-                                    Ok(sections)
+
+                                    Ok(converted_sections)
                                 }
                                 Err(e) => Err(anyhow::anyhow!("Failed to get sections: {}", e)),
                             }
@@ -401,10 +460,13 @@ impl BackendService {
     }
 
     /// Load cached home sections from database
-    /// Returns sections constructed from cached media items
+    /// Returns sections with MediaItemModel directly from database
     pub async fn get_cached_home_sections(
         db: &DatabaseConnection,
-    ) -> Vec<(crate::models::SourceId, Vec<HomeSection>)> {
+    ) -> Vec<(
+        crate::models::SourceId,
+        Vec<crate::models::HomeSectionWithModels>,
+    )> {
         use crate::db::repository::playback_repository::{
             PlaybackRepository, PlaybackRepositoryImpl,
         };
@@ -442,15 +504,14 @@ impl BackendService {
                             media_repo.find_by_id(&progress.media_id).await
                         {
                             if media_item.source_id == source.id {
-                                // Convert to MediaItem
-                                let item = Self::db_model_to_media_item(media_item);
-                                continue_watching_items.push(item);
+                                // Use MediaItemModel directly
+                                continue_watching_items.push(media_item);
                             }
                         }
                     }
 
                     if !continue_watching_items.is_empty() {
-                        sections.push(HomeSection {
+                        sections.push(crate::models::HomeSectionWithModels {
                             id: format!("{}::continue-watching", source.id),
                             title: "Continue Watching".to_string(),
                             section_type: HomeSectionType::ContinueWatching,
@@ -467,13 +528,13 @@ impl BackendService {
 
                 for item in recent_items {
                     if item.source_id == source.id {
-                        let media_item = Self::db_model_to_media_item(item);
-                        recently_added.push(media_item);
+                        // Use MediaItemModel directly
+                        recently_added.push(item);
                     }
                 }
 
                 if !recently_added.is_empty() {
-                    sections.push(HomeSection {
+                    sections.push(crate::models::HomeSectionWithModels {
                         id: format!("{}::recently-added", source.id),
                         title: "Recently Added".to_string(),
                         section_type: HomeSectionType::RecentlyAdded,
@@ -488,13 +549,11 @@ impl BackendService {
                 .await
             {
                 if !movies.is_empty() {
-                    let movie_items: Vec<MediaItem> = movies
-                        .into_iter()
-                        .take(20)
-                        .map(Self::db_model_to_media_item)
-                        .collect();
+                    // Use MediaItemModel directly
+                    let movie_items: Vec<crate::db::entities::MediaItemModel> =
+                        movies.into_iter().take(20).collect();
 
-                    sections.push(HomeSection {
+                    sections.push(crate::models::HomeSectionWithModels {
                         id: format!("{}::movies", source.id),
                         title: "Movies".to_string(),
                         section_type: HomeSectionType::Custom("Movies".to_string()),
@@ -505,16 +564,14 @@ impl BackendService {
 
             if let Ok(shows) = media_repo.find_by_source_and_type(&source.id, "show").await {
                 if !shows.is_empty() {
-                    let show_items: Vec<MediaItem> = shows
-                        .into_iter()
-                        .take(20)
-                        .map(Self::db_model_to_media_item)
-                        .collect();
+                    // Use MediaItemModel directly
+                    let show_items: Vec<crate::db::entities::MediaItemModel> =
+                        shows.into_iter().take(20).collect();
 
-                    sections.push(HomeSection {
+                    sections.push(crate::models::HomeSectionWithModels {
                         id: format!("{}::shows", source.id),
                         title: "TV Shows".to_string(),
-                        section_type: HomeSectionType::Custom("Movies".to_string()),
+                        section_type: HomeSectionType::Custom("TV Shows".to_string()),
                         items: show_items,
                     });
                 }
@@ -536,115 +593,5 @@ impl BackendService {
         );
 
         cached_sections
-    }
-
-    /// Convert database MediaItemModel to MediaItem enum
-    fn db_model_to_media_item(model: crate::db::entities::MediaItemModel) -> MediaItem {
-        use chrono::{DateTime, Utc};
-
-        match model.media_type.as_str() {
-            "movie" => MediaItem::Movie(Movie {
-                id: model.id.clone(),
-                backend_id: model.source_id.clone(),
-                title: model.title,
-                year: model.year.map(|y| y as u32),
-                overview: model.overview,
-                rating: model.rating,
-                duration: std::time::Duration::from_millis(model.duration_ms.unwrap_or(0) as u64),
-                poster_url: model.poster_url,
-                backdrop_url: model.backdrop_url,
-                genres: Vec::new(), // TODO: Extract from JSON if needed
-                cast: Vec::new(),
-                crew: Vec::new(),
-                added_at: model.added_at.map(|dt| {
-                    DateTime::<Utc>::from_timestamp(dt.and_utc().timestamp(), 0).unwrap()
-                }),
-                updated_at: Some(
-                    DateTime::<Utc>::from_timestamp(model.updated_at.and_utc().timestamp(), 0)
-                        .unwrap(),
-                ),
-                watched: false, // Would need to fetch from playback progress
-                view_count: 0,
-                last_watched_at: None,
-                playback_position: None,
-                intro_marker: None,
-                credits_marker: None,
-            }),
-            "show" => MediaItem::Show(Show {
-                id: model.id.clone(),
-                backend_id: model.source_id.clone(),
-                title: model.title,
-                year: model.year.map(|y| y as u32),
-                overview: model.overview,
-                rating: model.rating,
-                poster_url: model.poster_url,
-                backdrop_url: model.backdrop_url,
-                genres: Vec::new(), // TODO: Extract from JSON if needed
-                seasons: Vec::new(),
-                cast: Vec::new(),
-                added_at: model.added_at.map(|dt| {
-                    DateTime::<Utc>::from_timestamp(dt.and_utc().timestamp(), 0).unwrap()
-                }),
-                updated_at: Some(
-                    DateTime::<Utc>::from_timestamp(model.updated_at.and_utc().timestamp(), 0)
-                        .unwrap(),
-                ),
-                watched_episode_count: 0, // Would need to calculate from episodes
-                total_episode_count: 0,
-                last_watched_at: None,
-            }),
-            "episode" => MediaItem::Episode(Episode {
-                id: model.id.clone(),
-                backend_id: model.source_id.clone(),
-                show_id: model.parent_id.clone(),
-                season_number: model.season_number.unwrap_or(1) as u32,
-                episode_number: model.episode_number.unwrap_or(1) as u32,
-                title: model.title,
-                overview: model.overview,
-                air_date: None,
-                duration: std::time::Duration::from_millis(model.duration_ms.unwrap_or(0) as u64),
-                thumbnail_url: model.poster_url.clone(),
-                show_poster_url: None, // Would need to fetch from parent show
-                watched: false,        // Would need to fetch from playback progress
-                view_count: 0,
-                last_watched_at: None,
-                playback_position: None,
-                show_title: None,
-                intro_marker: None,
-                credits_marker: None,
-            }),
-            _ => {
-                // Unknown type, default to movie
-                MediaItem::Movie(Movie {
-                    id: model.id.clone(),
-                    backend_id: model.source_id.clone(),
-                    title: model.title,
-                    year: model.year.map(|y| y as u32),
-                    overview: model.overview,
-                    rating: model.rating,
-                    duration: std::time::Duration::from_millis(
-                        model.duration_ms.unwrap_or(0) as u64
-                    ),
-                    poster_url: model.poster_url,
-                    backdrop_url: model.backdrop_url,
-                    genres: Vec::new(),
-                    cast: Vec::new(),
-                    crew: Vec::new(),
-                    added_at: model.added_at.map(|dt| {
-                        DateTime::<Utc>::from_timestamp(dt.and_utc().timestamp(), 0).unwrap()
-                    }),
-                    updated_at: Some(
-                        DateTime::<Utc>::from_timestamp(model.updated_at.and_utc().timestamp(), 0)
-                            .unwrap(),
-                    ),
-                    watched: false,
-                    view_count: 0,
-                    last_watched_at: None,
-                    playback_position: None,
-                    intro_marker: None,
-                    credits_marker: None,
-                })
-            }
-        }
     }
 }

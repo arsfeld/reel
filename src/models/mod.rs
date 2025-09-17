@@ -224,6 +224,15 @@ pub struct HomeSection {
     pub items: Vec<MediaItem>,
 }
 
+/// Homepage section with database models for UI display
+#[derive(Debug, Clone)]
+pub struct HomeSectionWithModels {
+    pub id: String,
+    pub title: String,
+    pub section_type: HomeSectionType,
+    pub items: Vec<crate::db::entities::MediaItemModel>,
+}
+
 /// Type of homepage section
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HomeSectionType {

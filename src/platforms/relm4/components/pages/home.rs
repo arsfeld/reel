@@ -8,7 +8,7 @@ use tracing::{debug, error, info, trace};
 
 use crate::db::connection::DatabaseConnection;
 use crate::db::entities::MediaItemModel;
-use crate::models::{HomeSection, HomeSectionType, MediaItem, MediaItemId, SourceId};
+use crate::models::{HomeSectionType, HomeSectionWithModels, MediaItemId, SourceId};
 use crate::platforms::relm4::components::factories::media_card::{
     MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput,
 };
@@ -22,13 +22,13 @@ use tokio::time::timeout;
 #[derive(Debug, Clone)]
 pub enum SectionLoadState {
     Loading,
-    Loaded(Vec<HomeSection>),
+    Loaded(Vec<HomeSectionWithModels>),
     Failed(String), // Error message
 }
 
 pub struct HomePage {
     db: DatabaseConnection,
-    sections: Vec<HomeSection>,
+    sections: Vec<HomeSectionWithModels>,
     section_factories: HashMap<String, FactoryVecDeque<MediaCard>>,
     sections_container: gtk::Box,
     image_loader: relm4::WorkerController<ImageLoader>,
@@ -53,11 +53,11 @@ pub enum HomePageInput {
     /// Load home page data
     LoadData,
     /// Home sections loaded from backends
-    HomeSectionsLoaded(Vec<HomeSection>),
+    HomeSectionsLoaded(Vec<HomeSectionWithModels>),
     /// Source-specific sections loaded
     SourceSectionsLoaded {
         source_id: SourceId,
-        sections: Result<Vec<HomeSection>, String>,
+        sections: Result<Vec<HomeSectionWithModels>, String>,
     },
     /// Retry loading a specific source
     RetrySource(SourceId),
@@ -506,7 +506,7 @@ impl HomePage {
     fn display_source_sections(
         &mut self,
         source_id: &SourceId,
-        sections: Vec<HomeSection>,
+        sections: Vec<HomeSectionWithModels>,
         sender: &AsyncComponentSender<Self>,
     ) {
         // Add sections to our list
@@ -597,9 +597,8 @@ impl HomePage {
             // Add items to factory and queue image loads
             {
                 let mut guard = factory.guard();
-                for (idx, item) in section.items.iter().enumerate() {
-                    // Convert MediaItem to MediaItemModel
-                    let model = self.media_item_to_model(item);
+                for (idx, model) in section.items.iter().enumerate() {
+                    // Items are already MediaItemModel
                     let item_id = model.id.clone();
 
                     // Determine if we should show progress
@@ -786,131 +785,5 @@ impl HomePage {
 
         // Note: We can't easily remove specific UI elements from sections_container
         // without tracking them individually, so we rely on the full clear/rebuild approach
-    }
-
-    /// Convert a MediaItem to MediaItemModel for the factory
-    fn media_item_to_model(&self, item: &MediaItem) -> MediaItemModel {
-        use chrono::{NaiveDateTime, Utc};
-        use sea_orm::prelude::{DateTime, Json};
-
-        match item {
-            MediaItem::Movie(movie) => MediaItemModel {
-                id: movie.id.clone(),
-                source_id: movie.backend_id.clone(),
-                library_id: String::new(), // Not needed for display
-                title: movie.title.clone(),
-                sort_title: None,
-                media_type: "movie".to_string(),
-                year: movie.year.map(|y| y as i32),
-                rating: movie.rating,
-                overview: movie.overview.clone(),
-                genres: if movie.genres.is_empty() {
-                    None
-                } else {
-                    Some(Json::from(movie.genres.clone()))
-                },
-                duration_ms: Some(movie.duration.as_millis() as i64),
-                poster_url: movie.poster_url.clone(),
-                backdrop_url: movie.backdrop_url.clone(),
-                added_at: movie.added_at.map(|dt| {
-                    NaiveDateTime::from_timestamp_opt(dt.timestamp(), 0)
-                        .unwrap_or_else(|| NaiveDateTime::default())
-                }),
-                updated_at: movie
-                    .updated_at
-                    .map(|dt| {
-                        NaiveDateTime::from_timestamp_opt(dt.timestamp(), 0)
-                            .unwrap_or_else(|| NaiveDateTime::default())
-                    })
-                    .unwrap_or_else(|| Utc::now().naive_utc()),
-                metadata: None,
-                parent_id: None,
-                season_number: None,
-                episode_number: None,
-            },
-            MediaItem::Show(show) => MediaItemModel {
-                id: show.id.clone(),
-                source_id: show.backend_id.clone(),
-                library_id: String::new(),
-                title: show.title.clone(),
-                sort_title: None,
-                media_type: "show".to_string(),
-                year: show.year.map(|y| y as i32),
-                rating: show.rating,
-                overview: show.overview.clone(),
-                genres: if show.genres.is_empty() {
-                    None
-                } else {
-                    Some(Json::from(show.genres.clone()))
-                },
-                duration_ms: None,
-                poster_url: show.poster_url.clone(),
-                backdrop_url: show.backdrop_url.clone(),
-                added_at: show.added_at.map(|dt| {
-                    NaiveDateTime::from_timestamp_opt(dt.timestamp(), 0)
-                        .unwrap_or_else(|| NaiveDateTime::default())
-                }),
-                updated_at: show
-                    .updated_at
-                    .map(|dt| {
-                        NaiveDateTime::from_timestamp_opt(dt.timestamp(), 0)
-                            .unwrap_or_else(|| NaiveDateTime::default())
-                    })
-                    .unwrap_or_else(|| Utc::now().naive_utc()),
-                metadata: None,
-                parent_id: None,
-                season_number: None,
-                episode_number: None,
-            },
-            MediaItem::Episode(episode) => MediaItemModel {
-                id: episode.id.clone(),
-                source_id: episode.backend_id.clone(),
-                library_id: String::new(),
-                title: episode.title.clone(),
-                sort_title: None,
-                media_type: "episode".to_string(),
-                year: None,
-                rating: None, // Episodes don't have ratings in the current model
-                overview: episode.overview.clone(),
-                genres: None,
-                duration_ms: Some(episode.duration.as_millis() as i64),
-                // Use show poster for episodes in Continue Watching, fallback to episode thumbnail
-                poster_url: episode
-                    .show_poster_url
-                    .clone()
-                    .or(episode.thumbnail_url.clone()),
-                backdrop_url: None,
-                added_at: None, // Episodes don't have added_at in the current model
-                updated_at: Utc::now().naive_utc(),
-                metadata: None,
-                parent_id: episode.show_id.clone(),
-                season_number: Some(episode.season_number as i32),
-                episode_number: Some(episode.episode_number as i32),
-            },
-            _ => {
-                // For other media types, create a basic model
-                MediaItemModel {
-                    id: String::new(),
-                    source_id: String::new(),
-                    library_id: String::new(),
-                    title: "Unknown".to_string(),
-                    sort_title: None,
-                    media_type: "unknown".to_string(),
-                    year: None,
-                    rating: None,
-                    overview: None,
-                    genres: None,
-                    duration_ms: None,
-                    poster_url: None,
-                    backdrop_url: None,
-                    added_at: None,
-                    updated_at: Utc::now().naive_utc(),
-                    metadata: None,
-                    parent_id: None,
-                    season_number: None,
-                    episode_number: None,
-                }
-            }
-        }
     }
 }

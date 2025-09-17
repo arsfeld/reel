@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use sea_orm::ConnectionTrait;
 use tracing::{debug, error, info, warn};
+// Import the mapper extension trait for MediaItem::to_model()
+use crate::mapper::media_item_mapper;
 
 use crate::db::{
     connection::DatabaseConnection,
@@ -183,8 +185,8 @@ impl MediaService {
     ) -> Result<()> {
         let repo = MediaRepositoryImpl::new(db.clone());
 
-        // Convert to entity
-        let entity = convert_media_item_to_entity(item.clone(), library_id, source_id)?;
+        // Convert to entity using the new mapper
+        let entity = item.to_model(source_id.as_str(), Some(library_id.to_string()));
 
         if repo.find_by_id(&entity.id).await?.is_some() {
             repo.update(entity).await?;
@@ -445,126 +447,4 @@ impl MediaService {
 
         Ok(())
     }
-}
-
-/// Helper function to convert MediaItem to entity
-fn convert_media_item_to_entity(
-    item: MediaItem,
-    library_id: &LibraryId,
-    source_id: &SourceId,
-) -> Result<MediaItemModel> {
-    let (title, year, duration_ms, rating, poster_url, backdrop_url, overview, genres, media_type) =
-        match &item {
-            MediaItem::Movie(movie) => (
-                movie.title.clone(),
-                movie.year.map(|y| y as i32),
-                Some(movie.duration.as_millis() as i64),
-                movie.rating,
-                movie.poster_url.clone(),
-                movie.backdrop_url.clone(),
-                movie.overview.clone(),
-                if movie.genres.is_empty() {
-                    None
-                } else {
-                    serde_json::to_value(&movie.genres).ok()
-                },
-                "movie".to_string(),
-            ),
-            MediaItem::Show(show) => (
-                show.title.clone(),
-                show.year.map(|y| y as i32),
-                None,
-                show.rating,
-                show.poster_url.clone(),
-                show.backdrop_url.clone(),
-                show.overview.clone(),
-                if show.genres.is_empty() {
-                    None
-                } else {
-                    serde_json::to_value(&show.genres).ok()
-                },
-                "show".to_string(),
-            ),
-            MediaItem::Episode(episode) => (
-                episode.title.clone(),
-                None,
-                Some(episode.duration.as_millis() as i64),
-                None,
-                episode.thumbnail_url.clone(),
-                episode.thumbnail_url.clone(),
-                episode.overview.clone(),
-                None,
-                "episode".to_string(),
-            ),
-            MediaItem::MusicAlbum(album) => (
-                album.title.clone(),
-                album.year.map(|y| y as i32),
-                None,
-                None,
-                album.cover_url.clone(),
-                None,
-                None,
-                None,
-                "album".to_string(),
-            ),
-            MediaItem::MusicTrack(track) => (
-                track.title.clone(),
-                None,
-                Some(track.duration.as_millis() as i64),
-                None,
-                None,
-                None,
-                None,
-                None,
-                "track".to_string(),
-            ),
-            MediaItem::Photo(photo) => (
-                photo.title.clone(),
-                None,
-                None,
-                None,
-                photo.thumbnail_url.clone(),
-                photo.full_url.clone(),
-                None, // Photos don't have description
-                None,
-                "photo".to_string(),
-            ),
-        };
-
-    // Extract parent show ID for episodes
-    let parent_id = match &item {
-        MediaItem::Episode(episode) => episode.show_id.clone(),
-        _ => None,
-    };
-
-    // Extract season and episode numbers
-    let (season_number, episode_number) = match &item {
-        MediaItem::Episode(episode) => (
-            Some(episode.season_number as i32),
-            Some(episode.episode_number as i32),
-        ),
-        _ => (None, None),
-    };
-
-    Ok(MediaItemModel {
-        id: item.id().to_string(),
-        source_id: source_id.to_string(),
-        library_id: library_id.to_string(),
-        title: title.clone(),
-        year,
-        media_type,
-        duration_ms,
-        rating,
-        poster_url,
-        backdrop_url,
-        overview,
-        genres,
-        parent_id,
-        season_number,
-        episode_number,
-        sort_title: Some(title),
-        added_at: Some(chrono::Utc::now().naive_utc()),
-        updated_at: chrono::Utc::now().naive_utc(),
-        metadata: serde_json::to_value(&item).ok(),
-    })
 }
