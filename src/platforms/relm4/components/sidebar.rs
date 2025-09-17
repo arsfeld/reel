@@ -3,6 +3,7 @@ use libadwaita as adw;
 use relm4::factory::{DynamicIndex, FactoryComponent, FactorySender, FactoryVecDeque};
 use relm4::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender, gtk};
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, error};
 
 use crate::db::connection::DatabaseConnection;
@@ -51,6 +52,7 @@ pub struct SourceGroup {
     is_loading: bool,
     is_expanded: bool,
     db: DatabaseConnection,
+    syncing_libraries: HashSet<String>,
 }
 
 impl SourceGroup {
@@ -103,6 +105,13 @@ impl SourceGroup {
 
             hbox.append(&vbox);
 
+            // Add spinner if this library is syncing
+            if self.syncing_libraries.contains(&library.id) {
+                let spinner = gtk::Spinner::new();
+                spinner.set_spinning(true);
+                hbox.append(&spinner);
+            }
+
             row.set_child(Some(&hbox));
             library_list.append(&row);
         }
@@ -134,6 +143,10 @@ pub enum SourceGroupInput {
     ToggleExpanded,
     /// Reload libraries from database (e.g., after sync)
     ReloadLibraries,
+    /// Library sync started
+    LibrarySyncStarted(String),
+    /// Library sync completed
+    LibrarySyncCompleted(String),
 }
 
 #[derive(Debug)]
@@ -242,6 +255,7 @@ impl FactoryComponent for SourceGroup {
             is_loading: true,
             is_expanded: true, // Start expanded by default
             db,
+            syncing_libraries: HashSet::new(),
         }
     }
 
@@ -338,6 +352,24 @@ impl FactoryComponent for SourceGroup {
                     }
                 });
             }
+            SourceGroupInput::LibrarySyncStarted(library_id) => {
+                debug!(
+                    "Library {} sync started for source {}",
+                    library_id, self.source.name
+                );
+                self.syncing_libraries.insert(library_id);
+                // Update the library list to show spinners
+                self.update_library_list(&widgets.library_list);
+            }
+            SourceGroupInput::LibrarySyncCompleted(library_id) => {
+                debug!(
+                    "Library {} sync completed for source {}",
+                    library_id, self.source.name
+                );
+                self.syncing_libraries.remove(&library_id);
+                // Update the library list to hide spinners
+                self.update_library_list(&widgets.library_list);
+            }
         }
     }
 }
@@ -351,6 +383,45 @@ pub struct Sidebar {
     connection_status: String,
     is_syncing: bool,
     selected_library_id: Option<LibraryId>,
+    syncing_sources: HashMap<String, String>,
+    syncing_libraries: HashMap<String, (String, String)>,
+}
+
+impl Sidebar {
+    fn update_status_text(&mut self) {
+        if !self.has_sources {
+            self.connection_status = "No sources configured".to_string();
+        } else if !self.syncing_sources.is_empty() || !self.syncing_libraries.is_empty() {
+            // Build status message based on what's syncing
+            let mut status_parts = Vec::new();
+
+            // Add source sync status
+            if !self.syncing_sources.is_empty() {
+                let source_names: Vec<String> = self.syncing_sources.values().cloned().collect();
+                status_parts.push(format!("Syncing {}", source_names.join(", ")));
+            }
+
+            // Add library sync status
+            if !self.syncing_libraries.is_empty() {
+                if self.syncing_libraries.len() == 1 {
+                    let (_, library_name) = self.syncing_libraries.values().next().unwrap();
+                    status_parts.push(format!("Library: {}", library_name));
+                } else {
+                    status_parts.push(format!("{} libraries", self.syncing_libraries.len()));
+                }
+            }
+
+            self.connection_status = status_parts.join(" • ");
+        } else {
+            // No active syncs
+            let source_count = self.source_groups.guard().len();
+            if source_count > 0 {
+                self.connection_status = format!("All {} sources connected", source_count);
+            } else {
+                self.connection_status = "Ready".to_string();
+            }
+        }
+    }
 }
 
 #[relm4::component(pub)]
@@ -500,6 +571,8 @@ impl Component for Sidebar {
             connection_status: "No sources configured".to_string(),
             is_syncing: false,
             selected_library_id: None,
+            syncing_sources: HashMap::new(),
+            syncing_libraries: HashMap::new(),
         };
 
         let sources_container = model.source_groups.widget();
@@ -611,14 +684,39 @@ impl Component for Sidebar {
 
             SidebarInput::BrokerMsg(msg) => {
                 match msg {
-                    BrokerMessage::Source(SourceMessage::SyncStarted { .. }) => {
+                    BrokerMessage::Source(SourceMessage::SyncStarted { source_id, .. }) => {
                         self.is_syncing = true;
+
+                        // Find source name
+                        let source_name = {
+                            let guard = self.source_groups.guard();
+                            guard.iter().find_map(|sg| {
+                                if sg.source.id == source_id {
+                                    Some(sg.source.name.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                        }
+                        .unwrap_or_else(|| source_id.clone());
+
+                        self.syncing_sources.insert(source_id, source_name.clone());
+                        self.update_status_text();
                     }
-                    BrokerMessage::Source(SourceMessage::SyncCompleted { source_id, .. }) => {
-                        self.is_syncing = false;
+                    BrokerMessage::Source(SourceMessage::SyncCompleted {
+                        source_id,
+                        items_synced,
+                    }) => {
+                        self.syncing_sources.remove(&source_id);
+
+                        // Check if any sync is still running
+                        self.is_syncing =
+                            !self.syncing_sources.is_empty() || !self.syncing_libraries.is_empty();
+                        self.update_status_text();
+
                         debug!(
-                            "Sync completed for source: {}, refreshing libraries",
-                            source_id
+                            "Sync completed for source: {}, {} items synced, refreshing libraries",
+                            source_id, items_synced
                         );
 
                         // Find the index of the source group to update
@@ -639,8 +737,92 @@ impl Component for Sidebar {
                                 .send(idx, SourceGroupInput::ReloadLibraries);
                         }
                     }
-                    BrokerMessage::Source(SourceMessage::SyncError { .. }) => {
-                        self.is_syncing = false;
+                    BrokerMessage::Source(SourceMessage::SyncError { source_id, error }) => {
+                        self.syncing_sources.remove(&source_id);
+                        self.is_syncing =
+                            !self.syncing_sources.is_empty() || !self.syncing_libraries.is_empty();
+
+                        // Update status to show error briefly
+                        self.connection_status = format!("Sync failed: {}", error);
+
+                        // Reset status after 3 seconds
+                        let sender_clone = sender.clone();
+                        relm4::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                            sender_clone
+                                .input(SidebarInput::UpdateConnectionStatus("Ready".to_string()));
+                        });
+                    }
+                    BrokerMessage::Source(SourceMessage::LibrarySyncStarted {
+                        source_id,
+                        library_id,
+                        library_name,
+                    }) => {
+                        self.syncing_libraries.insert(
+                            library_id.clone(),
+                            (source_id.clone(), library_name.clone()),
+                        );
+                        self.is_syncing = true;
+
+                        // Find the source group index and send library sync started message
+                        let idx = {
+                            let guard = self.source_groups.guard();
+                            guard.iter().enumerate().find_map(|(idx, sg)| {
+                                if sg.source.id == source_id {
+                                    Some(idx)
+                                } else {
+                                    None
+                                }
+                            })
+                        };
+
+                        if let Some(idx) = idx {
+                            self.source_groups
+                                .send(idx, SourceGroupInput::LibrarySyncStarted(library_id));
+                        }
+
+                        self.update_status_text();
+                    }
+                    BrokerMessage::Source(SourceMessage::LibrarySyncCompleted {
+                        source_id,
+                        library_id,
+                        library_name,
+                        items_synced,
+                    }) => {
+                        self.syncing_libraries.remove(&library_id);
+                        self.is_syncing =
+                            !self.syncing_sources.is_empty() || !self.syncing_libraries.is_empty();
+
+                        // Find the source group index and send library sync completed message
+                        let idx = {
+                            let guard = self.source_groups.guard();
+                            guard.iter().enumerate().find_map(|(idx, sg)| {
+                                if sg.source.id == source_id {
+                                    Some(idx)
+                                } else {
+                                    None
+                                }
+                            })
+                        };
+
+                        if let Some(idx) = idx {
+                            self.source_groups.send(
+                                idx,
+                                SourceGroupInput::LibrarySyncCompleted(library_id.clone()),
+                            );
+                        }
+
+                        // Show completion message briefly
+                        self.connection_status =
+                            format!("Synced '{}' ({} items)", library_name, items_synced);
+
+                        // Update status after a short delay
+                        let sender_clone = sender.clone();
+                        relm4::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                            sender_clone
+                                .input(SidebarInput::UpdateConnectionStatus("Ready".to_string()));
+                        });
                     }
                     _ => {}
                 }

@@ -182,7 +182,7 @@ impl AsyncComponent for HomePage {
             sections_container: sections_container.clone(),
             image_loader,
             image_requests: HashMap::new(),
-            is_loading: true,
+            is_loading: false, // Start with no loading state for offline-first
             source_states: HashMap::new(),
             loading_containers: HashMap::new(),
         };
@@ -203,8 +203,7 @@ impl AsyncComponent for HomePage {
     ) {
         match msg {
             HomePageInput::LoadData => {
-                debug!("Loading home page data from all backends");
-                self.is_loading = true;
+                debug!("Loading home page data - offline-first approach");
 
                 // Clear existing sections
                 self.clear_sections();
@@ -213,21 +212,50 @@ impl AsyncComponent for HomePage {
                 let db = self.db.clone();
                 let sender_clone = sender.clone();
 
-                // Load home sections from all backends with per-source handling
+                // First, load cached data immediately (offline-first)
                 relm4::spawn(async move {
-                    info!("Fetching home sections from BackendService with per-source handling");
+                    info!("Loading cached home sections from database");
+
+                    // Load cached sections synchronously for instant display
+                    let cached_sections = BackendService::get_cached_home_sections(&db).await;
+
+                    // Display cached sections immediately
+                    for (source_id, sections) in cached_sections {
+                        if !sections.is_empty() {
+                            info!(
+                                "Displaying {} cached sections for source {}",
+                                sections.len(),
+                                source_id
+                            );
+                            sender_clone.input(HomePageInput::SourceSectionsLoaded {
+                                source_id: source_id.clone(),
+                                sections: Ok(sections),
+                            });
+                        }
+                    }
+
+                    // Then, trigger background API updates (non-blocking)
+                    info!("Starting background API refresh");
                     let source_results = BackendService::get_home_sections_per_source(&db).await;
 
-                    // Send individual source results
+                    // Send individual source results (will update/replace cached data)
                     for (source_id, result) in source_results {
                         let sections_result = match result {
                             Ok(sections) => {
-                                info!("Source {} loaded {} sections", source_id, sections.len());
+                                info!(
+                                    "API: Source {} loaded {} sections",
+                                    source_id,
+                                    sections.len()
+                                );
                                 Ok(sections)
                             }
                             Err(e) => {
-                                error!("Source {} failed: {}", source_id, e);
-                                Err(e.to_string())
+                                error!(
+                                    "API: Source {} failed: {} - keeping cached data",
+                                    source_id, e
+                                );
+                                // Don't send error if we already have cached data
+                                continue;
                             }
                         };
 
@@ -247,6 +275,13 @@ impl AsyncComponent for HomePage {
                     Ok(sections) => {
                         info!("Source {} loaded {} sections", source_id, sections.len());
 
+                        // Check if we already have sections from this source (from cache)
+                        let had_cached_sections = self
+                            .source_states
+                            .get(&source_id)
+                            .map(|state| matches!(state, SectionLoadState::Loaded(_)))
+                            .unwrap_or(false);
+
                         // Update source state to loaded
                         self.source_states.insert(
                             source_id.clone(),
@@ -256,6 +291,11 @@ impl AsyncComponent for HomePage {
                         // Remove loading container if it exists
                         if let Some(container) = self.loading_containers.remove(&source_id) {
                             self.sections_container.remove(&container);
+                        }
+
+                        // If we had cached sections, clear them before displaying fresh ones
+                        if had_cached_sections {
+                            self.clear_source_sections(&source_id);
                         }
 
                         // Process and display sections for this source
@@ -722,6 +762,30 @@ impl HomePage {
 
         // Clear sections data
         self.sections.clear();
+    }
+
+    /// Clear sections for a specific source
+    fn clear_source_sections(&mut self, source_id: &SourceId) {
+        debug!("Clearing sections for source {}", source_id);
+
+        // Find and remove section factories for this source
+        let mut factories_to_remove = Vec::new();
+        for (section_id, _) in &self.section_factories {
+            if section_id.starts_with(&format!("{}::", source_id)) {
+                factories_to_remove.push(section_id.clone());
+            }
+        }
+
+        for factory_id in factories_to_remove {
+            self.section_factories.remove(&factory_id);
+        }
+
+        // Remove sections from data
+        self.sections
+            .retain(|section| !section.id.starts_with(&format!("{}::", source_id)));
+
+        // Note: We can't easily remove specific UI elements from sections_container
+        // without tracking them individually, so we rely on the full clear/rebuild approach
     }
 
     /// Convert a MediaItem to MediaItemModel for the factory

@@ -273,10 +273,27 @@ impl MediaBackend for JellyfinBackend {
                         {
                             Ok(Some(Credentials::Token { token, .. })) => {
                                 tracing::info!(
-                                    "Successfully retrieved token from keyring for {}",
-                                    auth_provider.id()
+                                    "Successfully retrieved token from keyring for {}, token format check: {}",
+                                    auth_provider.id(),
+                                    if token.contains('|') {
+                                        "contains pipe separator"
+                                    } else {
+                                        "no pipe separator"
+                                    }
                                 );
-                                (server_url.clone(), token, user_id.clone())
+                                // Parse token to extract user_id if it's in format token|user_id
+                                let parts: Vec<&str> = token.split('|').collect();
+                                let (actual_token, actual_user_id) = if parts.len() == 2 {
+                                    tracing::info!("Extracted user_id from token: {}", parts[1]);
+                                    (parts[0].to_string(), parts[1].to_string())
+                                } else {
+                                    tracing::warn!(
+                                        "Token doesn't contain user_id, falling back to AuthProvider user_id: '{}'",
+                                        user_id
+                                    );
+                                    (token.clone(), user_id.clone())
+                                };
+                                (server_url.clone(), actual_token, actual_user_id)
                             }
                             Ok(Some(Credentials::UsernamePassword { ref password, .. })) => {
                                 tracing::info!("Got password from keyring, re-authenticating...");
