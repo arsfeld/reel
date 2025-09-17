@@ -472,7 +472,7 @@ impl Component for Sidebar {
 
             // Sources button at the bottom
             gtk::Button {
-                set_label: "Servers & Accounts",
+                set_label: "Media Sources",
                 set_margin_all: 8,
                 add_css_class: "pill",
                 connect_clicked => SidebarInput::ManageSources,

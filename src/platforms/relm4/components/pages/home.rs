@@ -1,13 +1,13 @@
 use gtk::prelude::*;
-use libadwaita as adw;
 use relm4::factory::FactoryVecDeque;
 use relm4::gtk;
 use relm4::prelude::*;
-use tracing::{debug, error};
+use std::collections::HashMap;
+use tracing::{debug, error, info};
 
 use crate::db::connection::DatabaseConnection;
 use crate::db::entities::MediaItemModel;
-use crate::models::{HomeSection, MediaItem, MediaItemId};
+use crate::models::{HomeSection, HomeSectionType, MediaItem, MediaItemId};
 use crate::platforms::relm4::components::factories::media_card::{
     MediaCard, MediaCardInit, MediaCardOutput,
 };
@@ -16,8 +16,9 @@ use crate::services::core::BackendService;
 #[derive(Debug)]
 pub struct HomePage {
     db: DatabaseConnection,
-    continue_watching_factory: FactoryVecDeque<MediaCard>,
-    recently_added_factory: FactoryVecDeque<MediaCard>,
+    sections: Vec<HomeSection>,
+    section_factories: HashMap<String, FactoryVecDeque<MediaCard>>,
+    sections_container: gtk::Box,
     is_loading: bool,
 }
 
@@ -27,10 +28,6 @@ pub enum HomePageInput {
     LoadData,
     /// Home sections loaded from backends
     HomeSectionsLoaded(Vec<HomeSection>),
-    /// Continue watching section loaded (fallback)
-    ContinueWatchingLoaded(Vec<MediaItemModel>),
-    /// Recently added section loaded (fallback)
-    RecentlyAddedLoaded(Vec<MediaItemModel>),
     /// Media item selected
     MediaItemSelected(MediaItemId),
 }
@@ -73,123 +70,57 @@ impl AsyncComponent for HomePage {
                 set_vexpand: true,
                 set_hscrollbar_policy: gtk::PolicyType::Never,
 
-                gtk::Box {
+                #[local_ref]
+                sections_container -> gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
                     set_margin_all: 24,
                     set_margin_top: 0,
                     set_spacing: 48,
 
-                    // Continue Watching section
+                    // Loading indicator
                     gtk::Box {
-                        set_orientation: gtk::Orientation::Vertical,
+                        set_orientation: gtk::Orientation::Horizontal,
                         set_spacing: 12,
+                        set_valign: gtk::Align::Center,
+                        set_vexpand: true,
                         #[watch]
-                        set_visible: !model.continue_watching_factory.is_empty(),
+                        set_visible: model.is_loading,
 
-                        gtk::Label {
-                            set_text: "Continue Watching",
-                            set_halign: gtk::Align::Start,
-                            add_css_class: "title-2",
+                        gtk::Spinner {
+                            set_spinning: true,
                         },
 
-                        gtk::ScrolledWindow {
-                            set_hscrollbar_policy: gtk::PolicyType::Automatic,
-                            set_vscrollbar_policy: gtk::PolicyType::Never,
-                            set_overlay_scrolling: true,
-
-                            #[local_ref]
-                            continue_watching_box -> gtk::FlowBox {
-                                set_orientation: gtk::Orientation::Horizontal,
-                                set_column_spacing: 12,
-                                set_min_children_per_line: 1,
-                                set_max_children_per_line: 10,
-                                set_selection_mode: gtk::SelectionMode::None,
-                            },
+                        gtk::Label {
+                            set_text: "Loading home sections...",
                         },
                     },
 
-                    // Recently Added section
+                    // Empty state
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
                         set_spacing: 12,
+                        set_valign: gtk::Align::Center,
+                        set_vexpand: true,
                         #[watch]
-                        set_visible: !model.recently_added_factory.is_empty() || model.is_loading,
+                        set_visible: !model.is_loading && model.sections.is_empty(),
+
+                        gtk::Image {
+                            set_icon_name: Some("user-home-symbolic"),
+                            set_pixel_size: 64,
+                            add_css_class: "dim-label",
+                        },
 
                         gtk::Label {
-                            set_text: "Recently Added",
-                            set_halign: gtk::Align::Start,
+                            set_text: "No content available",
                             add_css_class: "title-2",
+                            add_css_class: "dim-label",
                         },
 
-                        gtk::ScrolledWindow {
-                            set_hscrollbar_policy: gtk::PolicyType::Automatic,
-                            set_vscrollbar_policy: gtk::PolicyType::Never,
-                            set_overlay_scrolling: true,
-                            #[watch]
-                            set_visible: !model.is_loading,
-
-                            #[local_ref]
-                            recently_added_box -> gtk::FlowBox {
-                                set_orientation: gtk::Orientation::Horizontal,
-                                set_column_spacing: 12,
-                                set_min_children_per_line: 1,
-                                set_max_children_per_line: 10,
-                                set_selection_mode: gtk::SelectionMode::None,
-                            },
+                        gtk::Label {
+                            set_text: "Add a media source to see content here",
+                            add_css_class: "dim-label",
                         },
-
-                        // Loading indicator
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Horizontal,
-                            set_spacing: 12,
-                            #[watch]
-                            set_visible: model.is_loading,
-
-                            // Loading placeholders
-                            gtk::Box {
-                                set_width_request: 200,
-                                set_height_request: 300,
-                                add_css_class: "card",
-
-                                gtk::Spinner {
-                                    set_spinning: true,
-                                    set_size_request: (32, 32),
-                                },
-                            },
-
-                            gtk::Box {
-                                set_width_request: 200,
-                                set_height_request: 300,
-                                add_css_class: "card",
-
-                                gtk::Spinner {
-                                    set_spinning: true,
-                                    set_size_request: (32, 32),
-                                },
-                            },
-
-                            gtk::Box {
-                                set_width_request: 200,
-                                set_height_request: 300,
-                                add_css_class: "card",
-
-                                gtk::Spinner {
-                                    set_spinning: true,
-                                    set_size_request: (32, 32),
-                                },
-                            },
-                        }
                     },
-
-                    // Empty state - modern design with large icon
-                    adw::StatusPage {
-                        #[watch]
-                        set_visible: !model.is_loading && model.continue_watching_factory.is_empty() && model.recently_added_factory.is_empty(),
-                        set_icon_name: Some("folder-videos-symbolic"),
-                        set_title: "Welcome to Reel",
-                        set_description: Some("Add a source from the sidebar to start watching"),
-                        add_css_class: "compact",
-                    }
                 },
             },
         }
@@ -200,27 +131,16 @@ impl AsyncComponent for HomePage {
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
-        let continue_watching_box = gtk::FlowBox::default();
-        let recently_added_box = gtk::FlowBox::default();
-
-        let mut continue_watching_factory = FactoryVecDeque::<MediaCard>::builder()
-            .launch(continue_watching_box.clone())
-            .forward(sender.input_sender(), |output| match output {
-                MediaCardOutput::Clicked(id) => HomePageInput::MediaItemSelected(id),
-                MediaCardOutput::Play(id) => HomePageInput::MediaItemSelected(id),
-            });
-
-        let mut recently_added_factory = FactoryVecDeque::<MediaCard>::builder()
-            .launch(recently_added_box.clone())
-            .forward(sender.input_sender(), |output| match output {
-                MediaCardOutput::Clicked(id) => HomePageInput::MediaItemSelected(id),
-                MediaCardOutput::Play(id) => HomePageInput::MediaItemSelected(id),
-            });
+        let sections_container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(48)
+            .build();
 
         let model = Self {
             db,
-            continue_watching_factory,
-            recently_added_factory,
+            sections: Vec::new(),
+            section_factories: HashMap::new(),
+            sections_container: sections_container.clone(),
             is_loading: true,
         };
 
@@ -240,106 +160,134 @@ impl AsyncComponent for HomePage {
     ) {
         match msg {
             HomePageInput::LoadData => {
-                debug!("Loading home page data");
+                debug!("Loading home page data from all backends");
                 self.is_loading = true;
+
+                // Clear existing sections
+                self.clear_sections();
 
                 // Clone database for async operations
                 let db = self.db.clone();
-                let db_clone = self.db.clone();
                 let sender_clone = sender.clone();
 
-                // Load recently added items
+                // Load home sections from all backends
                 relm4::spawn(async move {
-                    // For now, get the models directly from the repository
-                    // TODO: Update command to return MediaItemModel or convert MediaItem
-                    use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
-                    let repo = MediaRepositoryImpl::new(db.clone());
-
-                    match repo.find_recently_added(20).await {
-                        Ok(items) => {
-                            debug!("Loaded {} recently added items", items.len());
-                            sender_clone.input(HomePageInput::RecentlyAddedLoaded(items));
-                        }
-                        Err(e) => {
-                            error!("Failed to load recently added items: {}", e);
-                            sender_clone.input(HomePageInput::RecentlyAddedLoaded(Vec::new()));
-                        }
-                    }
-                });
-
-                // Load continue watching items
-                let sender_clone = sender.clone();
-                relm4::spawn(async move {
-                    use crate::db::repository::{
-                        MediaRepository, MediaRepositoryImpl, PlaybackRepository,
-                        PlaybackRepositoryImpl, Repository,
-                    };
-
-                    let playback_repo = PlaybackRepositoryImpl::new(db_clone.clone());
-                    let media_repo = MediaRepositoryImpl::new(db_clone.clone());
-
-                    // Get items with progress
-                    match playback_repo.find_in_progress(None).await {
-                        Ok(progress_items) => {
-                            // Fetch the full media items
-                            let mut items = Vec::new();
-                            for progress in progress_items.into_iter().take(20) {
-                                if let Ok(Some(model)) =
-                                    media_repo.find_by_id(&progress.media_id).await
-                                {
-                                    items.push(model);
-                                }
+                    info!("Fetching home sections from BackendService");
+                    match BackendService::get_all_home_sections(&db).await {
+                        Ok(sections) => {
+                            info!("Successfully loaded {} home sections", sections.len());
+                            for section in &sections {
+                                info!(
+                                    "  Section '{}' (type: {:?}) with {} items",
+                                    section.title,
+                                    section.section_type,
+                                    section.items.len()
+                                );
                             }
-                            debug!("Loaded {} continue watching items", items.len());
-                            sender_clone.input(HomePageInput::ContinueWatchingLoaded(items));
+                            sender_clone.input(HomePageInput::HomeSectionsLoaded(sections));
                         }
                         Err(e) => {
-                            error!("Failed to load continue watching items: {}", e);
-                            sender_clone.input(HomePageInput::ContinueWatchingLoaded(Vec::new()));
+                            error!("Failed to load home sections: {}", e);
+                            // Fallback to empty sections
+                            sender_clone.input(HomePageInput::HomeSectionsLoaded(Vec::new()));
                         }
                     }
                 });
             }
 
-            HomePageInput::ContinueWatchingLoaded(items) => {
-                debug!("Continue watching loaded: {} items", items.len());
+            HomePageInput::HomeSectionsLoaded(sections) => {
+                info!("Processing {} home sections for display", sections.len());
 
-                // Clear existing items and add new ones
-                self.continue_watching_factory.guard().clear();
-                for item in items {
-                    self.continue_watching_factory
-                        .guard()
-                        .push_back(MediaCardInit {
-                            item,
-                            show_progress: true, // Continue watching shows progress
-                            watched: false,
-                            progress_percent: 0.0,
+                // Clear existing sections first
+                self.clear_sections();
+
+                // Store sections
+                self.sections = sections;
+
+                // Create UI for each section
+                for section in &self.sections {
+                    if section.items.is_empty() {
+                        debug!("Skipping empty section: {}", section.title);
+                        continue;
+                    }
+
+                    debug!(
+                        "Creating UI for section '{}' with {} items",
+                        section.title,
+                        section.items.len()
+                    );
+
+                    // Create section container
+                    let section_box = gtk::Box::builder()
+                        .orientation(gtk::Orientation::Vertical)
+                        .spacing(12)
+                        .build();
+
+                    // Section title
+                    let title_label = gtk::Label::builder()
+                        .label(&section.title)
+                        .halign(gtk::Align::Start)
+                        .css_classes(["title-2"])
+                        .build();
+                    section_box.append(&title_label);
+
+                    // Scrollable content area
+                    let scrolled_window = gtk::ScrolledWindow::builder()
+                        .hscrollbar_policy(gtk::PolicyType::Automatic)
+                        .vscrollbar_policy(gtk::PolicyType::Never)
+                        .overlay_scrolling(true)
+                        .build();
+
+                    // Flow box for media cards
+                    let flow_box = gtk::FlowBox::builder()
+                        .orientation(gtk::Orientation::Horizontal)
+                        .column_spacing(12)
+                        .min_children_per_line(1)
+                        .max_children_per_line(10)
+                        .selection_mode(gtk::SelectionMode::None)
+                        .build();
+
+                    // Create factory for this section
+                    let sender_input = sender.input_sender();
+                    let mut factory = FactoryVecDeque::<MediaCard>::builder()
+                        .launch(flow_box.clone())
+                        .forward(sender_input, |output| match output {
+                            MediaCardOutput::Clicked(id) => HomePageInput::MediaItemSelected(id),
+                            MediaCardOutput::Play(id) => HomePageInput::MediaItemSelected(id),
                         });
-                }
 
-                // Check if we're done loading
-                if !self.recently_added_factory.is_empty() || !self.is_loading {
-                    self.is_loading = false;
-                }
-            }
+                    // Add items to factory
+                    {
+                        let mut guard = factory.guard();
+                        for item in &section.items {
+                            // Convert MediaItem to MediaItemModel
+                            let model = self.media_item_to_model(item);
 
-            HomePageInput::RecentlyAddedLoaded(items) => {
-                debug!("Recently added loaded: {} items", items.len());
+                            // Determine if we should show progress
+                            let show_progress =
+                                matches!(section.section_type, HomeSectionType::ContinueWatching);
 
-                // Clear existing items and add new ones
-                self.recently_added_factory.guard().clear();
-                for item in items {
-                    self.recently_added_factory
-                        .guard()
-                        .push_back(MediaCardInit {
-                            item,
-                            show_progress: false, // Recently added doesn't show progress
-                            watched: false,
-                            progress_percent: 0.0,
-                        });
+                            guard.push_back(MediaCardInit {
+                                item: model,
+                                show_progress,
+                                watched: false,
+                                progress_percent: 0.0,
+                            });
+                        }
+                    }
+
+                    // Store factory
+                    self.section_factories.insert(section.id.clone(), factory);
+
+                    scrolled_window.set_child(Some(&flow_box));
+                    section_box.append(&scrolled_window);
+
+                    // Add section to container
+                    self.sections_container.append(&section_box);
                 }
 
                 self.is_loading = false;
+                info!("Home page sections loaded and displayed");
             }
 
             HomePageInput::MediaItemSelected(item_id) => {
@@ -348,19 +296,145 @@ impl AsyncComponent for HomePage {
                     .output(HomePageOutput::NavigateToMediaItem(item_id))
                     .unwrap();
             }
+        }
+    }
+}
 
-            HomePageInput::HomeSectionsLoaded(sections) => {
-                debug!("Home sections loaded: {} sections", sections.len());
-                // TODO: Implement dynamic section loading from Plex hubs
-                // For now, just log the sections
-                for section in sections {
-                    debug!(
-                        "Section: {} with {} items",
-                        section.title,
-                        section.items.len()
-                    );
+impl HomePage {
+    /// Clear all existing sections from the UI and factories
+    fn clear_sections(&mut self) {
+        debug!("Clearing all existing sections");
+
+        // Clear section factories
+        self.section_factories.clear();
+
+        // Remove all children from sections container
+        while let Some(child) = self.sections_container.first_child() {
+            self.sections_container.remove(&child);
+        }
+
+        // Clear sections data
+        self.sections.clear();
+    }
+
+    /// Convert a MediaItem to MediaItemModel for the factory
+    fn media_item_to_model(&self, item: &MediaItem) -> MediaItemModel {
+        use chrono::{NaiveDateTime, Utc};
+        use sea_orm::prelude::{DateTime, Json};
+
+        match item {
+            MediaItem::Movie(movie) => MediaItemModel {
+                id: movie.id.clone(),
+                source_id: movie.backend_id.clone(),
+                library_id: String::new(), // Not needed for display
+                title: movie.title.clone(),
+                sort_title: None,
+                media_type: "movie".to_string(),
+                year: movie.year.map(|y| y as i32),
+                rating: movie.rating,
+                overview: movie.overview.clone(),
+                genres: if movie.genres.is_empty() {
+                    None
+                } else {
+                    Some(Json::from(movie.genres.clone()))
+                },
+                duration_ms: Some(movie.duration.as_millis() as i64),
+                poster_url: movie.poster_url.clone(),
+                backdrop_url: movie.backdrop_url.clone(),
+                added_at: movie.added_at.map(|dt| {
+                    NaiveDateTime::from_timestamp_opt(dt.timestamp(), 0)
+                        .unwrap_or_else(|| NaiveDateTime::default())
+                }),
+                updated_at: movie
+                    .updated_at
+                    .map(|dt| {
+                        NaiveDateTime::from_timestamp_opt(dt.timestamp(), 0)
+                            .unwrap_or_else(|| NaiveDateTime::default())
+                    })
+                    .unwrap_or_else(|| Utc::now().naive_utc()),
+                metadata: None,
+                parent_id: None,
+                season_number: None,
+                episode_number: None,
+            },
+            MediaItem::Show(show) => MediaItemModel {
+                id: show.id.clone(),
+                source_id: show.backend_id.clone(),
+                library_id: String::new(),
+                title: show.title.clone(),
+                sort_title: None,
+                media_type: "show".to_string(),
+                year: show.year.map(|y| y as i32),
+                rating: show.rating,
+                overview: show.overview.clone(),
+                genres: if show.genres.is_empty() {
+                    None
+                } else {
+                    Some(Json::from(show.genres.clone()))
+                },
+                duration_ms: None,
+                poster_url: show.poster_url.clone(),
+                backdrop_url: show.backdrop_url.clone(),
+                added_at: show.added_at.map(|dt| {
+                    NaiveDateTime::from_timestamp_opt(dt.timestamp(), 0)
+                        .unwrap_or_else(|| NaiveDateTime::default())
+                }),
+                updated_at: show
+                    .updated_at
+                    .map(|dt| {
+                        NaiveDateTime::from_timestamp_opt(dt.timestamp(), 0)
+                            .unwrap_or_else(|| NaiveDateTime::default())
+                    })
+                    .unwrap_or_else(|| Utc::now().naive_utc()),
+                metadata: None,
+                parent_id: None,
+                season_number: None,
+                episode_number: None,
+            },
+            MediaItem::Episode(episode) => MediaItemModel {
+                id: episode.id.clone(),
+                source_id: episode.backend_id.clone(),
+                library_id: String::new(),
+                title: episode.title.clone(),
+                sort_title: None,
+                media_type: "episode".to_string(),
+                year: None,
+                rating: None, // Episodes don't have ratings in the current model
+                overview: episode.overview.clone(),
+                genres: None,
+                duration_ms: Some(episode.duration.as_millis() as i64),
+                poster_url: episode.thumbnail_url.clone(),
+                backdrop_url: None,
+                added_at: None, // Episodes don't have added_at in the current model
+                updated_at: Utc::now().naive_utc(),
+                metadata: None,
+                parent_id: episode.show_id.clone(),
+                season_number: Some(episode.season_number as i32),
+                episode_number: Some(episode.episode_number as i32),
+            },
+            _ => {
+                // For other media types, create a basic model
+                MediaItemModel {
+                    id: String::new(),
+                    source_id: String::new(),
+                    library_id: String::new(),
+                    title: "Unknown".to_string(),
+                    sort_title: None,
+                    media_type: "unknown".to_string(),
+                    year: None,
+                    rating: None,
+                    overview: None,
+                    genres: None,
+                    duration_ms: None,
+                    poster_url: None,
+                    backdrop_url: None,
+                    added_at: None,
+                    updated_at: Utc::now().naive_utc(),
+                    metadata: None,
+                    parent_id: None,
+                    season_number: None,
+                    episode_number: None,
                 }
-                self.is_loading = false;
             }
         }
     }

@@ -44,8 +44,15 @@ pub struct LibraryPage {
     total_items: Vec<MediaItemModel>,
     has_loaded_all: bool,
     sort_by: SortBy,
+    sort_order: SortOrder,
     filter_text: String,
     search_visible: bool,
+    // Genre filtering
+    selected_genres: Vec<String>,
+    available_genres: Vec<String>,
+    genre_popover: Option<gtk::Popover>,
+    genre_menu_button: Option<gtk::MenuButton>,
+    genre_label_text: String,
     // Viewport tracking
     visible_start_idx: usize,
     visible_end_idx: usize,
@@ -65,6 +72,12 @@ pub enum SortBy {
     Rating,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SortOrder {
+    Ascending,
+    Descending,
+}
+
 #[derive(Debug)]
 pub enum LibraryPageInput {
     /// Set the library to display
@@ -79,8 +92,14 @@ pub enum LibraryPageInput {
     MediaItemSelected(MediaItemId),
     /// Change sort order
     SetSortBy(SortBy),
+    /// Toggle sort order (ascending/descending)
+    ToggleSortOrder,
     /// Filter by text
     SetFilter(String),
+    /// Toggle genre filter
+    ToggleGenreFilter(String),
+    /// Clear all genre filters
+    ClearGenreFilters,
     /// Clear all items and reload
     Refresh,
     /// Show search bar
@@ -138,76 +157,155 @@ impl AsyncComponent for LibraryPage {
                 }
             },
 
-            // Main content
-            #[name = "scrolled_window"]
-            gtk::ScrolledWindow {
-                set_vexpand: true,
-                set_hscrollbar_policy: gtk::PolicyType::Never,
-                set_vscrollbar_policy: gtk::PolicyType::Automatic,
+            // Main content box
+            gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+                set_spacing: 0,
 
-                // Connect to edge-reached signal for infinite scrolling
-                connect_edge_reached[sender] => move |_, pos| {
-                    if pos == gtk::PositionType::Bottom {
-                        sender.input(LibraryPageInput::LoadMoreBatch);
-                    }
-                },
-
-                // Track scroll position changes for viewport-based loading
-                #[wrap(Some)]
-                set_vadjustment = &gtk::Adjustment {
-                    connect_value_changed[sender] => move |_| {
-                        sender.input(LibraryPageInput::ViewportScrolled);
-                    }
-                },
-
+                // Toolbar with sort controls
                 gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    set_spacing: 0,
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 12,
+                    set_margin_all: 12,
+                    set_halign: gtk::Align::Start,
 
-                    #[local_ref]
-                    media_box -> gtk::FlowBox {
-                        set_column_spacing: 12,  // Tighter grid spacing
-                        set_row_spacing: 16,      // Reduced vertical spacing
-                        set_homogeneous: true,
-                        set_min_children_per_line: 4,   // More items per row with smaller sizes
-                        set_max_children_per_line: 12,  // Allow more on wide screens
-                        set_selection_mode: gtk::SelectionMode::None,
-                        set_margin_top: 24,
-                        set_margin_bottom: 16,
-                        set_margin_start: 16,
-                        set_margin_end: 16,
-                        set_valign: gtk::Align::Start,
+                    gtk::Label {
+                        set_text: "Sort by:",
                     },
 
-                    // Loading indicator at bottom
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_halign: gtk::Align::Center,
-                        set_margin_all: 12,
+                    gtk::DropDown {
+                        set_model: Some(&gtk::StringList::new(&[
+                            "Title",
+                            "Year",
+                            "Date Added",
+                            "Rating",
+                        ])),
                         #[watch]
-                        set_visible: model.is_loading && model.loaded_count > 0,
-
-                        gtk::Spinner {
-                            set_spinning: true,
+                        set_selected: match model.sort_by {
+                            SortBy::Title => 0,
+                            SortBy::Year => 1,
+                            SortBy::DateAdded => 2,
+                            SortBy::Rating => 3,
                         },
-
-                        gtk::Label {
-                            set_text: "Loading more...",
-                            set_margin_start: 12,
-                            add_css_class: "dim-label",
-                        },
+                        connect_selected_notify[sender] => move |dropdown| {
+                            let sort_by = match dropdown.selected() {
+                                0 => SortBy::Title,
+                                1 => SortBy::Year,
+                                2 => SortBy::DateAdded,
+                                3 => SortBy::Rating,
+                                _ => SortBy::Title,
+                            };
+                            sender.input(LibraryPageInput::SetSortBy(sort_by));
+                        }
                     },
 
-                    // Empty state - modern design with large icon
-                    adw::StatusPage {
+                    // Sort order toggle button
+                    gtk::Button {
                         #[watch]
-                        set_visible: !model.is_loading && model.media_factory.is_empty(),
-                        set_icon_name: Some("folder-videos-symbolic"),
-                        set_title: "No Media Found",
-                        set_description: Some("This library is empty or still syncing"),
-                        add_css_class: "compact",
-                    }
+                        set_icon_name: if model.sort_order == SortOrder::Ascending {
+                            "view-sort-ascending-symbolic"
+                        } else {
+                            "view-sort-descending-symbolic"
+                        },
+                        set_tooltip_text: Some("Toggle sort order"),
+                        add_css_class: "flat",
+                        connect_clicked[sender] => move |_| {
+                            sender.input(LibraryPageInput::ToggleSortOrder);
+                        }
+                    },
+
+                    // Genre filter button with dropdown
+                    #[name = "genre_menu_button"]
+                    gtk::MenuButton {
+                        set_icon_name: "view-filter-symbolic",
+                        set_always_show_arrow: true,
+                        set_tooltip_text: Some("Filter by genre"),
+                        #[watch]
+                        set_visible: !model.available_genres.is_empty(),
+                    },
+
+                    // Add search button
+                    gtk::Button {
+                        set_icon_name: "system-search-symbolic",
+                        set_tooltip_text: Some("Search (/)"),
+                        add_css_class: "flat",
+                        connect_clicked[sender] => move |_| {
+                            sender.input(LibraryPageInput::ShowSearch);
+                        }
+                    },
                 },
+
+                // Scrolled window with media content
+                #[name = "scrolled_window"]
+                gtk::ScrolledWindow {
+                    set_vexpand: true,
+                    set_hscrollbar_policy: gtk::PolicyType::Never,
+                    set_vscrollbar_policy: gtk::PolicyType::Automatic,
+
+                    // Connect to edge-reached signal for infinite scrolling
+                    connect_edge_reached[sender] => move |_, pos| {
+                        if pos == gtk::PositionType::Bottom {
+                            sender.input(LibraryPageInput::LoadMoreBatch);
+                        }
+                    },
+
+                    // Track scroll position changes for viewport-based loading
+                    #[wrap(Some)]
+                    set_vadjustment = &gtk::Adjustment {
+                        connect_value_changed[sender] => move |_| {
+                            sender.input(LibraryPageInput::ViewportScrolled);
+                        }
+                    },
+
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 0,
+
+                        #[local_ref]
+                        media_box -> gtk::FlowBox {
+                            set_column_spacing: 12,  // Tighter grid spacing
+                            set_row_spacing: 16,      // Reduced vertical spacing
+                            set_homogeneous: true,
+                            set_min_children_per_line: 4,   // More items per row with smaller sizes
+                            set_max_children_per_line: 12,  // Allow more on wide screens
+                            set_selection_mode: gtk::SelectionMode::None,
+                            set_margin_top: 24,
+                            set_margin_bottom: 16,
+                            set_margin_start: 16,
+                            set_margin_end: 16,
+                            set_valign: gtk::Align::Start,
+                        },
+
+                        // Loading indicator at bottom
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_halign: gtk::Align::Center,
+                            set_margin_all: 12,
+                            #[watch]
+                            set_visible: model.is_loading && model.loaded_count > 0,
+
+                            gtk::Spinner {
+                                set_spinning: true,
+                            },
+
+                            gtk::Label {
+                                set_text: "Loading more...",
+                                set_margin_start: 12,
+                                add_css_class: "dim-label",
+                            },
+                        },
+
+                        // Empty state - modern design with large icon
+                        adw::StatusPage {
+                            #[watch]
+                            set_visible: !model.is_loading && model.media_factory.is_empty(),
+                            set_icon_name: Some("folder-videos-symbolic"),
+                            set_title: "No Media Found",
+                            set_description: Some("This library is empty or still syncing"),
+                            add_css_class: "compact",
+                        }
+                    },
+                }
             },
 
             // Floating search bar overlay
@@ -282,8 +380,15 @@ impl AsyncComponent for LibraryPage {
             total_items: Vec::new(),
             has_loaded_all: false,
             sort_by: SortBy::Title,
+            sort_order: SortOrder::Ascending,
             filter_text: String::new(),
             search_visible: false,
+            // Genre filtering
+            selected_genres: Vec::new(),
+            available_genres: Vec::new(),
+            genre_popover: None,
+            genre_menu_button: None,
+            genre_label_text: String::new(),
             // Viewport tracking
             visible_start_idx: 0,
             visible_end_idx: 0,
@@ -295,7 +400,19 @@ impl AsyncComponent for LibraryPage {
             pending_image_cancels: Vec::new(),
         };
 
+        let mut model = model;
+
         let widgets = view_output!();
+
+        // Create and set the genre filter popover
+        let genre_popover = gtk::Popover::new();
+        genre_popover.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
+        widgets.genre_menu_button.set_popover(Some(&genre_popover));
+        widgets
+            .genre_menu_button
+            .set_label(&model.get_genre_label());
+        model.genre_popover = Some(genre_popover);
+        model.genre_menu_button = Some(widgets.genre_menu_button.clone());
 
         AsyncComponentParts { model, widgets }
     }
@@ -304,7 +421,7 @@ impl AsyncComponent for LibraryPage {
         &mut self,
         msg: Self::Input,
         sender: AsyncComponentSender<Self>,
-        _root: &Self::Root,
+        root: &Self::Root,
     ) {
         match msg {
             LibraryPageInput::SetLibrary(library_id) => {
@@ -332,19 +449,47 @@ impl AsyncComponent for LibraryPage {
             LibraryPageInput::AllItemsLoaded { items } => {
                 debug!("Loaded all {} items from database", items.len());
 
-                // Apply filtering if needed
-                let filtered_items: Vec<MediaItemModel> = if self.filter_text.is_empty() {
-                    items
-                } else {
-                    items
-                        .into_iter()
-                        .filter(|item| {
-                            item.title
+                // Extract all unique genres from items
+                let mut genres_set = std::collections::HashSet::new();
+                for item in &items {
+                    for genre in item.get_genres() {
+                        genres_set.insert(genre);
+                    }
+                }
+                let mut available_genres: Vec<String> = genres_set.into_iter().collect();
+                available_genres.sort();
+                self.available_genres = available_genres;
+                debug!("Found {} unique genres", self.available_genres.len());
+
+                // Update the genre popover with available genres
+                if !self.available_genres.is_empty() {
+                    if let Some(ref popover) = self.genre_popover {
+                        self.update_genre_popover(popover, sender.clone());
+                    }
+                }
+
+                // Apply text and genre filtering
+                let filtered_items: Vec<MediaItemModel> = items
+                    .into_iter()
+                    .filter(|item| {
+                        // Text filter
+                        let text_match = self.filter_text.is_empty()
+                            || item
+                                .title
                                 .to_lowercase()
-                                .contains(&self.filter_text.to_lowercase())
-                        })
-                        .collect()
-                };
+                                .contains(&self.filter_text.to_lowercase());
+
+                        // Genre filter
+                        let genre_match = self.selected_genres.is_empty() || {
+                            let item_genres = item.get_genres();
+                            self.selected_genres
+                                .iter()
+                                .any(|selected| item_genres.contains(selected))
+                        };
+
+                        text_match && genre_match
+                    })
+                    .collect();
 
                 // Store filtered items
                 self.total_items = filtered_items;
@@ -395,7 +540,7 @@ impl AsyncComponent for LibraryPage {
                     self.has_loaded_all = end_idx >= self.total_items.len();
 
                     // Update visible range after rendering new items
-                    self.update_visible_range(&_root);
+                    self.update_visible_range(root);
 
                     // Load images for visible items
                     sender.input(LibraryPageInput::LoadVisibleImages);
@@ -414,6 +559,20 @@ impl AsyncComponent for LibraryPage {
             LibraryPageInput::SetSortBy(sort_by) => {
                 debug!("Setting sort by: {:?}", sort_by);
                 self.sort_by = sort_by;
+                // Set default sort order based on field
+                self.sort_order = match sort_by {
+                    SortBy::Title => SortOrder::Ascending,
+                    SortBy::Year | SortBy::DateAdded | SortBy::Rating => SortOrder::Descending,
+                };
+                self.refresh(sender.clone());
+            }
+
+            LibraryPageInput::ToggleSortOrder => {
+                debug!("Toggling sort order");
+                self.sort_order = match self.sort_order {
+                    SortOrder::Ascending => SortOrder::Descending,
+                    SortOrder::Descending => SortOrder::Ascending,
+                };
                 self.refresh(sender.clone());
             }
 
@@ -433,6 +592,52 @@ impl AsyncComponent for LibraryPage {
                 } else {
                     self.load_all_items(sender.clone());
                 }
+            }
+
+            LibraryPageInput::ToggleGenreFilter(genre) => {
+                debug!("Toggling genre filter: {}", genre);
+                if let Some(pos) = self.selected_genres.iter().position(|g| g == &genre) {
+                    self.selected_genres.remove(pos);
+                } else {
+                    self.selected_genres.push(genre);
+                }
+
+                // Update the menu button label
+                if let Some(ref button) = self.genre_menu_button {
+                    button.set_label(&self.get_genre_label());
+                }
+
+                // Update the popover UI
+                if let Some(ref popover) = self.genre_popover {
+                    self.update_genre_popover(popover, sender.clone());
+                }
+
+                // Apply filter and re-render
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
+            }
+
+            LibraryPageInput::ClearGenreFilters => {
+                debug!("Clearing all genre filters");
+                self.selected_genres.clear();
+
+                // Update the menu button label
+                if let Some(ref button) = self.genre_menu_button {
+                    button.set_label(&self.get_genre_label());
+                }
+
+                // Update the popover UI
+                if let Some(ref popover) = self.genre_popover {
+                    self.update_genre_popover(popover, sender.clone());
+                }
+
+                // Apply filter and re-render
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
             }
 
             LibraryPageInput::Refresh => {
@@ -495,8 +700,8 @@ impl AsyncComponent for LibraryPage {
 
             LibraryPageInput::ProcessDebouncedScroll => {
                 self.scroll_debounce_handle = None;
-                let old_start = self.visible_start_idx;
-                self.update_visible_range(&_root);
+                let _old_start = self.visible_start_idx;
+                self.update_visible_range(root);
 
                 // No need to clear tracking on viewport change anymore
 
@@ -511,10 +716,85 @@ impl AsyncComponent for LibraryPage {
 }
 
 impl LibraryPage {
+    fn get_genre_label(&self) -> String {
+        if self.selected_genres.is_empty() {
+            "All Genres".to_string()
+        } else if self.selected_genres.len() == 1 {
+            self.selected_genres[0].clone()
+        } else {
+            format!("{} genres", self.selected_genres.len())
+        }
+    }
+
+    fn update_genre_popover(&self, popover: &gtk::Popover, sender: AsyncComponentSender<Self>) {
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+        content.set_width_request(250);
+
+        // Header with clear button
+        let header_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let header_label = gtk::Label::new(Some("Filter by Genre"));
+        header_label.set_halign(gtk::Align::Start);
+        header_label.set_hexpand(true);
+        header_label.add_css_class("heading");
+        header_box.append(&header_label);
+
+        if !self.selected_genres.is_empty() {
+            let clear_button = gtk::Button::with_label("Clear");
+            clear_button.add_css_class("flat");
+            let sender_clone = sender.clone();
+            clear_button.connect_clicked(move |_| {
+                sender_clone.input(LibraryPageInput::ClearGenreFilters);
+            });
+            header_box.append(&clear_button);
+        }
+        content.append(&header_box);
+
+        // Separator
+        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+        content.append(&separator);
+
+        // Scrolled window for genre list
+        let scrolled_window = gtk::ScrolledWindow::new();
+        scrolled_window.set_max_content_height(400);
+        scrolled_window.set_propagate_natural_height(true);
+        scrolled_window.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+
+        let genre_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+
+        // Add checkboxes for each genre
+        for genre in &self.available_genres {
+            let is_selected = self.selected_genres.contains(genre);
+            let check_button = gtk::CheckButton::with_label(genre);
+            check_button.set_active(is_selected);
+            check_button.add_css_class("flat");
+
+            let genre_clone = genre.clone();
+            let sender_clone = sender.clone();
+            check_button.connect_toggled(move |_| {
+                sender_clone.input(LibraryPageInput::ToggleGenreFilter(genre_clone.clone()));
+            });
+
+            genre_box.append(&check_button);
+        }
+
+        scrolled_window.set_child(Some(&genre_box));
+        content.append(&scrolled_window);
+
+        popover.set_child(Some(&content));
+    }
+
     fn update_visible_range(&mut self, root: &gtk::Overlay) {
-        // Get the scrolled window from the root widget
-        let scrolled = root
+        // Get the Box from the overlay, then the scrolled window
+        let box_widget = root
             .first_child()
+            .and_then(|w| w.downcast::<gtk::Box>().ok());
+
+        let scrolled = box_widget
+            .and_then(|b| b.last_child())
             .and_then(|w| w.downcast::<gtk::ScrolledWindow>().ok());
 
         if let Some(scrolled) = scrolled {
@@ -654,6 +934,7 @@ impl LibraryPage {
             let db = self.db.clone();
             let library_id = library_id.clone();
             let sort_by = self.sort_by;
+            let sort_order = self.sort_order;
 
             relm4::spawn(async move {
                 use crate::db::repository::{
@@ -694,18 +975,34 @@ impl LibraryPage {
 
                 match media_result {
                     Ok(mut items) => {
-                        // Sort items based on sort criteria
-                        match sort_by {
-                            SortBy::Title => {
+                        // Sort items based on sort criteria and order
+                        match (sort_by, sort_order) {
+                            (SortBy::Title, SortOrder::Ascending) => {
                                 items.sort_by(|a, b| a.sort_title.cmp(&b.sort_title));
                             }
-                            SortBy::Year => {
+                            (SortBy::Title, SortOrder::Descending) => {
+                                items.sort_by(|a, b| b.sort_title.cmp(&a.sort_title));
+                            }
+                            (SortBy::Year, SortOrder::Ascending) => {
+                                items.sort_by(|a, b| a.year.cmp(&b.year));
+                            }
+                            (SortBy::Year, SortOrder::Descending) => {
                                 items.sort_by(|a, b| b.year.cmp(&a.year));
                             }
-                            SortBy::DateAdded => {
+                            (SortBy::DateAdded, SortOrder::Ascending) => {
+                                items.sort_by(|a, b| a.added_at.cmp(&b.added_at));
+                            }
+                            (SortBy::DateAdded, SortOrder::Descending) => {
                                 items.sort_by(|a, b| b.added_at.cmp(&a.added_at));
                             }
-                            SortBy::Rating => {
+                            (SortBy::Rating, SortOrder::Ascending) => {
+                                items.sort_by(|a, b| {
+                                    a.rating
+                                        .partial_cmp(&b.rating)
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                            }
+                            (SortBy::Rating, SortOrder::Descending) => {
                                 items.sort_by(|a, b| {
                                     b.rating
                                         .partial_cmp(&a.rating)
@@ -734,6 +1031,7 @@ impl LibraryPage {
         self.images_requested.clear();
         self.visible_start_idx = 0;
         self.visible_end_idx = 0;
+        // Keep genre filters during refresh to maintain user selection
         self.cancel_pending_images();
         self.load_all_items(sender);
     }
