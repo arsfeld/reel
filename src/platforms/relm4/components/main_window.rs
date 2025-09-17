@@ -447,6 +447,21 @@ impl AsyncComponent for MainWindow {
                     "back" => {
                         // Check if we have pages to pop (more than 1 page in stack)
                         if self.navigation_view.navigation_stack().n_items() > 1 {
+                            // Check if we're leaving the player page and need to stop it
+                            if let Some(page) = self.navigation_view.visible_page() {
+                                if page.title() == "Player" {
+                                    // Stop the player before leaving the page
+                                    if let Some(ref player_page) = self.player_page {
+                                        tracing::info!("Stopping player before navigation back");
+                                        player_page.sender().send(
+                                            crate::platforms::relm4::components::pages::player::PlayerInput::Stop
+                                        ).unwrap_or_else(|_| {
+                                            tracing::error!("Failed to stop player");
+                                        });
+                                    }
+                                }
+                            }
+
                             self.navigation_view.pop();
 
                             // Clear any custom header content when going back
@@ -1183,6 +1198,17 @@ impl AsyncComponent for MainWindow {
             }
             MainWindowInput::RestoreWindowChrome => {
                 tracing::info!("Restoring window chrome after player");
+
+                // Stop the player before leaving the page
+                if let Some(ref player_page) = self.player_page {
+                    tracing::info!("Stopping player before navigation");
+                    player_page
+                        .sender()
+                        .send(crate::platforms::relm4::components::pages::player::PlayerInput::Stop)
+                        .unwrap_or_else(|_| {
+                            tracing::error!("Failed to stop player");
+                        });
+                }
 
                 // Show window chrome again
                 self.content_header.set_visible(true);
