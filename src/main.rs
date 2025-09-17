@@ -6,6 +6,7 @@ mod constants;
 mod core;
 mod db;
 mod events;
+mod mapper;
 mod models;
 mod platforms;
 mod player;
