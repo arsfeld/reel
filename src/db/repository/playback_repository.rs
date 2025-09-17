@@ -5,7 +5,7 @@ use crate::db::entities::{
 use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, NotSet, Order, PaginatorTrait,
     QueryFilter, QueryOrder, Set,
 };
 use std::sync::Arc;
@@ -86,7 +86,7 @@ impl Repository<PlaybackProgressModel> for PlaybackRepositoryImpl {
 
     async fn insert(&self, entity: PlaybackProgressModel) -> Result<PlaybackProgressModel> {
         let active_model = PlaybackProgressActiveModel {
-            id: Set(entity.id),
+            id: NotSet, // Let database auto-generate the ID
             media_id: Set(entity.media_id.clone()),
             user_id: Set(entity.user_id.clone()),
             position_ms: Set(entity.position_ms),

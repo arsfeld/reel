@@ -215,11 +215,88 @@ impl SyncService {
 
         // Sync episodes for TV shows
         if matches!(library.library_type, crate::models::LibraryType::Shows) {
+            info!(
+                "Starting episode sync for TV shows in library {}",
+                library.title
+            );
             let shows =
                 MediaService::get_media_items(db, &library.id.clone().into(), None, 0, 1000)
                     .await?;
+            info!(
+                "Found {} shows in library to sync episodes for",
+                shows.len()
+            );
+
             for show in shows {
-                if let MediaItem::Show(show_data) = show {
+                if let MediaItem::Show(mut show_data) = show {
+                    info!(
+                        "Processing show: {} (id: {}), has {} seasons",
+                        show_data.title,
+                        show_data.id,
+                        show_data.seasons.len()
+                    );
+
+                    // Check if show has seasons data, fetch if missing
+                    let should_update_seasons =
+                        show_data.seasons.is_empty() || show_data.total_episode_count == 0;
+
+                    if should_update_seasons {
+                        info!(
+                            "Show {} (id: {}) needs seasons update (has {} seasons, {} episodes)",
+                            show_data.title,
+                            show_data.id,
+                            show_data.seasons.len(),
+                            show_data.total_episode_count
+                        );
+
+                        match backend.get_seasons(&show_data.id.clone().into()).await {
+                            Ok(seasons) => {
+                                info!(
+                                    "Fetched {} seasons for show {}",
+                                    seasons.len(),
+                                    show_data.title
+                                );
+                                show_data.seasons = seasons.clone();
+
+                                // Update episode count from seasons
+                                let total_episodes: u32 =
+                                    seasons.iter().map(|s| s.episode_count).sum();
+                                if total_episodes > 0 {
+                                    show_data.total_episode_count = total_episodes;
+                                    info!(
+                                        "Updated episode count to {} for show {}",
+                                        total_episodes, show_data.title
+                                    );
+                                }
+
+                                // Update the show in database with seasons
+                                if let Err(e) = MediaService::save_media_item(
+                                    db,
+                                    MediaItem::Show(show_data.clone()),
+                                    &library.id.clone().into(),
+                                    source_id,
+                                )
+                                .await
+                                {
+                                    warn!(
+                                        "Failed to update show {} with seasons: {}",
+                                        show_data.title, e
+                                    );
+                                } else {
+                                    info!(
+                                        "Successfully updated show {} with seasons data",
+                                        show_data.title
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to fetch seasons for show {}: {}",
+                                    show_data.title, e
+                                );
+                            }
+                        }
+                    }
                     match Self::sync_show_episodes(
                         db,
                         backend,
