@@ -15,7 +15,6 @@ use crate::platforms::relm4::components::factories::media_card::{
 use crate::platforms::relm4::components::workers::{
     ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize,
 };
-use relm4::Worker;
 
 impl std::fmt::Debug for LibraryPage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -62,6 +61,8 @@ pub struct LibraryPage {
     // Image loading state
     images_requested: std::collections::HashSet<String>, // Track which images have been requested
     pending_image_cancels: Vec<String>,
+    // Handler IDs for cleanup
+    scroll_handler_id: Option<gtk::glib::SignalHandlerId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -251,11 +252,7 @@ impl AsyncComponent for LibraryPage {
 
                     // Track scroll position changes for viewport-based loading
                     #[wrap(Some)]
-                    set_vadjustment = &gtk::Adjustment {
-                        connect_value_changed[sender] => move |_| {
-                            sender.input(LibraryPageInput::ViewportScrolled);
-                        }
-                    },
+                    set_vadjustment = &gtk::Adjustment {},  // Handler will be connected after init
 
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
@@ -398,6 +395,8 @@ impl AsyncComponent for LibraryPage {
             // Image loading state
             images_requested: std::collections::HashSet::new(),
             pending_image_cancels: Vec::new(),
+            // Handler IDs for cleanup
+            scroll_handler_id: None,
         };
 
         let mut model = model;
@@ -413,6 +412,14 @@ impl AsyncComponent for LibraryPage {
             .set_label(&model.get_genre_label());
         model.genre_popover = Some(genre_popover);
         model.genre_menu_button = Some(widgets.genre_menu_button.clone());
+
+        // Connect scroll handler and store the ID
+        let sender_for_scroll = sender.clone();
+        let adjustment = widgets.scrolled_window.vadjustment();
+        let scroll_handler_id = adjustment.connect_value_changed(move |_| {
+            sender_for_scroll.input(LibraryPageInput::ViewportScrolled);
+        });
+        model.scroll_handler_id = Some(scroll_handler_id);
 
         AsyncComponentParts { model, widgets }
     }
@@ -715,6 +722,21 @@ impl AsyncComponent for LibraryPage {
     }
 }
 
+impl Drop for LibraryPage {
+    fn drop(&mut self) {
+        // Cancel any pending debounce timer
+        if let Some(handle) = self.scroll_debounce_handle.take() {
+            handle.remove();
+        }
+
+        // Note: We can't disconnect the scroll handler here because we don't have access to widgets
+        // However, the handler ID is stored and GTK should clean it up when the adjustment is destroyed
+
+        // Cancel all pending image loads
+        self.cancel_pending_images();
+    }
+}
+
 impl LibraryPage {
     fn get_genre_label(&self) -> String {
         if self.selected_genres.is_empty() {
@@ -938,8 +960,7 @@ impl LibraryPage {
 
             relm4::spawn(async move {
                 use crate::db::repository::{
-                    LibraryRepository, LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl,
-                    Repository,
+                    LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl, Repository,
                 };
                 let library_repo = LibraryRepositoryImpl::new(db.clone());
                 let media_repo = MediaRepositoryImpl::new(db.clone());

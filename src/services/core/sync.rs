@@ -55,6 +55,15 @@ impl SyncService {
                     // Save library
                     MediaService::save_library(db, library.clone(), source_id).await?;
 
+                    // Notify library sync started
+                    BROKER
+                        .notify_library_sync_started(
+                            source_id.to_string(),
+                            library.id.clone(),
+                            library.title.clone(),
+                        )
+                        .await;
+
                     // Sync library content
                     match Self::sync_library(db, backend, source_id, &library).await {
                         Ok(items_count) => {
@@ -62,6 +71,17 @@ impl SyncService {
                                 "Successfully synced {} items for library {}",
                                 items_count, library.title
                             );
+
+                            // Notify library sync completed
+                            BROKER
+                                .notify_library_sync_completed(
+                                    source_id.to_string(),
+                                    library.id.clone(),
+                                    library.title.clone(),
+                                    items_count,
+                                )
+                                .await;
+
                             result.items_synced += items_count;
                         }
                         Err(e) => {
