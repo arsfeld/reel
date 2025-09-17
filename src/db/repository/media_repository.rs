@@ -25,6 +25,13 @@ pub trait MediaRepository: Repository<MediaItemModel> {
     /// Find media items by source
     async fn find_by_source(&self, source_id: &str) -> Result<Vec<MediaItemModel>>;
 
+    /// Find media items by source and type
+    async fn find_by_source_and_type(
+        &self,
+        source_id: &str,
+        media_type: &str,
+    ) -> Result<Vec<MediaItemModel>>;
+
     /// Find media items by type
     async fn find_by_type(&self, media_type: &str) -> Result<Vec<MediaItemModel>>;
 
@@ -298,6 +305,19 @@ impl MediaRepository for MediaRepositoryImpl {
     async fn find_by_source(&self, source_id: &str) -> Result<Vec<MediaItemModel>> {
         Ok(MediaItem::find()
             .filter(media_items::Column::SourceId.eq(source_id))
+            .all(self.base.db.as_ref())
+            .await?)
+    }
+
+    async fn find_by_source_and_type(
+        &self,
+        source_id: &str,
+        media_type: &str,
+    ) -> Result<Vec<MediaItemModel>> {
+        Ok(MediaItem::find()
+            .filter(media_items::Column::SourceId.eq(source_id))
+            .filter(media_items::Column::MediaType.eq(media_type))
+            .order_by(media_items::Column::SortTitle, Order::Asc)
             .all(self.base.db.as_ref())
             .await?)
     }

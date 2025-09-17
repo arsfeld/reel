@@ -868,22 +868,9 @@ impl AsyncComponent for MainWindow {
                 // Set the library on the new controller
                 library_controller.emit(crate::platforms::relm4::components::pages::library::LibraryPageInput::SetLibrary(library_id.clone()));
 
-                // Fetch library details for the title
-                let library_title = {
-                    use crate::services::commands::{Command, media_commands::GetLibraryCommand};
-                    let cmd = GetLibraryCommand {
-                        db: self.db.clone(),
-                        library_id: library_id.clone(),
-                    };
-                    match cmd.execute().await {
-                        Ok(Some(library)) => library.title,
-                        _ => "Library".to_string(),
-                    }
-                };
-
                 // Create navigation page with the new controller's widget
                 let page = adw::NavigationPage::builder()
-                    .title(&library_title)
+                    .title("Library")
                     .child(library_controller.widget())
                     .build();
 

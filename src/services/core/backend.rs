@@ -6,8 +6,8 @@ use crate::db::repository::{
     source_repository::{SourceRepository, SourceRepositoryImpl},
 };
 use crate::models::{
-    AuthProvider, ConnectionInfo, Credentials, HomeSection, MediaItemId, Source, SourceId,
-    SourceType, StreamInfo,
+    AuthProvider, ConnectionInfo, Credentials, Episode, HomeSection, MediaItem, MediaItemId, Movie,
+    Show, Source, SourceId, SourceType, StreamInfo,
 };
 use crate::services::core::auth::AuthService;
 use anyhow::{Context, Result};
@@ -398,5 +398,253 @@ impl BackendService {
 
         // Wait for all futures to complete
         futures::future::join_all(section_futures).await
+    }
+
+    /// Load cached home sections from database
+    /// Returns sections constructed from cached media items
+    pub async fn get_cached_home_sections(
+        db: &DatabaseConnection,
+    ) -> Vec<(crate::models::SourceId, Vec<HomeSection>)> {
+        use crate::db::repository::playback_repository::{
+            PlaybackRepository, PlaybackRepositoryImpl,
+        };
+        use crate::models::HomeSectionType;
+
+        tracing::info!("Loading cached home sections from database as models");
+
+        let mut cached_sections = Vec::new();
+
+        // Load all sources
+        let source_repo = SourceRepositoryImpl::new(db.clone());
+        let sources = match source_repo.find_all().await {
+            Ok(sources) => sources,
+            Err(e) => {
+                tracing::error!("Failed to load sources: {}", e);
+                return cached_sections;
+            }
+        };
+
+        for source in sources {
+            let source_id = crate::models::SourceId::new(source.id.clone());
+            let mut sections = Vec::new();
+
+            // Load continue watching items from playback progress
+            let playback_repo = PlaybackRepositoryImpl::new(db.clone());
+            if let Ok(in_progress) = playback_repo.find_in_progress(None).await {
+                if !in_progress.is_empty() {
+                    let media_repo = MediaRepositoryImpl::new(db.clone());
+                    let mut continue_watching_items = Vec::new();
+
+                    // Load media items for each in-progress item
+                    for progress in in_progress.iter().take(20) {
+                        // Only include items from this source
+                        if let Ok(Some(media_item)) =
+                            media_repo.find_by_id(&progress.media_id).await
+                        {
+                            if media_item.source_id == source.id {
+                                // Convert to MediaItem
+                                let item = Self::db_model_to_media_item(media_item);
+                                continue_watching_items.push(item);
+                            }
+                        }
+                    }
+
+                    if !continue_watching_items.is_empty() {
+                        sections.push(HomeSection {
+                            id: format!("{}::continue-watching", source.id),
+                            title: "Continue Watching".to_string(),
+                            section_type: HomeSectionType::ContinueWatching,
+                            items: continue_watching_items,
+                        });
+                    }
+                }
+            }
+
+            // Load recently added items
+            let media_repo = MediaRepositoryImpl::new(db.clone());
+            if let Ok(recent_items) = media_repo.find_recently_added(20).await {
+                let mut recently_added = Vec::new();
+
+                for item in recent_items {
+                    if item.source_id == source.id {
+                        let media_item = Self::db_model_to_media_item(item);
+                        recently_added.push(media_item);
+                    }
+                }
+
+                if !recently_added.is_empty() {
+                    sections.push(HomeSection {
+                        id: format!("{}::recently-added", source.id),
+                        title: "Recently Added".to_string(),
+                        section_type: HomeSectionType::RecentlyAdded,
+                        items: recently_added,
+                    });
+                }
+            }
+
+            // Load movie and show libraries by type
+            if let Ok(movies) = media_repo
+                .find_by_source_and_type(&source.id, "movie")
+                .await
+            {
+                if !movies.is_empty() {
+                    let movie_items: Vec<MediaItem> = movies
+                        .into_iter()
+                        .take(20)
+                        .map(Self::db_model_to_media_item)
+                        .collect();
+
+                    sections.push(HomeSection {
+                        id: format!("{}::movies", source.id),
+                        title: "Movies".to_string(),
+                        section_type: HomeSectionType::Custom("Movies".to_string()),
+                        items: movie_items,
+                    });
+                }
+            }
+
+            if let Ok(shows) = media_repo.find_by_source_and_type(&source.id, "show").await {
+                if !shows.is_empty() {
+                    let show_items: Vec<MediaItem> = shows
+                        .into_iter()
+                        .take(20)
+                        .map(Self::db_model_to_media_item)
+                        .collect();
+
+                    sections.push(HomeSection {
+                        id: format!("{}::shows", source.id),
+                        title: "TV Shows".to_string(),
+                        section_type: HomeSectionType::Custom("Movies".to_string()),
+                        items: show_items,
+                    });
+                }
+            }
+
+            if !sections.is_empty() {
+                tracing::info!(
+                    "Loaded {} cached sections for source {}",
+                    sections.len(),
+                    source.name
+                );
+                cached_sections.push((source_id, sections));
+            }
+        }
+
+        tracing::info!(
+            "Loaded {} sources with cached sections",
+            cached_sections.len()
+        );
+
+        cached_sections
+    }
+
+    /// Convert database MediaItemModel to MediaItem enum
+    fn db_model_to_media_item(model: crate::db::entities::MediaItemModel) -> MediaItem {
+        use chrono::{DateTime, Utc};
+
+        match model.media_type.as_str() {
+            "movie" => MediaItem::Movie(Movie {
+                id: model.id.clone(),
+                backend_id: model.source_id.clone(),
+                title: model.title,
+                year: model.year.map(|y| y as u32),
+                overview: model.overview,
+                rating: model.rating,
+                duration: std::time::Duration::from_millis(model.duration_ms.unwrap_or(0) as u64),
+                poster_url: model.poster_url,
+                backdrop_url: model.backdrop_url,
+                genres: Vec::new(), // TODO: Extract from JSON if needed
+                cast: Vec::new(),
+                crew: Vec::new(),
+                added_at: model.added_at.map(|dt| {
+                    DateTime::<Utc>::from_timestamp(dt.and_utc().timestamp(), 0).unwrap()
+                }),
+                updated_at: Some(
+                    DateTime::<Utc>::from_timestamp(model.updated_at.and_utc().timestamp(), 0)
+                        .unwrap(),
+                ),
+                watched: false, // Would need to fetch from playback progress
+                view_count: 0,
+                last_watched_at: None,
+                playback_position: None,
+                intro_marker: None,
+                credits_marker: None,
+            }),
+            "show" => MediaItem::Show(Show {
+                id: model.id.clone(),
+                backend_id: model.source_id.clone(),
+                title: model.title,
+                year: model.year.map(|y| y as u32),
+                overview: model.overview,
+                rating: model.rating,
+                poster_url: model.poster_url,
+                backdrop_url: model.backdrop_url,
+                genres: Vec::new(), // TODO: Extract from JSON if needed
+                seasons: Vec::new(),
+                cast: Vec::new(),
+                added_at: model.added_at.map(|dt| {
+                    DateTime::<Utc>::from_timestamp(dt.and_utc().timestamp(), 0).unwrap()
+                }),
+                updated_at: Some(
+                    DateTime::<Utc>::from_timestamp(model.updated_at.and_utc().timestamp(), 0)
+                        .unwrap(),
+                ),
+                watched_episode_count: 0, // Would need to calculate from episodes
+                total_episode_count: 0,
+                last_watched_at: None,
+            }),
+            "episode" => MediaItem::Episode(Episode {
+                id: model.id.clone(),
+                backend_id: model.source_id.clone(),
+                show_id: model.parent_id.clone(),
+                season_number: model.season_number.unwrap_or(1) as u32,
+                episode_number: model.episode_number.unwrap_or(1) as u32,
+                title: model.title,
+                overview: model.overview,
+                air_date: None,
+                duration: std::time::Duration::from_millis(model.duration_ms.unwrap_or(0) as u64),
+                thumbnail_url: model.poster_url.clone(),
+                show_poster_url: None, // Would need to fetch from parent show
+                watched: false,        // Would need to fetch from playback progress
+                view_count: 0,
+                last_watched_at: None,
+                playback_position: None,
+                show_title: None,
+                intro_marker: None,
+                credits_marker: None,
+            }),
+            _ => {
+                // Unknown type, default to movie
+                MediaItem::Movie(Movie {
+                    id: model.id.clone(),
+                    backend_id: model.source_id.clone(),
+                    title: model.title,
+                    year: model.year.map(|y| y as u32),
+                    overview: model.overview,
+                    rating: model.rating,
+                    duration: std::time::Duration::from_millis(
+                        model.duration_ms.unwrap_or(0) as u64
+                    ),
+                    poster_url: model.poster_url,
+                    backdrop_url: model.backdrop_url,
+                    genres: Vec::new(),
+                    cast: Vec::new(),
+                    crew: Vec::new(),
+                    added_at: model.added_at.map(|dt| {
+                        DateTime::<Utc>::from_timestamp(dt.and_utc().timestamp(), 0).unwrap()
+                    }),
+                    updated_at: Some(
+                        DateTime::<Utc>::from_timestamp(model.updated_at.and_utc().timestamp(), 0)
+                            .unwrap(),
+                    ),
+                    watched: false,
+                    view_count: 0,
+                    last_watched_at: None,
+                    playback_position: None,
+                    intro_marker: None,
+                    credits_marker: None,
+                })
+            }
+        }
     }
 }

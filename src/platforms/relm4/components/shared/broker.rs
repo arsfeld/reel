@@ -128,6 +128,17 @@ pub enum SourceMessage {
         source_id: String,
         error: String,
     },
+    LibrarySyncStarted {
+        source_id: String,
+        library_id: String,
+        library_name: String,
+    },
+    LibrarySyncCompleted {
+        source_id: String,
+        library_id: String,
+        library_name: String,
+        items_synced: usize,
+    },
 }
 
 pub struct MessageBroker {
@@ -283,6 +294,38 @@ impl MessageBroker {
     pub async fn notify_library_updated(&self, library_id: String) {
         self.broadcast(BrokerMessage::Data(DataMessage::LibraryUpdated {
             library_id,
+        }))
+        .await;
+    }
+
+    // Helper method to notify library sync started
+    pub async fn notify_library_sync_started(
+        &self,
+        source_id: String,
+        library_id: String,
+        library_name: String,
+    ) {
+        self.broadcast(BrokerMessage::Source(SourceMessage::LibrarySyncStarted {
+            source_id,
+            library_id,
+            library_name,
+        }))
+        .await;
+    }
+
+    // Helper method to notify library sync completed
+    pub async fn notify_library_sync_completed(
+        &self,
+        source_id: String,
+        library_id: String,
+        library_name: String,
+        items_synced: usize,
+    ) {
+        self.broadcast(BrokerMessage::Source(SourceMessage::LibrarySyncCompleted {
+            source_id,
+            library_id,
+            library_name,
+            items_synced,
         }))
         .await;
     }
