@@ -1,9 +1,11 @@
 ---
 id: task-100
 title: Fix Jellyfin library fetching returning 404 after successful authentication
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2025-09-16 19:34'
+updated_date: '2025-09-17 03:32'
 labels:
   - bug
   - jellyfin
@@ -24,3 +26,11 @@ After successfully authenticating with Jellyfin (including Quick Connect), the s
 - [ ] #4 Fix the user_id propagation issue in Jellyfin backend
 - [ ] #5 Test library fetching works after Quick Connect authentication
 <!-- AC:END -->
+
+## Implementation Plan
+
+1. Investigate how Quick Connect token with user_id is saved to keyring
+2. Check if user_id is properly extracted when loading from keyring
+3. Fix token format saving to include user_id when saving to keyring
+4. Ensure user_id is propagated through backend initialization
+5. Test Quick Connect auth flow end-to-end

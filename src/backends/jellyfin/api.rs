@@ -756,7 +756,9 @@ impl JellyfinApi {
                     .and_then(|ud| ud.playback_position_ticks)
                     .map(|ticks| Duration::from_secs(ticks / 10_000_000)),
                 show_title: item.series_name,
-                show_poster_url: None,
+                show_poster_url: item.series_id.as_ref().map(|series_id| {
+                    format!("{}/Items/{}/Images/Primary", self.base_url, series_id)
+                }),
                 intro_marker,
                 credits_marker,
             });
@@ -1133,7 +1135,9 @@ impl JellyfinApi {
                         .and_then(|ud| ud.playback_position_ticks)
                         .map(|ticks| Duration::from_secs(ticks / 10_000_000)),
                     show_title: next_item.series_name.clone(),
-                    show_poster_url: None,
+                    show_poster_url: next_item.series_id.as_ref().map(|series_id| {
+                        format!("{}/Items/{}/Images/Primary", self.base_url, series_id)
+                    }),
                     intro_marker: None,
                     credits_marker: None,
                 }))
@@ -1257,7 +1261,9 @@ impl JellyfinApi {
                         last_watched_at: None,
                         playback_position: None,
                         show_title: item.series_name,
-                        show_poster_url: None,
+                        show_poster_url: item.series_id.as_ref().map(|series_id| {
+                            format!("{}/Items/{}/Images/Primary", self.base_url, series_id)
+                        }),
                         intro_marker: None,
                         credits_marker: None,
                     }));
@@ -1441,7 +1447,9 @@ impl JellyfinApi {
                             .and_then(|ud| ud.playback_position_ticks)
                             .map(|ticks| Duration::from_secs(ticks / 10_000_000)),
                         show_title: item.series_name,
-                        show_poster_url: None,
+                        show_poster_url: item.series_id.as_ref().map(|series_id| {
+                            format!("{}/Items/{}/Images/Primary", self.base_url, series_id)
+                        }),
                         intro_marker: None,
                         credits_marker: None,
                     }))

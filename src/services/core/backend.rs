@@ -328,4 +328,75 @@ impl BackendService {
 
         Ok(all_sections)
     }
+
+    /// Get home sections per source with individual error handling
+    pub async fn get_home_sections_per_source(
+        db: &DatabaseConnection,
+    ) -> Vec<(crate::models::SourceId, Result<Vec<HomeSection>>)> {
+        use std::time::Duration;
+        use tokio::time::timeout;
+
+        // Load all sources
+        let source_repo = SourceRepositoryImpl::new(db.clone());
+        let sources = match source_repo.find_all().await {
+            Ok(sources) => sources,
+            Err(e) => {
+                tracing::error!("Failed to load sources: {}", e);
+                return Vec::new();
+            }
+        };
+        let sources_count = sources.len();
+
+        let mut section_futures = Vec::new();
+
+        for source_entity in sources.iter() {
+            // Skip disabled or offline sources
+            if !source_entity.is_online {
+                continue;
+            }
+
+            let db_clone = db.clone();
+            let source_clone = source_entity.clone();
+            let source_id = crate::models::SourceId::new(source_clone.id.clone());
+
+            let future = async move {
+                // Apply timeout to prevent slow backends from blocking
+                let timeout_result = timeout(Duration::from_secs(10), async {
+                    match Self::create_backend_for_source(&db_clone, &source_clone).await {
+                        Ok(backend) => {
+                            match backend.get_home_sections().await {
+                                Ok(mut sections) => {
+                                    // Prefix section IDs with source ID to avoid conflicts
+                                    for section in &mut sections {
+                                        section.id = format!("{}::{}", source_clone.id, section.id);
+                                        // Also prefix the title with source name if multiple sources exist
+                                        if sources_count > 1 {
+                                            section.title = format!(
+                                                "{} - {}",
+                                                source_clone.name, section.title
+                                            );
+                                        }
+                                    }
+                                    Ok(sections)
+                                }
+                                Err(e) => Err(anyhow::anyhow!("Failed to get sections: {}", e)),
+                            }
+                        }
+                        Err(e) => Err(anyhow::anyhow!("Failed to create backend: {}", e)),
+                    }
+                })
+                .await;
+
+                match timeout_result {
+                    Ok(result) => (source_id, result),
+                    Err(_) => (source_id, Err(anyhow::anyhow!("Request timed out"))),
+                }
+            };
+
+            section_futures.push(future);
+        }
+
+        // Wait for all futures to complete
+        futures::future::join_all(section_futures).await
+    }
 }

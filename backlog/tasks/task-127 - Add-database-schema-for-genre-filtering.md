@@ -4,11 +4,13 @@ title: Add database schema for genre filtering
 status: To Do
 assignee: []
 created_date: '2025-09-17 02:55'
+updated_date: '2025-09-17 03:09'
 labels:
   - database
   - backend
-dependencies: []
-priority: high
+dependencies:
+  - task-126
+priority: medium
 ---
 
 ## Description
