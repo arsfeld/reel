@@ -427,13 +427,16 @@ impl BackendService {
                                         }
 
                                         // Create new section with MediaItemModel
-                                        let converted_section = crate::models::HomeSectionWithModels {
-                                            id: section.id,
-                                            title: section.title,
-                                            section_type: section.section_type,
-                                            items: db_items,
-                                        };
-                                        converted_sections.push(converted_section);
+                                        // Only add sections that have items (match cached behavior)
+                                        if !db_items.is_empty() {
+                                            let converted_section = crate::models::HomeSectionWithModels {
+                                                id: section.id,
+                                                title: section.title,
+                                                section_type: section.section_type,
+                                                items: db_items,
+                                            };
+                                            converted_sections.push(converted_section);
+                                        }
                                     }
 
                                     Ok(converted_sections)

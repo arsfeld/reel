@@ -299,7 +299,8 @@ impl AsyncComponent for HomePage {
                         }
 
                         // Process and display sections for this source
-                        self.display_source_sections(&source_id, sections, &sender);
+                        self.display_source_sections(&source_id, sections, &sender)
+                            .await;
                     }
                     Err(error) => {
                         error!("Source {} failed with error: {}", source_id, error);
@@ -503,22 +504,47 @@ impl HomePage {
     }
 
     /// Display sections from a successfully loaded source
-    fn display_source_sections(
+    async fn display_source_sections(
         &mut self,
         source_id: &SourceId,
         sections: Vec<HomeSectionWithModels>,
         sender: &AsyncComponentSender<Self>,
     ) {
-        // Add sections to our list
-        self.sections.extend(sections.clone());
+        // Filter out empty sections before processing
+        let non_empty_sections: Vec<HomeSectionWithModels> = sections
+            .into_iter()
+            .filter(|s| !s.items.is_empty())
+            .collect();
 
-        // Create UI for each section
-        for section in &sections {
-            if section.items.is_empty() {
-                debug!("Skipping empty section: {}", section.title);
-                continue;
+        // Collect all media IDs from all sections
+        let all_media_ids: Vec<String> = non_empty_sections
+            .iter()
+            .flat_map(|s| s.items.iter().map(|item| item.id.clone()))
+            .collect();
+
+        // Batch fetch playback progress for all items
+        let playback_progress_map = if !all_media_ids.is_empty() {
+            match crate::services::core::MediaService::get_playback_progress_batch(
+                &self.db,
+                &all_media_ids,
+            )
+            .await
+            {
+                Ok(map) => map,
+                Err(e) => {
+                    debug!("Failed to fetch playback progress: {}", e);
+                    std::collections::HashMap::new()
+                }
             }
+        } else {
+            std::collections::HashMap::new()
+        };
 
+        // Add only non-empty sections to our list
+        self.sections.extend(non_empty_sections.clone());
+
+        // Create UI for each non-empty section
+        for section in &non_empty_sections {
             debug!(
                 "Creating UI for section '{}' with {} items",
                 section.title,
@@ -605,11 +631,19 @@ impl HomePage {
                     let show_progress =
                         matches!(section.section_type, HomeSectionType::ContinueWatching);
 
+                    // Use the pre-fetched playback progress data
+                    let (watched, progress_percent) =
+                        if let Some(progress) = playback_progress_map.get(&model.id) {
+                            (progress.watched, progress.get_progress_percentage() as f64)
+                        } else {
+                            (false, 0.0) // No progress record means unwatched
+                        };
+
                     guard.push_back(MediaCardInit {
                         item: model.clone(),
                         show_progress,
-                        watched: false,
-                        progress_percent: 0.0,
+                        watched,
+                        progress_percent,
                     });
 
                     // Queue image load if poster URL exists
@@ -716,9 +750,10 @@ impl HomePage {
         }
 
         info!(
-            "Displayed {} sections for source {}",
-            sections.len(),
-            source_id
+            "Displayed {} sections for source {} (filtered from {})",
+            non_empty_sections.len(),
+            source_id,
+            self.sections.len()
         );
     }
 
