@@ -67,9 +67,116 @@ pub struct PlayerPage {
     config_progress_update_interval_seconds: u64,
     // Playback state
     playback_speed: f64,
+    // Track selection menus
+    audio_menu_button: gtk::MenuButton,
+    subtitle_menu_button: gtk::MenuButton,
+    current_audio_track: i32,
+    current_subtitle_track: i32,
 }
 
 impl PlayerPage {
+    fn populate_audio_menu(&self, sender: AsyncComponentSender<Self>) {
+        if let Some(player) = &self.player {
+            let player_clone = player.clone();
+            let audio_menu_button = self.audio_menu_button.clone();
+            let current_track = self.current_audio_track;
+            let sender = sender.clone();
+
+            glib::spawn_future_local(async move {
+                let tracks = player_clone.get_audio_tracks().await.unwrap_or_default();
+
+                if tracks.is_empty() {
+                    // No audio tracks available, disable the button
+                    audio_menu_button.set_sensitive(false);
+                    audio_menu_button.set_popover(None::<&gtk::Popover>);
+                } else {
+                    audio_menu_button.set_sensitive(true);
+
+                    // Create menu
+                    let menu = gtk::gio::Menu::new();
+
+                    for (track_id, track_name) in &tracks {
+                        let item = gtk::gio::MenuItem::new(Some(&track_name), None);
+                        let action_name = format!("player.audio-track-{}", track_id);
+                        item.set_action_and_target_value(Some(&action_name), None);
+                        menu.append_item(&item);
+                    }
+
+                    // Create popover from menu model
+                    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+
+                    // Add actions for each track
+                    let action_group = gtk::gio::SimpleActionGroup::new();
+                    for (track_id, _) in &tracks {
+                        let action_name = format!("audio-track-{}", track_id);
+                        let action = gtk::gio::SimpleAction::new(&action_name, None);
+                        let sender_clone = sender.clone();
+                        let track_id_copy = *track_id;
+                        action.connect_activate(move |_, _| {
+                            sender_clone.input(PlayerInput::SetAudioTrack(track_id_copy));
+                        });
+                        action_group.add_action(&action);
+                    }
+
+                    // Insert the action group
+                    audio_menu_button.insert_action_group("player", Some(&action_group));
+                    audio_menu_button.set_popover(Some(&popover));
+                }
+            });
+        }
+    }
+
+    fn populate_subtitle_menu(&self, sender: AsyncComponentSender<Self>) {
+        if let Some(player) = &self.player {
+            let player_clone = player.clone();
+            let subtitle_menu_button = self.subtitle_menu_button.clone();
+            let current_track = self.current_subtitle_track;
+            let sender = sender.clone();
+
+            glib::spawn_future_local(async move {
+                let tracks = player_clone.get_subtitle_tracks().await.unwrap_or_default();
+
+                if tracks.is_empty() || tracks.len() == 1 {
+                    // No subtitle tracks available (only "None" option), disable the button
+                    subtitle_menu_button.set_sensitive(false);
+                    subtitle_menu_button.set_popover(None::<&gtk::Popover>);
+                } else {
+                    subtitle_menu_button.set_sensitive(true);
+
+                    // Create menu
+                    let menu = gtk::gio::Menu::new();
+
+                    for (track_id, track_name) in &tracks {
+                        let item = gtk::gio::MenuItem::new(Some(&track_name), None);
+                        let action_name = format!("player.subtitle-track-{}", track_id);
+                        item.set_action_and_target_value(Some(&action_name), None);
+                        menu.append_item(&item);
+                    }
+
+                    // Create popover from menu model
+                    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+
+                    // Add actions for each track
+                    let action_group = gtk::gio::SimpleActionGroup::new();
+                    for (track_id, _) in &tracks {
+                        let action_name = format!("subtitle-track-{}", track_id);
+                        let action = gtk::gio::SimpleAction::new(&action_name, None);
+                        let sender_clone = sender.clone();
+                        let track_id_copy = *track_id;
+                        action.connect_activate(move |_, _| {
+                            sender_clone.input(PlayerInput::SetSubtitleTrack(track_id_copy));
+                        });
+                        action_group.add_action(&action);
+                    }
+
+                    // Insert the action group
+                    subtitle_menu_button.insert_action_group("player", Some(&action_group));
+                    subtitle_menu_button.set_popover(Some(&popover));
+                }
+            });
+        }
+    }
+
     fn update_playlist_position_label(&self, context: &PlaylistContext) {
         match context {
             PlaylistContext::SingleItem => {
@@ -116,6 +223,9 @@ pub enum PlayerInput {
         media_id: MediaItemId,
         context: PlaylistContext,
     },
+    UpdateTrackMenus,
+    SetAudioTrack(i32),
+    SetSubtitleTrack(i32),
     PlayPause,
     Stop,
     Seek(Duration),
@@ -462,14 +572,14 @@ impl AsyncComponent for PlayerPage {
                         set_spacing: 2,
 
                         // Audio tracks button
-                        gtk::MenuButton {
+                        model.audio_menu_button.clone() {
                             set_icon_name: "audio-x-generic-symbolic",
                             add_css_class: "flat",
                             set_tooltip_text: Some("Audio Track"),
                         },
 
                         // Subtitle tracks button
-                        gtk::MenuButton {
+                        model.subtitle_menu_button.clone() {
                             set_icon_name: "media-view-subtitles-symbolic",
                             add_css_class: "flat",
                             set_tooltip_text: Some("Subtitles"),
@@ -587,6 +697,10 @@ impl AsyncComponent for PlayerPage {
         volume_slider.set_value(1.0);
         volume_slider.set_draw_value(false);
 
+        // Create menu buttons for track selection
+        let audio_menu_button = gtk::MenuButton::new();
+        let subtitle_menu_button = gtk::MenuButton::new();
+
         // Load config once at initialization
         let config = Config::load().unwrap_or_default();
 
@@ -627,6 +741,10 @@ impl AsyncComponent for PlayerPage {
                 .progress_update_interval_seconds
                 as u64,
             playback_speed: 1.0,
+            audio_menu_button: audio_menu_button.clone(),
+            subtitle_menu_button: subtitle_menu_button.clone(),
+            current_audio_track: -1,
+            current_subtitle_track: -1,
         };
 
         // Initialize the player controller
@@ -960,6 +1078,9 @@ impl AsyncComponent for PlayerPage {
                             Ok(_) => {
                                 info!("Media loaded successfully");
 
+                                // Populate track menus after media loads
+                                sender_clone.input(PlayerInput::UpdateTrackMenus);
+
                                 // Check for saved playback progress and resume if configured
                                 use crate::services::commands::GetPlaybackProgressCommand;
 
@@ -1103,6 +1224,9 @@ impl AsyncComponent for PlayerPage {
                         match player_handle.load_media(&stream_info.url).await {
                             Ok(_) => {
                                 info!("Media loaded successfully with playlist context");
+
+                                // Populate track menus after media loads
+                                sender_clone.input(PlayerInput::UpdateTrackMenus);
 
                                 // Check for saved playback progress and resume if configured
                                 use crate::services::commands::GetPlaybackProgressCommand;
@@ -1555,6 +1679,46 @@ impl AsyncComponent for PlayerPage {
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
                         player_handle.cycle_audio_track().await.ok();
+                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    });
+                }
+            }
+            PlayerInput::UpdateTrackMenus => {
+                // Populate the track selection menus
+                self.populate_audio_menu(sender.clone());
+                self.populate_subtitle_menu(sender.clone());
+
+                // Also get current track selections
+                if let Some(player) = &self.player {
+                    let player_handle = player.clone();
+                    let sender_clone = sender.clone();
+                    glib::spawn_future_local(async move {
+                        let _audio_track =
+                            player_handle.get_current_audio_track().await.unwrap_or(-1);
+                        let _subtitle_track = player_handle
+                            .get_current_subtitle_track()
+                            .await
+                            .unwrap_or(-1);
+                        // Store the current tracks (we'll update the model in a moment)
+                    });
+                }
+            }
+            PlayerInput::SetAudioTrack(track_id) => {
+                if let Some(player) = &self.player {
+                    self.current_audio_track = track_id;
+                    let player_handle = player.clone();
+                    sender.oneshot_command(async move {
+                        let _ = player_handle.set_audio_track(track_id).await;
+                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    });
+                }
+            }
+            PlayerInput::SetSubtitleTrack(track_id) => {
+                if let Some(player) = &self.player {
+                    self.current_subtitle_track = track_id;
+                    let player_handle = player.clone();
+                    sender.oneshot_command(async move {
+                        let _ = player_handle.set_subtitle_track(track_id).await;
                         PlayerCommandOutput::StateChanged(PlayerState::Playing)
                     });
                 }

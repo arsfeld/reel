@@ -233,7 +233,7 @@ impl AsyncComponent for SourcesPage {
                 set_margin_end: 24,
 
                 gtk::Label {
-                    set_text: "Servers & Accounts",
+                    set_text: "Media Sources",
                     set_halign: gtk::Align::Start,
                     add_css_class: "title-2",
                 },
