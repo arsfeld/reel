@@ -1,8 +1,6 @@
-use super::components::MainWindow;
 use crate::db::Database;
+use crate::ui::MainWindow;
 use libadwaita as adw;
-use libadwaita::prelude::*;
-use relm4::prelude::*;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -21,9 +19,9 @@ impl ReelApp {
         style_manager.set_color_scheme(adw::ColorScheme::ForceDark);
 
         // Load details page CSS
-        let details_css = include_str!("styles/details.css");
+        let details_css = include_str!("../../styles/details.css");
         // Load sidebar CSS
-        let sidebar_css = include_str!("styles/sidebar.css");
+        let sidebar_css = include_str!("../../styles/sidebar.css");
 
         // Set global CSS matching GTK library styles exactly
         let base_css = r#"

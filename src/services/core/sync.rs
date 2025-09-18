@@ -1,13 +1,11 @@
-use crate::platforms::relm4::components::shared::broker::{BROKER, DataMessage, SourceMessage};
+use crate::ui::shared::broker::BROKER;
 use anyhow::{Context, Result};
 use chrono::NaiveDateTime;
-use sea_orm::TransactionTrait;
-use std::error::Error;
 use tracing::{debug, info, warn};
 
 use crate::backends::traits::MediaBackend;
 use crate::db::connection::DatabaseConnection;
-use crate::db::entities::{LibraryModel, SyncStatusModel};
+use crate::db::entities::SyncStatusModel;
 use crate::db::repository::{
     Repository,
     sync_repository::{SyncRepository, SyncRepositoryImpl},
@@ -20,7 +18,7 @@ pub struct SyncService;
 
 impl SyncService {
     /// Estimate total items for sync progress tracking
-    async fn estimate_total_items(backend: &dyn MediaBackend) -> Result<Option<i32>> {
+    async fn estimate_total_items(_backend: &dyn MediaBackend) -> Result<Option<i32>> {
         // For now, we can't estimate total items without fetching all libraries
         // This would be too expensive, so we'll track progress per batch instead
         Ok(None)
@@ -199,18 +197,10 @@ impl SyncService {
                 shows.into_iter().map(MediaItem::Show).collect()
             }
             crate::models::LibraryType::Music => {
-                // For music, we might need both albums and tracks
-                let mut music_items = Vec::new();
-                if let Ok(albums) = backend
-                    .get_music_albums(&crate::models::LibraryId::new(library.id.clone()))
-                    .await
-                {
-                    music_items.extend(albums.into_iter().map(MediaItem::MusicAlbum));
-                }
-                // TODO: get_music_tracks takes album_id, not library_id
-                // We need to iterate through albums first, then get tracks for each
-                // For now, skip tracks
-                music_items
+                // Music support not yet implemented
+                // get_music_albums and get_music_tracks methods were removed as unused
+                warn!("Music library sync not yet implemented");
+                Vec::new()
             }
             crate::models::LibraryType::Photos | crate::models::LibraryType::Mixed => {
                 warn!("Library type {:?} not yet supported", library.library_type);
@@ -346,11 +336,11 @@ impl SyncService {
         }
 
         // Update library item count in database
-        use crate::db::repository::{LibraryRepository, LibraryRepositoryImpl};
+        use crate::db::repository::LibraryRepositoryImpl;
         let library_repo = LibraryRepositoryImpl::new(db.clone());
         if let Ok(Some(mut lib_entity)) = library_repo.find_by_id(&library.id).await {
             // Get actual count from media repository
-            use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
+            use crate::db::repository::MediaRepositoryImpl;
             let media_repo = MediaRepositoryImpl::new(db.clone());
             if let Ok(count) = media_repo.count_by_library(&library.id).await {
                 info!(
@@ -471,6 +461,7 @@ impl SyncService {
     }
 
     /// Get sync status for a source
+    #[allow(dead_code)]
     pub async fn get_sync_status(
         db: &DatabaseConnection,
         source_id: &SourceId,
@@ -529,6 +520,7 @@ impl SyncService {
     }
 
     /// Calculate sync progress
+    #[allow(dead_code)]
     pub async fn get_sync_progress(
         db: &DatabaseConnection,
         source_id: &SourceId,
@@ -563,6 +555,7 @@ pub struct SyncResult {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum SyncStatus {
     Idle,
     InProgress,

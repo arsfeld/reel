@@ -1,5 +1,4 @@
 pub mod app;
-pub mod components;
 
 use crate::core::frontend::Frontend;
 use anyhow::Result;

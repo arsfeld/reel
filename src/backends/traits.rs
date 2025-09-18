@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 use crate::models::{
-    BackendId, ChapterMarker, Credentials, Episode, HomeSection, Library, LibraryId, MediaItem,
-    MediaItemId, Movie, MusicAlbum, MusicTrack, Photo, Season, Show, ShowId, StreamInfo, User,
+    BackendId, Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId, Movie, Season,
+    Show, ShowId, StreamInfo, User,
 };
 
 #[async_trait]
@@ -14,16 +14,7 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     /// Returns Ok(Some(user)) if successfully connected, Ok(None) if no credentials, Err if failed
     async fn initialize(&self) -> Result<Option<User>>;
 
-    /// Check if the backend is initialized and ready to use
-    async fn is_initialized(&self) -> bool;
-
-    /// Check if the backend has credentials and can attempt playback
-    /// This is faster than full initialization and enables streaming without full API connection
-    async fn is_playback_ready(&self) -> bool {
-        // Default implementation checks if initialized, but backends should override
-        // to check credentials without requiring full connection test
-        self.is_initialized().await
-    }
+    // is_initialized and is_playback_ready removed - never used
 
     /// Get the backend as Any for downcasting
     fn as_any(&self) -> &dyn std::any::Any;
@@ -49,13 +40,8 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
         duration: Duration,
     ) -> Result<()>;
 
-    async fn mark_watched(&self, media_id: &MediaItemId) -> Result<()>;
-
-    async fn mark_unwatched(&self, media_id: &MediaItemId) -> Result<()>;
-
-    async fn get_watch_status(&self, media_id: &MediaItemId) -> Result<WatchStatus>;
-
-    async fn search(&self, query: &str) -> Result<SearchResults>;
+    // Watch status methods removed - never used in production
+    // Search method removed - never used in production
 
     /// Get homepage sections with suggested content, recently added, etc.
     async fn get_home_sections(&self) -> Result<Vec<HomeSection>> {
@@ -64,105 +50,18 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
         Ok(Vec::new())
     }
 
-    /// Fetch intro and credits markers for an episode
-    async fn fetch_episode_markers(
-        &self,
-        _episode_id: &MediaItemId,
-    ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
-        // Default implementation returns no markers
-        // Only Plex backend currently implements this
-        Ok((None, None))
-    }
+    // Marker and navigation methods removed - never used in production
 
-    /// Fetch intro and credits markers for any media (movie or episode)
-    async fn fetch_media_markers(
-        &self,
-        _media_id: &MediaItemId,
-    ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
-        // Default implementation returns no markers
-        // Backends should override this to provide marker functionality
-        Ok((None, None))
-    }
+    // get_library_items removed - never used in production
 
-    /// Find the next episode after the given episode
-    async fn find_next_episode(&self, _current_episode: &Episode) -> Result<Option<Episode>> {
-        // Default implementation returns None
-        // Backends should override this to provide next episode functionality
-        Ok(None)
-    }
+    // Music and photo methods removed - never implemented
 
-    // Generic media item fetching for all library types
-    async fn get_library_items(&self, library_id: &LibraryId) -> Result<Vec<MediaItem>> {
-        // Default implementation that only handles movies and shows
-        // Backends can override this to support all types
-        let library = self
-            .get_libraries()
-            .await?
-            .into_iter()
-            .find(|l| l.id == library_id.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Library not found"))?;
-
-        use crate::models::LibraryType;
-        match library.library_type {
-            LibraryType::Movies => {
-                let movies = self.get_movies(library_id).await?;
-                Ok(movies.into_iter().map(MediaItem::Movie).collect())
-            }
-            LibraryType::Shows => {
-                let shows = self.get_shows(library_id).await?;
-                Ok(shows.into_iter().map(MediaItem::Show).collect())
-            }
-            LibraryType::Music => {
-                // Backend should override this method to support music
-                Ok(Vec::new())
-            }
-            LibraryType::Photos => {
-                // Backend should override this method to support photos
-                Ok(Vec::new())
-            }
-            LibraryType::Mixed => {
-                // Backend should override this method to support mixed content
-                Ok(Vec::new())
-            }
-        }
-    }
-
-    // Optional: Get music albums for music libraries
-    async fn get_music_albums(&self, _library_id: &LibraryId) -> Result<Vec<MusicAlbum>> {
-        Ok(Vec::new())
-    }
-
-    // Optional: Get music tracks for an album
-    async fn get_music_tracks(&self, _album_id: &MediaItemId) -> Result<Vec<MusicTrack>> {
-        Ok(Vec::new())
-    }
-
-    // Optional: Get photos for photo libraries
-    async fn get_photos(&self, _library_id: &LibraryId) -> Result<Vec<Photo>> {
-        Ok(Vec::new())
-    }
-
-    // Backend information
-    async fn get_backend_info(&self) -> BackendInfo {
-        let backend_id = self.get_backend_id().await;
-        BackendInfo {
-            name: backend_id.to_string(),
-            display_name: backend_id.to_string(),
-            backend_type: BackendType::Generic,
-            server_name: None,
-            server_version: None,
-            connection_type: ConnectionType::Unknown,
-            is_local: false,
-            is_relay: false,
-        }
-    }
+    // get_backend_info removed - never used
 
     // Sync support methods
     async fn get_backend_id(&self) -> BackendId;
 
-    async fn get_last_sync_time(&self) -> Option<DateTime<Utc>>;
-
-    async fn supports_offline(&self) -> bool;
+    // get_last_sync_time and supports_offline removed - never used
 }
 
 #[derive(Debug, Clone)]

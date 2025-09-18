@@ -9,11 +9,8 @@ pub mod playback;
 pub mod playlist;
 pub mod sync;
 
-pub use auth::AuthService;
 pub use backend::BackendService;
 pub use connection::ConnectionService;
-pub use connection_cache::{ConnectionCache, ConnectionState, ConnectionType};
 pub use media::MediaService;
-pub use playback::PlaybackService;
 pub use playlist::PlaylistService;
-pub use sync::{SyncProgress, SyncResult, SyncService, SyncStatus};
+pub use sync::{SyncProgress, SyncService, SyncStatus};

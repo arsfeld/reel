@@ -114,7 +114,7 @@ impl Repository<SourceModel> for SourceRepositoryImpl {
 
     async fn delete(&self, id: &str) -> Result<()> {
         // Get entity details before deleting
-        let entity = self.find_by_id(id).await?;
+        let _entity = self.find_by_id(id).await?;
 
         Source::delete_by_id(id).exec(self.base.db.as_ref()).await?;
         Ok(())

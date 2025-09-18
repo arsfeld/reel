@@ -250,7 +250,7 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
 
     async fn delete(&self, id: &str) -> Result<()> {
         // First, get the entity details for the event before deleting
-        let entity = self.find_by_id(id).await?;
+        let _entity = self.find_by_id(id).await?;
 
         MediaItem::delete_by_id(id)
             .exec(self.base.db.as_ref())
@@ -384,12 +384,12 @@ impl MediaRepository for MediaRepositoryImpl {
         }
 
         // Collect item IDs for event emission
-        let item_ids: Vec<String> = items.iter().map(|item| item.id.clone()).collect();
-        let library_id = items
+        let _item_ids: Vec<String> = items.iter().map(|item| item.id.clone()).collect();
+        let _library_id = items
             .first()
             .map(|item| item.library_id.clone())
             .unwrap_or_default();
-        let source_id = items
+        let _source_id = items
             .first()
             .map(|item| item.source_id.clone())
             .unwrap_or_default();
