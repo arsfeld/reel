@@ -139,6 +139,7 @@ impl AsyncComponent for MovieDetailsPage {
                                 gtk::Box {
                                     set_orientation: gtk::Orientation::Horizontal,
                                     set_spacing: 12,
+                                    set_margin_bottom: 16,  // Add space before action buttons
                                     add_css_class: "stagger-animation",
 
                                     // Year pill
@@ -214,13 +215,15 @@ impl AsyncComponent for MovieDetailsPage {
                                     },
                                 },
 
-                                // Action buttons
+                                // Action buttons - separated from metadata
                                 gtk::Box {
                                     set_orientation: gtk::Orientation::Horizontal,
                                     set_spacing: 12,
+                                    set_margin_top: 8,  // Extra spacing from metadata
 
                                     gtk::Button {
                                         add_css_class: "action-button-primary",
+                                        add_css_class: "play-button-prominent",
                                         add_css_class: "ripple",
                                         set_can_focus: true,
 
@@ -243,16 +246,32 @@ impl AsyncComponent for MovieDetailsPage {
                                     gtk::Button {
                                         add_css_class: "action-button-secondary",
                                         add_css_class: "interactive-element",
+                                        #[watch]
+                                        set_tooltip_text: Some(if model.movie.as_ref()
+                                            .map(|m| m.watched)
+                                            .unwrap_or(false) {
+                                            "Mark as unwatched"
+                                        } else {
+                                            "Mark as watched"
+                                        }),
 
-                                        gtk::Image {
-                                            #[watch]
-                                            set_icon_name: Some(if model.movie.as_ref()
-                                                .map(|m| m.watched)
-                                                .unwrap_or(false) {
-                                                "object-select-symbolic"
-                                            } else {
-                                                "circle-outline-thick-symbolic"
-                                            }),
+                                        gtk::Box {
+                                            set_width_request: 20,
+                                            set_height_request: 20,
+                                            set_halign: gtk::Align::Center,
+                                            set_valign: gtk::Align::Center,
+
+                                            gtk::Image {
+                                                #[watch]
+                                                set_icon_name: Some(if model.movie.as_ref()
+                                                    .map(|m| m.watched)
+                                                    .unwrap_or(false) {
+                                                    "object-select-symbolic"
+                                                } else {
+                                                    "media-record-symbolic"  // Circle icon for unwatched
+                                                }),
+                                                set_pixel_size: 18,
+                                            },
                                         },
 
                                         connect_clicked => MovieDetailsInput::ToggleWatched,

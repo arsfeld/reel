@@ -4,12 +4,13 @@ title: Hide player controls when mouse leaves window
 status: To Do
 assignee: []
 created_date: '2025-09-16 00:35'
+updated_date: '2025-09-18 02:51'
 labels:
   - ui
   - player
   - enhancement
 dependencies: []
-priority: medium
+priority: high
 ---
 
 ## Description
