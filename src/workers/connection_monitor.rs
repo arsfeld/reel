@@ -5,8 +5,9 @@ use tracing::{debug, info, warn};
 
 use crate::db::DatabaseConnection;
 use crate::models::SourceId;
-use crate::services::core::ConnectionService;
+use crate::services::core::connection::ConnectionService;
 
+#[derive(Debug)]
 pub struct ConnectionMonitor {
     db: DatabaseConnection,
     next_check_times: HashMap<SourceId, Instant>,
@@ -227,7 +228,7 @@ impl ConnectionMonitor {
     }
 
     /// Start periodic monitoring of all sources with variable frequency
-    pub fn start_monitoring(sender: relm4::ComponentSender<ConnectionMonitor>) {
+    pub fn start_monitoring(sender: relm4::Sender<ConnectionMonitorInput>) {
         tokio::spawn(async move {
             // Use a shorter base interval to check more frequently
             // Individual sources will be skipped if not due for checking
@@ -238,7 +239,7 @@ impl ConnectionMonitor {
 
                 // Send check all sources message
                 // The handler will skip sources that aren't due for checking
-                sender.input(ConnectionMonitorInput::CheckAllSources);
+                let _ = sender.send(ConnectionMonitorInput::CheckAllSources);
             }
         });
     }

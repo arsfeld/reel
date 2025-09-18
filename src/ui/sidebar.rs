@@ -29,6 +29,11 @@ pub enum SidebarInput {
     ManageSources,
     /// Update connection status
     UpdateConnectionStatus(String),
+    /// Update specific source connection status
+    UpdateSourceConnectionStatus {
+        source_id: SourceId,
+        is_connected: bool,
+    },
     /// Broker message received
     BrokerMsg(BrokerMessage),
 }
@@ -52,6 +57,7 @@ pub struct SourceGroup {
     is_expanded: bool,
     db: DatabaseConnection,
     syncing_libraries: HashSet<String>,
+    is_connected: bool,
 }
 
 impl SourceGroup {
@@ -142,6 +148,8 @@ pub enum SourceGroupInput {
     ToggleExpanded,
     /// Reload libraries from database (e.g., after sync)
     ReloadLibraries,
+    /// Update connection status
+    UpdateConnectionStatus(bool),
     /// Library sync started
     LibrarySyncStarted(String),
     /// Library sync completed
@@ -196,6 +204,25 @@ impl FactoryComponent for SourceGroup {
                         set_text: &self.source.name,
                         set_halign: gtk::Align::Start,
                         set_hexpand: true,
+                    },
+
+                    // Connection status indicator
+                    gtk::Image {
+                        #[watch]
+                        set_icon_name: Some(if self.is_connected {
+                            "emblem-ok-symbolic"
+                        } else {
+                            "network-offline-symbolic"
+                        }),
+                        set_pixel_size: 16,
+                        #[watch]
+                        add_css_class: if self.is_connected { "success" } else { "error" },
+                        #[watch]
+                        set_tooltip_text: Some(if self.is_connected {
+                            "Connected"
+                        } else {
+                            "Disconnected"
+                        }),
                     },
 
                     gtk::Image {
@@ -255,6 +282,7 @@ impl FactoryComponent for SourceGroup {
             is_expanded: true, // Start expanded by default
             db,
             syncing_libraries: HashSet::new(),
+            is_connected: true, // Assume connected initially
         }
     }
 
@@ -368,6 +396,18 @@ impl FactoryComponent for SourceGroup {
                 self.syncing_libraries.remove(&library_id);
                 // Update the library list to hide spinners
                 self.update_library_list(&widgets.library_list);
+            }
+            SourceGroupInput::UpdateConnectionStatus(is_connected) => {
+                self.is_connected = is_connected;
+                debug!(
+                    "Source {} connection status updated: {}",
+                    self.source.name,
+                    if is_connected {
+                        "connected"
+                    } else {
+                        "disconnected"
+                    }
+                );
             }
         }
     }
@@ -679,6 +719,28 @@ impl Component for Sidebar {
 
             SidebarInput::UpdateConnectionStatus(status) => {
                 self.connection_status = status;
+            }
+
+            SidebarInput::UpdateSourceConnectionStatus {
+                source_id,
+                is_connected,
+            } => {
+                // Find the source group and update its connection status
+                let idx_to_update = {
+                    let guard = self.source_groups.guard();
+                    guard.iter().enumerate().find_map(|(idx, sg)| {
+                        if sg.source.id == source_id.to_string() {
+                            Some(idx)
+                        } else {
+                            None
+                        }
+                    })
+                };
+
+                if let Some(idx) = idx_to_update {
+                    self.source_groups
+                        .send(idx, SourceGroupInput::UpdateConnectionStatus(is_connected));
+                }
             }
 
             SidebarInput::BrokerMsg(msg) => {
