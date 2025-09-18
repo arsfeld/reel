@@ -3,7 +3,6 @@ use crate::models::{MediaItemId, PlaylistContext};
 use crate::player::{PlayerController, PlayerHandle, PlayerState};
 use adw::prelude::*;
 use gtk::glib::{self, SourceId};
-use gtk::prelude::*;
 use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;

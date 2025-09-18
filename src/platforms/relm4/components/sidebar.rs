@@ -1,5 +1,4 @@
 use gtk::prelude::*;
-use libadwaita as adw;
 use relm4::factory::{DynamicIndex, FactoryComponent, FactorySender, FactoryVecDeque};
 use relm4::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender, gtk};

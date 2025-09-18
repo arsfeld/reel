@@ -1,12 +1,10 @@
 use adw::prelude::*;
-use gtk::prelude::*;
 use libadwaita as adw;
 use relm4::factory::{DynamicIndex, FactoryVecDeque};
 use relm4::prelude::*;
 
 use super::media_card::{MediaCard, MediaCardInit, MediaCardOutput};
 use crate::db::entities::MediaItemModel;
-use crate::models::MediaItem;
 use crate::models::MediaItemId;
 
 #[derive(Debug)]

@@ -1,7 +1,6 @@
 use crate::models::{
     Episode, MediaItem, Movie, MusicAlbum, MusicTrack, Person, Photo, Season, Show,
 };
-use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

@@ -1,20 +1,15 @@
 use anyhow::{Context, Result};
-use sea_orm::ConnectionTrait;
-use tracing::{debug, error, info, warn};
-// Import the mapper extension trait for MediaItem::to_model()
-use crate::mapper::media_item_mapper;
+use tracing::{debug, info, warn};
 
 use crate::db::{
     connection::DatabaseConnection,
-    entities::{LibraryModel, MediaItemModel},
+    entities::LibraryModel,
     repository::{
         LibraryRepository, LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl,
         PlaybackRepository, PlaybackRepositoryImpl, Repository, SourceRepositoryImpl,
-        source_repository::SourceRepository,
     },
 };
 use crate::models::{Library, LibraryId, MediaItem, MediaItemId, MediaType, ShowId, SourceId};
-use crate::services::cache_keys::CacheKey;
 
 /// Pure functions for media operations
 /// No state, no Arc<Self>, just functions that operate on data

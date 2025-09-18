@@ -583,8 +583,6 @@ impl MediaRepository for MediaRepositoryImpl {
     ) -> Result<Option<MediaItemModel>> {
         use crate::db::entities::playback_progress;
         use sea_orm::Condition;
-        use sea_orm::JoinType;
-        use sea_orm::QuerySelect;
 
         // First, try to get the next episode after the given one that is unwatched
         let result = MediaItem::find()
@@ -619,7 +617,7 @@ impl MediaRepositoryImpl {
         use sea_orm::PaginatorTrait;
 
         // First get the library to check its type
-        use crate::db::repository::{LibraryRepository, LibraryRepositoryImpl};
+        use crate::db::repository::LibraryRepositoryImpl;
         let library_repo = LibraryRepositoryImpl::new(self.base.db.clone());
 
         let library = library_repo.find_by_id(library_id).await?;

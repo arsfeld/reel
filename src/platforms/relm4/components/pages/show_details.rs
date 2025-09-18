@@ -1,4 +1,4 @@
-use crate::models::{Episode, MediaItem, MediaItemId, PlaylistContext, Season, Show};
+use crate::models::{Episode, MediaItem, MediaItemId, PlaylistContext, Show};
 use crate::platforms::relm4::components::workers::image_loader::{
     ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize,
 };
@@ -6,12 +6,11 @@ use crate::services::commands::Command;
 use crate::services::commands::media_commands::{GetEpisodesCommand, GetItemDetailsCommand};
 use crate::services::core::PlaylistService;
 use adw::prelude::*;
-use gtk::prelude::*;
 use libadwaita as adw;
 use relm4::RelmWidgetExt;
+use relm4::WorkerController;
 use relm4::gtk;
 use relm4::prelude::*;
-use relm4::{Worker, WorkerController};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::error;

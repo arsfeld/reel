@@ -1,15 +1,12 @@
 use crate::db::DatabaseConnection;
 use crate::models::{LibraryId, SourceId};
 use crate::services::core::backend::BackendService;
-use crate::services::core::sync::SyncService;
-use gtk::prelude::*;
 use relm4::prelude::*;
 use relm4::{ComponentSender, Worker, WorkerHandle};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 #[derive(Debug, Clone)]
 pub struct SyncProgress {

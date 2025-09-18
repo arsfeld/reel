@@ -6,9 +6,9 @@ use tracing::{error, info};
 
 use crate::backends::MediaBackend;
 use crate::backends::jellyfin::JellyfinBackend;
-use crate::backends::plex::{PlexAuth, PlexBackend, PlexPin};
+use crate::backends::plex::{PlexAuth, PlexPin};
 use crate::db::connection::DatabaseConnection;
-use crate::models::{Credentials, Source, SourceId};
+use crate::models::{Credentials, SourceId};
 use crate::services::commands::Command;
 use crate::services::commands::auth_commands::CreateSourceCommand;
 
@@ -731,8 +731,7 @@ impl AsyncComponent for AuthDialog {
 
                 let sender_clone = sender.clone();
                 sender.oneshot_command(async move {
-                    use crate::backends::plex::{PlexBackend, PlexServer};
-                    use crate::services::core::auth::AuthService;
+                    use crate::backends::plex::PlexBackend;
 
                     // Discover available servers
                     let servers = match PlexAuth::discover_servers(&token).await {

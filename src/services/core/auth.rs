@@ -2,15 +2,10 @@ use anyhow::{Context, Result};
 use keyring::Entry;
 use tracing::{debug, info};
 
-use crate::backends::jellyfin::JellyfinBackend;
-use crate::backends::local::LocalBackend;
-use crate::backends::plex::PlexBackend;
 use crate::backends::traits::MediaBackend;
 use crate::db::connection::DatabaseConnection;
 use crate::db::entities::SourceModel;
-use crate::db::repository::{
-    Repository, SourceRepositoryImpl, source_repository::SourceRepository,
-};
+use crate::db::repository::{Repository, SourceRepositoryImpl};
 use crate::models::Credentials;
 use crate::models::auth_provider::{ConnectionInfo, Source, SourceType};
 use crate::models::{SourceId, User};

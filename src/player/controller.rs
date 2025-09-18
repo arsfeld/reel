@@ -2,7 +2,7 @@ use anyhow::Result;
 use gtk4;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use super::{Player, PlayerState};
 use crate::config::Config;

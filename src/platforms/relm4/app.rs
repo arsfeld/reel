@@ -1,9 +1,7 @@
 use super::components::MainWindow;
-use crate::db::{Database, DatabaseConnection};
-use gtk::gio;
+use crate::db::Database;
 use libadwaita as adw;
 use libadwaita::prelude::*;
-use relm4::gtk;
 use relm4::prelude::*;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
