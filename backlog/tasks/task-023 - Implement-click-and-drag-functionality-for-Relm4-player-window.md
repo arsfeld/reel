@@ -1,9 +1,10 @@
 ---
 id: task-023
 title: Implement click and drag functionality for Relm4 player window
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-15 03:37'
+updated_date: '2025-09-18 02:51'
 labels:
   - ui
   - player
