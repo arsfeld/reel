@@ -13,7 +13,9 @@ mod player;
 mod services;
 // State module removed in Relm4 migration - components manage their own state
 // mod state;
+mod ui;
 mod utils;
+mod workers;
 
 fn main() -> Result<()> {
     use core::frontend::Frontend;

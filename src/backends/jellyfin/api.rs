@@ -14,6 +14,7 @@ use crate::models::{
 const JELLYFIN_CLIENT_NAME: &str = "Reel";
 const JELLYFIN_VERSION: &str = "0.1.0";
 
+#[allow(dead_code)] // Used internally by JellyfinBackend
 #[derive(Clone)]
 pub struct JellyfinApi {
     client: reqwest::Client,
@@ -1510,6 +1511,7 @@ impl JellyfinApi {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ServerInfo {
@@ -1523,6 +1525,7 @@ struct AuthRequest {
     pw: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct AuthResponse {
@@ -1530,6 +1533,7 @@ pub struct AuthResponse {
     pub access_token: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct QuickConnectState {
@@ -1539,12 +1543,14 @@ pub struct QuickConnectState {
     pub date_added: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct QuickConnectResult {
     pub authenticated: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct JellyfinUser {
@@ -1553,12 +1559,14 @@ pub struct JellyfinUser {
     pub primary_image_tag: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct ViewsResponse {
     items: Vec<JellyfinView>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct JellyfinView {
@@ -1568,12 +1576,14 @@ struct JellyfinView {
     primary_image_tag: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct ItemsResponse {
     items: Vec<JellyfinItem>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct JellyfinItem {
@@ -1601,12 +1611,14 @@ pub struct JellyfinItem {
     people: Option<Vec<BaseItemPerson>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "PascalCase")]
 struct ImageTags {
     primary: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct UserData {
@@ -1620,6 +1632,7 @@ struct UserData {
     playback_position_ticks: Option<u64>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 struct BaseItemPerson {
@@ -1631,6 +1644,7 @@ struct BaseItemPerson {
     primary_image_tag: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct MediaSegment {
@@ -1651,18 +1665,21 @@ pub enum MediaSegmentType {
     Other,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct MediaSegmentsResponse {
     items: Vec<MediaSegment>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlaybackInfoResponse {
     media_sources: Vec<MediaSource>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct MediaSource {
@@ -1674,6 +1691,7 @@ struct MediaSource {
     media_streams: Vec<MediaStream>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct MediaStream {

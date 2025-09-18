@@ -13,15 +13,14 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
-use super::traits::{
-    BackendInfo, BackendType, ConnectionType, MediaBackend, SearchResults, WatchStatus,
-};
+use super::traits::MediaBackend;
 use crate::models::{
-    AuthProvider, BackendId, Credentials, Episode, HomeSection, Library, LibraryId, MediaItem,
-    MediaItemId, Movie, Season, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
+    AuthProvider, BackendId, Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId,
+    Movie, Season, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
 };
 use crate::services::core::auth::AuthService;
 
+#[allow(dead_code)] // Used via dynamic dispatch in BackendService
 pub struct JellyfinBackend {
     base_url: Arc<RwLock<Option<String>>>,
     api_key: Arc<RwLock<Option<String>>>,
@@ -368,10 +367,6 @@ impl MediaBackend for JellyfinBackend {
         }
     }
 
-    async fn is_initialized(&self) -> bool {
-        self.api.read().await.is_some()
-    }
-
     async fn authenticate(&self, credentials: Credentials) -> Result<User> {
         match credentials {
             Credentials::UsernamePassword { username, password } => {
@@ -562,129 +557,20 @@ impl MediaBackend for JellyfinBackend {
         Ok(())
     }
 
-    async fn mark_watched(&self, media_id: &MediaItemId) -> Result<()> {
-        let api = self.ensure_api_initialized().await?;
-        let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
-        api.mark_as_watched(&jellyfin_item_id).await
-    }
-
-    async fn mark_unwatched(&self, media_id: &MediaItemId) -> Result<()> {
-        let api = self.ensure_api_initialized().await?;
-        let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
-        api.mark_as_unwatched(&jellyfin_item_id).await
-    }
-
-    async fn get_watch_status(&self, media_id: &MediaItemId) -> Result<WatchStatus> {
-        let api = self.ensure_api_initialized().await?;
-        let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
-
-        api.get_watch_status(&jellyfin_item_id).await
-    }
-
-    async fn search(&self, query: &str) -> Result<SearchResults> {
-        let api = self.ensure_api_initialized().await?;
-
-        let items = api.search(query).await?;
-
-        let mut movies = Vec::new();
-        let mut shows = Vec::new();
-        let mut episodes = Vec::new();
-
-        for item in items {
-            match item {
-                MediaItem::Movie(movie) => movies.push(movie),
-                MediaItem::Show(show) => shows.push(show),
-                MediaItem::Episode(episode) => episodes.push(episode),
-                _ => {}
-            }
-        }
-
-        Ok(SearchResults {
-            movies,
-            shows,
-            episodes,
-        })
-    }
-
-    async fn find_next_episode(&self, current_episode: &Episode) -> Result<Option<Episode>> {
-        let api = self.ensure_api_initialized().await?;
-
-        api.find_next_episode(current_episode).await
-    }
+    // Removed unused methods: mark_watched, mark_unwatched, get_watch_status, search, find_next_episode
 
     async fn get_backend_id(&self) -> BackendId {
         BackendId::new(&self.backend_id)
     }
 
-    async fn get_last_sync_time(&self) -> Option<DateTime<Utc>> {
-        *self.last_sync_time.read().await
-    }
-
-    async fn supports_offline(&self) -> bool {
-        true
-    }
+    // Removed unused methods: get_last_sync_time, supports_offline
 
     async fn get_home_sections(&self) -> Result<Vec<HomeSection>> {
         let api = self.ensure_api_initialized().await?;
         api.get_home_sections().await
     }
 
-    async fn fetch_media_markers(
-        &self,
-        media_id: &MediaItemId,
-    ) -> Result<(
-        Option<crate::models::ChapterMarker>,
-        Option<crate::models::ChapterMarker>,
-    )> {
-        let api = self.ensure_api_initialized().await?;
-
-        let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
-        if let Ok(segments) = api.get_media_segments(&jellyfin_item_id).await {
-            let mut intro = None;
-            let mut credits = None;
-
-            for segment in segments {
-                match segment.segment_type {
-                    crate::backends::jellyfin::api::MediaSegmentType::Intro => {
-                        intro = Some(crate::models::ChapterMarker {
-                            start_time: Duration::from_secs(segment.start_ticks / 10_000_000),
-                            end_time: Duration::from_secs(segment.end_ticks / 10_000_000),
-                            marker_type: crate::models::ChapterType::Intro,
-                        });
-                    }
-                    crate::backends::jellyfin::api::MediaSegmentType::Credits
-                    | crate::backends::jellyfin::api::MediaSegmentType::Outro => {
-                        credits = Some(crate::models::ChapterMarker {
-                            start_time: Duration::from_secs(segment.start_ticks / 10_000_000),
-                            end_time: Duration::from_secs(segment.end_ticks / 10_000_000),
-                            marker_type: crate::models::ChapterType::Credits,
-                        });
-                    }
-                    _ => {}
-                }
-            }
-
-            Ok((intro, credits))
-        } else {
-            Ok((None, None))
-        }
-    }
-
-    async fn get_backend_info(&self) -> BackendInfo {
-        let server_name = self.server_name.read().await.clone();
-        BackendInfo {
-            name: self.backend_id.clone(),
-            display_name: server_name
-                .clone()
-                .unwrap_or_else(|| "Jellyfin".to_string()),
-            backend_type: BackendType::Jellyfin,
-            server_name,
-            server_version: None,
-            connection_type: ConnectionType::Remote,
-            is_local: false,
-            is_relay: false,
-        }
-    }
+    // Removed unused methods: fetch_media_markers, get_backend_info
 }
 
 #[cfg(test)]

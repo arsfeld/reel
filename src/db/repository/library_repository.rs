@@ -90,7 +90,7 @@ impl Repository<LibraryModel> for LibraryRepositoryImpl {
 
     async fn delete(&self, id: &str) -> Result<()> {
         // Get entity details before deleting
-        let entity = self.find_by_id(id).await?;
+        let _entity = self.find_by_id(id).await?;
 
         Library::delete_by_id(id)
             .exec(self.base.db.as_ref())
@@ -130,7 +130,7 @@ impl LibraryRepository for LibraryRepositoryImpl {
             let mut active_model: LibraryActiveModel = library.into();
             active_model.item_count = Set(count);
             active_model.updated_at = Set(chrono::Utc::now().naive_utc());
-            let updated_library = active_model.update(self.base.db.as_ref()).await?;
+            let _updated_library = active_model.update(self.base.db.as_ref()).await?;
 
             // TODO: Broadcast via MessageBroker when needed
             // BROKER.notify_library_updated(updated_library.id.clone()).await;

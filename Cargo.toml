@@ -9,22 +9,18 @@ repository = "https://github.com/arsfeld/reel"
 keywords = ["media", "player", "plex", "jellyfin", "gnome"]
 categories = ["multimedia", "gui"]
 
-[features]
-default = ["relm4"]
-relm4 = ["dep:relm4", "dep:relm4-components", "dep:relm4-icons", "dep:gtk4", "dep:gdk4", "dep:libadwaita", "dep:tracker"]
-
 [dependencies]
 # GTK and UI (required for Relm4)
-gtk4 = { version = "0.10", features = ["v4_14"], optional = true }
-gdk4 = { version = "0.10", features = ["v4_14"], optional = true }
-gdk-pixbuf = { version = "0.21", optional = true }
-libadwaita = { version = "0.8", features = ["v1_5"], optional = true }
+gtk4 = { version = "0.10", features = ["v4_14"] }
+gdk4 = { version = "0.10", features = ["v4_14"] }
+gdk-pixbuf = { version = "0.21" }
+libadwaita = { version = "0.8", features = ["v1_5"] }
 
-# Relm4 (optional for relm4 feature)
-relm4 = { version = "0.10", optional = true }
-relm4-components = { version = "0.10", optional = true }
-relm4-icons = { version = "0.10", optional = true }
-tracker = { version = "0.2", optional = true }
+# Relm4
+relm4 = { version = "0.10" }
+relm4-components = { version = "0.10" }
+relm4-icons = { version = "0.10" }
+tracker = { version = "0.2" }
 
 # Media playback
 gstreamer = "0.24"
@@ -90,7 +86,7 @@ tempfile = "3.22"
 criterion = "0.7"
 
 [build-dependencies]
-glib-build-tools = { version = "0.21", optional = true }
+glib-build-tools = { version = "0.21" }
 
 [profile.release]
 lto = true

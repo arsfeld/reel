@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
@@ -6,14 +6,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-use super::traits::{MediaBackend, SearchResults};
+use super::traits::MediaBackend;
 use crate::models::{
-    AuthProvider, BackendId, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season,
-    Show, ShowId, Source, StreamInfo, User,
+    BackendId, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season, Show, ShowId,
+    StreamInfo, User,
 };
 // Stateful services removed during Relm4 migration
 // use crate::services::{AuthManager, DataService};
 
+#[allow(dead_code)] // Placeholder for future local files support
 #[derive(Debug)]
 pub struct LocalBackend {
     media_directories: Arc<RwLock<Vec<PathBuf>>>,
@@ -22,22 +23,8 @@ pub struct LocalBackend {
 }
 
 impl LocalBackend {
-    /// Create from AuthProvider and Source
-    pub fn from_auth(_provider: AuthProvider, source: Source) -> Result<Self> {
-        // Extract path from source
-        let path = match source.source_type {
-            crate::models::SourceType::LocalFolder { path } => path,
-            _ => return Err(anyhow!("Invalid source type for LocalBackend")),
-        };
-
-        let backend = Self {
-            media_directories: Arc::new(RwLock::new(vec![path])),
-            backend_id: source.id,
-            last_scan_time: Arc::new(RwLock::new(None)),
-        };
-
-        Ok(backend)
-    }
+    // from_auth method removed - never used
+    // Local backend is mostly unimplemented placeholder
 }
 
 #[async_trait]
@@ -62,10 +49,6 @@ impl MediaBackend for LocalBackend {
             email: None,
             avatar_url: None,
         }))
-    }
-
-    async fn is_initialized(&self) -> bool {
-        !self.media_directories.read().await.is_empty()
     }
 
     async fn authenticate(&self, _credentials: Credentials) -> Result<User> {
@@ -130,41 +113,13 @@ impl MediaBackend for LocalBackend {
         todo!("Local progress tracking not yet implemented")
     }
 
-    async fn mark_watched(&self, _media_id: &MediaItemId) -> Result<()> {
-        // TODO: Store watched status locally
-        todo!("Local mark watched not yet implemented")
-    }
-
-    async fn mark_unwatched(&self, _media_id: &MediaItemId) -> Result<()> {
-        // TODO: Store unwatched status locally
-        todo!("Local mark unwatched not yet implemented")
-    }
-
-    async fn get_watch_status(
-        &self,
-        _media_id: &MediaItemId,
-    ) -> Result<super::traits::WatchStatus> {
-        // TODO: Get watch status from local storage
-        todo!("Local get watch status not yet implemented")
-    }
-
-    async fn search(&self, _query: &str) -> Result<SearchResults> {
-        // TODO: Search local files
-        todo!("Local search not yet implemented")
-    }
+    // Removed unused methods: mark_watched, mark_unwatched, get_watch_status, search
 
     async fn get_backend_id(&self) -> BackendId {
         BackendId::new(&self.backend_id)
     }
 
-    async fn get_last_sync_time(&self) -> Option<DateTime<Utc>> {
-        // For local backend, we return the last scan time
-        *self.last_scan_time.read().await
-    }
-
-    async fn supports_offline(&self) -> bool {
-        true // Local files are always available offline
-    }
+    // Removed unused methods: get_last_sync_time, supports_offline
 }
 
 #[cfg(test)]

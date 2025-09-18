@@ -23,6 +23,7 @@ struct PlexPinResponse {
     auth_token: Option<String>,
 }
 
+#[allow(dead_code)]
 pub struct PlexAuth;
 
 impl PlexAuth {
