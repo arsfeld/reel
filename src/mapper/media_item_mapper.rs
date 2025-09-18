@@ -345,6 +345,59 @@ impl MediaItem {
             _ => (None, None),
         };
 
+        // Build metadata JSON with type-specific fields
+        let metadata = match self {
+            MediaItem::Movie(movie) => {
+                serde_json::json!({
+                    "cast": movie.cast,
+                    "crew": movie.crew,
+                    "watched": movie.watched,
+                    "view_count": movie.view_count,
+                    "last_watched_at": movie.last_watched_at.map(|dt| dt.to_rfc3339()),
+                    "playback_position_ms": movie.playback_position.map(|d| d.as_millis() as u64),
+                })
+            }
+            MediaItem::Show(show) => {
+                serde_json::json!({
+                    "seasons": show.seasons,
+                    "cast": show.cast,
+                    "watched_episode_count": show.watched_episode_count,
+                    "total_episode_count": show.total_episode_count,
+                    "last_watched_at": show.last_watched_at.map(|dt| dt.to_rfc3339()),
+                })
+            }
+            MediaItem::Episode(episode) => {
+                serde_json::json!({
+                    "watched": episode.watched,
+                    "view_count": episode.view_count,
+                    "last_watched_at": episode.last_watched_at.map(|dt| dt.to_rfc3339()),
+                    "playback_position_ms": episode.playback_position.map(|d| d.as_millis() as u64),
+                    "air_date": episode.air_date.map(|dt| dt.to_rfc3339()),
+                    "show_title": episode.show_title,
+                    "show_poster_url": episode.show_poster_url,
+                })
+            }
+            MediaItem::MusicAlbum(album) => {
+                serde_json::json!({
+                    "artist": album.artist,
+                    "track_count": album.track_count,
+                    "total_duration_ms": album.duration.as_millis() as u64,
+                })
+            }
+            MediaItem::MusicTrack(track) => {
+                serde_json::json!({
+                    "artist": track.artist,
+                    "album": track.album,
+                    "track_number": track.track_number,
+                })
+            }
+            MediaItem::Photo(photo) => {
+                serde_json::json!({
+                    "date_taken": photo.date_taken.map(|dt| dt.to_rfc3339()),
+                })
+            }
+        };
+
         MediaItemModel {
             id: self.id().to_string(),
             source_id: source_id.to_string(),
@@ -364,7 +417,7 @@ impl MediaItem {
             sort_title: Some(title),
             added_at: Some(chrono::Utc::now().naive_utc()),
             updated_at: chrono::Utc::now().naive_utc(),
-            metadata: serde_json::to_value(self).ok(),
+            metadata: Some(metadata),
         }
     }
 }

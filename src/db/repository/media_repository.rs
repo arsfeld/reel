@@ -216,8 +216,29 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
     }
 
     async fn update(&self, entity: MediaItemModel) -> Result<MediaItemModel> {
-        let mut active_model: MediaItemActiveModel = entity.clone().into();
-        active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+        // Manually create ActiveModel with all fields explicitly set to ensure proper update
+        // The auto-generated From implementation doesn't properly mark all fields as Set
+        let active_model = MediaItemActiveModel {
+            id: Set(entity.id.clone()),
+            library_id: Set(entity.library_id.clone()),
+            source_id: Set(entity.source_id.clone()),
+            media_type: Set(entity.media_type.clone()),
+            title: Set(entity.title.clone()),
+            sort_title: Set(entity.sort_title.clone()),
+            year: Set(entity.year),
+            duration_ms: Set(entity.duration_ms),
+            rating: Set(entity.rating),
+            poster_url: Set(entity.poster_url.clone()),
+            backdrop_url: Set(entity.backdrop_url.clone()),
+            overview: Set(entity.overview.clone()),
+            genres: Set(entity.genres.clone()),
+            added_at: Set(entity.added_at),
+            updated_at: Set(chrono::Utc::now().naive_utc()),
+            metadata: Set(entity.metadata.clone()),
+            parent_id: Set(entity.parent_id.clone()),
+            season_number: Set(entity.season_number),
+            episode_number: Set(entity.episode_number),
+        };
 
         let result = active_model.update(self.base.db.as_ref()).await?;
 

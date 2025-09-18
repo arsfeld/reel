@@ -1,6 +1,7 @@
 use crate::models::{
     Episode, MediaItem, Movie, MusicAlbum, MusicTrack, Person, Photo, Season, Show,
 };
+use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -94,6 +95,9 @@ impl Related<Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+// Type alias for convenience
+pub type MediaItemActiveModel = ActiveModel;
 
 // Media type enum for type safety
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
