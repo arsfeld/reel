@@ -10,10 +10,14 @@ use super::dialogs::{
 use super::pages::{
     HomePage, LibraryPage, MovieDetailsPage, PlayerPage, ShowDetailsPage, SourcesPage,
 };
-use super::sidebar::{Sidebar, SidebarInput, SidebarOutput};
+use super::sidebar::{ConnectionState, Sidebar, SidebarInput, SidebarOutput};
 use crate::db::connection::DatabaseConnection;
 use crate::models::{LibraryId, MediaItemId, PlaylistContext, SourceId};
-use crate::workers::{ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput};
+use crate::workers::{
+    ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput, SyncWorker,
+    SyncWorkerInput, SyncWorkerOutput,
+};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct MainWindow {
@@ -21,6 +25,7 @@ pub struct MainWindow {
     sidebar: Controller<Sidebar>,
     home_page: AsyncController<HomePage>,
     connection_monitor: relm4::WorkerController<ConnectionMonitor>,
+    sync_worker: relm4::WorkerController<SyncWorker>,
     library_page: Option<AsyncController<LibraryPage>>,
     movie_details_page: Option<AsyncController<MovieDetailsPage>>,
     show_details_page: Option<AsyncController<ShowDetailsPage>>,
@@ -98,7 +103,7 @@ impl AsyncComponent for MainWindow {
     type Init = DatabaseConnection;
     type Input = MainWindowInput;
     type Output = MainWindowOutput;
-    type CommandOutput = (bool, usize, Option<String>);
+    type CommandOutput = Vec<crate::models::Source>;
 
     view! {
         #[root]
@@ -352,12 +357,54 @@ impl AsyncComponent for MainWindow {
         // Start monitoring connections periodically
         ConnectionMonitor::start_monitoring(connection_monitor.sender().clone());
 
+        // Initialize the SyncWorker
+        let sync_worker = SyncWorker::builder()
+            .detach_worker(Arc::new(db.clone()))
+            .forward(sender.input_sender(), |output| match output {
+                SyncWorkerOutput::SyncStarted { source_id, .. } => {
+                    tracing::info!("Sync started for source: {:?}", source_id);
+                    MainWindowInput::ShowToast(format!("Syncing source..."))
+                }
+                SyncWorkerOutput::SyncProgress(progress) => {
+                    tracing::debug!(
+                        "Sync progress for {:?}: {}/{}",
+                        progress.source_id,
+                        progress.current,
+                        progress.total
+                    );
+                    // Could be used to update UI progress indicators
+                    MainWindowInput::ShowToast(progress.message)
+                }
+                SyncWorkerOutput::SyncCompleted {
+                    source_id,
+                    items_synced,
+                    ..
+                } => {
+                    tracing::info!("Sync completed for {:?}: {} items", source_id, items_synced);
+                    MainWindowInput::ShowToast(format!(
+                        "Sync completed: {} items synced",
+                        items_synced
+                    ))
+                }
+                SyncWorkerOutput::SyncFailed {
+                    source_id, error, ..
+                } => {
+                    tracing::error!("Sync failed for {:?}: {}", source_id, error);
+                    MainWindowInput::ShowToast(format!("Sync failed: {}", error))
+                }
+                SyncWorkerOutput::SyncCancelled { source_id } => {
+                    tracing::info!("Sync cancelled for {:?}", source_id);
+                    MainWindowInput::ShowToast("Sync cancelled".to_string())
+                }
+            });
+
         let mut model = Self {
             db,
             sidebar,
             home_page,
             auth_dialog,
             connection_monitor,
+            sync_worker,
             library_page: None,
             movie_details_page: None,
             show_details_page: None,
@@ -539,11 +586,9 @@ impl AsyncComponent for MainWindow {
                             // Wait a moment for the UI to fully initialize
                             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-                            use crate::models::SourceId;
                             use crate::services::commands::{
                                 Command, auth_commands::LoadSourcesCommand,
                             };
-                            use crate::services::core::backend::BackendService;
 
                             let cmd = LoadSourcesCommand {
                                 db: db_clone.clone(),
@@ -554,56 +599,23 @@ impl AsyncComponent for MainWindow {
                                         "Found {} sources to sync on startup",
                                         sources.len()
                                     );
-                                    let mut any_synced = false;
-                                    for source in sources {
-                                        let source_id = SourceId::new(source.id.clone());
-                                        tracing::info!(
-                                            "Starting startup sync for source: {}",
-                                            source.name
-                                        );
-
-                                        // Sync the source in the background
-                                        match BackendService::sync_source(&db_clone, &source_id)
-                                            .await
-                                        {
-                                            Ok(sync_result) => {
-                                                tracing::info!(
-                                                    "Source {} sync completed: {} items synced",
-                                                    source.name,
-                                                    sync_result.items_synced
-                                                );
-                                                any_synced = true;
-                                            }
-                                            Err(e) => {
-                                                tracing::error!(
-                                                    "Failed to sync source {}: {}",
-                                                    source.name,
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-
-                                    // After all syncs complete, refresh the sidebar
-                                    if any_synced {
-                                        // We'll handle the refresh after this command completes
-                                    }
+                                    // Return the sources to be synced
+                                    sources
                                 }
                                 Err(e) => {
                                     tracing::error!(
                                         "Failed to load sources for initial sync: {}",
                                         e
                                     );
+                                    Vec::new()
                                 }
                             }
-                            // Return a dummy value since this is just startup sync
-                            (true, 0, None)
                         });
 
                         // Schedule a delayed sidebar refresh since sources might sync
                         let sender_clone = sender.clone();
                         relm4::spawn_local(async move {
-                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                             sender_clone
                                 .input(MainWindowInput::Navigate("refresh_sidebar".to_string()));
                         });
@@ -750,6 +762,10 @@ impl AsyncComponent for MainWindow {
                                         crate::ui::pages::sources::SourcesPageOutput::OpenAuthDialog => {
                                             tracing::info!("Opening auth dialog for adding source");
                                             MainWindowInput::Navigate("auth_dialog".to_string())
+                                        }
+                                        crate::ui::pages::sources::SourcesPageOutput::SyncSource(source_id) => {
+                                            tracing::info!("Source page requesting sync for: {:?}", source_id);
+                                            MainWindowInput::SyncSource(source_id)
                                         }
                                     });
 
@@ -1222,41 +1238,23 @@ impl AsyncComponent for MainWindow {
             MainWindowInput::SyncSource(source_id) => {
                 tracing::info!("Syncing new source: {:?}", source_id);
 
-                // Show toast notification for sync start
-                sender.input(MainWindowInput::ShowToast(
-                    "Source added successfully. Starting sync...".to_string(),
-                ));
-
-                // Trigger sync in background
-                let db = self.db.clone();
-                let source_id_clone = source_id.clone();
-
-                sender.oneshot_command(async move {
-                    use crate::services::core::backend::BackendService;
-
-                    // Sync the source
-                    match BackendService::sync_source(&db, &source_id_clone).await {
-                        Ok(sync_result) => {
-                            tracing::info!(
-                                "Source sync completed: {} items synced",
-                                sync_result.items_synced
-                            );
-                            // Return the result to be handled in the command output
-                            (true, sync_result.items_synced, None)
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to sync source: {}", e);
-                            // Return the error to be handled in the command output
-                            (false, 0, Some(e.to_string()))
-                        }
-                    }
-                });
+                // Trigger sync using the SyncWorker
+                self.sync_worker
+                    .sender()
+                    .send(SyncWorkerInput::StartSync {
+                        source_id: source_id.clone(),
+                        library_id: None,
+                        force: false,
+                    })
+                    .unwrap_or_else(|e| {
+                        tracing::error!("Failed to send sync command to worker: {:?}", e);
+                    });
 
                 // Schedule UI refresh after sync completes
                 let sender_clone = sender.clone();
                 relm4::spawn_local(async move {
                     // Wait for sync to complete (approximate time)
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                     sender_clone.input(MainWindowInput::Navigate("refresh_sidebar".to_string()));
                     sender_clone.input(MainWindowInput::Navigate(
                         "refresh_sources_page".to_string(),
@@ -1363,11 +1361,13 @@ impl AsyncComponent for MainWindow {
             }
             MainWindowInput::ConnectionStatusChanged { source_id, status } => {
                 // Handle connection status changes
-                let is_connected = matches!(status, ConnectionStatus::Connected(_));
-                let status_text = match &status {
+                let (connection_state, status_text) = match &status {
                     ConnectionStatus::Connected(url) => {
                         tracing::info!("Source {} connected at {}", source_id, url);
-                        format!("Source {} connected", source_id)
+                        (
+                            ConnectionState::Connected,
+                            format!("Source {} connected", source_id),
+                        )
                     }
                     ConnectionStatus::Disconnected => {
                         tracing::warn!("Source {} disconnected", source_id);
@@ -1375,11 +1375,18 @@ impl AsyncComponent for MainWindow {
                             "Connection lost for source {}",
                             source_id
                         )));
-                        format!("Source {} disconnected", source_id)
+                        (
+                            ConnectionState::Disconnected,
+                            format!("Source {} disconnected", source_id),
+                        )
                     }
                     ConnectionStatus::Reconnecting => {
                         tracing::info!("Source {} is reconnecting", source_id);
-                        format!("Reconnecting to source {}", source_id)
+                        // During reconnecting, show as disconnected
+                        (
+                            ConnectionState::Disconnected,
+                            format!("Reconnecting to source {}", source_id),
+                        )
                     }
                 };
 
@@ -1396,7 +1403,7 @@ impl AsyncComponent for MainWindow {
                     .sender()
                     .send(SidebarInput::UpdateSourceConnectionStatus {
                         source_id: source_id.clone(),
-                        is_connected,
+                        state: connection_state,
                     })
                     .unwrap_or_else(|e| {
                         tracing::error!("Failed to update source connection indicator: {:?}", e);
@@ -1404,6 +1411,8 @@ impl AsyncComponent for MainWindow {
 
                 // If we have a sources page open, update it too
                 if let Some(ref sources_page) = self.sources_page {
+                    // Convert ConnectionState to boolean for sources page (which shows detailed sync status separately)
+                    let is_connected = !matches!(connection_state, ConnectionState::Disconnected);
                     sources_page
                         .sender()
                         .send(
@@ -1440,21 +1449,26 @@ impl AsyncComponent for MainWindow {
 
     async fn update_cmd(
         &mut self,
-        message: Self::CommandOutput,
-        sender: AsyncComponentSender<Self>,
+        sources: Self::CommandOutput,
+        _sender: AsyncComponentSender<Self>,
         _root: &Self::Root,
     ) {
-        let (success, items_synced, error) = message;
-        if success {
-            sender.input(MainWindowInput::ShowToast(format!(
-                "Sync completed! {} items added to your library",
-                items_synced
-            )));
-        } else if let Some(error_msg) = error {
-            sender.input(MainWindowInput::ShowToast(format!(
-                "Sync failed: {}",
-                error_msg
-            )));
+        // Start sync for all loaded sources using SyncWorker
+        for source in sources {
+            let source_id = SourceId::new(source.id.clone());
+            tracing::info!("Starting startup sync for source: {}", source.name);
+
+            // Trigger sync using the SyncWorker
+            self.sync_worker
+                .sender()
+                .send(SyncWorkerInput::StartSync {
+                    source_id,
+                    library_id: None,
+                    force: false,
+                })
+                .unwrap_or_else(|e| {
+                    tracing::error!("Failed to send sync command to worker: {:?}", e);
+                });
         }
     }
 }

@@ -8,6 +8,7 @@ use crate::db::connection::DatabaseConnection;
 use crate::db::entities::SyncStatusModel;
 use crate::db::repository::{
     Repository,
+    source_repository::{SourceRepository, SourceRepositoryImpl},
     sync_repository::{SyncRepository, SyncRepositoryImpl},
 };
 use crate::models::{Library, MediaItem, SourceId};
@@ -110,6 +111,10 @@ impl SyncService {
                     Some(chrono::Utc::now().naive_utc()),
                 )
                 .await?;
+
+                // Update the source's last_sync timestamp
+                let source_repo = SourceRepositoryImpl::new(db.clone());
+                source_repo.update_last_sync(source_id.as_str()).await?;
 
                 // Notify sync completed
                 BROKER

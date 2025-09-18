@@ -30,6 +30,9 @@ pub enum SyncWorkerInput {
     StopAllSyncs,
     SetSyncInterval(Duration),
     EnableAutoSync(bool),
+    RecordSuccessfulSync {
+        source_id: SourceId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +58,7 @@ pub enum SyncWorkerOutput {
     },
 }
 
+#[derive(Debug)]
 pub struct SyncWorker {
     db: Arc<DatabaseConnection>,
     active_syncs: HashMap<SourceId, relm4::JoinHandle<()>>,
@@ -81,6 +85,7 @@ impl SyncWorker {
         _force: bool,
         sender: ComponentSender<SyncWorker>,
     ) {
+        info!("perform_sync called for source: {:?}", source_id);
         let start_time = Instant::now();
 
         // Send sync started
@@ -91,19 +96,41 @@ impl SyncWorker {
             })
             .ok();
 
+        info!("Calling BackendService::sync_source for {:?}", source_id);
         // Call actual sync service using stateless BackendService
         match BackendService::sync_source(&db, &source_id).await {
             Ok(sync_result) => {
+                info!(
+                    "Sync succeeded for {:?}: {} items",
+                    source_id, sync_result.items_synced
+                );
+
+                // Send the sync completed output
                 sender
                     .output(SyncWorkerOutput::SyncCompleted {
-                        source_id,
+                        source_id: source_id.clone(),
                         library_id,
                         items_synced: sync_result.items_synced,
                         duration: start_time.elapsed(),
                     })
                     .ok();
+
+                // Record successful sync time to prevent too-frequent retries
+                let _ = sender.input(SyncWorkerInput::RecordSuccessfulSync {
+                    source_id: source_id.clone(),
+                });
             }
             Err(e) => {
+                tracing::error!("Sync failed for {:?}: {}", source_id, e);
+                // Log the error chain for debugging
+                let mut error_chain = vec![e.to_string()];
+                let mut source = e.source();
+                while let Some(err) = source {
+                    error_chain.push(err.to_string());
+                    source = err.source();
+                }
+                tracing::error!("Error chain for {:?}: {:?}", source_id, error_chain);
+
                 sender
                     .output(SyncWorkerOutput::SyncFailed {
                         source_id,
@@ -141,13 +168,25 @@ impl SyncWorker {
         }
 
         // Start new sync
+        info!("Starting async sync task for source: {:?}", source_id);
         let db = self.db.clone();
         let source_id_clone = source_id.clone();
+        let source_id_clone2 = source_id.clone();
         let handle = relm4::spawn(async move {
+            info!(
+                "Async sync task starting for source: {:?}",
+                source_id_clone2
+            );
             Self::perform_sync(db, source_id_clone, library_id, force, sender).await;
+            info!(
+                "Async sync task completed for source: {:?}",
+                source_id_clone2
+            );
         });
 
         self.active_syncs.insert(source_id.clone(), handle);
+        // For now, still track when sync starts to prevent rapid retries
+        // TODO: Only track successful syncs to allow retry after failures
         self.last_sync_times.insert(source_id, Instant::now());
     }
 
@@ -182,6 +221,10 @@ impl Worker for SyncWorker {
                 library_id,
                 force,
             } => {
+                info!(
+                    "SyncWorker received StartSync request for source: {:?}, force: {}",
+                    source_id, force
+                );
                 self.start_sync(source_id, library_id, force, sender);
             }
 
@@ -208,6 +251,13 @@ impl Worker for SyncWorker {
                 if !enabled {
                     self.stop_all_syncs();
                 }
+            }
+
+            SyncWorkerInput::RecordSuccessfulSync { source_id } => {
+                // Record the time of successful sync to prevent too-frequent retries
+                self.last_sync_times
+                    .insert(source_id.clone(), Instant::now());
+                info!("Recorded successful sync time for {:?}", source_id);
             }
         }
     }

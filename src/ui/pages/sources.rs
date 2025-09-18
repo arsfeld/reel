@@ -56,6 +56,8 @@ pub enum SourcesPageInput {
 pub enum SourcesPageOutput {
     /// Open authentication dialog for adding a source
     OpenAuthDialog,
+    /// Request sync for a source
+    SyncSource(crate::models::SourceId),
 }
 
 #[derive(Debug)]
@@ -581,30 +583,22 @@ impl AsyncComponent for SourcesPage {
             }
 
             SourcesPageInput::SyncSource(source_id) => {
-                info!("Starting sync for source: {}", source_id);
-                // The broker messages will handle the UI state updates
+                info!("Requesting sync for source: {}", source_id);
 
-                let db = self.db.clone();
-                let source_id_clone = source_id.clone();
-
-                sender.oneshot_command(async move {
-                    use crate::services::core::backend::BackendService;
-
-                    // Use BackendService to sync the source
-                    match BackendService::sync_source(&db, &source_id_clone).await {
-                        Ok(sync_result) => {
-                            info!(
-                                "Source sync completed successfully: {} items synced",
-                                sync_result.items_synced
-                            );
-                            SourcesPageInput::SyncCompleted(source_id_clone, Ok(()))
-                        }
-                        Err(e) => {
-                            error!("Source sync failed: {}", e);
-                            SourcesPageInput::SyncCompleted(source_id_clone, Err(e.to_string()))
-                        }
+                // Update UI to show sync is starting
+                let mut factory_guard = self.sources_factory.guard();
+                for item in factory_guard.iter_mut() {
+                    if item.source.id == source_id.to_string() {
+                        item.is_syncing = true;
+                        item.sync_progress = Some((0, 0));
+                        item.sync_error = None;
                     }
-                });
+                }
+
+                // Send sync request to MainWindow which will use SyncWorker
+                sender
+                    .output(SourcesPageOutput::SyncSource(source_id))
+                    .unwrap();
             }
 
             SourcesPageInput::SyncCompleted(source_id, result) => {

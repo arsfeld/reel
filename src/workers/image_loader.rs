@@ -137,7 +137,6 @@ impl ImageLoader {
     ) -> Result<gtk::gdk::Texture, String> {
         // Check if file exists in cache
         if cache_path.exists() {
-            debug!("Loading image from cache: {}", request.id);
             return load_texture_from_file(&cache_path)
                 .map_err(|e| format!("Failed to load cached image: {}", e));
         }
@@ -353,11 +352,6 @@ impl ImageLoader {
         let sender_clone = sender.clone();
         let cache_key_clone = cache_key.clone();
         let id = request.id.clone();
-
-        debug!(
-            "Starting load for image {} with priority {}",
-            id, request.priority
-        );
 
         let handle = relm4::spawn(async move {
             match Self::load_image_async(req_clone.clone(), cache_path).await {
