@@ -157,16 +157,6 @@ impl ConnectionCache {
             false
         }
     }
-
-    pub async fn clear(&self) {
-        let mut cache = self.states.write().await;
-        cache.clear();
-    }
-
-    pub async fn remove(&self, source_id: &SourceId) {
-        let mut cache = self.states.write().await;
-        cache.pop(source_id);
-    }
 }
 
 impl Default for ConnectionCache {

@@ -1,0 +1,100 @@
+warning: Git tree '/home/arosenfeld/Code/gnome-reel' has uncommitted changes
+Reel Development Environment
+==================================
+
+Welcome to the development environment!
+Run 'help' to see all available commands.
+
+   Compiling reel v0.5.0 (/home/arosenfeld/Code/gnome-reel)
+src/services/core/playback.rs:2:5: warning: unused import: `std::time::Duration`
+src/services/core/playback.rs:3:5: warning: unused import: `tracing::debug`
+src/services/core/playback.rs:7:73: warning: unused import: `Repository`
+src/backends/jellyfin/mod.rs:47:12: warning: multiple associated items are never used
+src/backends/jellyfin/api.rs:14:7: warning: constant `JELLYFIN_CLIENT_NAME` is never used
+src/backends/jellyfin/api.rs:15:7: warning: constant `JELLYFIN_VERSION` is never used
+src/backends/jellyfin/api.rs:29:12: warning: multiple associated items are never used
+src/backends/jellyfin/api.rs:1523:8: warning: struct `AuthRequest` is never constructed
+src/backends/local/mod.rs:27:12: warning: associated function `from_auth` is never used
+src/backends/plex/mod.rs:45:9: warning: fields `name`, `is_local`, and `is_relay` are never read
+src/backends/plex/mod.rs:52:12: warning: multiple associated items are never used
+src/backends/plex/api.rs:41:12: warning: multiple associated items are never used
+src/backends/plex/auth.rs:8:7: warning: constant `PLEX_TV_URL` is never used
+src/backends/plex/auth.rs:9:7: warning: constant `CLIENT_ID` is never used
+src/backends/plex/auth.rs:10:7: warning: constant `PRODUCT_NAME` is never used
+src/backends/plex/auth.rs:31:18: warning: associated functions `get_pin`, `poll_for_token`, `get_user`, and `discover_servers` are never used
+src/backends/traits.rs:15:14: warning: multiple methods are never used
+src/backends/traits.rs:169:12: warning: struct `SearchResults` is never constructed
+src/backends/traits.rs:176:12: warning: struct `WatchStatus` is never constructed
+src/backends/traits.rs:184:12: warning: struct `SyncResult` is never constructed
+src/backends/traits.rs:193:10: warning: enum `BackendType` is never used
+src/backends/traits.rs:212:10: warning: enum `ConnectionType` is never used
+src/backends/traits.rs:221:12: warning: struct `BackendOfflineInfo` is never constructed
+src/backends/traits.rs:228:12: warning: struct `BackendInfo` is never constructed
+src/backends/traits.rs:240:12: warning: struct `OfflineStatus` is never constructed
+src/config.rs:192:12: warning: multiple associated items are never used
+src/constants.rs:7:11: warning: constant `SCROLL_DEBOUNCE_MS` is never used
+src/constants.rs:9:11: warning: constant `IMAGE_VIEWPORT_BUFFER` is never used
+src/constants.rs:11:11: warning: constant `CARD_BATCH_SIZE` is never used
+src/constants.rs:14:11: warning: constant `PLAYER_CONTROLS_HIDE_DELAY_SECS` is never used
+src/constants.rs:17:11: warning: constant `HOME_INITIAL_CARDS_PER_SECTION` is never used
+src/constants.rs:18:11: warning: constant `HOME_INITIAL_IMAGES_PER_SECTION` is never used
+src/core/frontend.rs:5:11: warning: trait `Frontend` is never used
+src/db/connection.rs:14:12: warning: struct `Database` is never constructed
+src/db/connection.rs:20:18: warning: multiple associated items are never used
+src/db/entities/libraries.rs:55:12: warning: associated items `as_str` and `from_str` are never used
+src/db/entities/libraries.rs:78:12: warning: method `get_library_type` is never used
+src/db/entities/media_items.rs:99:10: warning: type alias `MediaItemActiveModel` is never used
+src/db/entities/media_items.rs:113:12: warning: associated items `as_str` and `from_str` are never used
+src/db/entities/media_items.rs:138:12: warning: methods `get_media_type`, `get_metadata`, `is_episode`, `is_show`, and `get_episode_info` are never used
+src/db/entities/offline_content.rs:46:12: warning: associated items `as_str`, `from_str`, and `get_max_resolution` are never used
+src/db/entities/offline_content.rs:79:12: warning: methods `get_quality_preset`, `get_size_mb`, `file_exists`, `touch`, and `days_since_accessed` are never used
+src/db/entities/playback_progress.rs:39:12: warning: methods `get_progress_percentage`, `is_in_progress`, `is_near_completion`, `get_position_duration`, and `get_duration` are never used
+src/db/entities/sources.rs:57:12: warning: methods `is_plex`, `is_jellyfin`, and `is_local` are never used
+src/db/entities/sync_status.rs:47:12: warning: associated items `as_str` and `from_str` are never used
+src/db/entities/sync_status.rs:80:12: warning: associated items `as_str` and `from_str` are never used
+src/db/entities/sync_status.rs:101:12: warning: methods `get_sync_type`, `get_status`, `is_running`, `is_completed`, `is_failed`, and `get_duration` are never used
+src/db/migrations/mod.rs:9:12: warning: struct `Migrator` is never constructed
+src/db/migrations/m20250101_000001_create_initial_schema.rs:345:6: warning: enum `Sources` is never used
+src/db/migrations/m20250101_000001_create_initial_schema.rs:359:6: warning: enum `Libraries` is never used
+src/db/migrations/m20250101_000001_create_initial_schema.rs:372:6: warning: enum `MediaItems` is never used
+src/db/migrations/m20250101_000001_create_initial_schema.rs:393:6: warning: enum `PlaybackProgress` is never used
+src/db/migrations/m20250101_000001_create_initial_schema.rs:407:6: warning: enum `SyncStatus` is never used
+src/db/migrations/m20250101_000001_create_initial_schema.rs:420:6: warning: enum `OfflineContent` is never used
+src/db/migrations/m20250102_000001_add_episode_fields.rs:169:6: warning: enum `MediaItems` is never used
+src/db/migrations/m20250103_000001_add_source_connections.rs:79:6: warning: enum `Sources` is never used
+src/db/migrations/m20250104_000001_add_sync_total_items.rs:35:6: warning: enum `SyncStatus` is never used
+src/db/migrations/m20250105_000001_add_connection_tracking.rs:88:6: warning: enum `Sources` is never used
+src/db/repository/mod.rs:18:14: warning: methods `find_by_id`, `find_all`, `insert`, `update`, `delete`, and `count` are never used
+src/db/repository/library_repository.rs:14:11: warning: trait `LibraryRepository` is never used
+src/db/repository/library_repository.rs:32:12: warning: struct `LibraryRepositoryImpl` is never constructed
+src/db/repository/library_repository.rs:37:12: warning: associated function `new` is never used
+src/db/repository/media_repository.rs:14:11: warning: trait `MediaRepository` is never used
+src/db/repository/media_repository.rs:106:12: warning: struct `MediaRepositoryImpl` is never constructed
+src/db/repository/media_repository.rs:111:12: warning: associated items `new`, `insert_silent`, `update_silent`, and `find_episode_by_parent_season_episode` are never used
+src/db/repository/media_repository.rs:616:18: warning: methods `count_by_library`, `find_by_library_paginated`, and `find_by_library_and_type_paginated` are never used
+src/db/repository/playback_repository.rs:15:11: warning: trait `PlaybackRepository` is never used
+src/db/repository/playback_repository.rs:59:12: warning: struct `PlaybackRepositoryImpl` is never constructed
+src/db/repository/playback_repository.rs:64:12: warning: associated function `new` is never used
+src/db/repository/source_repository.rs:14:11: warning: trait `SourceRepository` is never used
+src/db/repository/source_repository.rs:60:12: warning: struct `SourceRepositoryImpl` is never constructed
+src/db/repository/source_repository.rs:65:12: warning: associated function `new` is never used
+src/db/repository/sync_repository.rs:16:14: warning: multiple methods are never used
+src/db/repository/sync_repository.rs:47:12: warning: struct `SyncStats` is never constructed
+src/events/mod.rs:9:11: warning: trait `EventHandler` is never used
+src/events/event_bus.rs:9:12: warning: struct `EventSubscriber` is never constructed
+src/events/event_bus.rs:16:12: warning: associated items `new`, `recv`, and `try_recv` are never used
+src/events/event_bus.rs:59:12: warning: struct `EventFilter` is never constructed
+src/events/event_bus.rs:72:12: warning: associated items `new`, `with_types`, `with_sources`, `with_min_priority`, and `matches` are never used
+src/events/event_bus.rs:124:12: warning: struct `EventBus` is never constructed
+src/events/event_bus.rs:132:12: warning: struct `EventBusStats` is never constructed
+src/events/event_bus.rs:142:12: warning: multiple associated items are never used
+src/events/types.rs:18:12: warning: associated items `new`, `with_source`, `with_priority`, and `with_metadata` are never used
+src/events/types.rs:218:12: warning: method `as_str` is never used
+src/mapper/media_item_mapper.rs:9:12: warning: struct `DurationTransformer` is never constructed
+src/mapper/media_item_mapper.rs:13:12: warning: associated functions `from_millis` and `to_millis` are never used
+src/mapper/media_item_mapper.rs:24:12: warning: struct `DateTimeTransformer` is never constructed
+src/mapper/media_item_mapper.rs:28:12: warning: associated functions `from_rfc3339` and `from_naive` are never used
+src/mapper/media_item_mapper.rs:39:12: warning: struct `JsonTransformer` is never constructed
+src/mapper/media_item_mapper.rs:43:12: warning: associated functions `extract` and `extract_genres` are never used
+src/mapper/media_item_mapper.rs:236:12: warning: method `to_model` is never used
+src/mapper/traits.rs:6:11: warning: trait `Mapper` is never used

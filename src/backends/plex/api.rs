@@ -12,12 +12,14 @@ use crate::models::{
 };
 
 // Plex Identity response for getting server machine ID
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlexIdentityResponse {
     media_container: PlexIdentityContainer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlexIdentityContainer {
@@ -27,6 +29,7 @@ struct PlexIdentityContainer {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // Used internally by PlexBackend
 pub struct PlexApi {
     client: reqwest::Client,
     base_url: String,
@@ -1171,24 +1174,28 @@ impl PlexApi {
 
 // Plex API Response Types
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlexMetadataResponse {
     media_container: PlexMetadataContainer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexMetadataContainer {
     #[serde(rename = "Metadata", default)]
     metadata: Vec<PlexMetadataWithMarkers>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexMetadataWithMarkers {
     #[serde(rename = "Marker", default)]
     marker: Option<Vec<PlexMarker>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexMarker {
     #[serde(rename = "type")]
@@ -1199,18 +1206,21 @@ struct PlexMarker {
     end_time_offset: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlexLibrariesResponse {
     media_container: PlexLibrariesContainer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexLibrariesContainer {
     #[serde(rename = "Directory", default)]
     directory: Vec<PlexLibraryDirectory>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexLibraryDirectory {
     key: String,
@@ -1220,18 +1230,21 @@ struct PlexLibraryDirectory {
     thumb: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlexMoviesResponse {
     media_container: PlexMoviesContainer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexMoviesContainer {
     #[serde(rename = "Metadata", default)]
     metadata: Vec<PlexMovieMetadata>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlexMovieMetadata {
@@ -1252,23 +1265,27 @@ struct PlexMovieMetadata {
     view_count: Option<u32>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct PlexTag {
     tag: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlexShowsResponse {
     media_container: PlexShowsContainer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexShowsContainer {
     #[serde(rename = "Metadata", default)]
     metadata: Vec<PlexShowMetadata>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlexShowMetadata {
@@ -1287,18 +1304,21 @@ struct PlexShowMetadata {
     leaf_count: Option<u32>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlexSeasonsResponse {
     media_container: PlexSeasonsContainer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexSeasonsContainer {
     #[serde(rename = "Metadata", default)]
     metadata: Vec<PlexSeasonMetadata>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlexSeasonMetadata {
@@ -1308,18 +1328,21 @@ struct PlexSeasonMetadata {
     thumb: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlexEpisodesResponse {
     media_container: PlexEpisodesContainer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexEpisodesContainer {
     #[serde(rename = "Metadata", default)]
     metadata: Vec<PlexEpisodeMetadata>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlexEpisodeMetadata {
@@ -1339,18 +1362,21 @@ struct PlexEpisodeMetadata {
     view_count: Option<u32>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlexMediaResponse {
     media_container: PlexMediaContainer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexMediaContainer {
     #[serde(rename = "Metadata", default)]
     metadata: Vec<PlexMediaMetadata>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlexMediaMetadata {
@@ -1358,6 +1384,7 @@ struct PlexMediaMetadata {
     media: Option<Vec<PlexMedia>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlexMedia {
@@ -1370,6 +1397,7 @@ struct PlexMedia {
     part: Option<Vec<PlexPart>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexPart {
     key: String,
@@ -1377,6 +1405,7 @@ struct PlexPart {
 }
 
 // Generic metadata structure that can handle movies, shows, and episodes
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlexGenericMetadata {
@@ -1406,37 +1435,44 @@ struct PlexGenericMetadata {
     view_count: Option<u32>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlexOnDeckResponse {
     media_container: PlexOnDeckContainer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexOnDeckContainer {
     #[serde(rename = "Metadata", default)]
     metadata: Vec<PlexGenericMetadata>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlexRecentlyAddedResponse {}
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexRecentlyAddedContainer {}
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct PlexHubsResponse {
     media_container: PlexHubsContainer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PlexHubsContainer {
     #[serde(rename = "Hub", default)]
     hub: Vec<PlexHub>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlexHub {

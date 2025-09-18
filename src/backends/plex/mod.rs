@@ -12,15 +12,15 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::info;
 
-use super::traits::{MediaBackend, SearchResults};
+use super::traits::MediaBackend;
 use crate::models::{
-    AuthProvider, BackendId, ChapterMarker, Credentials, Episode, Library, LibraryId, MediaItemId,
-    Movie, Season, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
+    AuthProvider, BackendId, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season,
+    Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
 };
 use crate::services::core::auth::AuthService;
 
+#[allow(dead_code)] // Used via dynamic dispatch in BackendService
 pub struct PlexBackend {
     base_url: Arc<RwLock<Option<String>>>,
     auth_token: Arc<RwLock<Option<String>>>,
@@ -47,6 +47,15 @@ pub struct ServerInfo {
 }
 
 impl PlexBackend {
+    // Internal helper method - used by initialize()
+    async fn is_initialized(&self) -> bool {
+        let has_token = self.auth_token.read().await.is_some();
+        let has_api = self.api.read().await.is_some();
+        let has_url = self.base_url.read().await.is_some();
+
+        has_token && has_api && has_url
+    }
+
     /// Create a temporary PlexBackend for authentication purposes
     pub fn new_for_auth(base_url: String, token: String) -> Self {
         let url = Some(base_url);
@@ -945,14 +954,6 @@ impl MediaBackend for PlexBackend {
         }
     }
 
-    async fn is_initialized(&self) -> bool {
-        let has_token = self.auth_token.read().await.is_some();
-        let has_api = self.api.read().await.is_some();
-        let has_url = self.base_url.read().await.is_some();
-
-        has_token && has_api && has_url
-    }
-
     async fn authenticate(&self, credentials: Credentials) -> Result<User> {
         match credentials {
             Credentials::Token { token } => {
@@ -1110,143 +1111,17 @@ impl MediaBackend for PlexBackend {
         api.update_progress(rating_key, position, duration).await
     }
 
-    async fn mark_watched(&self, media_id: &MediaItemId) -> Result<()> {
-        // Extract the actual Plex rating key from the composite ID
-        let media_id_str = media_id.as_str();
-        let rating_key = if media_id_str.contains(':') {
-            media_id_str.split(':').next_back().unwrap_or(media_id_str)
-        } else {
-            media_id_str
-        };
-
-        let api = self.get_api().await?;
-        api.mark_watched(rating_key).await
-    }
-
-    async fn mark_unwatched(&self, media_id: &MediaItemId) -> Result<()> {
-        // Extract the actual Plex rating key from the composite ID
-        let media_id_str = media_id.as_str();
-        let rating_key = if media_id_str.contains(':') {
-            media_id_str.split(':').next_back().unwrap_or(media_id_str)
-        } else {
-            media_id_str
-        };
-
-        let api = self.get_api().await?;
-        api.mark_unwatched(rating_key).await
-    }
-
-    async fn get_watch_status(
-        &self,
-        _media_id: &MediaItemId,
-    ) -> Result<super::traits::WatchStatus> {
-        // For now, return a default status - could fetch from API if needed
-        // In practice, the watch status is already included in get_movies/shows/episodes
-        Ok(super::traits::WatchStatus {
-            watched: false,
-            view_count: 0,
-            last_watched_at: None,
-            playback_position: None,
-        })
-    }
-
-    async fn search(&self, _query: &str) -> Result<SearchResults> {
-        // TODO: Implement Plex search
-        todo!("Search not yet implemented")
-    }
+    // Removed unused trait methods: mark_watched, mark_unwatched, get_watch_status, search,
+    // get_backend_info, get_last_sync_time, supports_offline, fetch_episode_markers,
+    // fetch_media_markers, find_next_episode
 
     async fn get_home_sections(&self) -> Result<Vec<crate::models::HomeSection>> {
         let api = self.get_api().await?;
         api.get_home_sections().await
     }
 
-    async fn get_backend_info(&self) -> super::traits::BackendInfo {
-        let server_info = self.server_info.read().await;
-        let server_name = self.server_name.read().await;
-
-        // Do a quick connectivity check
-        let is_online = self.check_connectivity().await;
-
-        if let Some(info) = server_info.as_ref() {
-            let connection_type = if !is_online {
-                // Server configured but not reachable
-                super::traits::ConnectionType::Offline
-            } else if info.is_local {
-                super::traits::ConnectionType::Local
-            } else if info.is_relay {
-                super::traits::ConnectionType::Relay
-            } else {
-                super::traits::ConnectionType::Remote
-            };
-
-            super::traits::BackendInfo {
-                name: self.backend_id.clone(),
-                display_name: format!("Plex ({})", info.name),
-                backend_type: super::traits::BackendType::Plex,
-                server_name: Some(info.name.clone()),
-                server_version: None,
-                connection_type,
-                is_local: info.is_local,
-                is_relay: info.is_relay,
-            }
-        } else {
-            super::traits::BackendInfo {
-                name: self.backend_id.clone(),
-                display_name: "Plex".to_string(),
-                backend_type: super::traits::BackendType::Plex,
-                server_name: server_name.clone(),
-                server_version: None,
-                connection_type: super::traits::ConnectionType::Unknown,
-                is_local: false,
-                is_relay: false,
-            }
-        }
-    }
-
     async fn get_backend_id(&self) -> BackendId {
         BackendId::new(&self.backend_id)
-    }
-
-    async fn get_last_sync_time(&self) -> Option<DateTime<Utc>> {
-        *self.last_sync_time.read().await
-    }
-
-    async fn supports_offline(&self) -> bool {
-        true // Plex supports offline functionality
-    }
-
-    async fn fetch_episode_markers(
-        &self,
-        episode_id: &MediaItemId,
-    ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
-        let api = self.get_api().await?;
-        api.fetch_episode_markers(episode_id.as_str()).await
-    }
-
-    async fn fetch_media_markers(
-        &self,
-        media_id: &MediaItemId,
-    ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
-        // Plex uses the same API endpoint for both movies and episodes
-        let api = self.get_api().await?;
-        api.fetch_episode_markers(media_id.as_str()).await
-    }
-
-    async fn find_next_episode(&self, current_episode: &Episode) -> Result<Option<Episode>> {
-        let _api = self.get_api().await?;
-
-        // For now, return None as we need to implement the logic to find the show
-        // and get the next episode. This is a placeholder implementation.
-        // TODO: Implement proper next episode finding logic
-
-        info!(
-            "Finding next episode after S{:02}E{:02} - {}",
-            current_episode.season_number, current_episode.episode_number, current_episode.title
-        );
-
-        // For now, return None - this will show "No next episode available"
-        // until we implement the full logic
-        Ok(None)
     }
 }
 

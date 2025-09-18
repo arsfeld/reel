@@ -11,7 +11,6 @@ use crate::models::{
 };
 use crate::services::core::auth::AuthService;
 use anyhow::{Context, Result};
-use sea_orm::ActiveModelTrait;
 
 /// Stateless backend service following Relm4's pure function pattern
 /// All backend operations are pure functions that take dependencies as parameters
@@ -368,7 +367,7 @@ impl BackendService {
                     match Self::create_backend_for_source(&db_clone, &source_clone).await {
                         Ok(backend) => {
                             match backend.get_home_sections().await {
-                                Ok(mut sections) => {
+                                Ok(sections) => {
                                     // Convert MediaItem to MediaItemModel and save to database
                                     let media_repo = MediaRepositoryImpl::new(db_clone.clone());
                                     let mut converted_sections = Vec::new();

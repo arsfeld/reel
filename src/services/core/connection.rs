@@ -92,7 +92,7 @@ impl ConnectionService {
                 use crate::db::entities::sources::ActiveModel;
                 use sea_orm::{ActiveModelTrait, Set};
 
-                let mut active_model = ActiveModel {
+                let active_model = ActiveModel {
                     id: Set(source_id.to_string()),
                     last_connection_test: Set(Some(chrono::Utc::now().naive_utc())),
                     connection_failure_count: Set(0),

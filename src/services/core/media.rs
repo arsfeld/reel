@@ -6,7 +6,7 @@ use crate::db::{
     entities::LibraryModel,
     repository::{
         LibraryRepository, LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl,
-        PlaybackRepository, PlaybackRepositoryImpl, Repository, SourceRepositoryImpl,
+        PlaybackRepository, PlaybackRepositoryImpl, Repository,
     },
 };
 use crate::models::{Library, LibraryId, MediaItem, MediaItemId, MediaType, ShowId, SourceId};
@@ -186,7 +186,7 @@ impl MediaService {
 
         let existing = repo.find_by_id(&entity.id).await?;
         if existing.is_some() {
-            let result = repo.update(entity.clone()).await?;
+            let _result = repo.update(entity.clone()).await?;
             debug!("Updated media item: {}", item.id());
 
             // Verify update for Shows
@@ -455,18 +455,6 @@ impl MediaService {
         // TODO: Implement proper trending algorithm based on watch history
         // For now, use recently added items as trending
         Self::get_recently_added(db, limit).await
-    }
-
-    /// Get playback progress for a media item
-    pub async fn get_playback_progress(
-        db: &DatabaseConnection,
-        media_id: &str,
-    ) -> Result<Option<crate::db::entities::PlaybackProgressModel>> {
-        let playback_repo = PlaybackRepositoryImpl::new(db.clone());
-        playback_repo
-            .find_by_media_id(media_id)
-            .await
-            .context("Failed to get playback progress")
     }
 
     /// Get playback progress for multiple media items in batch
