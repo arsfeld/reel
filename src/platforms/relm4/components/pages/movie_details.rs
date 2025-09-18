@@ -61,9 +61,9 @@ impl AsyncComponent for MovieDetailsPage {
             gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
 
-                // Hero Section with full-bleed backdrop and Ken Burns effect
+                // Hero Section with balanced height
                 gtk::Overlay {
-                    set_height_request: 600,  // Even taller for cinematic feel
+                    set_height_request: 480,  // Balanced to accommodate overview text
                     add_css_class: "hero-section",
 
                     // Backdrop image with Ken Burns animation
@@ -85,44 +85,63 @@ impl AsyncComponent for MovieDetailsPage {
 
                         gtk::Box {
                             set_orientation: gtk::Orientation::Horizontal,
-                            set_margin_all: 32,
-                            set_spacing: 32,
+                            set_margin_all: 24,
+                            set_margin_bottom: 16,  // Reduce bottom margin
+                            set_spacing: 24,
 
-                            // Premium poster with depth effect
+                            // Poster with original size
                             gtk::Picture {
                                 set_width_request: 300,
                                 set_height_request: 450,
                                 add_css_class: "card",
-                                add_css_class: "poster-premium",
+                                add_css_class: "poster-styled",
                                 add_css_class: "fade-in-scale",
                                 #[watch]
                                 set_paintable: model.poster_texture.as_ref(),
                             },
 
-                            // Movie info
+                            // Movie info with overview integrated
                             gtk::Box {
                                 set_orientation: gtk::Orientation::Vertical,
-                                set_valign: gtk::Align::End,
+                                set_valign: gtk::Align::End,  // Align to bottom to reduce gap
                                 set_spacing: 12,
                                 set_hexpand: true,
 
-                                // Title with hero typography
+                                // Title with hero typography - moved to top
                                 gtk::Label {
                                     set_halign: gtk::Align::Start,
                                     add_css_class: "title-hero",
                                     add_css_class: "fade-in-up",
                                     set_wrap: true,
+                                    set_margin_bottom: 8,  // Small spacing before overview
                                     #[watch]
                                     set_label: &model.movie.as_ref().map(|m| m.title.clone()).unwrap_or_default(),
                                 },
 
-                                // Metadata pills row with modern styling
+                                // Overview text below the title
+                                gtk::Label {
+                                    set_halign: gtk::Align::Start,
+                                    set_wrap: true,
+                                    set_wrap_mode: gtk::pango::WrapMode::WordChar,
+                                    set_max_width_chars: 60,
+                                    set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                    set_lines: 3,  // Limit to 3 lines to reduce vertical space
+                                    add_css_class: "overview-hero",
+                                    #[watch]
+                                    set_label: &model.movie.as_ref()
+                                        .and_then(|m| m.overview.clone())
+                                        .unwrap_or_default(),
+                                    #[watch]
+                                    set_visible: model.movie.as_ref().and_then(|m| m.overview.as_ref()).is_some(),
+                                },
+
+                                // Metadata row with modern styling
                                 gtk::Box {
                                     set_orientation: gtk::Orientation::Horizontal,
                                     set_spacing: 12,
                                     add_css_class: "stagger-animation",
 
-                                    // Year pill with modern glass effect
+                                    // Year pill
                                     gtk::Box {
                                         add_css_class: "metadata-pill-modern",
                                         add_css_class: "interactive-element",
@@ -166,7 +185,7 @@ impl AsyncComponent for MovieDetailsPage {
                                         }
                                     },
 
-                                    // Duration pill with modern effect
+                                    // Duration pill
                                     gtk::Box {
                                         add_css_class: "metadata-pill-modern",
                                         add_css_class: "interactive-element",
@@ -247,8 +266,9 @@ impl AsyncComponent for MovieDetailsPage {
                 // Content section with animations
                 gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
-                    set_margin_all: 32,
-                    set_spacing: 32,
+                    set_margin_all: 24,
+                    set_margin_top: 12,  // Reduce top margin to bring content up
+                    set_spacing: 20,
                     add_css_class: "fade-in-up",
                     #[watch]
                     set_visible: !model.loading,
@@ -263,31 +283,7 @@ impl AsyncComponent for MovieDetailsPage {
                         append: &model.genre_box,
                     },
 
-                    // Overview with glass card
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 16,
-                        add_css_class: "glass-card",
-                        #[watch]
-                        set_visible: model.movie.as_ref().and_then(|m| m.overview.as_ref()).is_some(),
-
-                        gtk::Label {
-                            set_label: "Overview",
-                            set_halign: gtk::Align::Start,
-                            add_css_class: "title-4",
-                        },
-
-                        gtk::Label {
-                            set_halign: gtk::Align::Start,
-                            set_wrap: true,
-                            set_selectable: true,
-                            add_css_class: "overview-text",
-                            #[watch]
-                            set_label: &model.movie.as_ref()
-                                .and_then(|m| m.overview.clone())
-                                .unwrap_or_default(),
-                        },
-                    },
+                    // Removed redundant overview section since it's now in the hero
 
                     // Cast & Crew
                     gtk::Box {
