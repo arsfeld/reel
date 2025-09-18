@@ -1,7 +1,3 @@
-use crate::events::{
-    event_bus::EventBus,
-    types::{DatabaseEvent, EventPayload, EventType},
-};
 use anyhow::{Context, Result};
 use sea_orm::{ConnectOptions, Database as SeaOrmDatabase, DatabaseConnection as SeaOrmConnection};
 use std::path::PathBuf;
@@ -87,11 +83,6 @@ impl Database {
 
     /// Run migrations
     pub async fn migrate(&self) -> Result<()> {
-        self.migrate_with_events(None).await
-    }
-
-    /// Run migrations with optional event bus for notifications
-    pub async fn migrate_with_events(&self, event_bus: Option<Arc<EventBus>>) -> Result<()> {
         use crate::db::migrations::Migrator;
         use sea_orm_migration::MigratorTrait;
 
@@ -109,44 +100,10 @@ impl Database {
                 .context("Failed to run migrations")?;
 
             info!("Database migrations completed successfully");
-
-            // Emit DatabaseMigrated event
-            if let Some(bus) = event_bus {
-                let event = DatabaseEvent::new(
-                    EventType::DatabaseMigrated,
-                    EventPayload::System {
-                        message: format!("Applied {} database migrations", pending_count),
-                        details: Some(serde_json::json!({
-                            "migrations_applied": pending_count,
-                            "database_path": Self::db_path().unwrap_or_default().to_string_lossy()
-                        })),
-                    },
-                );
-
-                if let Err(e) = bus.publish(event).await {
-                    tracing::warn!("Failed to publish DatabaseMigrated event: {}", e);
-                }
-            }
         } else {
             info!("No pending migrations to apply");
         }
 
         Ok(())
-    }
-
-    /// Check if database needs migration
-    pub async fn needs_migration(&self) -> Result<bool> {
-        use crate::db::migrations::Migrator;
-        use sea_orm_migration::MigratorTrait;
-
-        let _applied = Migrator::get_applied_migrations(&*self.connection)
-            .await
-            .context("Failed to get applied migrations")?;
-
-        let pending = Migrator::get_pending_migrations(&*self.connection)
-            .await
-            .context("Failed to get pending migrations")?;
-
-        Ok(!pending.is_empty())
     }
 }
