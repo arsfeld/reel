@@ -1,11 +1,11 @@
 ---
 id: task-027
 title: Move database save location to XDG data folder instead of cache folder
-status: Done
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2025-09-15 14:56'
-updated_date: '2025-09-15 15:03'
+updated_date: '2025-09-18 16:45'
 labels:
   - database
   - storage
@@ -31,6 +31,20 @@ Currently the database is stored in the XDG cache folder, but it should be in th
 3. Test database connection with new path
 4. Verify no migration logic exists (clean break)
 
+
 ## Implementation Notes
 
 Changed database location from XDG cache directory to XDG data directory in src/db/connection.rs:84. Updated the db_path() function to use dirs::data_dir() instead of dirs::cache_dir(). This ensures the database is stored in a persistent location appropriate for application data. No migration was implemented as requested - users will start fresh with the new location.
+
+## Problem Identified
+
+After investigating the sync behavior, discovered that while both Plex and Jellyfin sources are correctly identified and sent to the SyncWorker, only Plex actually completes the sync process. 
+
+The logs show:
+1. MainWindow correctly initiates sync for both sources
+2. SyncWorker receives both StartSync requests 
+3. Both async tasks are spawned and start executing
+4. Both call perform_sync and then BackendService::sync_source
+5. Only Plex completes successfully - Jellyfin sync task starts but never completes or reports an error
+
+The issue is that Jellyfin sync is failing silently somewhere in the BackendService::sync_source call. Added enhanced error logging to the SyncWorker to capture the actual error and its full error chain when the sync fails.

@@ -395,29 +395,36 @@ impl BackendService {
                                             // Save or update in database
                                             // Check if item exists first
                                             let saved_model = match media_repo.find_by_id(&db_model.id).await {
-                                                Ok(Some(_)) => {
-                                                    // Update existing
-                                                    match media_repo.update(db_model.clone()).await {
+                                                Ok(Some(existing)) => {
+                                                    // Update existing, preserving library_id
+                                                    let mut update_model = db_model.clone();
+                                                    update_model.library_id = existing.library_id.clone();
+                                                    match media_repo.update(update_model.clone()).await {
                                                         Ok(model) => model,
                                                         Err(e) => {
                                                             tracing::warn!("Failed to update media item {}: {}", db_model.id, e);
-                                                            db_model
+                                                            // Return the existing model on update failure
+                                                            existing
                                                         }
                                                     }
                                                 }
                                                 Ok(None) => {
-                                                    // Insert new
+                                                    // Insert new - skip if we don't have a library_id
+                                                    if db_model.library_id.is_empty() {
+                                                        tracing::debug!("Skipping insert for media item {} without library_id", db_model.id);
+                                                        continue;
+                                                    }
                                                     match media_repo.insert(db_model.clone()).await {
                                                         Ok(model) => model,
                                                         Err(e) => {
                                                             tracing::warn!("Failed to insert media item {}: {}", db_model.id, e);
-                                                            db_model
+                                                            continue;
                                                         }
                                                     }
                                                 }
                                                 Err(e) => {
                                                     tracing::warn!("Failed to check media item {}: {}", db_model.id, e);
-                                                    db_model
+                                                    continue;
                                                 }
                                             };
                                             db_items.push(saved_model);
