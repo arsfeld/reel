@@ -10,6 +10,5 @@ pub use home::HomePage;
 pub use library::LibraryPage;
 pub use movie_details::MovieDetailsPage;
 pub use player::PlayerPage;
-pub use preferences::PreferencesPage;
 pub use show_details::ShowDetailsPage;
 pub use sources::SourcesPage;

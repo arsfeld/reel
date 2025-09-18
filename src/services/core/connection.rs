@@ -1,5 +1,5 @@
 use crate::db::DatabaseConnection;
-use crate::models::{ServerConnection, ServerConnections, Source, SourceId};
+use crate::models::{ServerConnection, ServerConnections, SourceId};
 use crate::services::core::connection_cache::{ConnectionCache, ConnectionState, ConnectionType};
 use anyhow::Result;
 use reqwest::Client;
@@ -89,8 +89,8 @@ impl ConnectionService {
                 cache.insert(source_id.clone(), state).await;
 
                 // Update database connection tracking fields
-                use crate::db::entities::sources::{ActiveModel, Entity as SourceEntity};
-                use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+                use crate::db::entities::sources::ActiveModel;
+                use sea_orm::{ActiveModelTrait, Set};
 
                 let mut active_model = ActiveModel {
                     id: Set(source_id.to_string()),

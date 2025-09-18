@@ -1,12 +1,8 @@
 //! MediaItem mapping implementations
 
 use crate::db::entities::media_items::Model as MediaItemModel;
-use crate::mapper::traits::{TryMapper, map_option, try_map_option};
-use crate::models::{
-    Episode, MediaItem, Movie, MusicAlbum, MusicTrack, Person, Photo, Season, Show,
-};
-use anyhow::{Result, anyhow};
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use crate::models::MediaItem;
+use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 /// Custom field transformers for MediaItem

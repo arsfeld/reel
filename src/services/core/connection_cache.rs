@@ -1,5 +1,4 @@
 use crate::models::{ServerConnection, SourceId};
-use anyhow::Result;
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::Arc;

@@ -3,11 +3,9 @@ pub mod connection;
 mod identifiers;
 pub mod playlist_context;
 
-pub use auth_provider::{
-    AuthProvider, ConnectionInfo, NetworkAuthType, NetworkCredentialData, Source, SourceType,
-};
+pub use auth_provider::{AuthProvider, ConnectionInfo, Source, SourceType};
 pub use connection::{ServerConnection, ServerConnections};
-pub use identifiers::{BackendId, LibraryId, MediaItemId, ProviderId, ShowId, SourceId, UserId};
+pub use identifiers::{BackendId, LibraryId, MediaItemId, ShowId, SourceId};
 pub use playlist_context::{EpisodeInfo, PlaylistContext};
 
 use chrono::{DateTime, Utc};

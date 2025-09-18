@@ -1,8 +1,7 @@
 pub mod event_bus;
 pub mod types;
 
-pub use event_bus::{EventBus, EventFilter};
-pub use types::{DatabaseEvent, EventPayload, EventType};
+pub use types::DatabaseEvent;
 
 /// Event handler trait for processing events
 #[async_trait::async_trait]

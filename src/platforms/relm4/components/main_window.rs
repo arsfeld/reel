@@ -1,13 +1,11 @@
 use adw::prelude::*;
 use gtk::gio;
-use gtk::prelude::*;
 use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;
 
 use super::dialogs::{
-    AuthDialog, AuthDialogInput, AuthDialogOutput, PreferencesDialog, PreferencesDialogInput,
-    PreferencesDialogOutput,
+    AuthDialog, AuthDialogInput, AuthDialogOutput, PreferencesDialog, PreferencesDialogOutput,
 };
 use super::pages::{
     HomePage, LibraryPage, MovieDetailsPage, PlayerPage, ShowDetailsPage, SourcesPage,
@@ -919,7 +917,7 @@ impl AsyncComponent for MainWindow {
                 let sender_clone = sender.clone();
 
                 relm4::spawn_local(async move {
-                    use crate::db::repository::{MediaRepository, MediaRepositoryImpl, Repository};
+                    use crate::db::repository::{MediaRepositoryImpl, Repository};
 
                     let repo = MediaRepositoryImpl::new(db_clone);
                     if let Ok(Some(media)) = repo.find_by_id(item_id_clone.as_ref()).await {

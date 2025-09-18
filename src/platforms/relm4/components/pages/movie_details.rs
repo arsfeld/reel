@@ -2,7 +2,6 @@ use crate::models::{MediaItem, MediaItemId, Movie, Person};
 use crate::services::commands::Command;
 use crate::services::commands::media_commands::GetItemDetailsCommand;
 use adw::prelude::*;
-use gtk::prelude::*;
 use libadwaita as adw;
 use relm4::RelmWidgetExt;
 use relm4::gtk;

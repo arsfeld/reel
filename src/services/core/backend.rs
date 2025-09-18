@@ -6,14 +6,12 @@ use crate::db::repository::{
     source_repository::{SourceRepository, SourceRepositoryImpl},
 };
 use crate::models::{
-    AuthProvider, ConnectionInfo, Credentials, Episode, HomeSection, MediaItem, MediaItemId, Movie,
-    Show, Source, SourceId, SourceType, StreamInfo,
+    AuthProvider, ConnectionInfo, Credentials, HomeSection, MediaItemId, Source, SourceId,
+    SourceType, StreamInfo,
 };
 use crate::services::core::auth::AuthService;
 use anyhow::{Context, Result};
-use sea_orm::{ActiveModelTrait, Set};
-// Import the mapper for MediaItem::to_model()
-use crate::mapper::media_item_mapper;
+use sea_orm::ActiveModelTrait;
 
 /// Stateless backend service following Relm4's pure function pattern
 /// All backend operations are pure functions that take dependencies as parameters
