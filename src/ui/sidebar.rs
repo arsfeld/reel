@@ -12,6 +12,17 @@ use crate::services::commands::{Command, auth_commands::LoadSourcesCommand};
 use crate::services::core::media::MediaService;
 use crate::ui::shared::broker::{BROKER, BrokerMessage, SourceMessage};
 
+/// Connection state for sources
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionState {
+    /// Source is connected and syncing works
+    Connected,
+    /// Source is reachable but sync failed
+    SyncFailed,
+    /// Source is not reachable
+    Disconnected,
+}
+
 // Messages for the sidebar component
 #[derive(Debug)]
 pub enum SidebarInput {
@@ -32,7 +43,7 @@ pub enum SidebarInput {
     /// Update specific source connection status
     UpdateSourceConnectionStatus {
         source_id: SourceId,
-        is_connected: bool,
+        state: ConnectionState,
     },
     /// Broker message received
     BrokerMsg(BrokerMessage),
@@ -57,7 +68,7 @@ pub struct SourceGroup {
     is_expanded: bool,
     db: DatabaseConnection,
     syncing_libraries: HashSet<String>,
-    is_connected: bool,
+    connection_state: ConnectionState,
 }
 
 impl SourceGroup {
@@ -149,7 +160,7 @@ pub enum SourceGroupInput {
     /// Reload libraries from database (e.g., after sync)
     ReloadLibraries,
     /// Update connection status
-    UpdateConnectionStatus(bool),
+    UpdateConnectionStatus(ConnectionState),
     /// Library sync started
     LibrarySyncStarted(String),
     /// Library sync completed
@@ -209,19 +220,23 @@ impl FactoryComponent for SourceGroup {
                     // Connection status indicator
                     gtk::Image {
                         #[watch]
-                        set_icon_name: Some(if self.is_connected {
-                            "emblem-ok-symbolic"
-                        } else {
-                            "network-offline-symbolic"
+                        set_icon_name: Some(match self.connection_state {
+                            ConnectionState::Connected => "emblem-ok-symbolic",
+                            ConnectionState::SyncFailed => "dialog-warning-symbolic",
+                            ConnectionState::Disconnected => "network-offline-symbolic",
                         }),
                         set_pixel_size: 16,
                         #[watch]
-                        add_css_class: if self.is_connected { "success" } else { "error" },
+                        set_css_classes: &[match self.connection_state {
+                            ConnectionState::Connected => "success",
+                            ConnectionState::SyncFailed => "warning",
+                            ConnectionState::Disconnected => "error",
+                        }],
                         #[watch]
-                        set_tooltip_text: Some(if self.is_connected {
-                            "Connected"
-                        } else {
-                            "Disconnected"
+                        set_tooltip_text: Some(match self.connection_state {
+                            ConnectionState::Connected => "Connected and synced",
+                            ConnectionState::SyncFailed => "Connected but sync failed",
+                            ConnectionState::Disconnected => "Disconnected",
                         }),
                     },
 
@@ -282,7 +297,7 @@ impl FactoryComponent for SourceGroup {
             is_expanded: true, // Start expanded by default
             db,
             syncing_libraries: HashSet::new(),
-            is_connected: true, // Assume connected initially
+            connection_state: ConnectionState::Connected, // Assume connected initially
         }
     }
 
@@ -397,17 +412,15 @@ impl FactoryComponent for SourceGroup {
                 // Update the library list to hide spinners
                 self.update_library_list(&widgets.library_list);
             }
-            SourceGroupInput::UpdateConnectionStatus(is_connected) => {
-                self.is_connected = is_connected;
+            SourceGroupInput::UpdateConnectionStatus(state) => {
+                self.connection_state = state;
                 debug!(
-                    "Source {} connection status updated: {}",
-                    self.source.name,
-                    if is_connected {
-                        "connected"
-                    } else {
-                        "disconnected"
-                    }
+                    "Source {} connection status updated: {:?}",
+                    self.source.name, state
                 );
+                // Trigger a view refresh by updating the widgets
+                // The #[watch] attributes will now pick up the state change
+                widgets.root.queue_draw();
             }
         }
     }
@@ -721,10 +734,7 @@ impl Component for Sidebar {
                 self.connection_status = status;
             }
 
-            SidebarInput::UpdateSourceConnectionStatus {
-                source_id,
-                is_connected,
-            } => {
+            SidebarInput::UpdateSourceConnectionStatus { source_id, state } => {
                 // Find the source group and update its connection status
                 let idx_to_update = {
                     let guard = self.source_groups.guard();
@@ -739,7 +749,7 @@ impl Component for Sidebar {
 
                 if let Some(idx) = idx_to_update {
                     self.source_groups
-                        .send(idx, SourceGroupInput::UpdateConnectionStatus(is_connected));
+                        .send(idx, SourceGroupInput::UpdateConnectionStatus(state));
                 }
             }
 
@@ -792,10 +802,17 @@ impl Component for Sidebar {
                             })
                         };
 
-                        // Send reload message if we found the source
+                        // Send reload message and update connection status if we found the source
                         if let Some(idx) = idx_to_update {
                             self.source_groups
                                 .send(idx, SourceGroupInput::ReloadLibraries);
+                            // Set connection state to Connected since sync completed successfully
+                            self.source_groups.send(
+                                idx,
+                                SourceGroupInput::UpdateConnectionStatus(
+                                    ConnectionState::Connected,
+                                ),
+                            );
                         }
                     }
                     BrokerMessage::Source(SourceMessage::SyncError { source_id, error }) => {
@@ -805,6 +822,27 @@ impl Component for Sidebar {
 
                         // Update status to show error briefly
                         self.connection_status = format!("Sync failed: {}", error);
+
+                        // Update the source's connection state to show sync failed
+                        let idx_to_update = {
+                            let guard = self.source_groups.guard();
+                            guard.iter().enumerate().find_map(|(idx, sg)| {
+                                if sg.source.id == source_id {
+                                    Some(idx)
+                                } else {
+                                    None
+                                }
+                            })
+                        };
+
+                        if let Some(idx) = idx_to_update {
+                            self.source_groups.send(
+                                idx,
+                                SourceGroupInput::UpdateConnectionStatus(
+                                    ConnectionState::SyncFailed,
+                                ),
+                            );
+                        }
 
                         // Reset status after 3 seconds
                         let sender_clone = sender.clone();
