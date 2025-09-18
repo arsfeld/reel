@@ -171,6 +171,31 @@ impl SyncService {
                     .get_shows(&crate::models::LibraryId::new(library.id.clone()))
                     .await?;
                 info!("Found {} shows in library {}", shows.len(), library.title);
+
+                // Log detailed information about each show's seasons
+                for show in &shows {
+                    info!(
+                        "Show '{}' (id: {}) fetched from backend with {} seasons and {} total episodes",
+                        show.title,
+                        show.id,
+                        show.seasons.len(),
+                        show.total_episode_count
+                    );
+                    if !show.seasons.is_empty() {
+                        for season in &show.seasons {
+                            debug!(
+                                "  - Season {} has {} episodes",
+                                season.season_number, season.episode_count
+                            );
+                        }
+                    } else {
+                        warn!(
+                            "  - Show '{}' has no seasons data from backend!",
+                            show.title
+                        );
+                    }
+                }
+
                 shows.into_iter().map(MediaItem::Show).collect()
             }
             crate::models::LibraryType::Music => {

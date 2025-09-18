@@ -1,4 +1,7 @@
 use crate::models::{Episode, MediaItem, MediaItemId, PlaylistContext, Season, Show};
+use crate::platforms::relm4::components::workers::image_loader::{
+    ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize,
+};
 use crate::services::commands::Command;
 use crate::services::commands::media_commands::{GetEpisodesCommand, GetItemDetailsCommand};
 use crate::services::core::PlaylistService;
@@ -8,10 +11,11 @@ use libadwaita as adw;
 use relm4::RelmWidgetExt;
 use relm4::gtk;
 use relm4::prelude::*;
+use relm4::{Worker, WorkerController};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::error;
 
-#[derive(Debug)]
 pub struct ShowDetailsPage {
     show: Option<Show>,
     episodes: Vec<Episode>,
@@ -23,6 +27,21 @@ pub struct ShowDetailsPage {
     season_dropdown: gtk::DropDown,
     poster_texture: Option<gtk::gdk::Texture>,
     backdrop_texture: Option<gtk::gdk::Texture>,
+    image_loader: WorkerController<ImageLoader>,
+    episode_pictures: HashMap<usize, gtk::Picture>,
+}
+
+impl std::fmt::Debug for ShowDetailsPage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShowDetailsPage")
+            .field("show", &self.show)
+            .field("episodes", &self.episodes)
+            .field("current_season", &self.current_season)
+            .field("item_id", &self.item_id)
+            .field("loading", &self.loading)
+            .field("episode_pictures_count", &self.episode_pictures.len())
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -32,6 +51,13 @@ pub enum ShowDetailsInput {
     PlayEpisode(MediaItemId),
     ToggleEpisodeWatched(usize),
     LoadEpisodes,
+    ImageLoaded {
+        id: String,
+        texture: gtk::gdk::Texture,
+    },
+    ImageLoadFailed {
+        id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -84,9 +110,9 @@ impl AsyncComponent for ShowDetailsPage {
             gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
 
-                // Hero Section with full-bleed backdrop and Ken Burns effect
+                // Hero Section with balanced height
                 gtk::Overlay {
-                    set_height_request: 600,  // Even taller for cinematic feel
+                    set_height_request: 480,  // Balanced to accommodate overview text
                     add_css_class: "hero-section",
 
                     // Backdrop image with Ken Burns animation
@@ -104,35 +130,54 @@ impl AsyncComponent for ShowDetailsPage {
 
                         gtk::Box {
                             set_orientation: gtk::Orientation::Horizontal,
-                            set_margin_all: 32,
-                            set_spacing: 32,
+                            set_margin_all: 24,
+                            set_margin_bottom: 16,  // Reduce bottom margin
+                            set_spacing: 24,
 
-                            // Premium poster with depth effect
+                            // Poster with original size
                             gtk::Picture {
                                 set_width_request: 300,
                                 set_height_request: 450,
                                 add_css_class: "card",
-                                add_css_class: "poster-premium",
+                                add_css_class: "poster-styled",
                                 add_css_class: "fade-in-scale",
                                 #[watch]
                                 set_paintable: model.poster_texture.as_ref(),
                             },
 
-                            // Show info
+                            // Show info with overview integrated
                             gtk::Box {
                                 set_orientation: gtk::Orientation::Vertical,
-                                set_valign: gtk::Align::End,
+                                set_valign: gtk::Align::End,  // Align to bottom to reduce gap
                                 set_spacing: 12,
                                 set_hexpand: true,
 
-                                // Title with hero typography
+                                // Title with hero typography - moved to top
                                 gtk::Label {
                                     set_halign: gtk::Align::Start,
                                     add_css_class: "title-hero",
                                     add_css_class: "fade-in-up",
                                     set_wrap: true,
+                                    set_margin_bottom: 8,  // Small spacing before overview
                                     #[watch]
                                     set_label: &model.show.as_ref().map(|s| s.title.clone()).unwrap_or_default(),
+                                },
+
+                                // Overview text below the title
+                                gtk::Label {
+                                    set_halign: gtk::Align::Start,
+                                    set_wrap: true,
+                                    set_wrap_mode: gtk::pango::WrapMode::WordChar,
+                                    set_max_width_chars: 60,
+                                    set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                    set_lines: 3,  // Limit to 3 lines to reduce vertical space
+                                    add_css_class: "overview-hero",
+                                    #[watch]
+                                    set_label: &model.show.as_ref()
+                                        .and_then(|s| s.overview.clone())
+                                        .unwrap_or_default(),
+                                    #[watch]
+                                    set_visible: model.show.as_ref().and_then(|s| s.overview.as_ref()).is_some(),
                                 },
 
                                 // Metadata row with modern styling
@@ -254,40 +299,14 @@ impl AsyncComponent for ShowDetailsPage {
                     },
                 },
 
-                // Content section with animations
+                // Content section with episodes prioritized
                 gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
-                    set_margin_all: 32,
-                    set_spacing: 32,
-                    add_css_class: "fade-in-up",
+                    set_margin_all: 24,
+                    set_margin_top: 12,  // Reduce top margin to bring content up
+                    set_spacing: 20,
 
-                    // Overview with glass card
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 16,
-                        add_css_class: "glass-card",
-                        #[watch]
-                        set_visible: model.show.as_ref().and_then(|s| s.overview.as_ref()).is_some(),
-
-                        gtk::Label {
-                            set_label: "Overview",
-                            set_halign: gtk::Align::Start,
-                            add_css_class: "title-4",
-                        },
-
-                        gtk::Label {
-                            set_halign: gtk::Align::Start,
-                            set_wrap: true,
-                            set_selectable: true,
-                            add_css_class: "overview-text",
-                            #[watch]
-                            set_label: &model.show.as_ref()
-                                .and_then(|s| s.overview.clone())
-                                .unwrap_or_default(),
-                        },
-                    },
-
-                    // Episodes
+                    // Episodes - moved to top priority
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
                         set_spacing: 12,
@@ -295,18 +314,20 @@ impl AsyncComponent for ShowDetailsPage {
                         gtk::Label {
                             set_label: "Episodes",
                             set_halign: gtk::Align::Start,
-                            add_css_class: "title-4",
+                            add_css_class: "title-3",
                         },
 
                         gtk::ScrolledWindow {
                             set_hscrollbar_policy: gtk::PolicyType::Automatic,
                             set_vscrollbar_policy: gtk::PolicyType::Never,
-                            set_height_request: 220,  // Fixed height for episode cards
+                            set_height_request: 240,  // Slightly increased height for better visibility
                             set_overlay_scrolling: true,
 
                             set_child: Some(&model.episode_grid),
                         },
                     },
+
+                    // Removed redundant overview section since it's now in the hero
                 },
             },
         }
@@ -328,7 +349,10 @@ impl AsyncComponent for ShowDetailsPage {
             .valign(gtk::Align::Start)
             .build();
 
-        let season_dropdown = gtk::DropDown::builder().enable_search(false).build();
+        let season_dropdown = gtk::DropDown::builder()
+            .enable_search(false)
+            .css_classes(["season-dropdown-styled"])
+            .build();
 
         {
             let sender = sender.clone();
@@ -339,6 +363,23 @@ impl AsyncComponent for ShowDetailsPage {
                 sender.input(ShowDetailsInput::SelectSeason(season_num));
             });
         }
+
+        // Create the image loader worker
+        let image_loader =
+            ImageLoader::builder()
+                .detach_worker(())
+                .forward(sender.input_sender(), |output| match output {
+                    ImageLoaderOutput::ImageLoaded { id, texture, .. } => {
+                        ShowDetailsInput::ImageLoaded { id, texture }
+                    }
+                    ImageLoaderOutput::LoadFailed { id, .. } => {
+                        ShowDetailsInput::ImageLoadFailed { id }
+                    }
+                    ImageLoaderOutput::CacheCleared => {
+                        // Not used in this context
+                        ShowDetailsInput::LoadEpisodes
+                    }
+                });
 
         let model = Self {
             show: None,
@@ -351,6 +392,8 @@ impl AsyncComponent for ShowDetailsPage {
             season_dropdown,
             poster_texture: None,
             backdrop_texture: None,
+            image_loader,
+            episode_pictures: HashMap::new(),
         };
 
         let widgets = view_output!();
@@ -441,6 +484,23 @@ impl AsyncComponent for ShowDetailsPage {
                     sender.oneshot_command(async move {
                         ShowDetailsCommand::LoadEpisodes(show_id, season)
                     });
+                }
+            }
+            ShowDetailsInput::ImageLoaded { id, texture } => {
+                // Find the picture widget for this episode
+                if let Ok(index) = id.parse::<usize>() {
+                    if let Some(picture) = self.episode_pictures.get(&index) {
+                        picture.set_paintable(Some(&texture));
+                        picture.remove_css_class("loading");
+                    }
+                }
+            }
+            ShowDetailsInput::ImageLoadFailed { id } => {
+                // Remove loading indicator for failed image
+                if let Ok(index) = id.parse::<usize>() {
+                    if let Some(picture) = self.episode_pictures.get(&index) {
+                        picture.remove_css_class("loading");
+                    }
                 }
             }
         }
@@ -645,16 +705,31 @@ async fn load_image_from_url(
 }
 
 impl ShowDetailsPage {
-    fn update_episode_grid(&self, sender: &AsyncComponentSender<Self>) {
-        // Clear existing children
+    fn update_episode_grid(&mut self, sender: &AsyncComponentSender<Self>) {
+        // Clear existing children and picture references
         while let Some(child) = self.episode_grid.first_child() {
             self.episode_grid.remove(&child);
         }
+        self.episode_pictures.clear();
 
         // Add episode cards
         for (index, episode) in self.episodes.iter().enumerate() {
-            let card = create_episode_card(episode, index, sender.clone());
+            let (card, picture) = create_episode_card(episode, index, sender.clone());
             self.episode_grid.append(&card);
+
+            // Store picture reference for later updates
+            self.episode_pictures.insert(index, picture.clone());
+
+            // Send image load request to the worker
+            if let Some(thumbnail_url) = &episode.thumbnail_url {
+                self.image_loader
+                    .emit(ImageLoaderInput::LoadImage(ImageRequest {
+                        id: index.to_string(),
+                        url: thumbnail_url.clone(),
+                        size: ImageSize::Custom(240, 135),
+                        priority: index as u8, // Earlier episodes have higher priority
+                    }));
+            }
         }
 
         // Scroll to the first unwatched episode
@@ -720,12 +795,12 @@ fn create_episode_card(
     episode: &Episode,
     index: usize,
     sender: AsyncComponentSender<ShowDetailsPage>,
-) -> gtk::Box {
+) -> (gtk::Box, gtk::Picture) {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
-        .width_request(220)
-        .css_classes(["episode-card-modern", "interactive-element"])
+        .width_request(240)
+        .css_classes(["episode-card-minimal"])
         .build();
 
     // Make the card clickable
@@ -741,32 +816,25 @@ fn create_episode_card(
 
     // Episode thumbnail with number overlay
     let overlay = gtk::Overlay::builder()
-        .css_classes(["episode-thumbnail"])
+        .css_classes(["episode-thumbnail-container"])
         .build();
 
     let picture = gtk::Picture::builder()
-        .width_request(220)
-        .height_request(124)
+        .width_request(240)
+        .height_request(135)
         .content_fit(gtk::ContentFit::Cover)
+        .css_classes(["episode-thumbnail-image"])
         .build();
 
-    // Load thumbnail image if available
-    if let Some(thumbnail_url) = &episode.thumbnail_url {
-        let url = thumbnail_url.clone();
-        let picture_clone = picture.clone();
-        gtk::glib::spawn_future_local(async move {
-            if let Ok(texture) = load_image_from_url(&url, 220, 124).await {
-                picture_clone.set_paintable(Some(&texture));
-            }
-        });
-    }
+    // Set a placeholder background color while loading
+    picture.add_css_class("loading");
 
     overlay.set_child(Some(&picture));
 
-    // Episode number badge with modern styling
+    // Episode number badge - subtle and minimal
     let badge = gtk::Label::builder()
         .label(&format!("E{}", episode.episode_number))
-        .css_classes(["osd", "pill"])
+        .css_classes(["episode-number-badge"])
         .halign(gtk::Align::Start)
         .valign(gtk::Align::Start)
         .margin_top(8)
@@ -778,14 +846,14 @@ fn create_episode_card(
     if let Some(position) = episode.playback_position {
         if position.as_secs() > 0 && !episode.watched {
             let progress_container = gtk::Box::builder()
-                .css_classes(["episode-progress-bar"])
+                .css_classes(["episode-progress-container"])
                 .valign(gtk::Align::End)
                 .build();
 
             let progress = gtk::Box::builder()
-                .css_classes(["progress"])
+                .css_classes(["episode-progress-bar"])
                 .width_request(
-                    (220.0 * position.as_secs_f64() / episode.duration.as_secs_f64()) as i32,
+                    (240.0 * position.as_secs_f64() / episode.duration.as_secs_f64()) as i32,
                 )
                 .build();
 
@@ -794,11 +862,11 @@ fn create_episode_card(
         }
     }
 
-    // Watched indicator with modern styling
+    // New episode indicator (unwatched) OR watched check
     if episode.watched {
         let check = gtk::Image::builder()
             .icon_name("object-select-symbolic")
-            .css_classes(["osd", "fade-in-scale"])
+            .css_classes(["episode-watched-check"])
             .halign(gtk::Align::End)
             .valign(gtk::Align::Start)
             .margin_top(8)
@@ -806,31 +874,42 @@ fn create_episode_card(
             .pixel_size(20)
             .build();
         overlay.add_overlay(&check);
+    } else {
+        // New episode indicator - white glow dot
+        let new_indicator = gtk::Box::builder()
+            .css_classes(["episode-new-indicator"])
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .margin_top(8)
+            .margin_end(8)
+            .width_request(10)
+            .height_request(10)
+            .build();
+        overlay.add_overlay(&new_indicator);
     }
 
-    // Episode info with glass effect
+    // Episode info - minimal and clean
     let info_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(4)
-        .margin_top(12)
-        .margin_bottom(12)
-        .margin_start(12)
-        .margin_end(12)
+        .spacing(2)
+        .margin_top(8)
+        .margin_bottom(8)
+        .margin_start(4)
+        .margin_end(4)
         .build();
 
     let title = gtk::Label::builder()
         .label(&episode.title)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .xalign(0.0)
-        .css_classes(["subtitle-hero", "caption-heading"])
+        .css_classes(["episode-title", "body"])
         .build();
 
     let duration = episode.duration.as_secs() / 60;
     let details = gtk::Label::builder()
         .label(&format!("{}m", duration))
         .xalign(0.0)
-        .css_classes(["dim-label", "caption"])
-        .opacity(0.8)
+        .css_classes(["episode-duration", "dim-label", "caption"])
         .build();
 
     info_box.append(&title);
@@ -839,5 +918,5 @@ fn create_episode_card(
     card.append(&overlay);
     card.append(&info_box);
 
-    card
+    (card, picture)
 }

@@ -189,12 +189,77 @@ impl MediaService {
         // Convert to entity using the new mapper
         let entity = item.to_model(source_id.as_str(), Some(library_id.to_string()));
 
-        if repo.find_by_id(&entity.id).await?.is_some() {
-            repo.update(entity).await?;
+        let existing = repo.find_by_id(&entity.id).await?;
+        if existing.is_some() {
+            let result = repo.update(entity.clone()).await?;
             debug!("Updated media item: {}", item.id());
+
+            // Verify update for Shows
+            if entity.media_type == "show" {
+                if let Ok(Some(updated)) = repo.find_by_id(&entity.id).await {
+                    if let Some(ref metadata) = updated.metadata {
+                        // metadata is already a serde_json::Value
+                        if let Some(seasons_value) = metadata.get("seasons") {
+                            if let Ok(seasons) = serde_json::from_value::<Vec<crate::models::Season>>(
+                                seasons_value.clone(),
+                            ) {
+                                debug!(
+                                    "Verified Show '{}' after update: {} seasons persisted",
+                                    updated.title,
+                                    seasons.len()
+                                );
+                            } else {
+                                warn!(
+                                    "Failed to parse seasons for Show '{}' after update: {:?}",
+                                    updated.title, seasons_value
+                                );
+                            }
+                        } else {
+                            warn!(
+                                "No seasons field in metadata for Show '{}' after update",
+                                updated.title
+                            );
+                        }
+                    } else {
+                        warn!("No metadata for Show '{}' after update", updated.title);
+                    }
+                }
+            }
         } else {
-            repo.insert(entity).await?;
+            repo.insert(entity.clone()).await?;
             debug!("Created media item: {}", item.id());
+
+            // Verify insert for Shows
+            if entity.media_type == "show" {
+                if let Ok(Some(inserted)) = repo.find_by_id(&entity.id).await {
+                    if let Some(ref metadata) = inserted.metadata {
+                        // metadata is already a serde_json::Value
+                        if let Some(seasons_value) = metadata.get("seasons") {
+                            if let Ok(seasons) = serde_json::from_value::<Vec<crate::models::Season>>(
+                                seasons_value.clone(),
+                            ) {
+                                debug!(
+                                    "Verified Show '{}' after insert: {} seasons persisted",
+                                    inserted.title,
+                                    seasons.len()
+                                );
+                            } else {
+                                warn!(
+                                    "Failed to parse seasons for Show '{}' after insert: {:?}",
+                                    inserted.title, seasons_value
+                                );
+                            }
+                        } else {
+                            warn!(
+                                "No seasons field in metadata for Show '{}' after insert",
+                                inserted.title
+                            );
+                        }
+                    } else {
+                        warn!("No metadata for Show '{}' after insert", inserted.title);
+                    }
+                }
+            }
         }
 
         // Save playback progress if the item has been watched

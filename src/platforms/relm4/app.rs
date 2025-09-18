@@ -332,6 +332,35 @@ impl ReelApp {
                 transform: translateY(-2px);
             }
 
+            /* Episode Card Styled - Modern version */
+            .episode-card-styled {
+                border-radius: 12px;
+                background: alpha(currentColor, 0.05);
+                transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+                overflow: visible;
+                border: 1px solid alpha(currentColor, 0.1);
+            }
+            .episode-card-styled:hover {
+                background: alpha(currentColor, 0.08);
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px alpha(black, 0.1);
+            }
+
+            /* Episode Thumbnail Loading State */
+            .episode-thumbnail-picture.loading {
+                background: linear-gradient(90deg,
+                    alpha(currentColor, 0.1) 0%,
+                    alpha(currentColor, 0.2) 50%,
+                    alpha(currentColor, 0.1) 100%);
+                animation: loading-shimmer 1.5s ease-in-out infinite;
+            }
+
+            @keyframes loading-shimmer {
+                0% { opacity: 0.6; }
+                50% { opacity: 1; }
+                100% { opacity: 0.6; }
+            }
+
             /* Pills and Badges */
             .pill {
                 border-radius: 999px;
