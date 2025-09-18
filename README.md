@@ -162,24 +162,33 @@ nix run github:arsfeld/reel
 <details>
 <summary><b>Click to see architecture diagram</b></summary>
 
-Reel is migrating to a pure Relm4 reactive architecture:
+Reel uses a pure Relm4 reactive architecture:
 
 ```
-Relm4 Components Layer
+UI Layer (src/ui/)
 ├── AsyncComponents (Pages with data loading)
 ├── Factory Components (Dynamic collections)
-├── Worker Components (Background tasks)
-└── MessageBroker (Inter-component communication)
+├── Dialogs (Modal interactions)
+└── Main Window & Sidebar (Navigation)
     ↓
-Command Pattern (Structured async operations)
+Worker Components (src/workers/)
+├── ConnectionMonitor (Health checks)
+├── SyncWorker (Background sync)
+├── SearchWorker (Search operations)
+└── ImageLoader (Async image loading)
     ↓
-Service Layer (Stateless pure functions)
+Service Layer (src/services/)
+├── MessageBrokers (Inter-component communication)
+├── Commands (Structured async operations)
+└── Core Services (Auth, Media, Sync, Source)
     ↓
-Repository Layer (SeaORM/SQLite database)
+Repository Layer (src/db/)
+├── SeaORM Entities (Type-safe models)
+└── Repository Pattern (CRUD operations)
     ↓
-Backend Trait (Generic MediaBackend interface)
-    ↓
-Implementations (Plex, Jellyfin, Local)
+Backend Trait (src/backends/)
+├── MediaBackend Interface
+└── Implementations (Plex, Jellyfin, Local)
 ```
 
 **Key Patterns:**

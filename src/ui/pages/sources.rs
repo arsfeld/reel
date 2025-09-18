@@ -43,6 +43,11 @@ pub enum SourcesPageInput {
     SyncCompleted(SourceId, Result<(), String>),
     /// Message from the broker
     BrokerMsg(BrokerMessage),
+    /// Update connection status for a source
+    UpdateConnectionStatus {
+        source_id: SourceId,
+        is_connected: bool,
+    },
     /// Error occurred
     Error(String),
 }
@@ -57,6 +62,7 @@ pub enum SourcesPageOutput {
 pub struct SourceListItem {
     source: Source,
     is_syncing: bool,
+    is_connected: bool,
     sync_progress: Option<(usize, usize)>,
     sync_error: Option<String>,
     last_sync_status: Option<SyncStatusType>,
@@ -66,6 +72,7 @@ pub struct SourceListItem {
 pub enum SourceListItemInput {
     Sync,
     Remove,
+    UpdateConnectionStatus(bool),
 }
 
 #[relm4::factory(pub)]
@@ -139,21 +146,24 @@ impl FactoryComponent for SourceListItem {
 
                         // Connection status indicator
                         gtk::Image {
-                            set_icon_name: Some(if self.source.connection_info.is_online {
+                            #[watch]
+                            set_icon_name: Some(if self.is_connected {
                                 "emblem-ok-symbolic"
                             } else {
                                 "network-offline-symbolic"
                             }),
                             set_pixel_size: 16,
-                            set_tooltip_text: Some(if self.source.connection_info.is_online {
+                            #[watch]
+                            set_tooltip_text: Some(if self.is_connected {
                                 "Connected"
                             } else {
-                                "Offline"
+                                "Disconnected"
                             }),
-                            add_css_class: if self.source.connection_info.is_online {
+                            #[watch]
+                            add_css_class: if self.is_connected {
                                 "success"
                             } else {
-                                "dim-label"
+                                "error"
                             },
                         },
 
@@ -242,9 +252,13 @@ impl FactoryComponent for SourceListItem {
     }
 
     fn init_model(source: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
+        // Assume connected initially - will be updated by ConnectionMonitor
+        let is_connected = source.connection_info.is_online;
+
         Self {
             source,
             is_syncing: false,
+            is_connected,
             sync_progress: None,
             sync_error: None,
             last_sync_status: None,
@@ -266,6 +280,9 @@ impl FactoryComponent for SourceListItem {
                         self.source.id.clone(),
                     )))
                     .unwrap();
+            }
+            SourceListItemInput::UpdateConnectionStatus(is_connected) => {
+                self.is_connected = is_connected;
             }
         }
     }
@@ -595,6 +612,30 @@ impl AsyncComponent for SourcesPage {
                 match result {
                     Ok(_) => info!("Source sync command completed: {}", source_id),
                     Err(e) => error!("Source sync command failed {}: {}", source_id, e),
+                }
+            }
+
+            SourcesPageInput::UpdateConnectionStatus {
+                source_id,
+                is_connected,
+            } => {
+                // Update the connection status for the specific source
+                let idx_to_update = {
+                    let factory_guard = self.sources_factory.guard();
+                    factory_guard.iter().enumerate().find_map(|(idx, item)| {
+                        if item.source.id == source_id.to_string() {
+                            Some(idx)
+                        } else {
+                            None
+                        }
+                    })
+                };
+
+                if let Some(idx) = idx_to_update {
+                    self.sources_factory.send(
+                        idx,
+                        SourceListItemInput::UpdateConnectionStatus(is_connected),
+                    );
                 }
             }
 

@@ -67,31 +67,34 @@ cargo test -- --nocapture
 ## Architecture Overview
 
 ### Module Structure
-- `src/main.rs` - Entry point with platform detection
-- `src/platforms/relm4/` - Relm4 platform implementation (target architecture)
-  - `app.rs` - Relm4 application root AsyncComponent
-  - `components/` - Pure Relm4 components with native patterns
-    - `main_window.rs` - Root window AsyncComponent
-    - `pages/` - Page AsyncComponents (home, library, player, sources, movie_details, show_details)
-    - `factories/` - Factory components for collections (media cards, episode lists)
-    - `workers/` - Background worker components (sync, search, image loading)
-    - `shared/` - Common messages, commands, navigation
-- `src/core/` - Platform-agnostic core logic
-  - `player_traits.rs` - Media player abstraction
-  - `frontend.rs` - Frontend trait for platform abstraction
+- `src/main.rs` - Entry point and application initialization
+- `src/app/` - Application core with Relm4 AsyncComponent
+  - `mod.rs` - Application root component and state management
+- `src/ui/` - Relm4 UI components
+  - `main_window.rs` - Root window AsyncComponent
+  - `sidebar.rs` - Navigation sidebar component
+  - `pages/` - Page AsyncComponents (home, library, player, sources, movie_details, show_details, preferences)
+  - `factories/` - Factory components for collections (media cards, episode lists)
+  - `dialogs/` - Dialog components (auth, source management)
+  - `shared/` - Common UI utilities, messages, navigation
+- `src/workers/` - Background worker components
+  - `connection_monitor.rs` - Connection health monitoring
+  - `sync_worker.rs` - Background synchronization
+  - `search_worker.rs` - Search functionality
+  - `image_loader.rs` - Async image loading
+- `src/services/` - Service layer architecture
+  - `core/` - Core service implementations (auth, sync, media, source)
+  - `brokers/` - MessageBroker components (connection, media, sync)
+  - `commands/` - Command pattern implementations (auth, media, sync)
+  - `types/` - Service type definitions
+  - `initialization.rs` - Service initialization and setup
+  - `cache_keys.rs` - Cache key management
 - `src/backends/` - Media server integrations
   - `traits.rs` - Common backend interface (`MediaBackend` trait)
   - `plex/` - Plex backend with OAuth authentication
   - `jellyfin/` - Jellyfin backend with username/password auth
   - `local/` - Local files backend (mostly unimplemented)
-- `src/services/` - Core services
-  - `data.rs` - DataService for database operations with caching
-  - `sync.rs` - SyncManager for background synchronization
-  - `auth_manager.rs` - Authentication and credential management
-  - `source_coordinator.rs` - Multi-backend coordination
-- `src/events/` - Event system
-  - `event_bus.rs` - Central event broadcasting with Tokio
-  - `types.rs` - Event type definitions (Media, Sync, Library, Playback, Source)
+  - `sync_strategy.rs` - Synchronization strategies
 - `src/db/` - Database layer (SeaORM/SQLite)
   - `repository/` - Repository pattern implementations (media, library, source, playback, sync)
   - `entities/` - SeaORM entity definitions with relations
@@ -100,9 +103,17 @@ cargo test -- --nocapture
 - `src/player/` - Media playback
   - `mpv_player.rs` - MPV backend (default, no subtitle issues)
   - `gstreamer_player.rs` - GStreamer backend (has subtitle color artifacts)
-  - `traits.rs` - Player interface definition
+  - `controller.rs` - Player controller and state management
   - `factory.rs` - Player backend selection
 - `src/models/` - Data models and auth providers
+  - `identifiers.rs` - Type-safe ID wrappers
+  - `auth_provider.rs` - Authentication provider types
+  - `connection.rs` - Connection state models
+  - `playlist_context.rs` - Playlist and playback context
+- `src/core/` - Core abstractions and traits
+  - `mod.rs` - Core module exports and traits
+- `src/mapper/` - Data mapping and transformations
+- `src/styles/` - CSS and theming
 - `src/utils/` - Utilities (errors, image loading)
 
 ### Key Design Patterns
@@ -176,9 +187,10 @@ Built with Relm4 and libadwaita:
 ## Event System
 
 The application uses Relm4's MessageBroker for inter-component communication:
-- **MessageBroker** replaces custom EventBus for component communication
-- **Commands** provide structured async operations with proper lifecycle
-- **Worker Components** handle background tasks in isolation
+- **MessageBroker** for component communication (located in `src/services/brokers/`)
+- **Commands** provide structured async operations with proper lifecycle (in `src/services/commands/`)
+- **Worker Components** handle background tasks in isolation (in `src/workers/`)
+- Service brokers manage specific domains: ConnectionBroker, MediaBroker, SyncBroker
 
 ## Dependencies
 
@@ -225,6 +237,7 @@ build-all-packages
 - Horizontal scrolling on homepage doesn't load images
 - GStreamer subtitle color artifacts (use MPV player instead)
 - Main Window has hybrid status system creating race conditions between reactive and direct UI updates
+- ConnectionMonitor worker not properly integrated into application
 
 ### Architecture Gaps
 - Repository layer has zero event integration (bypasses event system)

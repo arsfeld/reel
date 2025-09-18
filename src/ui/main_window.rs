@@ -13,12 +13,14 @@ use super::pages::{
 use super::sidebar::{Sidebar, SidebarInput, SidebarOutput};
 use crate::db::connection::DatabaseConnection;
 use crate::models::{LibraryId, MediaItemId, PlaylistContext, SourceId};
+use crate::workers::{ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput};
 
 #[derive(Debug)]
 pub struct MainWindow {
     db: DatabaseConnection,
     sidebar: Controller<Sidebar>,
     home_page: AsyncController<HomePage>,
+    connection_monitor: relm4::WorkerController<ConnectionMonitor>,
     library_page: Option<AsyncController<LibraryPage>>,
     movie_details_page: Option<AsyncController<MovieDetailsPage>>,
     show_details_page: Option<AsyncController<ShowDetailsPage>>,
@@ -73,6 +75,17 @@ pub enum MainWindowInput {
     SetHeaderEndContent(Option<gtk::Widget>),
     ClearHeaderContent,
     ShowToast(String),
+    ConnectionStatusChanged {
+        source_id: SourceId,
+        status: ConnectionStatus,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ConnectionStatus {
+    Connected(String), // URL
+    Disconnected,
+    Reconnecting,
 }
 
 #[derive(Debug)]
@@ -312,11 +325,39 @@ impl AsyncComponent for MainWindow {
                 }
             });
 
+        // Initialize the ConnectionMonitor worker
+        let connection_monitor = ConnectionMonitor::builder()
+            .detach_worker(db.clone())
+            .forward(sender.input_sender(), |output| match output {
+                ConnectionMonitorOutput::ConnectionChanged { source_id, new_url } => {
+                    MainWindowInput::ConnectionStatusChanged {
+                        source_id,
+                        status: ConnectionStatus::Connected(new_url),
+                    }
+                }
+                ConnectionMonitorOutput::ConnectionLost { source_id } => {
+                    MainWindowInput::ConnectionStatusChanged {
+                        source_id,
+                        status: ConnectionStatus::Disconnected,
+                    }
+                }
+                ConnectionMonitorOutput::ConnectionRestored { source_id, url } => {
+                    MainWindowInput::ConnectionStatusChanged {
+                        source_id,
+                        status: ConnectionStatus::Connected(url),
+                    }
+                }
+            });
+
+        // Start monitoring connections periodically
+        ConnectionMonitor::start_monitoring(connection_monitor.sender().clone());
+
         let mut model = Self {
             db,
             sidebar,
             home_page,
             auth_dialog,
+            connection_monitor,
             library_page: None,
             movie_details_page: None,
             show_details_page: None,
@@ -1319,6 +1360,80 @@ impl AsyncComponent for MainWindow {
                 let toast = adw::Toast::new(&message);
                 toast.set_timeout(3);
                 self.toast_overlay.add_toast(toast);
+            }
+            MainWindowInput::ConnectionStatusChanged { source_id, status } => {
+                // Handle connection status changes
+                let is_connected = matches!(status, ConnectionStatus::Connected(_));
+                let status_text = match &status {
+                    ConnectionStatus::Connected(url) => {
+                        tracing::info!("Source {} connected at {}", source_id, url);
+                        format!("Source {} connected", source_id)
+                    }
+                    ConnectionStatus::Disconnected => {
+                        tracing::warn!("Source {} disconnected", source_id);
+                        sender.input(MainWindowInput::ShowToast(format!(
+                            "Connection lost for source {}",
+                            source_id
+                        )));
+                        format!("Source {} disconnected", source_id)
+                    }
+                    ConnectionStatus::Reconnecting => {
+                        tracing::info!("Source {} is reconnecting", source_id);
+                        format!("Reconnecting to source {}", source_id)
+                    }
+                };
+
+                // Update sidebar with overall connection status text
+                self.sidebar
+                    .sender()
+                    .send(SidebarInput::UpdateConnectionStatus(status_text))
+                    .unwrap_or_else(|e| {
+                        tracing::error!("Failed to update sidebar connection status: {:?}", e);
+                    });
+
+                // Update the specific source's connection status indicator
+                self.sidebar
+                    .sender()
+                    .send(SidebarInput::UpdateSourceConnectionStatus {
+                        source_id: source_id.clone(),
+                        is_connected,
+                    })
+                    .unwrap_or_else(|e| {
+                        tracing::error!("Failed to update source connection indicator: {:?}", e);
+                    });
+
+                // If we have a sources page open, update it too
+                if let Some(ref sources_page) = self.sources_page {
+                    sources_page
+                        .sender()
+                        .send(
+                            crate::ui::pages::sources::SourcesPageInput::UpdateConnectionStatus {
+                                source_id: source_id.clone(),
+                                is_connected,
+                            },
+                        )
+                        .unwrap_or_else(|e| {
+                            tracing::error!(
+                                "Failed to update sources page connection status: {:?}",
+                                e
+                            );
+                        });
+                }
+
+                // Trigger connection monitor to check this specific source again in case of disconnect
+                if matches!(status, ConnectionStatus::Disconnected) {
+                    // Wait a bit before retrying
+                    let monitor_sender = self.connection_monitor.sender().clone();
+                    let source_id_clone = source_id.clone();
+                    relm4::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        monitor_sender
+                            .send(ConnectionMonitorInput::CheckSource(source_id_clone))
+                            .unwrap_or_else(|e| {
+                                tracing::error!("Failed to trigger connection check: {:?}", e);
+                            });
+                    });
+                }
             }
         }
     }
