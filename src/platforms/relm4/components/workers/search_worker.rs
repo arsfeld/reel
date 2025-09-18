@@ -1,8 +1,6 @@
-use crate::models::{Episode, MediaItem, MediaItemId, Movie, Show};
-use gtk::prelude::*;
+use crate::models::{MediaItem, MediaItemId};
 use relm4::prelude::*;
 use relm4::{ComponentSender, Worker, WorkerHandle};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use tantivy::{
     Document, Index, IndexReader, IndexWriter,
@@ -10,9 +8,9 @@ use tantivy::{
     directory::MmapDirectory,
     doc,
     query::QueryParser,
-    schema::{self, Field, STORED, Schema, TEXT},
+    schema::{Field, STORED, Schema, TEXT},
 };
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 #[derive(Debug, Clone)]
 pub struct SearchDocument {

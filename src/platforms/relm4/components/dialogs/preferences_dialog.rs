@@ -1,5 +1,4 @@
 use adw::prelude::*;
-use gtk::prelude::*;
 use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;

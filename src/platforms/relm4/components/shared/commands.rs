@@ -5,7 +5,6 @@ use crate::models::{LibraryId, MediaItem, MediaItemId, SourceId};
 use crate::services::core::backend::BackendService;
 use crate::services::core::media::MediaService;
 use anyhow::Result;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum AppCommand {
@@ -68,7 +67,7 @@ pub async fn execute_command(command: AppCommand, db: &DatabaseConnection) -> Co
             match MediaService::get_libraries_for_source(db, &source_id).await {
                 Ok(libraries) => {
                     // Get media repository to calculate item counts
-                    use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
+                    use crate::db::repository::MediaRepositoryImpl;
                     let media_repo = MediaRepositoryImpl::new(db.clone());
 
                     // Convert to entity models with actual item counts
@@ -159,7 +158,7 @@ async fn load_initial_data(
     let mut all_libraries = Vec::new();
 
     // Get media repository to calculate item counts
-    use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
+    use crate::db::repository::MediaRepositoryImpl;
     let media_repo = MediaRepositoryImpl::new(db.clone());
 
     for source in &sources {

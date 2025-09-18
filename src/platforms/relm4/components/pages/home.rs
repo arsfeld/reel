@@ -1,5 +1,4 @@
 use gtk::prelude::*;
-use relm4::Worker;
 use relm4::factory::FactoryVecDeque;
 use relm4::gtk;
 use relm4::prelude::*;
@@ -7,7 +6,6 @@ use std::collections::HashMap;
 use tracing::{debug, error, info, trace};
 
 use crate::db::connection::DatabaseConnection;
-use crate::db::entities::MediaItemModel;
 use crate::models::{HomeSectionType, HomeSectionWithModels, MediaItemId, SourceId};
 use crate::platforms::relm4::components::factories::media_card::{
     MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput,
@@ -16,8 +14,6 @@ use crate::platforms::relm4::components::workers::{
     ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize,
 };
 use crate::services::core::BackendService;
-use std::time::Duration;
-use tokio::time::timeout;
 
 #[derive(Debug, Clone)]
 pub enum SectionLoadState {
@@ -347,8 +343,7 @@ impl AsyncComponent for HomePage {
                 relm4::spawn(async move {
                     // Get the source entity
                     use crate::db::repository::{
-                        Repository,
-                        source_repository::{SourceRepository, SourceRepositoryImpl},
+                        Repository, source_repository::SourceRepositoryImpl,
                     };
                     let source_repo = SourceRepositoryImpl::new(db.clone());
 

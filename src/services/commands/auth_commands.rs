@@ -8,7 +8,6 @@ use crate::models::auth_provider::Source;
 use crate::models::{Credentials, SourceId, User};
 use crate::services::commands::Command;
 use crate::services::core::auth::AuthService;
-use std::sync::Arc;
 
 /// Authenticate with a backend
 pub struct AuthenticateCommand<'a> {

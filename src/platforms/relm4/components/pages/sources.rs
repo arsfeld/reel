@@ -3,19 +3,18 @@ use libadwaita as adw;
 use relm4::factory::FactoryVecDeque;
 use relm4::gtk;
 use relm4::prelude::*;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::db::connection::DatabaseConnection;
 use crate::db::entities::sync_status::SyncStatusType;
 use crate::models::{
     SourceId,
-    auth_provider::{ConnectionInfo, Source, SourceType},
+    auth_provider::{Source, SourceType},
 };
 use crate::platforms::relm4::components::shared::broker::{BROKER, BrokerMessage, SourceMessage};
 use crate::services::commands::{
     Command,
     auth_commands::{LoadSourcesCommand, RemoveSourceCommand},
-    sync_commands::SyncSourceCommand,
 };
 
 #[derive(Debug)]
@@ -170,7 +169,7 @@ impl FactoryComponent for SourceListItem {
                             } else if let Some(ref error) = self.sync_error {
                                 "Sync failed".to_string()
                             } else if let Some(ref last_sync) = self.source.last_sync {
-                                use chrono::{DateTime, Utc};
+                                use chrono::Utc;
                                 let now = Utc::now();
                                 let duration = now.signed_duration_since(last_sync.clone());
                                 if duration.num_hours() < 1 {

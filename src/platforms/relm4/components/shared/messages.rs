@@ -1,5 +1,3 @@
-use relm4::prelude::*;
-
 #[derive(Debug, Clone)]
 pub enum AppInput {
     Initialize,

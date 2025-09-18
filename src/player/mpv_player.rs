@@ -4,7 +4,6 @@ use gtk4::GLArea;
 use gtk4::{self, glib, prelude::*};
 use libmpv2::Mpv;
 use libmpv2_sys::*;
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_void};
 use std::ptr;
