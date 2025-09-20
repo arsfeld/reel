@@ -10,7 +10,7 @@ use super::dialogs::{
 use super::pages::{
     HomePage, LibraryPage, MovieDetailsPage, PlayerPage, ShowDetailsPage, SourcesPage,
 };
-use super::sidebar::{ConnectionState, Sidebar, SidebarInput, SidebarOutput};
+use super::sidebar::{Sidebar, SidebarInput, SidebarOutput};
 use crate::db::connection::DatabaseConnection;
 use crate::models::{LibraryId, MediaItemId, PlaylistContext, SourceId};
 use crate::workers::{
@@ -1360,14 +1360,11 @@ impl AsyncComponent for MainWindow {
                 self.toast_overlay.add_toast(toast);
             }
             MainWindowInput::ConnectionStatusChanged { source_id, status } => {
-                // Handle connection status changes
-                let (connection_state, status_text) = match &status {
+                // Handle connection status changes from ConnectionMonitor
+                let (is_connected, status_text) = match &status {
                     ConnectionStatus::Connected(url) => {
                         tracing::info!("Source {} connected at {}", source_id, url);
-                        (
-                            ConnectionState::Connected,
-                            format!("Source {} connected", source_id),
-                        )
+                        (true, format!("Source {} connected", source_id))
                     }
                     ConnectionStatus::Disconnected => {
                         tracing::warn!("Source {} disconnected", source_id);
@@ -1375,18 +1372,11 @@ impl AsyncComponent for MainWindow {
                             "Connection lost for source {}",
                             source_id
                         )));
-                        (
-                            ConnectionState::Disconnected,
-                            format!("Source {} disconnected", source_id),
-                        )
+                        (false, format!("Source {} disconnected", source_id))
                     }
                     ConnectionStatus::Reconnecting => {
                         tracing::info!("Source {} is reconnecting", source_id);
-                        // During reconnecting, show as disconnected
-                        (
-                            ConnectionState::Disconnected,
-                            format!("Reconnecting to source {}", source_id),
-                        )
+                        (false, format!("Reconnecting to source {}", source_id))
                     }
                 };
 
@@ -1398,12 +1388,12 @@ impl AsyncComponent for MainWindow {
                         tracing::error!("Failed to update sidebar connection status: {:?}", e);
                     });
 
-                // Update the specific source's connection status indicator
+                // Use ConnectionCheckResult which won't override SyncFailed state
                 self.sidebar
                     .sender()
-                    .send(SidebarInput::UpdateSourceConnectionStatus {
+                    .send(SidebarInput::ConnectionCheckResult {
                         source_id: source_id.clone(),
-                        state: connection_state,
+                        is_connected,
                     })
                     .unwrap_or_else(|e| {
                         tracing::error!("Failed to update source connection indicator: {:?}", e);
@@ -1411,8 +1401,7 @@ impl AsyncComponent for MainWindow {
 
                 // If we have a sources page open, update it too
                 if let Some(ref sources_page) = self.sources_page {
-                    // Convert ConnectionState to boolean for sources page (which shows detailed sync status separately)
-                    let is_connected = !matches!(connection_state, ConnectionState::Disconnected);
+                    // Use the is_connected value we already computed above
                     sources_page
                         .sender()
                         .send(

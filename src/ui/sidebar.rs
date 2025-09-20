@@ -44,6 +44,12 @@ pub enum SidebarInput {
     UpdateSourceConnectionStatus {
         source_id: SourceId,
         state: ConnectionState,
+        error: Option<String>,
+    },
+    /// Connection check from monitor (doesn't override SyncFailed)
+    ConnectionCheckResult {
+        source_id: SourceId,
+        is_connected: bool,
     },
     /// Broker message received
     BrokerMsg(BrokerMessage),
@@ -69,6 +75,7 @@ pub struct SourceGroup {
     db: DatabaseConnection,
     syncing_libraries: HashSet<String>,
     connection_state: ConnectionState,
+    sync_error_message: Option<String>,
 }
 
 impl SourceGroup {
@@ -159,8 +166,8 @@ pub enum SourceGroupInput {
     ToggleExpanded,
     /// Reload libraries from database (e.g., after sync)
     ReloadLibraries,
-    /// Update connection status
-    UpdateConnectionStatus(ConnectionState),
+    /// Update connection status with optional error message
+    UpdateConnectionStatus(ConnectionState, Option<String>),
     /// Library sync started
     LibrarySyncStarted(String),
     /// Library sync completed
@@ -217,27 +224,13 @@ impl FactoryComponent for SourceGroup {
                         set_hexpand: true,
                     },
 
-                    // Connection status indicator
+                    // Connection status indicator - only shown for problems
+                    #[name = "connection_icon"]
                     gtk::Image {
                         #[watch]
-                        set_icon_name: Some(match self.connection_state {
-                            ConnectionState::Connected => "emblem-ok-symbolic",
-                            ConnectionState::SyncFailed => "dialog-warning-symbolic",
-                            ConnectionState::Disconnected => "network-offline-symbolic",
-                        }),
+                        set_visible: self.connection_state != ConnectionState::Connected,
+                        set_icon_name: Some("dialog-warning-symbolic"),  // Default icon
                         set_pixel_size: 16,
-                        #[watch]
-                        set_css_classes: &[match self.connection_state {
-                            ConnectionState::Connected => "success",
-                            ConnectionState::SyncFailed => "warning",
-                            ConnectionState::Disconnected => "error",
-                        }],
-                        #[watch]
-                        set_tooltip_text: Some(match self.connection_state {
-                            ConnectionState::Connected => "Connected and synced",
-                            ConnectionState::SyncFailed => "Connected but sync failed",
-                            ConnectionState::Disconnected => "Disconnected",
-                        }),
                     },
 
                     gtk::Image {
@@ -298,6 +291,7 @@ impl FactoryComponent for SourceGroup {
             db,
             syncing_libraries: HashSet::new(),
             connection_state: ConnectionState::Connected, // Assume connected initially
+            sync_error_message: None,
         }
     }
 
@@ -412,15 +406,69 @@ impl FactoryComponent for SourceGroup {
                 // Update the library list to hide spinners
                 self.update_library_list(&widgets.library_list);
             }
-            SourceGroupInput::UpdateConnectionStatus(state) => {
-                self.connection_state = state;
+            SourceGroupInput::UpdateConnectionStatus(state, error_msg) => {
                 debug!(
-                    "Source {} connection status updated: {:?}",
-                    self.source.name, state
+                    "Source {} connection status updating from {:?} to {:?} (error: {:?})",
+                    self.source.name, self.connection_state, state, error_msg
                 );
-                // Trigger a view refresh by updating the widgets
-                // The #[watch] attributes will now pick up the state change
-                widgets.root.queue_draw();
+
+                // Log stack trace to see who's calling this
+                if self.connection_state == ConnectionState::SyncFailed
+                    && state == ConnectionState::Connected
+                {
+                    error!(
+                        "WARNING: Resetting SyncFailed to Connected for source {}! This should not happen!",
+                        self.source.name
+                    );
+                    // Log a backtrace to find out where this is coming from
+                    debug!("Stack trace: {:?}", std::backtrace::Backtrace::capture());
+                }
+
+                self.connection_state = state;
+                self.sync_error_message = error_msg.clone();
+
+                // Manually update the connection icon widget
+                // Hide icon when Connected, show for problems
+                let should_show = state != ConnectionState::Connected;
+                debug!(
+                    "Setting icon visibility for {} to {} (state: {:?})",
+                    self.source.name, should_show, state
+                );
+                widgets.connection_icon.set_visible(should_show);
+
+                if should_show {
+                    let icon_name = match state {
+                        ConnectionState::SyncFailed => "dialog-warning-symbolic",
+                        ConnectionState::Disconnected => "network-offline-symbolic",
+                        _ => "dialog-warning-symbolic", // Fallback
+                    };
+                    debug!("Setting icon name to: {}", icon_name);
+                    widgets.connection_icon.set_icon_name(Some(icon_name));
+                }
+
+                if should_show {
+                    widgets.connection_icon.set_css_classes(&[match state {
+                        ConnectionState::SyncFailed => "warning",
+                        ConnectionState::Disconnected => "error",
+                        _ => "warning", // Fallback
+                    }]);
+                }
+
+                // Set tooltip with error details if available
+                if state != ConnectionState::Connected {
+                    let tooltip = match state {
+                        ConnectionState::SyncFailed => {
+                            if let Some(ref error) = error_msg {
+                                format!("Sync failed: {}", error)
+                            } else {
+                                "Connected but sync failed".to_string()
+                            }
+                        }
+                        ConnectionState::Disconnected => "Disconnected".to_string(),
+                        _ => String::new(),
+                    };
+                    widgets.connection_icon.set_tooltip_text(Some(&tooltip));
+                }
             }
         }
     }
@@ -734,7 +782,11 @@ impl Component for Sidebar {
                 self.connection_status = status;
             }
 
-            SidebarInput::UpdateSourceConnectionStatus { source_id, state } => {
+            SidebarInput::UpdateSourceConnectionStatus {
+                source_id,
+                state,
+                error,
+            } => {
                 // Find the source group and update its connection status
                 let idx_to_update = {
                     let guard = self.source_groups.guard();
@@ -749,7 +801,64 @@ impl Component for Sidebar {
 
                 if let Some(idx) = idx_to_update {
                     self.source_groups
-                        .send(idx, SourceGroupInput::UpdateConnectionStatus(state));
+                        .send(idx, SourceGroupInput::UpdateConnectionStatus(state, error));
+                }
+            }
+
+            SidebarInput::ConnectionCheckResult {
+                source_id,
+                is_connected,
+            } => {
+                // Handle connection check from monitor
+                // Only update state if we're currently Disconnected
+                // Don't override SyncFailed state
+                let idx_to_check = {
+                    let guard = self.source_groups.guard();
+                    guard.iter().enumerate().find_map(|(idx, sg)| {
+                        if sg.source.id == source_id.to_string() {
+                            // Check current state - only update if Disconnected
+                            if sg.connection_state == ConnectionState::Disconnected && is_connected
+                            {
+                                Some((idx, true))
+                            } else if !is_connected
+                                && sg.connection_state != ConnectionState::Disconnected
+                            {
+                                Some((idx, false))
+                            } else {
+                                None // Don't change if SyncFailed or already in correct state
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                };
+
+                if let Some((idx, should_connect)) = idx_to_check {
+                    if should_connect {
+                        debug!(
+                            "Connection restored for source {}, setting to Connected",
+                            source_id
+                        );
+                        self.source_groups.send(
+                            idx,
+                            SourceGroupInput::UpdateConnectionStatus(
+                                ConnectionState::Connected,
+                                None,
+                            ),
+                        );
+                    } else {
+                        debug!(
+                            "Connection lost for source {}, setting to Disconnected",
+                            source_id
+                        );
+                        self.source_groups.send(
+                            idx,
+                            SourceGroupInput::UpdateConnectionStatus(
+                                ConnectionState::Disconnected,
+                                None,
+                            ),
+                        );
+                    }
                 }
             }
 
@@ -806,13 +915,28 @@ impl Component for Sidebar {
                         if let Some(idx) = idx_to_update {
                             self.source_groups
                                 .send(idx, SourceGroupInput::ReloadLibraries);
-                            // Set connection state to Connected since sync completed successfully
-                            self.source_groups.send(
-                                idx,
-                                SourceGroupInput::UpdateConnectionStatus(
-                                    ConnectionState::Connected,
-                                ),
-                            );
+
+                            // Only set to Connected if we actually synced items
+                            // If items_synced is 0, it might mean the sync failed earlier
+                            // and we should preserve the SyncFailed state
+                            if items_synced > 0 {
+                                debug!(
+                                    "Sync successful for source {} with {} items, setting to Connected",
+                                    source_id, items_synced
+                                );
+                                self.source_groups.send(
+                                    idx,
+                                    SourceGroupInput::UpdateConnectionStatus(
+                                        ConnectionState::Connected,
+                                        None, // No error on successful sync
+                                    ),
+                                );
+                            } else {
+                                debug!(
+                                    "Sync completed for source {} but with 0 items, preserving current connection state",
+                                    source_id
+                                );
+                            }
                         }
                     }
                     BrokerMessage::Source(SourceMessage::SyncError { source_id, error }) => {
@@ -840,17 +964,13 @@ impl Component for Sidebar {
                                 idx,
                                 SourceGroupInput::UpdateConnectionStatus(
                                     ConnectionState::SyncFailed,
+                                    Some(error.clone()), // Pass the error message for tooltip
                                 ),
                             );
                         }
 
-                        // Reset status after 3 seconds
-                        let sender_clone = sender.clone();
-                        relm4::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                            sender_clone
-                                .input(SidebarInput::UpdateConnectionStatus("Ready".to_string()));
-                        });
+                        // Keep the error status visible - don't reset it
+                        // The status will be updated on next successful sync
                     }
                     BrokerMessage::Source(SourceMessage::LibrarySyncStarted {
                         source_id,
