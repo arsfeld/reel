@@ -6,6 +6,7 @@
   **A modern reactive media player for GNOME, built with Rust and Relm4 for performance and reliability.**
 
   [![CI](https://github.com/arsfeld/reel/actions/workflows/ci.yml/badge.svg)](https://github.com/arsfeld/reel/actions/workflows/ci.yml)
+  [![codecov](https://codecov.io/gh/arsfeld/reel/branch/main/graph/badge.svg)](https://codecov.io/gh/arsfeld/reel)
   [![Rust](https://img.shields.io/badge/rust-1.89%2B-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
   [![Relm4](https://img.shields.io/badge/Relm4-0.10-ff6b6b.svg?style=flat-square)](https://relm4.org/)
   [![Relm4](https://img.shields.io/badge/Relm4-0.9-ff6b6b.svg?style=flat-square)](https://relm4.org/)

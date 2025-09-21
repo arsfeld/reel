@@ -68,6 +68,29 @@ jobs:
             - name: Run tests
               run: cargo test --release
 
+            - name: Install cargo-tarpaulin
+              run: |
+                  cargo install cargo-tarpaulin || true
+
+            - name: Generate coverage report
+              run: |
+                  cargo tarpaulin --verbose --all-features --workspace --timeout 120 --out xml
+
+            - name: Upload coverage to Codecov
+              uses: codecov/codecov-action@v4
+              with:
+                  file: ./cobertura.xml
+                  flags: unittests
+                  name: codecov-umbrella
+                  fail_ci_if_error: false
+                  token: ${{ secrets.CODECOV_TOKEN }}
+
+            - name: Upload coverage report as artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: coverage-report
+                  path: cobertura.xml
+
             - name: Upload Linux binary
               uses: actions/upload-artifact@v4
               with:
