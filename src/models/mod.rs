@@ -29,7 +29,7 @@ pub struct Library {
     pub item_count: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LibraryType {
     Movies,
     Shows,

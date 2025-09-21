@@ -107,3 +107,21 @@ impl Database {
         Ok(())
     }
 }
+
+#[cfg(test)]
+pub async fn get_test_db_connection() -> Result<SeaOrmConnection> {
+    use tempfile::TempDir;
+
+    // Create temporary directory for test database
+    let temp_dir = TempDir::new()?;
+    let db_path = temp_dir.path().join("test.db");
+
+    // Create database connection
+    let db = Database::connect(&db_path).await?;
+
+    // Run migrations
+    db.migrate().await?;
+
+    // Return the underlying connection (not Arc-wrapped for tests)
+    Ok(Arc::try_unwrap(db.connection).unwrap_or_else(|arc| (*arc).clone()))
+}
