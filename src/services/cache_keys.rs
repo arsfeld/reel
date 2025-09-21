@@ -243,16 +243,24 @@ mod tests {
 
     #[test]
     fn test_media_item_key() {
+        // Test with Album type which doesn't have a specific variant
         let key = CacheKey::MediaItem {
             source: SourceId::from("plex-1"),
             library: LibraryId::from("lib-1"),
-            media_type: MediaType::Movie,
-            item_id: MediaItemId::from("movie-123"),
+            media_type: MediaType::Album,
+            item_id: MediaItemId::from("album-123"),
         };
-        assert_eq!(key.to_string(), "plex-1:lib-1:movie:movie-123");
+        assert_eq!(key.to_string(), "plex-1:lib-1:album:album-123");
 
-        let parsed = CacheKey::parse("plex-1:lib-1:movie:movie-123").unwrap();
+        let parsed = CacheKey::parse("plex-1:lib-1:album:album-123").unwrap();
         assert_eq!(parsed, key);
+
+        // Test that movie/episode/show types use their specific variants
+        let movie_parsed = CacheKey::parse("plex-1:lib-1:movie:movie-123").unwrap();
+        assert!(matches!(movie_parsed, CacheKey::Movie(_, _, _)));
+
+        let episode_parsed = CacheKey::parse("plex-1:lib-1:episode:ep-123").unwrap();
+        assert!(matches!(episode_parsed, CacheKey::Episode(_, _, _)));
     }
 
     #[test]
@@ -287,8 +295,8 @@ mod tests {
             CacheKey::MediaItem {
                 source: SourceId::from("src3"),
                 library: LibraryId::from("lib2"),
-                media_type: MediaType::Episode,
-                item_id: MediaItemId::from("ep1"),
+                media_type: MediaType::Album,
+                item_id: MediaItemId::from("album1"),
             },
             CacheKey::HomeSections(SourceId::from("src4")),
             CacheKey::Show(
@@ -296,9 +304,14 @@ mod tests {
                 LibraryId::from("lib3"),
                 ShowId::from("show1"),
             ),
-            CacheKey::Movie(
+            CacheKey::Episode(
                 SourceId::from("src6"),
                 LibraryId::from("lib4"),
+                MediaItemId::from("ep1"),
+            ),
+            CacheKey::Movie(
+                SourceId::from("src7"),
+                LibraryId::from("lib5"),
                 MediaItemId::from("mov1"),
             ),
         ];
@@ -314,6 +327,6 @@ mod tests {
     fn test_invalid_parse() {
         assert!(CacheKey::parse("invalid").is_err());
         assert!(CacheKey::parse("").is_err());
-        assert!(CacheKey::parse("too:many:colons:here:and:more").is_ok()); // Will parse as MediaItem
+        assert!(CacheKey::parse("too:many:colons:here:and:more").is_err()); // Too many parts
     }
 }
