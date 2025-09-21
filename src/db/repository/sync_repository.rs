@@ -42,6 +42,9 @@ pub trait SyncRepository: Repository<SyncStatusModel> {
     async fn cleanup_old_records(&self, keep_count: usize) -> Result<u64>;
 }
 
+#[cfg(test)]
+mod sync_repository_tests;
+
 #[derive(Debug, Clone)]
 
 pub struct SyncStats {
@@ -82,7 +85,11 @@ impl Repository<SyncStatusModel> for SyncRepositoryImpl {
 
     async fn insert(&self, entity: SyncStatusModel) -> Result<SyncStatusModel> {
         let active_model = SyncStatusActiveModel {
-            id: Set(entity.id),
+            id: if entity.id == 0 {
+                sea_orm::NotSet
+            } else {
+                Set(entity.id)
+            },
             source_id: Set(entity.source_id.clone()),
             sync_type: Set(entity.sync_type.clone()),
             status: Set(entity.status.clone()),
@@ -97,7 +104,17 @@ impl Repository<SyncStatusModel> for SyncRepositoryImpl {
     }
 
     async fn update(&self, entity: SyncStatusModel) -> Result<SyncStatusModel> {
-        let active_model: SyncStatusActiveModel = entity.clone().into();
+        let active_model = SyncStatusActiveModel {
+            id: Set(entity.id),
+            source_id: Set(entity.source_id.clone()),
+            sync_type: Set(entity.sync_type.clone()),
+            status: Set(entity.status.clone()),
+            started_at: Set(entity.started_at),
+            completed_at: Set(entity.completed_at),
+            items_synced: Set(entity.items_synced),
+            total_items: Set(entity.total_items),
+            error_message: Set(entity.error_message.clone()),
+        };
         Ok(active_model.update(self.base.db.as_ref()).await?)
     }
 

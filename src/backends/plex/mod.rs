@@ -1,5 +1,6 @@
 mod api;
 mod auth;
+mod tests;
 
 pub use api::PlexApi;
 pub use auth::{PlexAuth, PlexConnection, PlexPin, PlexServer};
