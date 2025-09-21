@@ -16,6 +16,9 @@ mod ui;
 mod utils;
 mod workers;
 
+#[cfg(test)]
+mod test_utils;
+
 fn main() -> Result<()> {
     use app::AppPlatform;
     use std::sync::Arc;
