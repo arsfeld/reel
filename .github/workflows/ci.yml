@@ -53,8 +53,20 @@ jobs:
                       ~/.cargo/registry/cache/
                       ~/.cargo/git/db/
                       target/
-                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-                  restore-keys: ${{ runner.os }}-cargo-
+                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/Cargo.toml') }}
+                  restore-keys: |
+                      ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+                      ${{ runner.os }}-cargo-
+
+            - name: Cache LLVM coverage data
+              uses: actions/cache@v4
+              with:
+                  path: |
+                      target/llvm-cov-target/
+                  key: ${{ runner.os }}-llvm-cov-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+                  restore-keys: |
+                      ${{ runner.os }}-llvm-cov-${{ hashFiles('**/Cargo.lock') }}-
+                      ${{ runner.os }}-llvm-cov-
 
             # - name: Check formatting
             #   run: cargo fmt -- --check
@@ -63,23 +75,37 @@ jobs:
             #   run: cargo clippy -- -D warnings
 
             - name: Build
-              run: cargo build --release
+              run: |
+                  # Use all available cores for building
+                  export CARGO_BUILD_JOBS=$(nproc)
+                  cargo build --release
 
             - name: Run tests
-              run: cargo test --release
-
-            - name: Install cargo-tarpaulin
               run: |
-                  cargo install cargo-tarpaulin || true
+                  # Run tests in parallel with all available cores
+                  export RUST_TEST_THREADS=$(nproc)
+                  cargo test --release
+
+            - name: Install cargo-llvm-cov
+              uses: taiki-e/install-action@cargo-llvm-cov
 
             - name: Generate coverage report
               run: |
-                  cargo tarpaulin --verbose --all-features --workspace --timeout 120 --out xml
+                  # Use llvm-cov for much faster coverage generation
+                  # --release uses optimized builds for faster execution
+                  # --no-clean prevents unnecessary rebuilds
+                  # --ignore-filename-regex excludes test files, migrations, and generated code from coverage
+                  export RUST_TEST_THREADS=$(nproc)
+                  cargo llvm-cov --all-features --workspace --release \
+                    --ignore-filename-regex '(tests?/.*|.*_test\.rs|target/.*|migrations/.*|.*\.gen\.rs)' \
+                    --lcov --output-path lcov.info \
+                    --no-clean \
+                    -- --test-threads=$(nproc)
 
             - name: Upload coverage to Codecov
               uses: codecov/codecov-action@v4
               with:
-                  file: ./cobertura.xml
+                  file: ./lcov.info
                   flags: unittests
                   name: codecov-umbrella
                   fail_ci_if_error: false
@@ -89,7 +115,7 @@ jobs:
               uses: actions/upload-artifact@v4
               with:
                   name: coverage-report
-                  path: cobertura.xml
+                  path: lcov.info
 
             - name: Upload Linux binary
               uses: actions/upload-artifact@v4
