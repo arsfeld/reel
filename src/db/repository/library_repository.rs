@@ -75,7 +75,10 @@ impl Repository<LibraryModel> for LibraryRepositoryImpl {
             entity.item_count
         );
         let mut active_model: LibraryActiveModel = entity.clone().into();
-        // Explicitly set the item_count field to ensure it's updated
+        // Explicitly set all updatable fields to ensure they're updated
+        active_model.title = Set(entity.title.clone());
+        active_model.library_type = Set(entity.library_type.clone());
+        active_model.icon = Set(entity.icon.clone());
         active_model.item_count = Set(entity.item_count);
         active_model.updated_at = Set(chrono::Utc::now().naive_utc());
 
