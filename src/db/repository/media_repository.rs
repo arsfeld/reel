@@ -681,3 +681,557 @@ impl MediaRepositoryImpl {
             .await?)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::db::entities::{MediaItem, MediaItemModel, media_items};
+    use crate::db::repository::{MediaRepository, MediaRepositoryImpl, Repository};
+    use anyhow::Result;
+    use chrono::Utc;
+    use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
+    use std::sync::Arc;
+
+    async fn setup_test_repository() -> Result<(Arc<DatabaseConnection>, Arc<MediaRepositoryImpl>)>
+    {
+        use crate::db::connection::Database;
+        use crate::db::entities::libraries::ActiveModel as LibraryActiveModel;
+        use crate::db::entities::sources::ActiveModel as SourceActiveModel;
+        use tempfile::TempDir;
+
+        // Create temporary directory for test database
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        // Need to leak the temp_dir to keep it alive for the test
+        let _temp_dir = Box::leak(Box::new(temp_dir));
+
+        // Create database connection
+        let db = Database::connect(&db_path).await?;
+
+        // Run migrations
+        db.migrate().await?;
+
+        let db_arc = db.get_connection();
+        let repo = Arc::new(MediaRepositoryImpl::new(db_arc.clone()));
+
+        // Create test source
+        let source = SourceActiveModel {
+            id: Set("test-source".to_string()),
+            name: Set("Test Source".to_string()),
+            source_type: Set("test".to_string()),
+            auth_provider_id: Set(None),
+            connection_url: Set(None),
+            connections: Set(None),
+            machine_id: Set(None),
+            is_owned: Set(false),
+            is_online: Set(true),
+            last_sync: Set(None),
+            last_connection_test: Set(None),
+            connection_failure_count: Set(0),
+            connection_quality: Set(None),
+            created_at: Set(Utc::now().naive_utc()),
+            updated_at: Set(Utc::now().naive_utc()),
+        };
+        source.insert(db_arc.as_ref()).await?;
+
+        // Create test libraries
+        let movie_library = LibraryActiveModel {
+            id: Set("test-movie-lib".to_string()),
+            source_id: Set("test-source".to_string()),
+            title: Set("Movies".to_string()),
+            library_type: Set("movie".to_string()),
+            icon: Set(Some("video-x-generic".to_string())),
+            item_count: Set(0),
+            created_at: Set(Utc::now().naive_utc()),
+            updated_at: Set(Utc::now().naive_utc()),
+        };
+        movie_library.insert(db_arc.as_ref()).await?;
+
+        let show_library = LibraryActiveModel {
+            id: Set("test-show-lib".to_string()),
+            source_id: Set("test-source".to_string()),
+            title: Set("TV Shows".to_string()),
+            library_type: Set("show".to_string()),
+            icon: Set(Some("video-x-generic".to_string())),
+            item_count: Set(0),
+            created_at: Set(Utc::now().naive_utc()),
+            updated_at: Set(Utc::now().naive_utc()),
+        };
+        show_library.insert(db_arc.as_ref()).await?;
+
+        Ok((db_arc, repo))
+    }
+
+    fn create_test_movie(id: &str, title: &str, library_id: &str) -> MediaItemModel {
+        MediaItemModel {
+            id: id.to_string(),
+            source_id: "test-source".to_string(),
+            library_id: library_id.to_string(),
+            parent_id: None,
+            media_type: "movie".to_string(),
+            title: title.to_string(),
+            sort_title: title.to_lowercase(),
+            original_title: Some(title.to_string()),
+            summary: Some(format!("Summary for {}", title)),
+            tagline: Some(format!("Tagline for {}", title)),
+            year: Some(2024),
+            duration: Some(7200000), // 2 hours in milliseconds
+            rating: Some(8.5),
+            genres: Some(vec!["Action".to_string(), "Adventure".to_string()]),
+            poster_url: Some(format!("https://example.com/{}.jpg", id)),
+            backdrop_url: Some(format!("https://example.com/{}_backdrop.jpg", id)),
+            media_url: Some(format!("https://example.com/{}.mp4", id)),
+            file_path: None,
+            container: Some("mp4".to_string()),
+            video_codec: Some("h264".to_string()),
+            audio_codec: Some("aac".to_string()),
+            subtitles_available: Some(vec!["en".to_string()]),
+            season_number: None,
+            episode_number: None,
+            air_date: None,
+            studio: Some("Test Studios".to_string()),
+            cast: Some(serde_json::json!([])),
+            crew: Some(serde_json::json!([])),
+            added_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
+            metadata: Some(serde_json::json!({})),
+        }
+    }
+
+    fn create_test_show(id: &str, title: &str) -> MediaItemModel {
+        MediaItemModel {
+            id: id.to_string(),
+            source_id: "test-source".to_string(),
+            library_id: "test-show-lib".to_string(),
+            parent_id: None,
+            media_type: "show".to_string(),
+            title: title.to_string(),
+            sort_title: title.to_lowercase(),
+            original_title: Some(title.to_string()),
+            summary: Some(format!("Summary for show {}", title)),
+            tagline: None,
+            year: Some(2024),
+            duration: None,
+            rating: Some(8.0),
+            genres: Some(vec!["Drama".to_string()]),
+            poster_url: Some(format!("https://example.com/{}.jpg", id)),
+            backdrop_url: Some(format!("https://example.com/{}_backdrop.jpg", id)),
+            media_url: None,
+            file_path: None,
+            container: None,
+            video_codec: None,
+            audio_codec: None,
+            subtitles_available: None,
+            season_number: None,
+            episode_number: None,
+            air_date: None,
+            studio: Some("Test Network".to_string()),
+            cast: Some(serde_json::json!([])),
+            crew: Some(serde_json::json!([])),
+            added_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
+            metadata: Some(serde_json::json!({"seasons": 3})),
+        }
+    }
+
+    fn create_test_episode(
+        id: &str,
+        show_id: &str,
+        title: &str,
+        season: i32,
+        episode: i32,
+    ) -> MediaItemModel {
+        MediaItemModel {
+            id: id.to_string(),
+            source_id: "test-source".to_string(),
+            library_id: "test-show-lib".to_string(),
+            parent_id: Some(show_id.to_string()),
+            media_type: "episode".to_string(),
+            title: title.to_string(),
+            sort_title: format!("s{:02}e{:02}", season, episode),
+            original_title: Some(title.to_string()),
+            summary: Some(format!("Episode {} summary", title)),
+            tagline: None,
+            year: Some(2024),
+            duration: Some(2700000), // 45 minutes
+            rating: Some(8.2),
+            genres: None,
+            poster_url: Some(format!("https://example.com/{}.jpg", id)),
+            backdrop_url: None,
+            media_url: Some(format!("https://example.com/{}.mp4", id)),
+            file_path: None,
+            container: Some("mp4".to_string()),
+            video_codec: Some("h264".to_string()),
+            audio_codec: Some("aac".to_string()),
+            subtitles_available: Some(vec!["en".to_string()]),
+            season_number: Some(season),
+            episode_number: Some(episode),
+            air_date: Some(Utc::now().naive_utc()),
+            studio: None,
+            cast: None,
+            crew: None,
+            added_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
+            metadata: Some(serde_json::json!({})),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_media_repository_crud_operations() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Test insert
+        let movie = create_test_movie("movie-1", "Test Movie", "test-movie-lib");
+        repo.insert(movie.clone()).await?;
+
+        // Test find_by_id
+        let found = repo.find_by_id("movie-1").await?;
+        assert!(found.is_some());
+        let found = found.unwrap();
+        assert_eq!(found.title, "Test Movie");
+
+        // Test update
+        let mut updated_movie = found.clone();
+        updated_movie.title = "Updated Movie".to_string();
+        repo.update(updated_movie).await?;
+
+        let found = repo.find_by_id("movie-1").await?;
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().title, "Updated Movie");
+
+        // Test delete
+        repo.delete("movie-1").await?;
+        let found = repo.find_by_id("movie-1").await?;
+        assert!(found.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_by_library() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Insert test movies
+        let movie1 = create_test_movie("movie-1", "Movie One", "test-movie-lib");
+        let movie2 = create_test_movie("movie-2", "Movie Two", "test-movie-lib");
+        let show = create_test_show("show-1", "Show One");
+
+        repo.insert(movie1).await?;
+        repo.insert(movie2).await?;
+        repo.insert(show).await?;
+
+        // Test find_by_library for movies
+        let movies = repo.find_by_library("test-movie-lib").await?;
+        assert_eq!(movies.len(), 2);
+        assert!(movies.iter().all(|m| m.library_id == "test-movie-lib"));
+
+        // Test find_by_library for shows
+        let shows = repo.find_by_library("test-show-lib").await?;
+        assert_eq!(shows.len(), 1);
+        assert_eq!(shows[0].title, "Show One");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_by_library_and_type() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Insert mixed content
+        let movie = create_test_movie("movie-1", "Movie", "test-movie-lib");
+        let show = create_test_show("show-1", "Show");
+        let episode = create_test_episode("ep-1", "show-1", "Episode 1", 1, 1);
+
+        repo.insert(movie).await?;
+        repo.insert(show).await?;
+        repo.insert(episode).await?;
+
+        // Test finding movies
+        let movies = repo
+            .find_by_library_and_type("test-movie-lib", "movie")
+            .await?;
+        assert_eq!(movies.len(), 1);
+        assert_eq!(movies[0].media_type, "movie");
+
+        // Test finding shows
+        let shows = repo
+            .find_by_library_and_type("test-show-lib", "show")
+            .await?;
+        assert_eq!(shows.len(), 1);
+        assert_eq!(shows[0].media_type, "show");
+
+        // Test finding episodes
+        let episodes = repo
+            .find_by_library_and_type("test-show-lib", "episode")
+            .await?;
+        assert_eq!(episodes.len(), 1);
+        assert_eq!(episodes[0].media_type, "episode");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_search() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Insert test data
+        let movie1 = create_test_movie("movie-1", "The Matrix", "test-movie-lib");
+        let movie2 = create_test_movie("movie-2", "Inception", "test-movie-lib");
+        let movie3 = create_test_movie("movie-3", "The Dark Knight", "test-movie-lib");
+
+        repo.insert(movie1).await?;
+        repo.insert(movie2).await?;
+        repo.insert(movie3).await?;
+
+        // Test search
+        let results = repo.search("matrix").await?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "The Matrix");
+
+        let results = repo.search("the").await?;
+        assert_eq!(results.len(), 2); // "The Matrix" and "The Dark Knight"
+
+        let results = repo.search("inception").await?;
+        assert_eq!(results.len(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_recently_added() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Add movies with slight delays to ensure ordering
+        let movie1 = create_test_movie("movie-1", "Old Movie", "test-movie-lib");
+        repo.insert(movie1).await?;
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        let movie2 = create_test_movie("movie-2", "Recent Movie", "test-movie-lib");
+        repo.insert(movie2).await?;
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        let movie3 = create_test_movie("movie-3", "Newest Movie", "test-movie-lib");
+        repo.insert(movie3).await?;
+
+        // Test find_recently_added
+        let recent = repo.find_recently_added(2).await?;
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].title, "Newest Movie");
+        assert_eq!(recent[1].title, "Recent Movie");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_episodes_by_show() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Create show and episodes
+        let show = create_test_show("show-1", "Test Show");
+        repo.insert(show).await?;
+
+        let ep1 = create_test_episode("ep-1", "show-1", "Pilot", 1, 1);
+        let ep2 = create_test_episode("ep-2", "show-1", "Episode 2", 1, 2);
+        let ep3 = create_test_episode("ep-3", "show-1", "Season Finale", 1, 10);
+
+        repo.insert(ep1).await?;
+        repo.insert(ep2).await?;
+        repo.insert(ep3).await?;
+
+        // Test find_episodes_by_show
+        let episodes = repo.find_episodes_by_show("show-1").await?;
+        assert_eq!(episodes.len(), 3);
+        assert!(
+            episodes
+                .iter()
+                .all(|e| e.parent_id == Some("show-1".to_string()))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_episodes_by_season() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Create show and episodes across seasons
+        let show = create_test_show("show-1", "Test Show");
+        repo.insert(show).await?;
+
+        let s1e1 = create_test_episode("s1e1", "show-1", "S1E1", 1, 1);
+        let s1e2 = create_test_episode("s1e2", "show-1", "S1E2", 1, 2);
+        let s2e1 = create_test_episode("s2e1", "show-1", "S2E1", 2, 1);
+
+        repo.insert(s1e1).await?;
+        repo.insert(s1e2).await?;
+        repo.insert(s2e1).await?;
+
+        // Test finding season 1 episodes
+        let season1 = repo.find_episodes_by_season("show-1", 1).await?;
+        assert_eq!(season1.len(), 2);
+        assert!(season1.iter().all(|e| e.season_number == Some(1)));
+
+        // Test finding season 2 episodes
+        let season2 = repo.find_episodes_by_season("show-1", 2).await?;
+        assert_eq!(season2.len(), 1);
+        assert_eq!(season2[0].season_number, Some(2));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bulk_insert() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Create multiple movies
+        let movies = vec![
+            create_test_movie("bulk-1", "Bulk Movie 1", "test-movie-lib"),
+            create_test_movie("bulk-2", "Bulk Movie 2", "test-movie-lib"),
+            create_test_movie("bulk-3", "Bulk Movie 3", "test-movie-lib"),
+        ];
+
+        // Test bulk_insert
+        repo.bulk_insert(movies).await?;
+
+        // Verify all were inserted
+        let found1 = repo.find_by_id("bulk-1").await?;
+        let found2 = repo.find_by_id("bulk-2").await?;
+        let found3 = repo.find_by_id("bulk-3").await?;
+
+        assert!(found1.is_some());
+        assert!(found2.is_some());
+        assert!(found3.is_some());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_metadata() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Insert a movie
+        let movie = create_test_movie("movie-1", "Test Movie", "test-movie-lib");
+        repo.insert(movie).await?;
+
+        // Update metadata
+        let new_metadata = serde_json::json!({
+            "custom_field": "custom_value",
+            "rating_details": {
+                "imdb": 8.5,
+                "rotten_tomatoes": 92
+            }
+        });
+
+        repo.update_metadata("movie-1", new_metadata.clone())
+            .await?;
+
+        // Verify metadata was updated
+        let found = repo.find_by_id("movie-1").await?;
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().metadata, Some(new_metadata));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_next_and_previous_episode() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Create show and episodes
+        let show = create_test_show("show-1", "Test Show");
+        repo.insert(show).await?;
+
+        let s1e1 = create_test_episode("s1e1", "show-1", "S1E1", 1, 1);
+        let s1e2 = create_test_episode("s1e2", "show-1", "S1E2", 1, 2);
+        let s1e3 = create_test_episode("s1e3", "show-1", "S1E3", 1, 3);
+        let s2e1 = create_test_episode("s2e1", "show-1", "S2E1", 2, 1);
+
+        repo.insert(s1e1).await?;
+        repo.insert(s1e2).await?;
+        repo.insert(s1e3).await?;
+        repo.insert(s2e1).await?;
+
+        // Test find_next_episode
+        let next = repo.find_next_episode("show-1", 1, 2).await?;
+        assert!(next.is_some());
+        assert_eq!(next.unwrap().episode_number, Some(3));
+
+        // Test next episode across seasons
+        let next = repo.find_next_episode("show-1", 1, 3).await?;
+        assert!(next.is_some());
+        assert_eq!(next.unwrap().season_number, Some(2));
+        assert_eq!(next.unwrap().episode_number, Some(1));
+
+        // Test find_previous_episode
+        let prev = repo.find_previous_episode("show-1", 1, 2).await?;
+        assert!(prev.is_some());
+        assert_eq!(prev.unwrap().episode_number, Some(1));
+
+        // Test previous episode across seasons
+        let prev = repo.find_previous_episode("show-1", 2, 1).await?;
+        assert!(prev.is_some());
+        assert_eq!(prev.unwrap().season_number, Some(1));
+        assert_eq!(prev.unwrap().episode_number, Some(3));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_library() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Insert movies in different libraries
+        let movie1 = create_test_movie("movie-1", "Movie 1", "test-movie-lib");
+        let movie2 = create_test_movie("movie-2", "Movie 2", "test-movie-lib");
+        let show = create_test_show("show-1", "Show 1");
+
+        repo.insert(movie1).await?;
+        repo.insert(movie2).await?;
+        repo.insert(show).await?;
+
+        // Delete all movies in movie library
+        repo.delete_by_library("test-movie-lib").await?;
+
+        // Verify movies are deleted but show remains
+        let movies = repo.find_by_library("test-movie-lib").await?;
+        assert_eq!(movies.len(), 0);
+
+        let shows = repo.find_by_library("test-show-lib").await?;
+        assert_eq!(shows.len(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_by_genre() -> Result<()> {
+        let (_db, repo) = setup_test_repository().await?;
+
+        // Insert movies with different genres
+        let mut action_movie = create_test_movie("movie-1", "Action Movie", "test-movie-lib");
+        action_movie.genres = Some(vec!["Action".to_string(), "Thriller".to_string()]);
+
+        let mut comedy_movie = create_test_movie("movie-2", "Comedy Movie", "test-movie-lib");
+        comedy_movie.genres = Some(vec!["Comedy".to_string()]);
+
+        let mut action_comedy = create_test_movie("movie-3", "Action Comedy", "test-movie-lib");
+        action_comedy.genres = Some(vec!["Action".to_string(), "Comedy".to_string()]);
+
+        repo.insert(action_movie).await?;
+        repo.insert(comedy_movie).await?;
+        repo.insert(action_comedy).await?;
+
+        // Test finding by genre
+        let action_movies = repo.find_by_genre("Action").await?;
+        assert_eq!(action_movies.len(), 2);
+
+        let comedy_movies = repo.find_by_genre("Comedy").await?;
+        assert_eq!(comedy_movies.len(), 2);
+
+        let thriller_movies = repo.find_by_genre("Thriller").await?;
+        assert_eq!(thriller_movies.len(), 1);
+
+        Ok(())
+    }
+}
