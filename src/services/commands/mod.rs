@@ -44,3 +44,64 @@ impl CommandExecutor {
         Ok(CommandResult::new(result, execution_time_ms))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::anyhow;
+
+    struct SuccessfulCommand {
+        value: String,
+    }
+
+    #[async_trait]
+    impl Command<String> for SuccessfulCommand {
+        async fn execute(&self) -> Result<String> {
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            Ok(self.value.clone())
+        }
+    }
+
+    struct FailingCommand {
+        error_message: String,
+    }
+
+    #[async_trait]
+    impl Command<String> for FailingCommand {
+        async fn execute(&self) -> Result<String> {
+            Err(anyhow!(self.error_message.clone()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_command_executor_success() {
+        let command = SuccessfulCommand {
+            value: "test_result".to_string(),
+        };
+
+        let result = CommandExecutor::execute(&command).await;
+        assert!(result.is_ok());
+
+        let command_result = result.unwrap();
+        assert_eq!(command_result.data, "test_result");
+        assert!(command_result.execution_time_ms >= 10);
+    }
+
+    #[tokio::test]
+    async fn test_command_executor_failure() {
+        let command = FailingCommand {
+            error_message: "Command failed".to_string(),
+        };
+
+        let result = CommandExecutor::execute(&command).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Command failed");
+    }
+
+    #[tokio::test]
+    async fn test_command_result_creation() {
+        let result = CommandResult::new("test_data".to_string(), 42);
+        assert_eq!(result.data, "test_data");
+        assert_eq!(result.execution_time_ms, 42);
+    }
+}

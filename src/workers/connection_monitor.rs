@@ -209,7 +209,7 @@ impl Worker for ConnectionMonitor {
 
 impl ConnectionMonitor {
     /// Calculate next check time based on connection quality
-    fn calculate_next_check(&self, _source_id: &SourceId, quality: Option<&str>) -> Instant {
+    pub fn calculate_next_check(&self, _source_id: &SourceId, quality: Option<&str>) -> Instant {
         let interval = match quality {
             Some("local") => Duration::from_secs(300), // 5 minutes for local
             Some("remote") => Duration::from_secs(120), // 2 minutes for remote
@@ -220,7 +220,7 @@ impl ConnectionMonitor {
     }
 
     /// Check if a source needs checking based on its quality
-    fn should_check_source(&self, source_id: &SourceId) -> bool {
+    pub fn should_check_source(&self, source_id: &SourceId) -> bool {
         self.next_check_times
             .get(source_id)
             .map(|&next_check| Instant::now() >= next_check)
@@ -244,3 +244,7 @@ impl ConnectionMonitor {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "connection_monitor_tests.rs"]
+mod tests;
