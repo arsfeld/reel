@@ -9,7 +9,6 @@
   [![codecov](https://codecov.io/gh/arsfeld/reel/branch/main/graph/badge.svg)](https://codecov.io/gh/arsfeld/reel)
   [![Rust](https://img.shields.io/badge/rust-1.89%2B-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
   [![Relm4](https://img.shields.io/badge/Relm4-0.10-ff6b6b.svg?style=flat-square)](https://relm4.org/)
-  [![Relm4](https://img.shields.io/badge/Relm4-0.9-ff6b6b.svg?style=flat-square)](https://relm4.org/)
   [![License](https://img.shields.io/badge/license-GPLv3-green.svg?style=flat-square)](LICENSE)
   [![Nix Flakes](https://img.shields.io/badge/nix-flakes-5277C3.svg?style=flat-square&logo=nixos&logoColor=white)](https://nixos.wiki/wiki/Flakes)
   [![libadwaita](https://img.shields.io/badge/libadwaita-1.4-purple.svg?style=flat-square)](https://gnome.pages.gitlab.gnome.org/libadwaita/)
