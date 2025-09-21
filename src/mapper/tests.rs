@@ -2,9 +2,8 @@
 
 #[cfg(test)]
 mod tests {
-    use super::super::*;
     use crate::db::entities::media_items::Model as MediaItemModel;
-    use crate::models::{Episode, MediaItem, Movie, MusicAlbum, MusicTrack, Person, Photo, Show};
+    use crate::models::{Episode, MediaItem, Movie, Person, Show};
     use chrono::Utc;
     use std::time::Duration;
 
@@ -21,11 +20,13 @@ mod tests {
             overview: Some("A test movie description".to_string()),
             genres: vec!["Action".to_string(), "Sci-Fi".to_string()],
             cast: vec![Person {
+                id: "actor-1".to_string(),
                 name: "Actor 1".to_string(),
                 role: Some("Lead".to_string()),
                 image_url: None,
             }],
             crew: vec![Person {
+                id: "director-1".to_string(),
                 name: "Director 1".to_string(),
                 role: Some("Director".to_string()),
                 image_url: None,
@@ -56,9 +57,9 @@ mod tests {
             genres: vec!["Drama".to_string(), "Mystery".to_string()],
             seasons: vec![Season {
                 id: "season-1".to_string(),
-                number: 1,
+                season_number: 1,
                 episode_count: 10,
-                overview: Some("Season 1 overview".to_string()),
+                poster_url: None,
             }],
             cast: vec![],
             added_at: Some(Utc::now()),
@@ -82,7 +83,11 @@ mod tests {
             duration: Duration::from_secs(2700),
             air_date: Some(Utc::now()),
             watched: false,
+            view_count: 0,
+            last_watched_at: None,
             playback_position: None,
+            show_title: Some("Test Show".to_string()),
+            show_poster_url: None,
             intro_marker: None,
             credits_marker: None,
         }
@@ -163,8 +168,6 @@ mod tests {
 
     #[test]
     fn test_model_to_movie_conversion() {
-        use crate::mapper::media_item_mapper::*;
-
         let mut model = MediaItemModel {
             id: "movie-1".to_string(),
             source_id: "source-1".to_string(),
@@ -191,6 +194,7 @@ mod tests {
         let metadata = serde_json::json!({
             "cast": [
                 {
+                    "id": "actor-1",
                     "name": "Actor 1",
                     "role": "Lead",
                     "image_url": null
@@ -198,6 +202,7 @@ mod tests {
             ],
             "crew": [
                 {
+                    "id": "director-1",
                     "name": "Director 1",
                     "role": "Director",
                     "image_url": null
@@ -233,9 +238,6 @@ mod tests {
 
     #[test]
     fn test_model_to_show_conversion() {
-        use crate::mapper::media_item_mapper::*;
-        use crate::models::Season;
-
         let mut model = MediaItemModel {
             id: "show-1".to_string(),
             source_id: "source-1".to_string(),
@@ -263,9 +265,9 @@ mod tests {
             "seasons": [
                 {
                     "id": "season-1",
-                    "number": 1,
+                    "season_number": 1,
                     "episode_count": 10,
-                    "overview": "Season 1 overview"
+                    "poster_url": null
                 }
             ],
             "watched_episode_count": 5,
@@ -285,7 +287,7 @@ mod tests {
                 assert_eq!(show.rating, Some(9.0));
                 assert_eq!(show.genres, vec!["Drama", "Mystery"]);
                 assert_eq!(show.seasons.len(), 1);
-                assert_eq!(show.seasons[0].number, 1);
+                assert_eq!(show.seasons[0].season_number, 1);
                 assert_eq!(show.watched_episode_count, 5);
                 assert_eq!(show.total_episode_count, 10);
             }
@@ -295,8 +297,6 @@ mod tests {
 
     #[test]
     fn test_model_to_episode_conversion() {
-        use crate::mapper::media_item_mapper::*;
-
         let model = MediaItemModel {
             id: "episode-1".to_string(),
             source_id: "source-1".to_string(),
@@ -338,8 +338,6 @@ mod tests {
 
     #[test]
     fn test_unknown_media_type_error() {
-        use crate::mapper::media_item_mapper::*;
-
         let model = MediaItemModel {
             id: "unknown-1".to_string(),
             source_id: "source-1".to_string(),

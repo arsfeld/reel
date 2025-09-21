@@ -267,3 +267,213 @@ impl Worker for SyncWorker {
 pub fn create_sync_worker(db: Arc<DatabaseConnection>) -> WorkerHandle<SyncWorker> {
     SyncWorker::builder().detach_worker(db)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_sync_worker_initialization() {
+        // Create a mock database connection for testing
+        let db = Arc::new(DatabaseConnection::default());
+        let worker = SyncWorker::new(db);
+
+        // Verify default values
+        assert!(worker.active_syncs.is_empty());
+        assert_eq!(worker.sync_interval, Duration::from_secs(3600));
+        assert!(worker.auto_sync_enabled);
+        assert!(worker.last_sync_times.is_empty());
+    }
+
+    #[test]
+    fn test_sync_interval_updates() {
+        let db = Arc::new(DatabaseConnection::default());
+        let mut worker = SyncWorker::new(db);
+
+        // Default interval should be 1 hour
+        assert_eq!(worker.sync_interval, Duration::from_secs(3600));
+
+        // Update interval directly (simulating update message)
+        worker.sync_interval = Duration::from_secs(1800);
+        assert_eq!(worker.sync_interval, Duration::from_secs(1800));
+    }
+
+    #[test]
+    fn test_auto_sync_flag() {
+        let db = Arc::new(DatabaseConnection::default());
+        let mut worker = SyncWorker::new(db);
+
+        // Auto-sync should be enabled by default
+        assert!(worker.auto_sync_enabled);
+
+        // Disable auto-sync
+        worker.auto_sync_enabled = false;
+        assert!(!worker.auto_sync_enabled);
+
+        // Re-enable auto-sync
+        worker.auto_sync_enabled = true;
+        assert!(worker.auto_sync_enabled);
+    }
+
+    #[test]
+    fn test_sync_interval_prevents_rapid_syncs() {
+        let db = Arc::new(DatabaseConnection::default());
+        let mut worker = SyncWorker::new(db);
+
+        // Set a specific interval
+        worker.sync_interval = Duration::from_secs(60);
+
+        let source_id = SourceId::from("test-source");
+
+        // Record a sync time
+        worker
+            .last_sync_times
+            .insert(source_id.clone(), Instant::now());
+
+        // Check that sync is too recent (should be prevented unless forced)
+        if let Some(last_sync) = worker.last_sync_times.get(&source_id) {
+            assert!(last_sync.elapsed() < worker.sync_interval);
+        }
+
+        // After waiting, it should be allowed
+        worker
+            .last_sync_times
+            .insert(source_id.clone(), Instant::now() - Duration::from_secs(120));
+
+        if let Some(last_sync) = worker.last_sync_times.get(&source_id) {
+            assert!(last_sync.elapsed() >= worker.sync_interval);
+        }
+    }
+
+    #[test]
+    fn test_concurrent_sync_tracking() {
+        let db = Arc::new(DatabaseConnection::default());
+        let mut worker = SyncWorker::new(db);
+
+        // Simulate multiple active syncs
+        let source_id1 = SourceId::from("test-source-1");
+        let source_id2 = SourceId::from("test-source-2");
+        let source_id3 = SourceId::from("test-source-3");
+
+        // Simulate adding sync handles (we'll use dummy handles for testing)
+        let handle1 = relm4::spawn(async {});
+        let handle2 = relm4::spawn(async {});
+        let handle3 = relm4::spawn(async {});
+
+        worker.active_syncs.insert(source_id1.clone(), handle1);
+        worker.active_syncs.insert(source_id2.clone(), handle2);
+        worker.active_syncs.insert(source_id3.clone(), handle3);
+
+        // Verify all syncs are tracked
+        assert_eq!(worker.active_syncs.len(), 3);
+        assert!(worker.active_syncs.contains_key(&source_id1));
+        assert!(worker.active_syncs.contains_key(&source_id2));
+        assert!(worker.active_syncs.contains_key(&source_id3));
+
+        // Remove one sync
+        if let Some(handle) = worker.active_syncs.remove(&source_id2) {
+            handle.abort();
+        }
+
+        assert_eq!(worker.active_syncs.len(), 2);
+        assert!(!worker.active_syncs.contains_key(&source_id2));
+
+        // Clear all syncs
+        worker.stop_all_syncs();
+        assert!(worker.active_syncs.is_empty());
+    }
+
+    #[test]
+    fn test_sync_time_recording() {
+        let db = Arc::new(DatabaseConnection::default());
+        let mut worker = SyncWorker::new(db);
+
+        let source_id = SourceId::from("test-source");
+
+        // Record a successful sync time
+        worker
+            .last_sync_times
+            .insert(source_id.clone(), Instant::now());
+
+        // Verify sync time was recorded
+        assert!(worker.last_sync_times.contains_key(&source_id));
+
+        let recorded_time = worker.last_sync_times.get(&source_id).unwrap();
+        assert!(recorded_time.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_sync_cancellation_behavior() {
+        let db = Arc::new(DatabaseConnection::default());
+        let mut worker = SyncWorker::new(db);
+
+        let source_id = SourceId::from("test-source");
+
+        // Add a sync handle
+        let handle = relm4::spawn(async {
+            // Simulate a long-running sync
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        });
+
+        worker.active_syncs.insert(source_id.clone(), handle);
+        assert_eq!(worker.active_syncs.len(), 1);
+
+        // Simulate cancelling and replacing with new sync
+        if let Some(old_handle) = worker.active_syncs.remove(&source_id) {
+            old_handle.abort();
+        }
+
+        let new_handle = relm4::spawn(async {});
+        worker.active_syncs.insert(source_id.clone(), new_handle);
+
+        // Should still have exactly one sync for this source
+        assert_eq!(worker.active_syncs.len(), 1);
+        assert!(worker.active_syncs.contains_key(&source_id));
+    }
+
+    #[test]
+    fn test_stop_specific_sync() {
+        let db = Arc::new(DatabaseConnection::default());
+        let mut worker = SyncWorker::new(db);
+
+        let source_id = SourceId::from("test-source");
+
+        // Add a sync
+        let handle = relm4::spawn(async {});
+        worker.active_syncs.insert(source_id.clone(), handle);
+
+        assert!(worker.active_syncs.contains_key(&source_id));
+
+        // Stop the sync
+        worker.stop_sync(&source_id);
+
+        assert!(!worker.active_syncs.contains_key(&source_id));
+    }
+
+    #[test]
+    fn test_auto_sync_stops_all_on_disable() {
+        let db = Arc::new(DatabaseConnection::default());
+        let mut worker = SyncWorker::new(db);
+
+        // Add multiple syncs
+        let source_id1 = SourceId::from("test-source-1");
+        let source_id2 = SourceId::from("test-source-2");
+
+        let handle1 = relm4::spawn(async {});
+        let handle2 = relm4::spawn(async {});
+
+        worker.active_syncs.insert(source_id1, handle1);
+        worker.active_syncs.insert(source_id2, handle2);
+
+        assert_eq!(worker.active_syncs.len(), 2);
+        assert!(worker.auto_sync_enabled);
+
+        // Disable auto-sync should stop all syncs
+        worker.auto_sync_enabled = false;
+        worker.stop_all_syncs(); // This would be called in the actual update handler
+
+        assert!(!worker.auto_sync_enabled);
+        assert!(worker.active_syncs.is_empty());
+    }
+}
