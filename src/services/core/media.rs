@@ -586,13 +586,12 @@ mod tests {
     use crate::db::connection::Database;
     use crate::db::entities::{LibraryModel, MediaItemModel};
     use crate::db::repository::{LibraryRepositoryImpl, MediaRepositoryImpl, Repository};
-    use crate::models::{
-        Library, LibraryId, LibraryType, MediaItem, MediaItemId, MediaType, ShowId, SourceId,
-    };
+    use crate::models::{Library, LibraryId, LibraryType, MediaType, Movie, SourceId};
     use crate::services::core::media::MediaService;
     use anyhow::Result;
     use chrono::Utc;
-    use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+    use sea_orm::{ActiveModelTrait, Set};
+    use std::time::Duration;
     use tempfile::TempDir;
 
     async fn setup_test_database() -> Result<Database> {
@@ -634,54 +633,54 @@ mod tests {
         Ok(db)
     }
 
+    fn create_test_movie_model(id: &str, title: &str, library_id: &str) -> MediaItemModel {
+        use sea_orm::JsonValue;
+        MediaItemModel {
+            id: id.to_string(),
+            source_id: "test-source".to_string(),
+            library_id: library_id.to_string(),
+            parent_id: None,
+            media_type: "movie".to_string(),
+            title: title.to_string(),
+            sort_title: Some(title.to_lowercase()),
+            year: Some(2024),
+            duration_ms: Some(7200000),
+            rating: Some(8.0),
+            genres: Some(JsonValue::from(vec!["Action".to_string()])),
+            poster_url: Some(format!("https://example.com/{}.jpg", id)),
+            backdrop_url: Some(format!("https://example.com/{}_backdrop.jpg", id)),
+            overview: Some(format!("Summary for {}", title)),
+            season_number: None,
+            episode_number: None,
+            added_at: Some(Utc::now().naive_utc()),
+            updated_at: Utc::now().naive_utc(),
+            metadata: Some(serde_json::json!({
+                "original_title": title,
+                "tagline": format!("Tagline for {}", title),
+                "studio": "Test Studios",
+                "cast": [],
+                "crew": [],
+                "media_url": format!("https://example.com/{}.mp4", id),
+                "container": "mp4",
+                "video_codec": "h264",
+                "audio_codec": "aac",
+                "subtitles_available": ["en"]
+            })),
+        }
+    }
+
     fn create_test_library(id: &str, title: &str, lib_type: &str) -> Library {
         Library {
             id: id.to_string(),
             title: title.to_string(),
             library_type: match lib_type {
-                "movie" => LibraryType::Movie,
-                "show" => LibraryType::Show,
+                "movie" => LibraryType::Movies,
+                "show" => LibraryType::Shows,
                 "music" => LibraryType::Music,
-                _ => LibraryType::Movie,
+                _ => LibraryType::Movies,
             },
             icon: Some("video-x-generic".to_string()),
             item_count: 0,
-        }
-    }
-
-    fn create_test_movie(id: &str, title: &str) -> MediaItem {
-        MediaItem {
-            id: MediaItemId(id.to_string()),
-            source_id: SourceId("test-source".to_string()),
-            library_id: LibraryId("test-lib".to_string()),
-            media_type: MediaType::Movie,
-            title: title.to_string(),
-            sort_title: title.to_lowercase(),
-            original_title: Some(title.to_string()),
-            summary: Some(format!("Summary for {}", title)),
-            tagline: Some(format!("Tagline for {}", title)),
-            year: Some(2024),
-            duration: Some(7200000),
-            rating: Some(8.5),
-            genres: vec!["Action".to_string(), "Adventure".to_string()],
-            poster_url: Some(format!("https://example.com/{}.jpg", id)),
-            backdrop_url: Some(format!("https://example.com/{}_backdrop.jpg", id)),
-            media_url: Some(format!("https://example.com/{}.mp4", id)),
-            file_path: None,
-            container: Some("mp4".to_string()),
-            video_codec: Some("h264".to_string()),
-            audio_codec: Some("aac".to_string()),
-            subtitles_available: vec!["en".to_string()],
-            added_at: Utc::now().naive_utc(),
-            updated_at: Utc::now().naive_utc(),
-            parent_id: None,
-            season_number: None,
-            episode_number: None,
-            air_date: None,
-            studio: Some("Test Studios".to_string()),
-            cast: vec![],
-            crew: vec![],
-            metadata: serde_json::json!({}),
         }
     }
 
@@ -782,12 +781,12 @@ mod tests {
         lib_repo.insert(lib2).await?;
 
         // Test get_libraries_for_source
-        let source_id = SourceId("test-source".to_string());
+        let source_id = SourceId::from("test-source");
         let libraries = MediaService::get_libraries_for_source(&db_conn, &source_id).await?;
         assert_eq!(libraries.len(), 1);
         assert_eq!(libraries[0].title, "Source 1 Movies");
 
-        let source_id_2 = SourceId("test-source-2".to_string());
+        let source_id_2 = SourceId::from("test-source-2");
         let libraries_2 = MediaService::get_libraries_for_source(&db_conn, &source_id_2).await?;
         assert_eq!(libraries_2.len(), 1);
         assert_eq!(libraries_2[0].title, "Source 2 Movies");
@@ -817,7 +816,7 @@ mod tests {
         lib_repo.insert(lib).await?;
 
         // Test get_library - existing
-        let lib_id = LibraryId("lib-1".to_string());
+        let lib_id = LibraryId::from("lib-1");
         let library = MediaService::get_library(&db_conn, &lib_id).await?;
         assert!(library.is_some());
         let library = library.unwrap();
@@ -825,7 +824,7 @@ mod tests {
         assert_eq!(library.item_count, 10);
 
         // Test get_library - non-existent
-        let lib_id = LibraryId("non-existent".to_string());
+        let lib_id = LibraryId::from("non-existent");
         let library = MediaService::get_library(&db_conn, &lib_id).await?;
         assert!(library.is_none());
 
@@ -839,12 +838,12 @@ mod tests {
 
         // Create and save a library
         let library = create_test_library("new-lib", "New Library", "movie");
-        let source_id = SourceId("test-source".to_string());
+        let source_id = SourceId::from("test-source");
 
         MediaService::save_library(&db_conn, library.clone(), &source_id).await?;
 
         // Verify it was saved
-        let lib_id = LibraryId("new-lib".to_string());
+        let lib_id = LibraryId::from("new-lib");
         let saved = MediaService::get_library(&db_conn, &lib_id).await?;
         assert!(saved.is_some());
         let saved = saved.unwrap();
@@ -889,98 +888,28 @@ mod tests {
         // Insert test media items
         let media_repo = MediaRepositoryImpl::new(db_conn.clone());
 
-        let movie1 = MediaItemModel {
-            id: "movie-1".to_string(),
-            source_id: "test-source".to_string(),
-            library_id: "test-lib".to_string(),
-            parent_id: None,
-            media_type: "movie".to_string(),
-            title: "Movie One".to_string(),
-            sort_title: "movie one".to_string(),
-            original_title: Some("Movie One".to_string()),
-            summary: Some("Summary 1".to_string()),
-            tagline: Some("Tagline 1".to_string()),
-            year: Some(2024),
-            duration: Some(7200000),
-            rating: Some(8.0),
-            genres: Some(vec!["Action".to_string()]),
-            poster_url: Some("https://example.com/poster1.jpg".to_string()),
-            backdrop_url: Some("https://example.com/backdrop1.jpg".to_string()),
-            media_url: Some("https://example.com/movie1.mp4".to_string()),
-            file_path: None,
-            container: Some("mp4".to_string()),
-            video_codec: Some("h264".to_string()),
-            audio_codec: Some("aac".to_string()),
-            subtitles_available: Some(vec!["en".to_string()]),
-            season_number: None,
-            episode_number: None,
-            air_date: None,
-            studio: Some("Studio 1".to_string()),
-            cast: Some(serde_json::json!([])),
-            crew: Some(serde_json::json!([])),
-            added_at: Utc::now().naive_utc(),
-            updated_at: Utc::now().naive_utc(),
-            metadata: Some(serde_json::json!({})),
-        };
+        let movie1 = create_test_movie_model("movie-1", "Movie One", "test-lib");
 
-        let movie2 = MediaItemModel {
-            id: "movie-2".to_string(),
-            source_id: "test-source".to_string(),
-            library_id: "test-lib".to_string(),
-            parent_id: None,
-            media_type: "movie".to_string(),
-            title: "Movie Two".to_string(),
-            sort_title: "movie two".to_string(),
-            original_title: Some("Movie Two".to_string()),
-            summary: Some("Summary 2".to_string()),
-            tagline: Some("Tagline 2".to_string()),
-            year: Some(2023),
-            duration: Some(6000000),
-            rating: Some(7.5),
-            genres: Some(vec!["Drama".to_string()]),
-            poster_url: Some("https://example.com/poster2.jpg".to_string()),
-            backdrop_url: Some("https://example.com/backdrop2.jpg".to_string()),
-            media_url: Some("https://example.com/movie2.mp4".to_string()),
-            file_path: None,
-            container: Some("mp4".to_string()),
-            video_codec: Some("h264".to_string()),
-            audio_codec: Some("aac".to_string()),
-            subtitles_available: Some(vec!["en".to_string()]),
-            season_number: None,
-            episode_number: None,
-            air_date: None,
-            studio: Some("Studio 2".to_string()),
-            cast: Some(serde_json::json!([])),
-            crew: Some(serde_json::json!([])),
-            added_at: Utc::now().naive_utc(),
-            updated_at: Utc::now().naive_utc(),
-            metadata: Some(serde_json::json!({})),
-        };
+        let movie2 = create_test_movie_model("movie-2", "Movie Two", "test-lib");
 
         media_repo.insert(movie1).await?;
         media_repo.insert(movie2).await?;
 
         // Test get_media_items
-        let library_id = LibraryId("test-lib".to_string());
-        let items = MediaService::get_media_items(&db_conn, &library_id, None, None, None).await?;
+        let library_id = LibraryId::from("test-lib");
+        let items = MediaService::get_media_items(&db_conn, &library_id, None, 0, 100).await?;
         assert_eq!(items.len(), 2);
-        assert!(items.iter().any(|i| i.title == "Movie One"));
-        assert!(items.iter().any(|i| i.title == "Movie Two"));
+        assert!(items.iter().any(|i| i.title() == "Movie One"));
+        assert!(items.iter().any(|i| i.title() == "Movie Two"));
 
         // Test with media type filter
-        let items = MediaService::get_media_items(
-            &db_conn,
-            &library_id,
-            Some(&MediaType::Movie),
-            None,
-            None,
-        )
-        .await?;
+        let items =
+            MediaService::get_media_items(&db_conn, &library_id, Some(MediaType::Movie), 0, 100)
+                .await?;
         assert_eq!(items.len(), 2);
 
         // Test with pagination
-        let items =
-            MediaService::get_media_items(&db_conn, &library_id, None, Some(1), Some(0)).await?;
+        let items = MediaService::get_media_items(&db_conn, &library_id, None, 0, 1).await?;
         assert_eq!(items.len(), 1);
 
         Ok(())
@@ -1007,92 +936,26 @@ mod tests {
 
         let media_repo = MediaRepositoryImpl::new(db_conn.clone());
 
-        let movie1 = MediaItemModel {
-            id: "movie-1".to_string(),
-            source_id: "test-source".to_string(),
-            library_id: "test-lib".to_string(),
-            parent_id: None,
-            media_type: "movie".to_string(),
-            title: "The Matrix".to_string(),
-            sort_title: "matrix".to_string(),
-            original_title: Some("The Matrix".to_string()),
-            summary: Some("A computer hacker learns about the true nature of reality".to_string()),
-            tagline: Some("Welcome to the Real World".to_string()),
-            year: Some(1999),
-            duration: Some(8160000),
-            rating: Some(8.7),
-            genres: Some(vec!["Sci-Fi".to_string(), "Action".to_string()]),
-            poster_url: Some("https://example.com/matrix.jpg".to_string()),
-            backdrop_url: Some("https://example.com/matrix_backdrop.jpg".to_string()),
-            media_url: Some("https://example.com/matrix.mp4".to_string()),
-            file_path: None,
-            container: Some("mp4".to_string()),
-            video_codec: Some("h264".to_string()),
-            audio_codec: Some("aac".to_string()),
-            subtitles_available: Some(vec!["en".to_string()]),
-            season_number: None,
-            episode_number: None,
-            air_date: None,
-            studio: Some("Warner Bros".to_string()),
-            cast: Some(serde_json::json!([])),
-            crew: Some(serde_json::json!([])),
-            added_at: Utc::now().naive_utc(),
-            updated_at: Utc::now().naive_utc(),
-            metadata: Some(serde_json::json!({})),
-        };
+        let movie1 = create_test_movie_model("movie-1", "The Matrix", "test-lib");
 
-        let movie2 = MediaItemModel {
-            id: "movie-2".to_string(),
-            source_id: "test-source".to_string(),
-            library_id: "test-lib".to_string(),
-            parent_id: None,
-            media_type: "movie".to_string(),
-            title: "Inception".to_string(),
-            sort_title: "inception".to_string(),
-            original_title: Some("Inception".to_string()),
-            summary: Some(
-                "A thief who steals corporate secrets through dream-sharing technology".to_string(),
-            ),
-            tagline: Some("Your mind is the scene of the crime".to_string()),
-            year: Some(2010),
-            duration: Some(8880000),
-            rating: Some(8.8),
-            genres: Some(vec!["Sci-Fi".to_string(), "Thriller".to_string()]),
-            poster_url: Some("https://example.com/inception.jpg".to_string()),
-            backdrop_url: Some("https://example.com/inception_backdrop.jpg".to_string()),
-            media_url: Some("https://example.com/inception.mp4".to_string()),
-            file_path: None,
-            container: Some("mp4".to_string()),
-            video_codec: Some("h264".to_string()),
-            audio_codec: Some("aac".to_string()),
-            subtitles_available: Some(vec!["en".to_string()]),
-            season_number: None,
-            episode_number: None,
-            air_date: None,
-            studio: Some("Warner Bros".to_string()),
-            cast: Some(serde_json::json!([])),
-            crew: Some(serde_json::json!([])),
-            added_at: Utc::now().naive_utc(),
-            updated_at: Utc::now().naive_utc(),
-            metadata: Some(serde_json::json!({})),
-        };
+        let movie2 = create_test_movie_model("movie-2", "Inception", "test-lib");
 
         media_repo.insert(movie1).await?;
         media_repo.insert(movie2).await?;
 
         // Test search
-        let results = MediaService::search_media(&db_conn, "matrix").await?;
+        let results = MediaService::search_media(&db_conn, "matrix", None, None).await?;
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].title, "The Matrix");
+        assert_eq!(results[0].title(), "The Matrix");
 
-        let results = MediaService::search_media(&db_conn, "inception").await?;
+        let results = MediaService::search_media(&db_conn, "inception", None, None).await?;
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].title, "Inception");
+        assert_eq!(results[0].title(), "Inception");
 
         // Test partial match
-        let results = MediaService::search_media(&db_conn, "cep").await?;
+        let results = MediaService::search_media(&db_conn, "cep", None, None).await?;
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].title, "Inception");
+        assert_eq!(results[0].title(), "Inception");
 
         Ok(())
     }
@@ -1120,39 +983,14 @@ mod tests {
 
         // Create movies with different added times
         for i in 0..5 {
-            let movie = MediaItemModel {
-                id: format!("movie-{}", i),
-                source_id: "test-source".to_string(),
-                library_id: "test-lib".to_string(),
-                parent_id: None,
-                media_type: "movie".to_string(),
-                title: format!("Movie {}", i),
-                sort_title: format!("movie {}", i),
-                original_title: Some(format!("Movie {}", i)),
-                summary: Some(format!("Summary {}", i)),
-                tagline: None,
-                year: Some(2024),
-                duration: Some(7200000),
-                rating: Some(8.0),
-                genres: Some(vec!["Action".to_string()]),
-                poster_url: None,
-                backdrop_url: None,
-                media_url: None,
-                file_path: None,
-                container: None,
-                video_codec: None,
-                audio_codec: None,
-                subtitles_available: None,
-                season_number: None,
-                episode_number: None,
-                air_date: None,
-                studio: None,
-                cast: None,
-                crew: None,
-                added_at: Utc::now().naive_utc() - chrono::Duration::hours(i as i64),
-                updated_at: Utc::now().naive_utc(),
-                metadata: None,
-            };
+            use sea_orm::JsonValue;
+            let mut movie = create_test_movie_model(
+                &format!("movie-{}", i),
+                &format!("Movie {}", i),
+                "test-lib",
+            );
+            // Override the added_at to test sorting
+            movie.added_at = Some(Utc::now().naive_utc() - chrono::Duration::hours(i as i64));
             media_repo.insert(movie).await?;
 
             // Small delay to ensure ordering
@@ -1163,9 +1001,18 @@ mod tests {
         let recent = MediaService::get_recently_added(&db_conn, 3).await?;
         assert_eq!(recent.len(), 3);
         // Most recent should be first (Movie 0 has the most recent added_at)
-        assert_eq!(recent[0].title, "Movie 0");
-        assert_eq!(recent[1].title, "Movie 1");
-        assert_eq!(recent[2].title, "Movie 2");
+        match &recent[0] {
+            crate::models::MediaItem::Movie(movie) => assert_eq!(movie.title, "Movie 0"),
+            _ => panic!("Expected Movie variant"),
+        }
+        match &recent[1] {
+            crate::models::MediaItem::Movie(movie) => assert_eq!(movie.title, "Movie 1"),
+            _ => panic!("Expected Movie variant"),
+        }
+        match &recent[2] {
+            crate::models::MediaItem::Movie(movie) => assert_eq!(movie.title, "Movie 2"),
+            _ => panic!("Expected Movie variant"),
+        }
 
         Ok(())
     }

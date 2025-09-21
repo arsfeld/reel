@@ -684,11 +684,11 @@ impl MediaRepositoryImpl {
 
 #[cfg(test)]
 mod tests {
-    use crate::db::entities::{MediaItem, MediaItemModel, media_items};
+    use crate::db::entities::MediaItemModel;
     use crate::db::repository::{MediaRepository, MediaRepositoryImpl, Repository};
     use anyhow::Result;
     use chrono::Utc;
-    use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
+    use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
     use std::sync::Arc;
 
     async fn setup_test_repository() -> Result<(Arc<DatabaseConnection>, Arc<MediaRepositoryImpl>)>
@@ -763,6 +763,7 @@ mod tests {
     }
 
     fn create_test_movie(id: &str, title: &str, library_id: &str) -> MediaItemModel {
+        use sea_orm::JsonValue;
         MediaItemModel {
             id: id.to_string(),
             source_id: "test-source".to_string(),
@@ -770,35 +771,38 @@ mod tests {
             parent_id: None,
             media_type: "movie".to_string(),
             title: title.to_string(),
-            sort_title: title.to_lowercase(),
-            original_title: Some(title.to_string()),
-            summary: Some(format!("Summary for {}", title)),
-            tagline: Some(format!("Tagline for {}", title)),
+            sort_title: Some(title.to_lowercase()),
             year: Some(2024),
-            duration: Some(7200000), // 2 hours in milliseconds
+            duration_ms: Some(7200000), // 2 hours in milliseconds
             rating: Some(8.5),
-            genres: Some(vec!["Action".to_string(), "Adventure".to_string()]),
+            genres: Some(JsonValue::from(vec![
+                "Action".to_string(),
+                "Adventure".to_string(),
+            ])),
             poster_url: Some(format!("https://example.com/{}.jpg", id)),
             backdrop_url: Some(format!("https://example.com/{}_backdrop.jpg", id)),
-            media_url: Some(format!("https://example.com/{}.mp4", id)),
-            file_path: None,
-            container: Some("mp4".to_string()),
-            video_codec: Some("h264".to_string()),
-            audio_codec: Some("aac".to_string()),
-            subtitles_available: Some(vec!["en".to_string()]),
+            overview: Some(format!("Summary for {}", title)),
             season_number: None,
             episode_number: None,
-            air_date: None,
-            studio: Some("Test Studios".to_string()),
-            cast: Some(serde_json::json!([])),
-            crew: Some(serde_json::json!([])),
-            added_at: Utc::now().naive_utc(),
+            added_at: Some(Utc::now().naive_utc()),
             updated_at: Utc::now().naive_utc(),
-            metadata: Some(serde_json::json!({})),
+            metadata: Some(serde_json::json!({
+                "original_title": title,
+                "tagline": format!("Tagline for {}", title),
+                "studio": "Test Studios",
+                "cast": [],
+                "crew": [],
+                "media_url": format!("https://example.com/{}.mp4", id),
+                "container": "mp4",
+                "video_codec": "h264",
+                "audio_codec": "aac",
+                "subtitles_available": ["en"]
+            })),
         }
     }
 
     fn create_test_show(id: &str, title: &str) -> MediaItemModel {
+        use sea_orm::JsonValue;
         MediaItemModel {
             id: id.to_string(),
             source_id: "test-source".to_string(),
@@ -806,31 +810,25 @@ mod tests {
             parent_id: None,
             media_type: "show".to_string(),
             title: title.to_string(),
-            sort_title: title.to_lowercase(),
-            original_title: Some(title.to_string()),
-            summary: Some(format!("Summary for show {}", title)),
-            tagline: None,
+            sort_title: Some(title.to_lowercase()),
             year: Some(2024),
-            duration: None,
+            duration_ms: None,
             rating: Some(8.0),
-            genres: Some(vec!["Drama".to_string()]),
+            genres: Some(JsonValue::from(vec!["Drama".to_string()])),
             poster_url: Some(format!("https://example.com/{}.jpg", id)),
             backdrop_url: Some(format!("https://example.com/{}_backdrop.jpg", id)),
-            media_url: None,
-            file_path: None,
-            container: None,
-            video_codec: None,
-            audio_codec: None,
-            subtitles_available: None,
+            overview: Some(format!("Summary for show {}", title)),
             season_number: None,
             episode_number: None,
-            air_date: None,
-            studio: Some("Test Network".to_string()),
-            cast: Some(serde_json::json!([])),
-            crew: Some(serde_json::json!([])),
-            added_at: Utc::now().naive_utc(),
+            added_at: Some(Utc::now().naive_utc()),
             updated_at: Utc::now().naive_utc(),
-            metadata: Some(serde_json::json!({"seasons": 3})),
+            metadata: Some(serde_json::json!({
+                "original_title": title,
+                "seasons": 3,
+                "studio": "Test Network",
+                "cast": [],
+                "crew": []
+            })),
         }
     }
 
@@ -848,31 +846,27 @@ mod tests {
             parent_id: Some(show_id.to_string()),
             media_type: "episode".to_string(),
             title: title.to_string(),
-            sort_title: format!("s{:02}e{:02}", season, episode),
-            original_title: Some(title.to_string()),
-            summary: Some(format!("Episode {} summary", title)),
-            tagline: None,
+            sort_title: Some(format!("s{:02}e{:02}", season, episode)),
             year: Some(2024),
-            duration: Some(2700000), // 45 minutes
+            duration_ms: Some(2700000), // 45 minutes
             rating: Some(8.2),
             genres: None,
             poster_url: Some(format!("https://example.com/{}.jpg", id)),
             backdrop_url: None,
-            media_url: Some(format!("https://example.com/{}.mp4", id)),
-            file_path: None,
-            container: Some("mp4".to_string()),
-            video_codec: Some("h264".to_string()),
-            audio_codec: Some("aac".to_string()),
-            subtitles_available: Some(vec!["en".to_string()]),
+            overview: Some(format!("Episode {} summary", title)),
             season_number: Some(season),
             episode_number: Some(episode),
-            air_date: Some(Utc::now().naive_utc()),
-            studio: None,
-            cast: None,
-            crew: None,
-            added_at: Utc::now().naive_utc(),
+            added_at: Some(Utc::now().naive_utc()),
             updated_at: Utc::now().naive_utc(),
-            metadata: Some(serde_json::json!({})),
+            metadata: Some(serde_json::json!({
+                "original_title": title,
+                "air_date": Utc::now().naive_utc().to_string(),
+                "media_url": format!("https://example.com/{}.mp4", id),
+                "container": "mp4",
+                "video_codec": "h264",
+                "audio_codec": "aac",
+                "subtitles_available": ["en"]
+            })),
         }
     }
 
@@ -1161,19 +1155,22 @@ mod tests {
         // Test next episode across seasons
         let next = repo.find_next_episode("show-1", 1, 3).await?;
         assert!(next.is_some());
-        assert_eq!(next.unwrap().season_number, Some(2));
-        assert_eq!(next.unwrap().episode_number, Some(1));
+        let next_ep = next.unwrap();
+        assert_eq!(next_ep.season_number, Some(2));
+        assert_eq!(next_ep.episode_number, Some(1));
 
         // Test find_previous_episode
         let prev = repo.find_previous_episode("show-1", 1, 2).await?;
         assert!(prev.is_some());
-        assert_eq!(prev.unwrap().episode_number, Some(1));
+        let prev_ep = prev.unwrap();
+        assert_eq!(prev_ep.episode_number, Some(1));
 
         // Test previous episode across seasons
         let prev = repo.find_previous_episode("show-1", 2, 1).await?;
         assert!(prev.is_some());
-        assert_eq!(prev.unwrap().season_number, Some(1));
-        assert_eq!(prev.unwrap().episode_number, Some(3));
+        let prev_ep = prev.unwrap();
+        assert_eq!(prev_ep.season_number, Some(1));
+        assert_eq!(prev_ep.episode_number, Some(3));
 
         Ok(())
     }
@@ -1210,13 +1207,19 @@ mod tests {
 
         // Insert movies with different genres
         let mut action_movie = create_test_movie("movie-1", "Action Movie", "test-movie-lib");
-        action_movie.genres = Some(vec!["Action".to_string(), "Thriller".to_string()]);
+        action_movie.genres = Some(sea_orm::JsonValue::from(vec![
+            "Action".to_string(),
+            "Thriller".to_string(),
+        ]));
 
         let mut comedy_movie = create_test_movie("movie-2", "Comedy Movie", "test-movie-lib");
-        comedy_movie.genres = Some(vec!["Comedy".to_string()]);
+        comedy_movie.genres = Some(sea_orm::JsonValue::from(vec!["Comedy".to_string()]));
 
         let mut action_comedy = create_test_movie("movie-3", "Action Comedy", "test-movie-lib");
-        action_comedy.genres = Some(vec!["Action".to_string(), "Comedy".to_string()]);
+        action_comedy.genres = Some(sea_orm::JsonValue::from(vec![
+            "Action".to_string(),
+            "Comedy".to_string(),
+        ]));
 
         repo.insert(action_movie).await?;
         repo.insert(comedy_movie).await?;
