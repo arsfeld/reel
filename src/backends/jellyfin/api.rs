@@ -7,8 +7,8 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::models::{
-    Episode, HomeSection, HomeSectionType, Library, LibraryType, MediaItem, Movie, Resolution,
-    Season, Show, StreamInfo, User,
+    Episode, HomeSection, HomeSectionType, Library, LibraryType, MediaItem, Movie, QualityOption,
+    Resolution, Season, Show, StreamInfo, User,
 };
 
 const JELLYFIN_CLIENT_NAME: &str = "Reel";
@@ -578,6 +578,18 @@ impl JellyfinApi {
             let seasons = self.get_seasons(&item.id).await?;
             let (cast, _crew) = self.convert_people_to_cast_crew(item.people.clone());
 
+            // Calculate total episode count from seasons
+            let total_episode_count: u32 = seasons.iter().map(|s| s.episode_count).sum();
+
+            // Calculate watched episodes for shows (total - unplayed)
+            let watched_episode_count = item.user_data.as_ref().map_or(0, |ud| {
+                if total_episode_count > 0 && ud.unplayed_item_count > 0 {
+                    total_episode_count.saturating_sub(ud.unplayed_item_count)
+                } else {
+                    ud.played_count
+                }
+            });
+
             shows.push(Show {
                 id: item.id.clone(),
                 backend_id: self.backend_id.clone(),
@@ -603,8 +615,8 @@ impl JellyfinApi {
                     .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                     .map(|dt| dt.with_timezone(&Utc)),
                 updated_at: None,
-                watched_episode_count: item.user_data.as_ref().map_or(0, |ud| ud.played_count),
-                total_episode_count: item.child_count.unwrap_or(0) as u32,
+                watched_episode_count,
+                total_episode_count,
                 last_watched_at: item
                     .user_data
                     .as_ref()
@@ -821,7 +833,14 @@ impl JellyfinApi {
 
         let media_source = &playback_info.media_sources[0];
 
-        let stream_url = if media_source.supports_direct_play {
+        let stream_url = if let Some(direct_url) = &media_source.direct_stream_url {
+            // Use the provided DirectStreamUrl if available
+            if direct_url.starts_with("http") {
+                direct_url.clone()
+            } else {
+                format!("{}{}", self.base_url, direct_url)
+            }
+        } else if media_source.supports_direct_play {
             format!(
                 "{}/Videos/{}/stream?Static=true&mediaSourceId={}&api_key={}",
                 self.base_url, media_id, media_source.id, self.api_key
@@ -849,6 +868,50 @@ impl JellyfinApi {
             .iter()
             .find(|s| s.stream_type == "Audio");
 
+        // Jellyfin supports various quality transcoding options
+        let quality_options = vec![
+            QualityOption {
+                name: "Original".to_string(),
+                resolution: Resolution {
+                    width: video_stream.width.unwrap_or(1920) as u32,
+                    height: video_stream.height.unwrap_or(1080) as u32,
+                },
+                bitrate: media_source.bitrate.unwrap_or(8000000) as u64,
+                url: stream_url.clone(),
+                requires_transcode: false,
+            },
+            QualityOption {
+                name: "1080p".to_string(),
+                resolution: Resolution {
+                    width: 1920,
+                    height: 1080,
+                },
+                bitrate: 8000000,
+                url: stream_url.clone(),
+                requires_transcode: true,
+            },
+            QualityOption {
+                name: "720p".to_string(),
+                resolution: Resolution {
+                    width: 1280,
+                    height: 720,
+                },
+                bitrate: 4000000,
+                url: stream_url.clone(),
+                requires_transcode: true,
+            },
+            QualityOption {
+                name: "480p".to_string(),
+                resolution: Resolution {
+                    width: 854,
+                    height: 480,
+                },
+                bitrate: 2000000,
+                url: stream_url.clone(),
+                requires_transcode: true,
+            },
+        ];
+
         Ok(StreamInfo {
             url: stream_url,
             direct_play: media_source.supports_direct_play,
@@ -862,7 +925,7 @@ impl JellyfinApi {
                 width: video_stream.width.unwrap_or(0) as u32,
                 height: video_stream.height.unwrap_or(0) as u32,
             },
-            quality_options: vec![],
+            quality_options,
         })
     }
 
@@ -1628,6 +1691,8 @@ struct UserData {
     play_count: u32,
     #[serde(default)]
     played_count: u32,
+    #[serde(default)]
+    unplayed_item_count: u32,
     last_played_date: Option<String>,
     playback_position_ticks: Option<u64>,
 }
@@ -1686,8 +1751,11 @@ struct MediaSource {
     id: String,
     container: Option<String>,
     bitrate: Option<u32>,
+    #[serde(default)]
     supports_direct_play: bool,
+    #[serde(default)]
     supports_direct_stream: bool,
+    direct_stream_url: Option<String>,
     media_streams: Vec<MediaStream>,
 }
 
