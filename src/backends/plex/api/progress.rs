@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::client::PlexApi;
 

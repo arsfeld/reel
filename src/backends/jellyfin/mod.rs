@@ -299,7 +299,7 @@ impl MediaBackend for JellyfinBackend {
                             Ok(Some(Credentials::UsernamePassword { ref password, .. })) => {
                                 tracing::info!("Got password from keyring, re-authenticating...");
                                 // Re-authenticate with username/password
-                                match JellyfinApi::authenticate(server_url, username, &password)
+                                match JellyfinApi::authenticate(server_url, username, password)
                                     .await
                                 {
                                     Ok(auth_response) => {
@@ -488,23 +488,23 @@ impl MediaBackend for JellyfinBackend {
 
     async fn get_movies(&self, library_id: &LibraryId) -> Result<Vec<Movie>> {
         let api = self.ensure_api_initialized().await?;
-        api.get_movies(&library_id.to_string()).await
+        api.get_movies(library_id.as_ref()).await
     }
 
     async fn get_shows(&self, library_id: &LibraryId) -> Result<Vec<Show>> {
         let api = self.ensure_api_initialized().await?;
-        api.get_shows(&library_id.to_string()).await
+        api.get_shows(library_id.as_ref()).await
     }
 
     async fn get_seasons(&self, show_id: &ShowId) -> Result<Vec<Season>> {
         let api = self.ensure_api_initialized().await?;
-        api.get_seasons(&show_id.to_string()).await
+        api.get_seasons(show_id.as_ref()).await
     }
 
     async fn get_episodes(&self, show_id: &ShowId, season: u32) -> Result<Vec<Episode>> {
         let api = self.ensure_api_initialized().await?;
 
-        let seasons = api.get_seasons(&show_id.to_string()).await?;
+        let seasons = api.get_seasons(show_id.as_ref()).await?;
         if let Some(season_info) = seasons.iter().find(|s| s.season_number == season) {
             let mut episodes = api.get_episodes(&season_info.id).await?;
 

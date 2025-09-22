@@ -63,11 +63,11 @@ impl AuthService {
         let service_name = format!("gnome-reel.{}", source_id);
 
         // Try to load as token first
-        if let Ok(entry) = Entry::new(&service_name, "token") {
-            if let Ok(token) = entry.get_password() {
-                debug!("Found token credentials for source: {}", source_id);
-                return Ok(Some(Credentials::Token { token }));
-            }
+        if let Ok(entry) = Entry::new(&service_name, "token")
+            && let Ok(token) = entry.get_password()
+        {
+            debug!("Found token credentials for source: {}", source_id);
+            return Ok(Some(Credentials::Token { token }));
         }
 
         debug!("No credentials found for source: {}", source_id);
@@ -131,7 +131,7 @@ impl AuthService {
             auth_provider_id: Some(user.id.clone()),
             connection_url: server_url.clone(),
             connections: None, // Will be populated later by connection discovery
-            machine_id: machine_id, // Set the machine_id if provided
+            machine_id,        // Set the machine_id if provided
             is_owned: is_owned.unwrap_or(true), // Use provided value or default to owned
             is_online: true,
             last_sync: None,
@@ -173,7 +173,7 @@ impl AuthService {
 
         // Remove from database
         let repo = SourceRepositoryImpl::new(db.clone());
-        repo.delete(&source_id.to_string()).await?;
+        repo.delete(source_id.as_ref()).await?;
 
         info!("Removed source: {}", source_id);
         Ok(())
@@ -209,7 +209,7 @@ impl AuthService {
 
         // Update source in database
         let repo = SourceRepositoryImpl::new(db.clone());
-        if let Some(mut source) = repo.find_by_id(&source_id.to_string()).await? {
+        if let Some(mut source) = repo.find_by_id(source_id.as_ref()).await? {
             source.is_online = true;
             source.auth_provider_id = Some(user.id);
             source.updated_at = chrono::Utc::now().naive_utc();

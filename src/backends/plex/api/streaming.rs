@@ -69,8 +69,7 @@ impl PlexApi {
                         percent_encoding::utf8_percent_encode(
                             &path,
                             percent_encoding::NON_ALPHANUMERIC
-                        )
-                        .to_string(),
+                        ),
                         bitrate / 1000, // Convert to kbps
                         width,
                         height,

@@ -100,7 +100,7 @@ impl PlayerPage {
                     let menu = gtk::gio::Menu::new();
 
                     for (track_id, track_name) in &tracks {
-                        let item = gtk::gio::MenuItem::new(Some(&track_name), None);
+                        let item = gtk::gio::MenuItem::new(Some(track_name), None);
                         let action_name = format!("player.audio-track-{}", track_id);
                         item.set_action_and_target_value(Some(&action_name), None);
                         menu.append_item(&item);
@@ -151,7 +151,7 @@ impl PlayerPage {
                     let menu = gtk::gio::Menu::new();
 
                     for (track_id, track_name) in &tracks {
-                        let item = gtk::gio::MenuItem::new(Some(&track_name), None);
+                        let item = gtk::gio::MenuItem::new(Some(track_name), None);
                         let action_name = format!("player.subtitle-track-{}", track_id);
                         item.set_action_and_target_value(Some(&action_name), None);
                         menu.append_item(&item);
@@ -664,19 +664,19 @@ impl AsyncComponent for PlayerPage {
                 }
 
                 // Get the surface and start the drag
-                if !window_clone.is_fullscreen() {
-                    if let Some(surface) = window_clone.surface() {
-                        // Check if surface implements Toplevel interface
-                        use gtk::gdk::prelude::ToplevelExt;
-                        if let Some(toplevel) = surface.downcast_ref::<gtk::gdk::Toplevel>() {
-                            toplevel.begin_move(
-                                &event.device().unwrap(),
-                                gesture.current_button() as i32,
-                                start_x,
-                                start_y,
-                                event.time(),
-                            );
-                        }
+                if !window_clone.is_fullscreen()
+                    && let Some(surface) = window_clone.surface()
+                {
+                    // Check if surface implements Toplevel interface
+                    use gtk::gdk::prelude::ToplevelExt;
+                    if let Some(toplevel) = surface.downcast_ref::<gtk::gdk::Toplevel>() {
+                        toplevel.begin_move(
+                            &event.device().unwrap(),
+                            gesture.current_button() as i32,
+                            start_x,
+                            start_y,
+                            event.time(),
+                        );
                     }
                 }
             }
@@ -1127,7 +1127,7 @@ impl AsyncComponent for PlayerPage {
                                 sender_clone.input(PlayerInput::UpdateTrackMenus);
 
                                 // Check for saved playback progress and resume if configured
-                                use crate::services::commands::{GetPlaybackProgressCommand, GetPlayQueueStateCommand};
+                                use crate::services::commands::GetPlaybackProgressCommand;
 
                                 // Use cached config values
                                 if auto_resume {
@@ -1159,8 +1159,7 @@ impl AsyncComponent for PlayerPage {
                                 // Try to get video dimensions and calculate appropriate window size
                                 if let Ok(Some((width, height))) =
                                     player_handle.get_video_dimensions().await
-                                {
-                                    if width > 0 && height > 0 {
+                                    && width > 0 && height > 0 {
                                         // Calculate window size based on video aspect ratio
                                         // Keep width reasonable (max 1920) and scale height accordingly
                                         let max_width = 1920.0_f32.min(width as f32);
@@ -1184,7 +1183,6 @@ impl AsyncComponent for PlayerPage {
                                             })
                                             .ok();
                                     }
-                                }
 
                                 // Get the actual state from the player after loading
                                 let actual_state = player_handle
@@ -1282,7 +1280,7 @@ impl AsyncComponent for PlayerPage {
                                 sender_clone.input(PlayerInput::UpdateTrackMenus);
 
                                 // Check for saved playback progress and resume if configured
-                                use crate::services::commands::{GetPlaybackProgressCommand, GetPlayQueueStateCommand};
+                                use crate::services::commands::GetPlaybackProgressCommand;
 
                                 // Use cached config values
                                 if auto_resume {
@@ -1314,8 +1312,7 @@ impl AsyncComponent for PlayerPage {
                                 // Try to get video dimensions and calculate appropriate window size
                                 if let Ok(Some((width, height))) =
                                     player_handle.get_video_dimensions().await
-                                {
-                                    if width > 0 && height > 0 {
+                                    && width > 0 && height > 0 {
                                         // Calculate window size based on video aspect ratio
                                         // Keep width reasonable (max 1920) and scale height accordingly
                                         let max_width = 1920.0_f32.min(width as f32);
@@ -1339,7 +1336,6 @@ impl AsyncComponent for PlayerPage {
                                             })
                                             .ok();
                                     }
-                                }
 
                                 // Get the actual state from the player after loading
                                 let actual_state = player_handle
@@ -1596,10 +1592,10 @@ impl AsyncComponent for PlayerPage {
             }
             PlayerInput::ShowCursor => {
                 // Set cursor to default (visible)
-                if let Some(surface) = self.window.surface() {
-                    if let Some(cursor) = gtk::gdk::Cursor::from_name("default", None) {
-                        surface.set_cursor(Some(&cursor));
-                    }
+                if let Some(surface) = self.window.surface()
+                    && let Some(cursor) = gtk::gdk::Cursor::from_name("default", None)
+                {
+                    surface.set_cursor(Some(&cursor));
                 }
                 sender.input(PlayerInput::ResetCursorTimer);
             }
@@ -1715,26 +1711,26 @@ impl AsyncComponent for PlayerPage {
             }
             PlayerInput::FrameStepForward => {
                 // Step one frame forward (while paused)
-                if self.player_state == PlayerState::Paused {
-                    if let Some(player) = &self.player {
-                        let player_handle = player.clone();
-                        sender.oneshot_command(async move {
-                            player_handle.frame_step_forward().await.ok();
-                            PlayerCommandOutput::StateChanged(PlayerState::Paused)
-                        });
-                    }
+                if self.player_state == PlayerState::Paused
+                    && let Some(player) = &self.player
+                {
+                    let player_handle = player.clone();
+                    sender.oneshot_command(async move {
+                        player_handle.frame_step_forward().await.ok();
+                        PlayerCommandOutput::StateChanged(PlayerState::Paused)
+                    });
                 }
             }
             PlayerInput::FrameStepBackward => {
                 // Step one frame backward (while paused)
-                if self.player_state == PlayerState::Paused {
-                    if let Some(player) = &self.player {
-                        let player_handle = player.clone();
-                        sender.oneshot_command(async move {
-                            player_handle.frame_step_backward().await.ok();
-                            PlayerCommandOutput::StateChanged(PlayerState::Paused)
-                        });
-                    }
+                if self.player_state == PlayerState::Paused
+                    && let Some(player) = &self.player
+                {
+                    let player_handle = player.clone();
+                    sender.oneshot_command(async move {
+                        player_handle.frame_step_backward().await.ok();
+                        PlayerCommandOutput::StateChanged(PlayerState::Paused)
+                    });
                 }
             }
             PlayerInput::ToggleMute => {
@@ -1979,21 +1975,21 @@ impl AsyncComponent for PlayerPage {
                             self.auto_play_triggered = true;
 
                             // Check if we have a playlist context with auto-play enabled
-                            if let Some(ref context) = self.playlist_context {
-                                if context.is_auto_play_enabled() && context.has_next() {
-                                    info!("Auto-play triggered, loading next episode");
+                            if let Some(ref context) = self.playlist_context
+                                && context.is_auto_play_enabled()
+                                && context.has_next()
+                            {
+                                info!("Auto-play triggered, loading next episode");
 
-                                    // Load next item after a short delay to let current one finish
-                                    let sender_clone = sender.clone();
-                                    let timeout_id =
-                                        glib::timeout_add_seconds_local(3, move || {
-                                            sender_clone.input(PlayerInput::Next);
-                                            glib::ControlFlow::Break
-                                        });
+                                // Load next item after a short delay to let current one finish
+                                let sender_clone = sender.clone();
+                                let timeout_id = glib::timeout_add_seconds_local(3, move || {
+                                    sender_clone.input(PlayerInput::Next);
+                                    glib::ControlFlow::Break
+                                });
 
-                                    // Store timeout ID in case we need to cancel (e.g., user manually navigates)
-                                    self.auto_play_timeout = Some(timeout_id);
-                                }
+                                // Store timeout ID in case we need to cancel (e.g., user manually navigates)
+                                self.auto_play_timeout = Some(timeout_id);
                             }
                         }
 
@@ -2006,60 +2002,61 @@ impl AsyncComponent for PlayerPage {
                             let duration_ms = dur.as_millis() as i64;
 
                             // If we have a PlayQueue context, also sync with Plex server
-                            if let Some(ref context) = self.playlist_context {
-                                if let Some(queue_info) = context.get_play_queue_info() {
-                                    // Clone the context for the async task
-                                    let context_clone = context.clone();
-                                    let db_clone = db.clone();
-                                    let media_id_clone = media_id.clone();
-                                    let position = pos;
-                                    let duration = dur;
+                            if let Some(ref context) = self.playlist_context
+                                && let Some(queue_info) = context.get_play_queue_info()
+                            {
+                                // Clone the context for the async task
+                                let context_clone = context.clone();
+                                let db_clone = db.clone();
+                                let media_id_clone = media_id.clone();
+                                let position = pos;
+                                let duration = dur;
 
-                                    glib::spawn_future_local(async move {
-                                        use crate::db::repository::source_repository::{
-                                            SourceRepository, SourceRepositoryImpl,
-                                        };
-                                        use crate::db::repository::{
-                                            MediaRepository, MediaRepositoryImpl, Repository,
-                                        };
-                                        use crate::services::core::BackendService;
-                                        use crate::services::core::playqueue::PlayQueueService;
+                                glib::spawn_future_local(async move {
+                                    use crate::db::repository::source_repository::SourceRepositoryImpl;
+                                    use crate::db::repository::{MediaRepositoryImpl, Repository};
+                                    use crate::services::core::BackendService;
+                                    use crate::services::core::playqueue::PlayQueueService;
 
-                                        // Get the media's source
-                                        let media_repo = MediaRepositoryImpl::new(db_clone.clone());
-                                        if let Ok(Some(media)) =
-                                            media_repo.find_by_id(media_id_clone.as_ref()).await
+                                    // Get the media's source
+                                    let media_repo = MediaRepositoryImpl::new(db_clone.clone());
+                                    if let Ok(Some(media)) =
+                                        media_repo.find_by_id(media_id_clone.as_ref()).await
+                                        && let Ok(_source_id) = media.source_id.parse::<i32>()
+                                    {
+                                        let source_repo =
+                                            SourceRepositoryImpl::new(db_clone.clone());
+                                        if let Ok(Some(source)) =
+                                            source_repo.find_by_id(&media.source_id).await
                                         {
-                                            if let Ok(_source_id) = media.source_id.parse::<i32>() {
-                                                let source_repo =
-                                                    SourceRepositoryImpl::new(db_clone.clone());
-                                                if let Ok(Some(source)) =
-                                                    source_repo.find_by_id(&media.source_id).await
+                                            // Create backend and sync PlayQueue progress
+                                            if let Ok(backend) =
+                                                BackendService::create_backend_for_source(
+                                                    &db_clone, &source,
+                                                )
+                                                .await
+                                            {
+                                                // PlayQueueService will handle the sync
+                                                if let Err(e) =
+                                                    PlayQueueService::update_progress_with_queue(
+                                                        backend.as_any(),
+                                                        &context_clone,
+                                                        &media_id_clone,
+                                                        position,
+                                                        duration,
+                                                        if watched { "stopped" } else { "playing" },
+                                                    )
+                                                    .await
                                                 {
-                                                    // Create backend and sync PlayQueue progress
-                                                    if let Ok(backend) =
-                                                        BackendService::create_backend_for_source(
-                                                            &db_clone, &source,
-                                                        )
-                                                        .await
-                                                    {
-                                                        // PlayQueueService will handle the sync
-                                                        if let Err(e) = PlayQueueService::update_progress_with_queue(
-                                                            backend.as_any(),
-                                                            &context_clone,
-                                                            &media_id_clone,
-                                                            position,
-                                                            duration,
-                                                            if watched { "stopped" } else { "playing" },
-                                                        ).await {
-                                                            debug!("Failed to sync PlayQueue progress: {}", e);
-                                                        }
-                                                    }
+                                                    debug!(
+                                                        "Failed to sync PlayQueue progress: {}",
+                                                        e
+                                                    );
                                                 }
                                             }
                                         }
-                                    });
-                                }
+                                    }
+                                });
                             }
 
                             relm4::spawn(async move {

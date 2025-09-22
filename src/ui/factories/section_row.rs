@@ -60,7 +60,7 @@ impl FactoryComponent for SectionRow {
                 gtk::Button {
                     set_label: "View All",
                     add_css_class: "flat",
-                    set_visible: self.media_items.len() > 0,
+                    set_visible: !self.media_items.is_empty(),
                 },
             },
 

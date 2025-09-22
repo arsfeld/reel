@@ -206,7 +206,7 @@ macro_rules! field_transformer {
     ) => {
         pub struct $name;
 
-        impl crate::mapper::FieldTransform<$from, $to> for $name {
+        impl $crate::mapper::FieldTransform<$from, $to> for $name {
             fn transform(source: $from) -> $to {
                 ($transform)(source)
             }

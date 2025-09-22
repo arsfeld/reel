@@ -1,14 +1,13 @@
 use anyhow::{Result, anyhow};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
-use tracing::{debug, warn};
+use tracing::debug;
 use url::Url;
 
 use super::client::create_standard_headers;
 use super::types::PlexGenericMetadata;
-use crate::models::{Episode, MediaItem, MediaItemId, Movie, Show, ShowId};
+use crate::models::{Episode, MediaItem, Movie, Show};
 
 // Custom search response container that uses generic metadata
 #[derive(Debug, Clone, Deserialize)]
@@ -402,7 +401,6 @@ impl PlexSearch {
     }
 
     fn convert_metadata_to_movie(&self, item: PlexGenericMetadata) -> Result<Movie> {
-        use chrono::Utc;
         use std::time::Duration;
         Ok(Movie {
             id: item.rating_key,

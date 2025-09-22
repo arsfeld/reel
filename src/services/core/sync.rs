@@ -472,7 +472,7 @@ impl SyncService {
         source_id: &SourceId,
     ) -> Result<Option<SyncStatusModel>> {
         let repo = SyncRepositoryImpl::new(db.clone());
-        repo.find_latest_for_source(&source_id.to_string())
+        repo.find_latest_for_source(source_id.as_ref())
             .await
             .context("Failed to get sync status")
     }
@@ -505,9 +505,7 @@ impl SyncService {
         } else {
             // Insert new record using start_sync which properly handles ID generation
             let repo = SyncRepositoryImpl::new(db.clone());
-            let new_sync = repo
-                .start_sync(&source_id.to_string(), "full", None)
-                .await?;
+            let new_sync = repo.start_sync(source_id.as_ref(), "full", None).await?;
 
             // If we need to update the status immediately (e.g., to completed or failed)
             if status != SyncStatus::InProgress {

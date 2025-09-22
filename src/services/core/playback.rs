@@ -16,7 +16,7 @@ impl PlaybackService {
         item_id: &MediaItemId,
     ) -> Result<Option<PlaybackProgressModel>> {
         let repo = PlaybackRepositoryImpl::new(db.clone());
-        repo.find_by_media_and_user(&item_id.to_string(), user_id)
+        repo.find_by_media_and_user(item_id.as_ref(), user_id)
             .await
             .context("Failed to get playback progress")
     }
@@ -28,7 +28,7 @@ impl PlaybackService {
         item_id: &MediaItemId,
     ) -> Result<Option<(i64, i32, i64, i32)>> {
         let repo = PlaybackRepositoryImpl::new(db.clone());
-        repo.get_playqueue_state(&item_id.to_string(), Some(user_id))
+        repo.get_playqueue_state(item_id.as_ref(), Some(user_id))
             .await
             .context("Failed to get PlayQueue state")
     }

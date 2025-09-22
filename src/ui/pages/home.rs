@@ -396,22 +396,22 @@ impl AsyncComponent for HomePage {
             HomePageInput::ImageLoaded { id, texture } => {
                 trace!("Image loaded for item: {}", id);
                 // Find the section and card index for this image
-                if let Some((section_id, card_idx)) = self.image_requests.get(&id) {
-                    if let Some(factory) = self.section_factories.get(section_id) {
-                        // Send the texture to the specific card
-                        factory.send(*card_idx, MediaCardInput::ImageLoaded(texture));
-                    }
+                if let Some((section_id, card_idx)) = self.image_requests.get(&id)
+                    && let Some(factory) = self.section_factories.get(section_id)
+                {
+                    // Send the texture to the specific card
+                    factory.send(*card_idx, MediaCardInput::ImageLoaded(texture));
                 }
             }
 
             HomePageInput::ImageLoadFailed { id } => {
                 debug!("Failed to load image for item: {}", id);
                 // Find the section and card index for this image
-                if let Some((section_id, card_idx)) = self.image_requests.get(&id) {
-                    if let Some(factory) = self.section_factories.get(section_id) {
-                        // Notify the card that the image failed to load
-                        factory.send(*card_idx, MediaCardInput::ImageLoadFailed);
-                    }
+                if let Some((section_id, card_idx)) = self.image_requests.get(&id)
+                    && let Some(factory) = self.section_factories.get(section_id)
+                {
+                    // Notify the card that the image failed to load
+                    factory.send(*card_idx, MediaCardInput::ImageLoadFailed);
                 }
                 // Remove from tracking
                 self.image_requests.remove(&id);
@@ -435,7 +435,7 @@ impl HomePage {
         let spinner = gtk::Spinner::builder().spinning(true).build();
 
         let label = gtk::Label::builder()
-            .label(&format!("Loading content from {}...", source_id))
+            .label(format!("Loading content from {}...", source_id))
             .build();
 
         loading_box.append(&spinner);
@@ -470,7 +470,7 @@ impl HomePage {
 
         // Error message
         let label = gtk::Label::builder()
-            .label(&format!("Failed to load content: {}", error))
+            .label(format!("Failed to load content: {}", error))
             .hexpand(true)
             .xalign(0.0)
             .build();
@@ -639,27 +639,27 @@ impl HomePage {
                     });
 
                     // Queue image load if poster URL exists
-                    if let Some(poster_url) = &model.poster_url {
-                        if !poster_url.is_empty() {
-                            // Track this request
-                            self.image_requests
-                                .insert(item_id.clone(), (section.id.clone(), idx));
+                    if let Some(poster_url) = &model.poster_url
+                        && !poster_url.is_empty()
+                    {
+                        // Track this request
+                        self.image_requests
+                            .insert(item_id.clone(), (section.id.clone(), idx));
 
-                            // Queue the image load with priority based on position
-                            let priority = (idx / 10).min(10) as u8;
-                            trace!(
-                                "Queueing image for item {} with priority {}",
-                                item_id, priority
-                            );
+                        // Queue the image load with priority based on position
+                        let priority = (idx / 10).min(10) as u8;
+                        trace!(
+                            "Queueing image for item {} with priority {}",
+                            item_id, priority
+                        );
 
-                            self.image_loader
-                                .emit(ImageLoaderInput::LoadImage(ImageRequest {
-                                    id: item_id,
-                                    url: poster_url.clone(),
-                                    size: ImageSize::Thumbnail,
-                                    priority,
-                                }));
-                        }
+                        self.image_loader
+                            .emit(ImageLoaderInput::LoadImage(ImageRequest {
+                                id: item_id,
+                                url: poster_url.clone(),
+                                size: ImageSize::Thumbnail,
+                                priority,
+                            }));
                     }
                 }
             }
@@ -796,7 +796,7 @@ impl HomePage {
 
         // Find and remove section factories for this source
         let mut factories_to_remove = Vec::new();
-        for (section_id, _) in &self.section_factories {
+        for section_id in self.section_factories.keys() {
             if section_id.starts_with(&format!("{}::", source_id)) {
                 factories_to_remove.push(section_id.clone());
             }

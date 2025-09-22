@@ -183,7 +183,7 @@ impl FactoryComponent for SourceListItem {
                             } else if let Some(ref last_sync) = self.source.last_sync {
                                 use chrono::Utc;
                                 let now = Utc::now();
-                                let duration = now.signed_duration_since(last_sync.clone());
+                                let duration = now.signed_duration_since(*last_sync);
                                 if duration.num_hours() < 1 {
                                     format!("{}m ago", duration.num_minutes())
                                 } else if duration.num_days() < 1 {
@@ -197,7 +197,7 @@ impl FactoryComponent for SourceListItem {
                             add_css_class: "dim-label",
                             add_css_class: "caption",
                             #[watch]
-                            set_tooltip_text: self.sync_error.as_ref().map(|e| e.as_str()),
+                            set_tooltip_text: self.sync_error.as_deref(),
                         },
                     },
 

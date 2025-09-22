@@ -447,7 +447,7 @@ impl AsyncComponent for AuthDialog {
                                         add_css_class: "title-1",
                                         add_css_class: "accent",
                                         #[watch]
-                                        set_label: &model.jellyfin_quick_connect_code.as_ref().unwrap_or(&String::new()),
+                                        set_label: model.jellyfin_quick_connect_code.as_ref().unwrap_or(&String::new()),
                                     },
 
                                     gtk4::Box {

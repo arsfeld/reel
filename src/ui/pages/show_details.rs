@@ -358,7 +358,7 @@ impl AsyncComponent for ShowDetailsPage {
             season_dropdown.connect_selected_notify(move |dropdown| {
                 let selected = dropdown.selected();
                 // Use checked_add to prevent overflow, default to season 1 if overflow occurs
-                let season_num = (selected as u32).checked_add(1).unwrap_or(1);
+                let season_num = selected.checked_add(1).unwrap_or(1);
                 sender.input(ShowDetailsInput::SelectSeason(season_num));
             });
         }
@@ -468,10 +468,10 @@ impl AsyncComponent for ShowDetailsPage {
                             if let Err(e) = repo.mark_watched(&media_id.to_string(), None).await {
                                 error!("Failed to mark episode as watched: {}", e);
                             }
-                        } else {
-                            if let Err(e) = repo.mark_unwatched(&media_id.to_string(), None).await {
-                                error!("Failed to mark episode as unwatched: {}", e);
-                            }
+                        } else if let Err(e) =
+                            repo.mark_unwatched(&media_id.to_string(), None).await
+                        {
+                            error!("Failed to mark episode as unwatched: {}", e);
                         }
                     });
 
@@ -489,19 +489,19 @@ impl AsyncComponent for ShowDetailsPage {
             }
             ShowDetailsInput::ImageLoaded { id, texture } => {
                 // Find the picture widget for this episode
-                if let Ok(index) = id.parse::<usize>() {
-                    if let Some(picture) = self.episode_pictures.get(&index) {
-                        picture.set_paintable(Some(&texture));
-                        picture.remove_css_class("loading");
-                    }
+                if let Ok(index) = id.parse::<usize>()
+                    && let Some(picture) = self.episode_pictures.get(&index)
+                {
+                    picture.set_paintable(Some(&texture));
+                    picture.remove_css_class("loading");
                 }
             }
             ShowDetailsInput::ImageLoadFailed { id } => {
                 // Remove loading indicator for failed image
-                if let Ok(index) = id.parse::<usize>() {
-                    if let Some(picture) = self.episode_pictures.get(&index) {
-                        picture.remove_css_class("loading");
-                    }
+                if let Ok(index) = id.parse::<usize>()
+                    && let Some(picture) = self.episode_pictures.get(&index)
+                {
+                    picture.remove_css_class("loading");
                 }
             }
         }
@@ -734,14 +734,13 @@ impl ShowDetailsPage {
         }
 
         // Scroll to the first unwatched episode
-        if let Some(first_unwatched_index) = self.episodes.iter().position(|e| !e.watched) {
-            if let Some(child) = self
+        if let Some(first_unwatched_index) = self.episodes.iter().position(|e| !e.watched)
+            && let Some(child) = self
                 .episode_grid
                 .child_at_index(first_unwatched_index as i32)
-            {
-                // Focus on the first unwatched episode for better visibility
-                child.grab_focus();
-            }
+        {
+            // Focus on the first unwatched episode for better visibility
+            child.grab_focus();
         }
     }
 }
@@ -834,7 +833,7 @@ fn create_episode_card(
 
     // Episode number badge - subtle and minimal
     let badge = gtk::Label::builder()
-        .label(&format!("E{}", episode.episode_number))
+        .label(format!("E{}", episode.episode_number))
         .css_classes(["episode-number-badge"])
         .halign(gtk::Align::Start)
         .valign(gtk::Align::Start)
@@ -844,23 +843,22 @@ fn create_episode_card(
     overlay.add_overlay(&badge);
 
     // Modern progress bar if partially watched
-    if let Some(position) = episode.playback_position {
-        if position.as_secs() > 0 && !episode.watched {
-            let progress_container = gtk::Box::builder()
-                .css_classes(["episode-progress-container"])
-                .valign(gtk::Align::End)
-                .build();
+    if let Some(position) = episode.playback_position
+        && position.as_secs() > 0
+        && !episode.watched
+    {
+        let progress_container = gtk::Box::builder()
+            .css_classes(["episode-progress-container"])
+            .valign(gtk::Align::End)
+            .build();
 
-            let progress = gtk::Box::builder()
-                .css_classes(["episode-progress-bar"])
-                .width_request(
-                    (240.0 * position.as_secs_f64() / episode.duration.as_secs_f64()) as i32,
-                )
-                .build();
+        let progress = gtk::Box::builder()
+            .css_classes(["episode-progress-bar"])
+            .width_request((240.0 * position.as_secs_f64() / episode.duration.as_secs_f64()) as i32)
+            .build();
 
-            progress_container.append(&progress);
-            overlay.add_overlay(&progress_container);
-        }
+        progress_container.append(&progress);
+        overlay.add_overlay(&progress_container);
     }
 
     // New episode indicator (unwatched) OR watched check
@@ -908,7 +906,7 @@ fn create_episode_card(
 
     let duration = episode.duration.as_secs() / 60;
     let details = gtk::Label::builder()
-        .label(&format!("{}m", duration))
+        .label(format!("{}m", duration))
         .xalign(0.0)
         .css_classes(["episode-duration", "dim-label", "caption"])
         .build();

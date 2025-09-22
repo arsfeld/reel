@@ -61,7 +61,7 @@ impl Command<Vec<MediaItem>> for GetMediaItemsCommand {
         MediaService::get_media_items(
             &self.db,
             &self.library_id,
-            self.media_type.clone(),
+            self.media_type,
             self.offset,
             self.limit,
         )
@@ -110,7 +110,7 @@ impl Command<Vec<MediaItem>> for SearchMediaCommand {
             &self.db,
             &self.query,
             self.library_id.as_ref(),
-            self.media_type.clone(),
+            self.media_type,
         )
         .await
     }

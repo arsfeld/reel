@@ -66,19 +66,19 @@ impl BackendService {
                 backend.initialize().await?;
 
                 // Update the source with the best connection URL if it changed
-                if backend.has_url_changed().await {
-                    if let Some(new_url) = backend.get_current_url().await {
-                        tracing::info!(
-                            "Updating source {} with new URL: {}",
-                            source_entity.id,
-                            new_url
-                        );
-                        let source_repo = SourceRepositoryImpl::new(db.clone());
-                        source_repo
-                            .update_connection_url(&source_entity.id, Some(new_url))
-                            .await
-                            .context("Failed to update source URL")?;
-                    }
+                if backend.has_url_changed().await
+                    && let Some(new_url) = backend.get_current_url().await
+                {
+                    tracing::info!(
+                        "Updating source {} with new URL: {}",
+                        source_entity.id,
+                        new_url
+                    );
+                    let source_repo = SourceRepositoryImpl::new(db.clone());
+                    source_repo
+                        .update_connection_url(&source_entity.id, Some(new_url))
+                        .await
+                        .context("Failed to update source URL")?;
                 }
 
                 Box::new(backend)
@@ -499,32 +499,30 @@ impl BackendService {
 
             // Load continue watching items from playback progress
             let playback_repo = PlaybackRepositoryImpl::new(db.clone());
-            if let Ok(in_progress) = playback_repo.find_in_progress(None).await {
-                if !in_progress.is_empty() {
-                    let media_repo = MediaRepositoryImpl::new(db.clone());
-                    let mut continue_watching_items = Vec::new();
+            if let Ok(in_progress) = playback_repo.find_in_progress(None).await
+                && !in_progress.is_empty()
+            {
+                let media_repo = MediaRepositoryImpl::new(db.clone());
+                let mut continue_watching_items = Vec::new();
 
-                    // Load media items for each in-progress item
-                    for progress in in_progress.iter().take(20) {
-                        // Only include items from this source
-                        if let Ok(Some(media_item)) =
-                            media_repo.find_by_id(&progress.media_id).await
-                        {
-                            if media_item.source_id == source.id {
-                                // Use MediaItemModel directly
-                                continue_watching_items.push(media_item);
-                            }
-                        }
+                // Load media items for each in-progress item
+                for progress in in_progress.iter().take(20) {
+                    // Only include items from this source
+                    if let Ok(Some(media_item)) = media_repo.find_by_id(&progress.media_id).await
+                        && media_item.source_id == source.id
+                    {
+                        // Use MediaItemModel directly
+                        continue_watching_items.push(media_item);
                     }
+                }
 
-                    if !continue_watching_items.is_empty() {
-                        sections.push(crate::models::HomeSectionWithModels {
-                            id: format!("{}::continue-watching", source.id),
-                            title: "Continue Watching".to_string(),
-                            section_type: HomeSectionType::ContinueWatching,
-                            items: continue_watching_items,
-                        });
-                    }
+                if !continue_watching_items.is_empty() {
+                    sections.push(crate::models::HomeSectionWithModels {
+                        id: format!("{}::continue-watching", source.id),
+                        title: "Continue Watching".to_string(),
+                        section_type: HomeSectionType::ContinueWatching,
+                        items: continue_watching_items,
+                    });
                 }
             }
 
@@ -554,34 +552,33 @@ impl BackendService {
             if let Ok(movies) = media_repo
                 .find_by_source_and_type(&source.id, "movie")
                 .await
+                && !movies.is_empty()
             {
-                if !movies.is_empty() {
-                    // Use MediaItemModel directly
-                    let movie_items: Vec<crate::db::entities::MediaItemModel> =
-                        movies.into_iter().take(20).collect();
+                // Use MediaItemModel directly
+                let movie_items: Vec<crate::db::entities::MediaItemModel> =
+                    movies.into_iter().take(20).collect();
 
-                    sections.push(crate::models::HomeSectionWithModels {
-                        id: format!("{}::movies", source.id),
-                        title: "Movies".to_string(),
-                        section_type: HomeSectionType::Custom("Movies".to_string()),
-                        items: movie_items,
-                    });
-                }
+                sections.push(crate::models::HomeSectionWithModels {
+                    id: format!("{}::movies", source.id),
+                    title: "Movies".to_string(),
+                    section_type: HomeSectionType::Custom("Movies".to_string()),
+                    items: movie_items,
+                });
             }
 
-            if let Ok(shows) = media_repo.find_by_source_and_type(&source.id, "show").await {
-                if !shows.is_empty() {
-                    // Use MediaItemModel directly
-                    let show_items: Vec<crate::db::entities::MediaItemModel> =
-                        shows.into_iter().take(20).collect();
+            if let Ok(shows) = media_repo.find_by_source_and_type(&source.id, "show").await
+                && !shows.is_empty()
+            {
+                // Use MediaItemModel directly
+                let show_items: Vec<crate::db::entities::MediaItemModel> =
+                    shows.into_iter().take(20).collect();
 
-                    sections.push(crate::models::HomeSectionWithModels {
-                        id: format!("{}::shows", source.id),
-                        title: "TV Shows".to_string(),
-                        section_type: HomeSectionType::Custom("TV Shows".to_string()),
-                        items: show_items,
-                    });
-                }
+                sections.push(crate::models::HomeSectionWithModels {
+                    id: format!("{}::shows", source.id),
+                    title: "TV Shows".to_string(),
+                    section_type: HomeSectionType::Custom("TV Shows".to_string()),
+                    items: show_items,
+                });
             }
 
             if !sections.is_empty() {

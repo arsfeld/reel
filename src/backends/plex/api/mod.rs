@@ -12,6 +12,5 @@ mod streaming;
 mod types;
 
 // Re-export the main PlexApi struct, constants, and helper functions
-pub use client::{PLEX_CLIENT_IDENTIFIER, PLEX_PRODUCT, PlexApi, create_standard_headers};
+pub use client::{PlexApi, create_standard_headers};
 // Re-export PlayQueue types for external use
-pub use playqueue::{PlayQueueContainer, PlayQueueItem, PlayQueueResponse};

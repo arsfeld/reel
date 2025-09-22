@@ -116,7 +116,7 @@ impl SyncWorker {
                     .ok();
 
                 // Record successful sync time to prevent too-frequent retries
-                let _ = sender.input(SyncWorkerInput::RecordSuccessfulSync {
+                sender.input(SyncWorkerInput::RecordSuccessfulSync {
                     source_id: source_id.clone(),
                 });
             }
@@ -155,16 +155,15 @@ impl SyncWorker {
         }
 
         // Check if we should sync (unless forced)
-        if !force {
-            if let Some(last_sync) = self.last_sync_times.get(&source_id) {
-                if last_sync.elapsed() < self.sync_interval {
-                    info!(
-                        "Skipping sync for {:?}, too soon since last sync",
-                        source_id
-                    );
-                    return;
-                }
-            }
+        if !force
+            && let Some(last_sync) = self.last_sync_times.get(&source_id)
+            && last_sync.elapsed() < self.sync_interval
+        {
+            info!(
+                "Skipping sync for {:?}, too soon since last sync",
+                source_id
+            );
+            return;
         }
 
         // Start new sync
