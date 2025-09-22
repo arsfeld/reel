@@ -14,6 +14,10 @@ pub struct Model {
     pub view_count: i32,
     pub last_watched_at: Option<DateTime>,
     pub updated_at: DateTime,
+    pub play_queue_id: Option<i64>,
+    pub play_queue_version: Option<i32>,
+    pub play_queue_item_id: Option<i64>,
+    pub source_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -24,11 +28,23 @@ pub enum Relation {
         to = "super::media_items::Column::Id"
     )]
     MediaItem,
+    #[sea_orm(
+        belongs_to = "super::sources::Entity",
+        from = "Column::SourceId",
+        to = "super::sources::Column::Id"
+    )]
+    Source,
 }
 
 impl Related<super::media_items::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::MediaItem.def()
+    }
+}
+
+impl Related<super::sources::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Source.def()
     }
 }
 

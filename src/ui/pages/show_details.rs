@@ -434,6 +434,8 @@ impl AsyncComponent for ShowDetailsPage {
 
                 sender.oneshot_command(async move {
                     // Try to build playlist context for TV show navigation
+                    // PlayQueueService::create_from_media already handles Plex PlayQueue creation
+                    // and falls back to regular context if not available
                     match PlaylistService::build_show_context(&db_clone, &episode_id_clone).await {
                         Ok(context) => ShowDetailsCommand::PlayWithContext {
                             episode_id: episode_id_clone,

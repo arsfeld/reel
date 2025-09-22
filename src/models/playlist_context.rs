@@ -19,11 +19,51 @@ pub enum PlaylistContext {
         episodes: Vec<EpisodeInfo>,
         /// Whether to automatically play the next episode
         auto_play_next: bool,
+        /// Optional Plex PlayQueue metadata
+        play_queue_info: Option<PlayQueueInfo>,
     },
-    // Future variants:
-    // Album { ... }
-    // Playlist { ... }
-    // Queue { ... }
+
+    /// Generic PlayQueue context (for movies, mixed content, playlists)
+    PlayQueue {
+        /// Plex PlayQueue metadata
+        play_queue_info: PlayQueueInfo,
+        /// Current item index in the queue
+        current_index: usize,
+        /// All items in the queue
+        items: Vec<QueueItem>,
+        /// Whether to automatically play the next item
+        auto_play_next: bool,
+    },
+}
+
+/// Plex PlayQueue metadata for server-side queue management
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayQueueInfo {
+    /// PlayQueue ID from Plex server
+    pub play_queue_id: i64,
+    /// PlayQueue version for sync tracking
+    pub play_queue_version: i32,
+    /// Currently selected item ID in the queue
+    pub play_queue_item_id: i64,
+    /// Source URI that created this queue
+    pub source_uri: Option<String>,
+    /// Whether the queue is shuffled
+    pub shuffled: bool,
+}
+
+/// Generic queue item for PlayQueue context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueItem {
+    /// Media item ID
+    pub id: MediaItemId,
+    /// Item title
+    pub title: String,
+    /// Media type (movie, episode, track, etc.)
+    pub media_type: String,
+    /// Duration in milliseconds
+    pub duration_ms: Option<i64>,
+    /// PlayQueue item ID for Plex sync
+    pub play_queue_item_id: Option<i64>,
 }
 
 /// Minimal episode information for playlist context
@@ -43,6 +83,8 @@ pub struct EpisodeInfo {
     pub watched: bool,
     /// Current playback position in milliseconds
     pub playback_position_ms: Option<i64>,
+    /// PlayQueue item ID for Plex sync
+    pub play_queue_item_id: Option<i64>,
 }
 
 impl PlaylistContext {
@@ -61,6 +103,17 @@ impl PlaylistContext {
                     None
                 }
             }
+            PlaylistContext::PlayQueue {
+                items,
+                current_index,
+                ..
+            } => {
+                if *current_index + 1 < items.len() {
+                    Some(items[*current_index + 1].id.clone())
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -75,6 +128,17 @@ impl PlaylistContext {
             } => {
                 if *current_index > 0 {
                     Some(episodes[*current_index - 1].id.clone())
+                } else {
+                    None
+                }
+            }
+            PlaylistContext::PlayQueue {
+                items,
+                current_index,
+                ..
+            } => {
+                if *current_index > 0 {
+                    Some(items[*current_index - 1].id.clone())
                 } else {
                     None
                 }
@@ -98,6 +162,25 @@ impl PlaylistContext {
                     false
                 }
             }
+            PlaylistContext::PlayQueue {
+                items,
+                current_index,
+                play_queue_info,
+                ..
+            } => {
+                if let Some(new_index) = items.iter().position(|i| &i.id == item_id) {
+                    *current_index = new_index;
+                    // Update the selected item ID in PlayQueue info
+                    if let Some(item) = items.get(new_index) {
+                        if let Some(item_id) = item.play_queue_item_id {
+                            play_queue_info.play_queue_item_id = item_id;
+                        }
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -110,6 +193,11 @@ impl PlaylistContext {
                 current_index,
                 ..
             } => *current_index + 1 < episodes.len(),
+            PlaylistContext::PlayQueue {
+                items,
+                current_index,
+                ..
+            } => *current_index + 1 < items.len(),
         }
     }
 
@@ -118,6 +206,7 @@ impl PlaylistContext {
         match self {
             PlaylistContext::SingleItem => false,
             PlaylistContext::TvShow { current_index, .. } => *current_index > 0,
+            PlaylistContext::PlayQueue { current_index, .. } => *current_index > 0,
         }
     }
 
@@ -136,6 +225,32 @@ impl PlaylistContext {
                     None
                 }
             }
+            PlaylistContext::PlayQueue { .. } => {
+                // PlayQueue uses generic items, not episodes
+                None
+            }
+        }
+    }
+
+    /// Get PlayQueue info if available
+    pub fn get_play_queue_info(&self) -> Option<&PlayQueueInfo> {
+        match self {
+            PlaylistContext::SingleItem => None,
+            PlaylistContext::TvShow {
+                play_queue_info, ..
+            } => play_queue_info.as_ref(),
+            PlaylistContext::PlayQueue {
+                play_queue_info, ..
+            } => Some(play_queue_info),
+        }
+    }
+
+    /// Check if auto-play is enabled
+    pub fn is_auto_play_enabled(&self) -> bool {
+        match self {
+            PlaylistContext::SingleItem => false,
+            PlaylistContext::TvShow { auto_play_next, .. } => *auto_play_next,
+            PlaylistContext::PlayQueue { auto_play_next, .. } => *auto_play_next,
         }
     }
 }

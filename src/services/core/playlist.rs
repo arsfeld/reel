@@ -58,6 +58,7 @@ impl PlaylistService {
                 duration_ms: ep.duration_ms,
                 watched: false,             // TODO: Get from playback_progress
                 playback_position_ms: None, // TODO: Get from playback_progress
+                play_queue_item_id: None,   // Will be set if using PlayQueue
             })
             .collect();
 
@@ -79,7 +80,8 @@ impl PlaylistService {
             show_title: show.title,
             current_index,
             episodes: episode_infos,
-            auto_play_next: true, // TODO: Get from user preferences
+            auto_play_next: true,  // TODO: Get from user preferences
+            play_queue_info: None, // Will be set by PlayQueueService if applicable
         })
     }
 }
