@@ -1,0 +1,2448 @@
+warning: Git tree '/home/arosenfeld/Code/gnome-reel' has uncommitted changes
+Reel Development Environment
+==================================
+
+Welcome to the development environment!
+Run 'help' to see all available commands.
+
+   Compiling reel v0.5.0 (/home/arosenfeld/Code/gnome-reel)
+warning: unused import: `super::*`
+   --> src/services/commands/auth_commands.rs:154:9
+    |
+154 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `crate::backends::traits::BackendType`
+   --> src/services/commands/auth_commands.rs:155:9
+    |
+155 |     use crate::backends::traits::BackendType;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::db::entities::sources`
+   --> src/services/commands/auth_commands.rs:156:9
+    |
+156 |     use crate::db::entities::sources;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Episode`, `LibraryType`, `Library`, `Movie`, and `Show`
+   --> src/services/commands/auth_commands.rs:157:25
+    |
+157 |     use crate::models::{Episode, Library, LibraryType, Movie, Show};
+    |                         ^^^^^^^  ^^^^^^^  ^^^^^^^^^^^  ^^^^^  ^^^^
+
+warning: unused import: `chrono::Utc`
+   --> src/services/commands/auth_commands.rs:158:9
+    |
+158 |     use chrono::Utc;
+    |         ^^^^^^^^^^^
+
+warning: unused import: `std::sync::Arc`
+   --> src/services/commands/auth_commands.rs:160:9
+    |
+160 |     use std::sync::Arc;
+    |         ^^^^^^^^^^^^^^
+
+warning: unused import: `std::time::Duration`
+   --> src/services/commands/auth_commands.rs:161:9
+    |
+161 |     use std::time::Duration;
+    |         ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::*`
+   --> src/services/commands/media_commands.rs:294:9
+    |
+294 |     use super::*;
+    |         ^^^^^^^^
+
+warning: unused imports: `libraries`, `media_items`, and `playback_progress`
+   --> src/services/commands/media_commands.rs:295:31
+    |
+295 |     use crate::db::entities::{libraries, media_items, playback_progress};
+    |                               ^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `LibraryType` and `Movie`
+   --> src/services/commands/media_commands.rs:296:25
+    |
+296 |     use crate::models::{LibraryType, Movie};
+    |                         ^^^^^^^^^^^  ^^^^^
+
+warning: unused import: `chrono::Utc`
+   --> src/services/commands/media_commands.rs:297:9
+    |
+297 |     use chrono::Utc;
+    |         ^^^^^^^^^^^
+
+warning: unused import: `std::sync::Arc`
+   --> src/services/commands/media_commands.rs:299:9
+    |
+299 |     use std::sync::Arc;
+    |         ^^^^^^^^^^^^^^
+
+warning: unused import: `std::time::Duration`
+   --> src/services/commands/media_commands.rs:300:9
+    |
+300 |     use std::time::Duration;
+    |         ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::backends::traits::BackendType`
+  --> src/services/commands/sync_commands.rs:44:9
+   |
+44 |     use crate::backends::traits::BackendType;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `HomeSection`
+  --> src/services/commands/sync_commands.rs:47:42
+   |
+47 |         BackendId, Credentials, Episode, HomeSection, Library, LibraryId, LibraryType, MediaItemId,
+   |                                          ^^^^^^^^^^^
+
+warning: unused import: `debug`
+ --> src/services/core/media.rs:2:15
+  |
+2 | use tracing::{debug, info, warn};
+  |               ^^^^^
+
+warning: unused import: `super::*`
+   --> src/services/core/media.rs:585:9
+    |
+585 |     use super::*;
+    |         ^^^^^^^^
+
+warning: unused import: `Movie`
+   --> src/services/core/media.rs:589:69
+    |
+589 |     use crate::models::{Library, LibraryId, LibraryType, MediaType, Movie, SourceId};
+    |                                                                     ^^^^^
+
+warning: unused import: `std::time::Duration`
+   --> src/services/core/media.rs:594:9
+    |
+594 |     use std::time::Duration;
+    |         ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `sea_orm::JsonValue`
+   --> src/services/core/media.rs:986:17
+    |
+986 |             use sea_orm::JsonValue;
+    |                 ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `SyncService`
+  --> src/services/core/mod.rs:16:30
+   |
+16 | pub use sync::{SyncProgress, SyncService, SyncStatus};
+   |                              ^^^^^^^^^^^
+
+warning: unused import: `crate::db::repository::source_repository::SourceRepositoryImpl`
+ --> src/workers/connection_monitor_tests.rs:4:9
+  |
+4 |     use crate::db::repository::source_repository::SourceRepositoryImpl;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ConnectionMonitorInput`
+ --> src/workers/connection_monitor_tests.rs:8:28
+  |
+8 |         ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput,
+  |                            ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `relm4::Worker`
+  --> src/workers/connection_monitor_tests.rs:10:9
+   |
+10 |     use relm4::Worker;
+   |         ^^^^^^^^^^^^^
+
+warning: unused import: `SearchResults`
+  --> src/test_utils.rs:80:49
+   |
+80 |     use crate::backends::traits::{MediaBackend, SearchResults};
+   |                                                 ^^^^^^^^^^^^^
+
+warning: unused variable: `index`
+   --> src/services/core/media.rs:347:14
+    |
+347 |         for (index, item) in items.iter().enumerate() {
+    |              ^^^^^ help: if this is intentional, prefix it with an underscore: `_index`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: trait `PlatformApp` is never used
+ --> src/app/mod.rs:7:11
+  |
+7 | pub trait PlatformApp {
+  |           ^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` on by default
+
+warning: field `runtime` is never read
+ --> src/app/app.rs:8:5
+  |
+7 | pub struct ReelApp {
+  |            ------- field in this struct
+8 |     runtime: Arc<Runtime>,
+  |     ^^^^^^^
+
+warning: method `get_credentials` is never used
+   --> src/backends/jellyfin/mod.rs:220:18
+    |
+46  | impl JellyfinBackend {
+    | -------------------- method in this implementation
+...
+220 |     pub async fn get_credentials(&self) -> Option<(String, String)> {
+    |                  ^^^^^^^^^^^^^^^
+
+warning: methods `mark_as_watched`, `mark_as_unwatched`, `get_item`, `get_watch_status`, `find_next_episode`, and `search` are never used
+    --> src/backends/jellyfin/api.rs:1009:18
+     |
+28   | impl JellyfinApi {
+     | ---------------- methods in this implementation
+...
+1009 |     pub async fn mark_as_watched(&self, media_id: &str) -> Result<()> {
+     |                  ^^^^^^^^^^^^^^^
+...
+1029 |     pub async fn mark_as_unwatched(&self, media_id: &str) -> Result<()> {
+     |                  ^^^^^^^^^^^^^^^^^
+...
+1052 |     pub async fn get_item(&self, media_id: &str) -> Result<JellyfinItem> {
+     |                  ^^^^^^^^
+...
+1073 |     pub async fn get_watch_status(
+     |                  ^^^^^^^^^^^^^^^^
+...
+1121 |     pub async fn find_next_episode(&self, current_episode: &Episode) -> Result<Option<Episode>> {
+     |                  ^^^^^^^^^^^^^^^^^
+...
+1216 |     pub async fn search(&self, query: &str) -> Result<Vec<MediaItem>> {
+     |                  ^^^^^^
+
+warning: fields `name`, `is_local`, and `is_relay` are never read
+  --> src/backends/plex/mod.rs:45:9
+   |
+44 | pub struct ServerInfo {
+   |            ---------- fields in this struct
+45 |     pub name: String,
+   |         ^^^^
+46 |     pub is_local: bool,
+   |         ^^^^^^^^
+47 |     pub is_relay: bool,
+   |         ^^^^^^^^
+   |
+   = note: `ServerInfo` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `check_connectivity`, `refresh_connections_background`, and `clone_for_background` are never used
+   --> src/backends/plex/mod.rs:121:18
+    |
+50  | impl PlexBackend {
+    | ---------------- methods in this implementation
+...
+121 |     pub async fn check_connectivity(&self) -> bool {
+    |                  ^^^^^^^^^^^^^^^^^^
+...
+443 |     pub async fn refresh_connections_background(&self) {
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+471 |     fn clone_for_background(&self) -> PlexBackend {
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `mark_unwatched` and `fetch_episode_markers` are never used
+    --> src/backends/plex/api.rs:549:18
+     |
+40   | impl PlexApi {
+     | ------------ methods in this implementation
+...
+549  |     pub async fn mark_unwatched(&self, media_id: &str) -> Result<()> {
+     |                  ^^^^^^^^^^^^^^
+...
+1091 |     pub async fn fetch_episode_markers(
+     |                  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `as_any` and `get_backend_id` are never used
+  --> src/backends/traits.rs:20:8
+   |
+12 | pub trait MediaBackend: Send + Sync + std::fmt::Debug {
+   |           ------------ methods in this trait
+...
+20 |     fn as_any(&self) -> &dyn std::any::Any;
+   |        ^^^^^^
+...
+62 |     async fn get_backend_id(&self) -> BackendId;
+   |              ^^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+   --> src/config.rs:225:18
+    |
+191 | impl Config {
+    | ----------- methods in this implementation
+...
+225 |     pub async fn set_plex_token(&mut self, token: &str) -> Result<()> {
+    |                  ^^^^^^^^^^^^^^
+...
+230 |     pub fn get_legacy_backends(&self) -> Vec<String> {
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+234 |     pub fn set_library_visibility(&mut self, library_id: &str, visible: bool) -> Result<()> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+241 |     pub fn get_library_visibility(&self, library_id: &str) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+249 |     pub fn get_all_library_visibility(&self) -> std::collections::HashMap<String, bool> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+253 |     pub fn set_all_library_visibility(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+261 |     pub fn get_auth_providers(
+    |            ^^^^^^^^^^^^^^^^^^
+...
+267 |     pub fn set_auth_providers(
+    |            ^^^^^^^^^^^^^^^^^^
+...
+275 |     pub fn add_auth_provider(
+    |            ^^^^^^^^^^^^^^^^^
+...
+284 |     pub fn remove_auth_provider(&mut self, id: &str) -> Result<()> {
+    |            ^^^^^^^^^^^^^^^^^^^^
+...
+291 |     pub fn remove_legacy_backend(&mut self, backend_id: &str) -> Result<()> {
+    |            ^^^^^^^^^^^^^^^^^^^^^
+...
+296 |     pub fn get_cached_sources(&self, provider_id: &str) -> Option<Vec<crate::models::Source>> {
+    |            ^^^^^^^^^^^^^^^^^^
+...
+300 |     pub fn set_cached_sources(
+    |            ^^^^^^^^^^^^^^^^^^
+...
+314 |     pub fn get_sources_last_fetched(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+321 |     pub fn is_sources_cache_stale(&self, provider_id: &str, max_age_secs: i64) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+330 |     pub fn get_preferred_source_id(&self) -> Option<String> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+...
+334 |     pub fn set_preferred_source_id(&mut self, source_id: Option<String>) -> Result<()> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: trait `Frontend` is never used
+ --> src/core/frontend.rs:5:11
+  |
+5 | pub trait Frontend {
+  |           ^^^^^^^^
+
+warning: associated items `as_str` and `from_str` are never used
+  --> src/db/entities/libraries.rs:55:12
+   |
+54 | impl LibraryType {
+   | ---------------- associated items in this implementation
+55 |     pub fn as_str(&self) -> &'static str {
+   |            ^^^^^^
+...
+65 |     pub fn from_str(s: &str) -> Option<Self> {
+   |            ^^^^^^^^
+
+warning: method `get_library_type` is never used
+  --> src/db/entities/libraries.rs:78:12
+   |
+77 | impl Model {
+   | ---------- method in this implementation
+78 |     pub fn get_library_type(&self) -> Option<LibraryType> {
+   |            ^^^^^^^^^^^^^^^^
+
+warning: type alias `MediaItemActiveModel` is never used
+  --> src/db/entities/media_items.rs:99:10
+   |
+99 | pub type MediaItemActiveModel = ActiveModel;
+   |          ^^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `as_str` and `from_str` are never used
+   --> src/db/entities/media_items.rs:113:12
+    |
+112 | impl MediaType {
+    | -------------- associated items in this implementation
+113 |     pub fn as_str(&self) -> &'static str {
+    |            ^^^^^^
+...
+124 |     pub fn from_str(s: &str) -> Option<Self> {
+    |            ^^^^^^^^
+
+warning: methods `get_media_type`, `get_metadata`, `is_episode`, `is_show`, and `get_episode_info` are never used
+   --> src/db/entities/media_items.rs:138:12
+    |
+137 | impl Model {
+    | ---------- methods in this implementation
+138 |     pub fn get_media_type(&self) -> Option<MediaType> {
+    |            ^^^^^^^^^^^^^^
+...
+149 |     pub fn get_metadata<T: for<'de> Deserialize<'de>>(&self) -> Option<T> {
+    |            ^^^^^^^^^^^^
+...
+156 |     pub fn is_episode(&self) -> bool {
+    |            ^^^^^^^^^^
+...
+161 |     pub fn is_show(&self) -> bool {
+    |            ^^^^^^^
+...
+166 |     pub fn get_episode_info(&self) -> Option<(i32, i32)> {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: associated items `as_str`, `from_str`, and `get_max_resolution` are never used
+  --> src/db/entities/offline_content.rs:46:12
+   |
+45 | impl QualityPreset {
+   | ------------------ associated items in this implementation
+46 |     pub fn as_str(&self) -> &'static str {
+   |            ^^^^^^
+...
+56 |     pub fn from_str(s: &str) -> Option<Self> {
+   |            ^^^^^^^^
+...
+67 |     pub fn get_max_resolution(&self) -> (u32, u32) {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: methods `get_quality_preset`, `get_size_mb`, `file_exists`, `touch`, and `days_since_accessed` are never used
+   --> src/db/entities/offline_content.rs:79:12
+    |
+78  | impl Model {
+    | ---------- methods in this implementation
+79  |     pub fn get_quality_preset(&self) -> Option<QualityPreset> {
+    |            ^^^^^^^^^^^^^^^^^^
+...
+86  |     pub fn get_size_mb(&self) -> f64 {
+    |            ^^^^^^^^^^^
+...
+93  |     pub fn file_exists(&self) -> bool {
+    |            ^^^^^^^^^^^
+...
+98  |     pub async fn touch(&mut self) -> Result<(), DbErr> {
+    |                  ^^^^^
+...
+104 |     pub fn days_since_accessed(&self) -> Option<i64> {
+    |            ^^^^^^^^^^^^^^^^^^^
+
+warning: methods `is_in_progress`, `is_near_completion`, `get_position_duration`, and `get_duration` are never used
+  --> src/db/entities/playback_progress.rs:48:12
+   |
+37 | impl Model {
+   | ---------- methods in this implementation
+...
+48 |     pub fn is_in_progress(&self) -> bool {
+   |            ^^^^^^^^^^^^^^
+...
+53 |     pub fn is_near_completion(&self) -> bool {
+   |            ^^^^^^^^^^^^^^^^^^
+...
+58 |     pub fn get_position_duration(&self) -> std::time::Duration {
+   |            ^^^^^^^^^^^^^^^^^^^^^
+...
+63 |     pub fn get_duration(&self) -> std::time::Duration {
+   |            ^^^^^^^^^^^^
+
+warning: methods `is_plex`, `is_jellyfin`, and `is_local` are never used
+  --> src/db/entities/sources.rs:57:12
+   |
+56 | impl Model {
+   | ---------- methods in this implementation
+57 |     pub fn is_plex(&self) -> bool {
+   |            ^^^^^^^
+...
+61 |     pub fn is_jellyfin(&self) -> bool {
+   |            ^^^^^^^^^^^
+...
+65 |     pub fn is_local(&self) -> bool {
+   |            ^^^^^^^^
+
+warning: associated items `as_str` and `from_str` are never used
+  --> src/db/entities/sync_status.rs:47:12
+   |
+46 | impl SyncType {
+   | ------------- associated items in this implementation
+47 |     pub fn as_str(&self) -> String {
+   |            ^^^^^^
+...
+56 |     pub fn from_str(s: &str) -> Option<Self> {
+   |            ^^^^^^^^
+
+warning: associated items `as_str` and `from_str` are never used
+  --> src/db/entities/sync_status.rs:80:12
+   |
+79 | impl SyncStatusType {
+   | ------------------- associated items in this implementation
+80 |     pub fn as_str(&self) -> &'static str {
+   |            ^^^^^^
+...
+89 |     pub fn from_str(s: &str) -> Option<Self> {
+   |            ^^^^^^^^
+
+warning: methods `get_sync_type`, `get_status`, `is_running`, `is_completed`, `is_failed`, and `get_duration` are never used
+   --> src/db/entities/sync_status.rs:101:12
+    |
+100 | impl Model {
+    | ---------- methods in this implementation
+101 |     pub fn get_sync_type(&self) -> Option<SyncType> {
+    |            ^^^^^^^^^^^^^
+...
+105 |     pub fn get_status(&self) -> Option<SyncStatusType> {
+    |            ^^^^^^^^^^
+...
+109 |     pub fn is_running(&self) -> bool {
+    |            ^^^^^^^^^^
+...
+113 |     pub fn is_completed(&self) -> bool {
+    |            ^^^^^^^^^^^^
+...
+117 |     pub fn is_failed(&self) -> bool {
+    |            ^^^^^^^^^
+...
+121 |     pub fn get_duration(&self) -> Option<std::time::Duration> {
+    |            ^^^^^^^^^^^^
+
+warning: variant `Id` is never constructed
+   --> src/db/migrations/m20250102_000001_add_episode_fields.rs:172:5
+    |
+169 | enum MediaItems {
+    |      ---------- variant in this enum
+...
+172 |     Id,
+    |     ^^
+
+warning: methods `find_by_type`, `update_item_count`, `get_total_item_count`, and `delete_by_source` are never used
+  --> src/db/repository/library_repository.rs:19:14
+   |
+14 | pub trait LibraryRepository: Repository<LibraryModel> {
+   |           ----------------- methods in this trait
+...
+19 |     async fn find_by_type(&self, library_type: &str) -> Result<Vec<LibraryModel>>;
+   |              ^^^^^^^^^^^^
+...
+22 |     async fn update_item_count(&self, id: &str, count: i32) -> Result<()>;
+   |              ^^^^^^^^^^^^^^^^^
+...
+25 |     async fn get_total_item_count(&self) -> Result<i64>;
+   |              ^^^^^^^^^^^^^^^^^^^^
+...
+28 |     async fn delete_by_source(&self, source_id: &str) -> Result<()>;
+   |              ^^^^^^^^^^^^^^^^
+
+warning: methods `find_by_source`, `find_by_type`, `find_by_source_and_backend_id`, `delete_by_source`, and `find_next_unwatched_episode` are never used
+  --> src/db/repository/media_repository.rs:26:14
+   |
+14 | pub trait MediaRepository: Repository<MediaItemModel> {
+   |           --------------- methods in this trait
+...
+26 |     async fn find_by_source(&self, source_id: &str) -> Result<Vec<MediaItemModel>>;
+   |              ^^^^^^^^^^^^^^
+...
+36 |     async fn find_by_type(&self, media_type: &str) -> Result<Vec<MediaItemModel>>;
+   |              ^^^^^^^^^^^^
+...
+65 |     async fn find_by_source_and_backend_id(
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+75 |     async fn delete_by_source(&self, source_id: &str) -> Result<()>;
+   |              ^^^^^^^^^^^^^^^^
+...
+97 |     async fn find_next_unwatched_episode(
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `insert_silent`, `update_silent`, and `find_episode_by_parent_season_episode` are never used
+   --> src/db/repository/media_repository.rs:118:18
+    |
+110 | impl MediaRepositoryImpl {
+    | ------------------------ methods in this implementation
+...
+118 |     pub async fn insert_silent(&self, entity: MediaItemModel) -> anyhow::Result<MediaItemModel> {
+    |                  ^^^^^^^^^^^^^
+...
+147 |     pub async fn update_silent(&self, entity: MediaItemModel) -> anyhow::Result<MediaItemModel> {
+    |                  ^^^^^^^^^^^^^
+...
+156 |     pub async fn find_episode_by_parent_season_episode(
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `find_by_library_and_type_paginated` is never used
+   --> src/db/repository/media_repository.rs:666:18
+    |
+615 | impl MediaRepositoryImpl {
+    | ------------------------ method in this implementation
+...
+666 |     pub async fn find_by_library_and_type_paginated(
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `find_watched`, `find_recently_watched`, and `cleanup_old_entries` are never used
+  --> src/db/repository/playback_repository.rs:27:14
+   |
+15 | pub trait PlaybackRepository: Repository<PlaybackProgressModel> {
+   |           ------------------ methods in this trait
+...
+27 |     async fn find_watched(&self, user_id: Option<&str>) -> Result<Vec<PlaybackProgressModel>>;
+   |              ^^^^^^^^^^^^
+...
+48 |     async fn find_recently_watched(
+   |              ^^^^^^^^^^^^^^^^^^^^^
+...
+55 |     async fn cleanup_old_entries(&self, days: i64) -> Result<u64>;
+   |              ^^^^^^^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+  --> src/db/repository/source_repository.rs:16:14
+   |
+14 | pub trait SourceRepository: Repository<SourceModel> {
+   |           ---------------- methods in this trait
+15 |     /// Find sources by type
+16 |     async fn find_by_type(&self, source_type: &str) -> Result<Vec<SourceModel>>;
+   |              ^^^^^^^^^^^^
+...
+19 |     async fn find_online(&self) -> Result<Vec<SourceModel>>;
+   |              ^^^^^^^^^^^
+...
+22 |     async fn update_online_status(&self, id: &str, is_online: bool) -> Result<()>;
+   |              ^^^^^^^^^^^^^^^^^^^^
+...
+28 |     async fn upsert(&self, entity: SourceModel) -> Result<SourceModel>;
+   |              ^^^^^^
+...
+31 |     async fn find_by_auth_provider(&self, provider_id: &str) -> Result<Vec<SourceModel>>;
+   |              ^^^^^^^^^^^^^^^^^^^^^
+...
+34 |     async fn cleanup_sources_for_provider(
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+41 |     async fn archive_invalid_sources(
+   |              ^^^^^^^^^^^^^^^^^^^^^^^
+...
+47 |     async fn find_archived(&self) -> Result<Vec<SourceModel>>;
+   |              ^^^^^^^^^^^^^
+...
+50 |     async fn cleanup_unknown_sources(&self) -> Result<Vec<SourceModel>>;
+   |              ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated function `from_millis` is never used
+  --> src/mapper/media_item_mapper.rs:13:12
+   |
+11 | impl DurationTransformer {
+   | ------------------------ associated function in this implementation
+12 |     /// Convert milliseconds to Duration
+13 |     pub fn from_millis(ms: Option<i64>) -> Duration {
+   |            ^^^^^^^^^^^
+
+warning: struct `DateTimeTransformer` is never constructed
+  --> src/mapper/media_item_mapper.rs:24:12
+   |
+24 | pub struct DateTimeTransformer;
+   |            ^^^^^^^^^^^^^^^^^^^
+
+warning: associated functions `from_rfc3339` and `from_naive` are never used
+  --> src/mapper/media_item_mapper.rs:28:12
+   |
+26 | impl DateTimeTransformer {
+   | ------------------------ associated functions in this implementation
+27 |     /// Parse datetime from RFC3339 string
+28 |     pub fn from_rfc3339(s: Option<&str>) -> Option<DateTime<Utc>> {
+   |            ^^^^^^^^^^^^
+...
+34 |     pub fn from_naive(dt: Option<chrono::NaiveDateTime>) -> Option<DateTime<Utc>> {
+   |            ^^^^^^^^^^
+
+warning: struct `JsonTransformer` is never constructed
+  --> src/mapper/media_item_mapper.rs:39:12
+   |
+39 | pub struct JsonTransformer;
+   |            ^^^^^^^^^^^^^^^
+
+warning: associated functions `extract` and `extract_genres` are never used
+  --> src/mapper/media_item_mapper.rs:43:12
+   |
+41 | impl JsonTransformer {
+   | -------------------- associated functions in this implementation
+42 |     /// Extract and deserialize a field from JSON metadata
+43 |     pub fn extract<T: serde::de::DeserializeOwned>(
+   |            ^^^^^^^
+...
+54 |     pub fn extract_genres(genres: &Option<serde_json::Value>) -> Vec<String> {
+   |            ^^^^^^^^^^^^^^
+
+warning: trait `Mapper` is never used
+ --> src/mapper/traits.rs:6:11
+  |
+6 | pub trait Mapper<T>: Sized {
+  |           ^^^^^^
+
+warning: trait `TryMapper` is never used
+  --> src/mapper/traits.rs:15:11
+   |
+15 | pub trait TryMapper<T>: Sized {
+   |           ^^^^^^^^^
+
+warning: trait `FieldTransform` is never used
+  --> src/mapper/traits.rs:26:11
+   |
+26 | pub trait FieldTransform<S, T> {
+   |           ^^^^^^^^^^^^^^
+
+warning: function `map_option` is never used
+  --> src/mapper/traits.rs:66:8
+   |
+66 | pub fn map_option<S, T, F>(opt: Option<S>, f: F) -> Option<T>
+   |        ^^^^^^^^^^
+
+warning: function `map_vec` is never used
+  --> src/mapper/traits.rs:74:8
+   |
+74 | pub fn map_vec<S, T, F>(vec: Vec<S>, f: F) -> Vec<T>
+   |        ^^^^^^^
+
+warning: function `try_map_option` is never used
+  --> src/mapper/traits.rs:82:8
+   |
+82 | pub fn try_map_option<S, T, E, F>(opt: Option<S>, f: F) -> Result<Option<T>, E>
+   |        ^^^^^^^^^^^^^^
+
+warning: function `try_map_vec` is never used
+  --> src/mapper/traits.rs:93:8
+   |
+93 | pub fn try_map_vec<S, T, E, F>(vec: Vec<S>, f: F) -> Result<Vec<T>, E>
+   |        ^^^^^^^^^^^
+
+warning: associated function `from_media_item` is never used
+   --> src/models/mod.rs:247:12
+    |
+246 | impl MediaType {
+    | -------------- associated function in this implementation
+247 |     pub fn from_media_item(item: &MediaItem) -> Self {
+    |            ^^^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+   --> src/models/mod.rs:269:12
+    |
+257 | impl MediaItem {
+    | -------------- methods in this implementation
+...
+269 |     pub fn backend_id(&self) -> &str {
+    |            ^^^^^^^^^^
+...
+291 |     pub fn is_watched(&self) -> bool {
+    |            ^^^^^^^^^^
+...
+302 |     pub fn is_partially_watched(&self) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^^^
+...
+313 |     pub fn watch_progress(&self) -> Option<f32> {
+    |            ^^^^^^^^^^^^^^
+...
+328 |     pub fn playback_position(&self) -> Option<Duration> {
+    |            ^^^^^^^^^^^^^^^^^
+...
+336 |     pub fn duration(&self) -> Option<Duration> {
+    |            ^^^^^^^^
+...
+345 |     pub fn year(&self) -> Option<u32> {
+    |            ^^^^
+...
+353 |     pub fn content_rating(&self) -> Option<&str> {
+    |            ^^^^^^^^^^^^^^
+...
+358 |     pub fn duration_millis(&self) -> Option<u64> {
+    |            ^^^^^^^^^^^^^^^
+...
+362 |     pub fn rating(&self) -> Option<f32> {
+    |            ^^^^^^
+
+warning: variant `ApiKey` is never constructed
+   --> src/models/mod.rs:375:5
+    |
+372 | pub enum Credentials {
+    |          ----------- variant in this enum
+...
+375 |     ApiKey { key: String },
+    |     ^^^^^^
+    |
+    = note: `Credentials` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `display_name`, `provider_type`, and `needs_refresh` are never used
+  --> src/models/auth_provider.rs:50:12
+   |
+40 | impl AuthProvider {
+   | ----------------- methods in this implementation
+...
+50 |     pub fn display_name(&self) -> String {
+   |            ^^^^^^^^^^^^
+...
+65 |     pub fn provider_type(&self) -> &'static str {
+   |            ^^^^^^^^^^^^^
+...
+74 |     pub fn needs_refresh(&self) -> bool {
+   |            ^^^^^^^^^^^^^
+
+warning: associated items `new`, `is_online`, and `source_icon` are never used
+   --> src/models/auth_provider.rs:158:12
+    |
+157 | impl Source {
+    | ----------- associated items in this implementation
+158 |     pub fn new(
+    |            ^^^
+...
+180 |     pub fn is_online(&self) -> bool {
+    |            ^^^^^^^^^
+...
+184 |     pub fn source_icon(&self) -> &'static str {
+    |            ^^^^^^^^^^^
+
+warning: method `is_local_network` is never used
+  --> src/models/connection.rs:47:12
+   |
+17 | impl ServerConnection {
+   | --------------------- method in this implementation
+...
+47 |     pub fn is_local_network(&self) -> bool {
+   |            ^^^^^^^^^^^^^^^^
+
+warning: methods `local_connections`, `remote_connections`, and `relay_connections` are never used
+  --> src/models/connection.rs:81:12
+   |
+64 | impl ServerConnections {
+   | ---------------------- methods in this implementation
+...
+81 |     pub fn local_connections(&self) -> Vec<&ServerConnection> {
+   |            ^^^^^^^^^^^^^^^^^
+...
+89 |     pub fn remote_connections(&self) -> Vec<&ServerConnection> {
+   |            ^^^^^^^^^^^^^^^^^^
+...
+97 |     pub fn relay_connections(&self) -> Vec<&ServerConnection> {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: method `get_next_episode_info` is never used
+   --> src/models/playlist_context.rs:125:12
+    |
+48  | impl PlaylistContext {
+    | -------------------- method in this implementation
+...
+125 |     pub fn get_next_episode_info(&self) -> Option<&EpisodeInfo> {
+    |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_friendly_name` is never used
+   --> src/models/mod.rs:398:12
+    |
+398 |     pub fn create_friendly_name(source_name: &str, source_type: &str) -> String {
+    |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `SetUpscalingMode`, `GetPlaybackSpeed`, `IsMuted`, and `Shutdown` are never constructed
+   --> src/player/controller.rs:85:5
+    |
+14  | pub enum PlayerCommand {
+    |          ------------- variants in this enum
+...
+85  |     SetUpscalingMode {
+    |     ^^^^^^^^^^^^^^^^
+...
+95  |     GetPlaybackSpeed { respond_to: oneshot::Sender<f64> },
+    |     ^^^^^^^^^^^^^^^^
+...
+109 |     IsMuted { respond_to: oneshot::Sender<bool> },
+    |     ^^^^^^^
+...
+119 |     Shutdown,
+    |     ^^^^^^^^
+    |
+    = note: `PlayerCommand` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: methods `set_upscaling_mode`, `get_playback_speed`, `is_muted`, and `shutdown` are never used
+   --> src/player/controller.rs:513:18
+    |
+312 | impl PlayerHandle {
+    | ----------------- methods in this implementation
+...
+513 |     pub async fn set_upscaling_mode(&self, mode: UpscalingMode) -> Result<()> {
+    |                  ^^^^^^^^^^^^^^^^^^
+...
+535 |     pub async fn get_playback_speed(&self) -> Result<f64> {
+    |                  ^^^^^^^^^^^^^^^^^^
+...
+579 |     pub async fn is_muted(&self) -> Result<bool> {
+    |                  ^^^^^^^^
+...
+612 |     pub fn shutdown(&self) -> Result<()> {
+    |            ^^^^^^^^
+
+warning: field `get_proc_address` is never read
+  --> src/player/mpv_player.rs:27:5
+   |
+26 | struct OpenGLFunctions {
+   |        --------------- field in this struct
+27 |     get_proc_address: unsafe extern "C" fn(*const i8) -> *mut c_void,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: variants `HighQuality`, `FSR`, and `Anime` are never constructed
+  --> src/player/mpv_player.rs:45:5
+   |
+43 | pub enum UpscalingMode {
+   |          ------------- variants in this enum
+44 |     None,
+45 |     HighQuality,
+   |     ^^^^^^^^^^^
+46 |     FSR,
+   |     ^^^
+47 |     Anime,
+   |     ^^^^^
+   |
+   = note: `UpscalingMode` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `gl_functions` is never read
+  --> src/player/mpv_player.rs:64:5
+   |
+61 | struct MpvPlayerInner {
+   |        -------------- field in this struct
+...
+64 |     gl_functions: Arc<Mutex<Option<OpenGLFunctions>>>,
+   |     ^^^^^^^^^^^^
+
+warning: struct `AppInitializationState` is never constructed
+ --> src/services/initialization.rs:9:12
+  |
+9 | pub struct AppInitializationState {
+  |            ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated function `new` is never used
+  --> src/services/initialization.rs:24:12
+   |
+23 | impl AppInitializationState {
+   | --------------------------- associated function in this implementation
+24 |     pub fn new() -> Self {
+   |            ^^^
+
+warning: struct `SourceInfo` is never constructed
+  --> src/services/initialization.rs:37:12
+   |
+37 | pub struct SourceInfo {
+   |            ^^^^^^^^^^
+
+warning: enum `SourceReadiness` is never used
+  --> src/services/initialization.rs:49:10
+   |
+49 | pub enum SourceReadiness {
+   |          ^^^^^^^^^^^^^^^
+
+warning: methods `is_playable` and `is_fully_connected` are never used
+  --> src/services/initialization.rs:69:12
+   |
+68 | impl SourceReadiness {
+   | -------------------- methods in this implementation
+69 |     pub fn is_playable(&self) -> bool {
+   |            ^^^^^^^^^^^
+...
+73 |     pub fn is_fully_connected(&self) -> bool {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: enum `ConnectionStatus` is never used
+  --> src/services/initialization.rs:82:10
+   |
+82 | pub enum ConnectionStatus {
+   |          ^^^^^^^^^^^^^^^^
+
+warning: enum `ApiClientStatus` is never used
+  --> src/services/initialization.rs:90:10
+   |
+90 | pub enum ApiClientStatus {
+   |          ^^^^^^^^^^^^^^^
+
+warning: struct `SyncProgress` is never constructed
+  --> src/services/initialization.rs:96:12
+   |
+96 | pub struct SyncProgress {
+   |            ^^^^^^^^^^^^
+
+warning: enum `ConnectionMessage` is never used
+ --> src/services/brokers/connection_broker.rs:7:10
+  |
+7 | pub enum ConnectionMessage {
+  |          ^^^^^^^^^^^^^^^^^
+
+warning: function `log_connection_status_changed` is never used
+  --> src/services/brokers/connection_broker.rs:35:8
+   |
+35 | pub fn log_connection_status_changed(source_id: SourceId, is_connected: bool) {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `log_connection_test_result` is never used
+  --> src/services/brokers/connection_broker.rs:42:8
+   |
+42 | pub fn log_connection_test_result(source_id: SourceId, is_connected: bool, error: Option<&str>) {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `log_auth_result` is never used
+  --> src/services/brokers/connection_broker.rs:56:8
+   |
+56 | pub fn log_auth_result(source_id: SourceId, success: bool, error: Option<&str>) {
+   |        ^^^^^^^^^^^^^^^
+
+warning: function `log_source_added` is never used
+  --> src/services/brokers/connection_broker.rs:64:8
+   |
+64 | pub fn log_source_added(source_id: SourceId) {
+   |        ^^^^^^^^^^^^^^^^
+
+warning: function `log_source_removed` is never used
+  --> src/services/brokers/connection_broker.rs:68:8
+   |
+68 | pub fn log_source_removed(source_id: SourceId) {
+   |        ^^^^^^^^^^^^^^^^^^
+
+warning: enum `MediaMessage` is never used
+ --> src/services/brokers/media_broker.rs:7:10
+  |
+7 | pub enum MediaMessage {
+  |          ^^^^^^^^^^^^
+
+warning: function `log_library_updated` is never used
+  --> src/services/brokers/media_broker.rs:46:8
+   |
+46 | pub fn log_library_updated(source_id: SourceId, library_id: LibraryId, item_count: usize) {
+   |        ^^^^^^^^^^^^^^^^^^^
+
+warning: function `log_item_updated` is never used
+  --> src/services/brokers/media_broker.rs:53:8
+   |
+53 | pub fn log_item_updated(source_id: SourceId, library_id: LibraryId, item: &MediaItem) {
+   |        ^^^^^^^^^^^^^^^^
+
+warning: function `log_items_bulk_updated` is never used
+  --> src/services/brokers/media_broker.rs:62:8
+   |
+62 | pub fn log_items_bulk_updated(source_id: SourceId, library_id: LibraryId, count: usize) {
+   |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `log_item_removed` is never used
+  --> src/services/brokers/media_broker.rs:69:8
+   |
+69 | pub fn log_item_removed(source_id: SourceId, library_id: LibraryId, item_id: MediaItemId) {
+   |        ^^^^^^^^^^^^^^^^
+
+warning: function `log_library_cleared` is never used
+  --> src/services/brokers/media_broker.rs:76:8
+   |
+76 | pub fn log_library_cleared(source_id: SourceId, library_id: LibraryId) {
+   |        ^^^^^^^^^^^^^^^^^^^
+
+warning: function `log_source_cleared` is never used
+  --> src/services/brokers/media_broker.rs:83:8
+   |
+83 | pub fn log_source_cleared(source_id: SourceId) {
+   |        ^^^^^^^^^^^^^^^^^^
+
+warning: enum `SyncMessage` is never used
+ --> src/services/brokers/sync_broker.rs:8:10
+  |
+8 | pub enum SyncMessage {
+  |          ^^^^^^^^^^^
+
+warning: function `log_sync_started` is never used
+  --> src/services/brokers/sync_broker.rs:37:8
+   |
+37 | pub fn log_sync_started(source_id: SourceId) {
+   |        ^^^^^^^^^^^^^^^^
+
+warning: function `log_sync_progress` is never used
+  --> src/services/brokers/sync_broker.rs:41:8
+   |
+41 | pub fn log_sync_progress(source_id: SourceId, progress: &SyncProgress) {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: function `log_sync_completed` is never used
+  --> src/services/brokers/sync_broker.rs:48:8
+   |
+48 | pub fn log_sync_completed(source_id: SourceId, libraries_synced: usize, items_synced: usize) {
+   |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `log_sync_failed` is never used
+  --> src/services/brokers/sync_broker.rs:55:8
+   |
+55 | pub fn log_sync_failed(source_id: SourceId, error: &str) {
+   |        ^^^^^^^^^^^^^^^
+
+warning: function `log_sync_cancelled` is never used
+  --> src/services/brokers/sync_broker.rs:59:8
+   |
+59 | pub fn log_sync_cancelled(source_id: SourceId) {
+   |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `log_sync_status` is never used
+  --> src/services/brokers/sync_broker.rs:63:8
+   |
+63 | pub fn log_sync_status(source_id: SourceId, status: &SyncStatus) {
+   |        ^^^^^^^^^^^^^^^
+
+warning: struct `AuthenticateCommand` is never constructed
+  --> src/services/commands/auth_commands.rs:13:12
+   |
+13 | pub struct AuthenticateCommand<'a> {
+   |            ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `SaveCredentialsCommand` is never constructed
+  --> src/services/commands/auth_commands.rs:26:12
+   |
+26 | pub struct SaveCredentialsCommand {
+   |            ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `LoadCredentialsCommand` is never constructed
+  --> src/services/commands/auth_commands.rs:39:12
+   |
+39 | pub struct LoadCredentialsCommand {
+   |            ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoveCredentialsCommand` is never constructed
+  --> src/services/commands/auth_commands.rs:51:12
+   |
+51 | pub struct RemoveCredentialsCommand {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `TestConnectionCommand` is never constructed
+   --> src/services/commands/auth_commands.rs:105:12
+    |
+105 | pub struct TestConnectionCommand<'a> {
+    |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ReauthSourceCommand` is never constructed
+   --> src/services/commands/auth_commands.rs:118:12
+    |
+118 | pub struct ReauthSourceCommand<'a> {
+    |            ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `TestBackend` is never constructed
+   --> src/services/commands/auth_commands.rs:163:12
+    |
+163 |     struct TestBackend {
+    |            ^^^^^^^^^^^
+
+warning: struct `GetLibrariesCommand` is never constructed
+  --> src/services/commands/media_commands.rs:12:12
+   |
+12 | pub struct GetLibrariesCommand {
+   |            ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `GetLibrariesForSourceCommand` is never constructed
+  --> src/services/commands/media_commands.rs:24:12
+   |
+24 | pub struct GetLibrariesForSourceCommand {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `GetLibraryCommand` is never constructed
+  --> src/services/commands/media_commands.rs:37:12
+   |
+37 | pub struct GetLibraryCommand {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `GetMediaItemsCommand` is never constructed
+  --> src/services/commands/media_commands.rs:50:12
+   |
+50 | pub struct GetMediaItemsCommand {
+   |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `GetMediaItemCommand` is never constructed
+  --> src/services/commands/media_commands.rs:73:12
+   |
+73 | pub struct GetMediaItemCommand {
+   |            ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `SearchMediaCommand` is never constructed
+  --> src/services/commands/media_commands.rs:99:12
+   |
+99 | pub struct SearchMediaCommand {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `GetRecentlyAddedCommand` is never constructed
+   --> src/services/commands/media_commands.rs:120:12
+    |
+120 | pub struct GetRecentlyAddedCommand {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `GetContinueWatchingCommand` is never constructed
+   --> src/services/commands/media_commands.rs:133:12
+    |
+133 | pub struct GetContinueWatchingCommand {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `SaveLibraryCommand` is never constructed
+   --> src/services/commands/media_commands.rs:188:12
+    |
+188 | pub struct SaveLibraryCommand {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `SaveMediaItemCommand` is never constructed
+   --> src/services/commands/media_commands.rs:202:12
+    |
+202 | pub struct SaveMediaItemCommand {
+    |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ClearLibraryCommand` is never constructed
+   --> src/services/commands/media_commands.rs:223:12
+    |
+223 | pub struct ClearLibraryCommand {
+    |            ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ClearSourceCommand` is never constructed
+   --> src/services/commands/media_commands.rs:264:12
+    |
+264 | pub struct ClearSourceCommand {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `SyncSourceCommand` is never constructed
+  --> src/services/commands/sync_commands.rs:11:12
+   |
+11 | pub struct SyncSourceCommand<'a> {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `SyncLibraryCommand` is never constructed
+  --> src/services/commands/sync_commands.rs:25:12
+   |
+25 | pub struct SyncLibraryCommand<'a> {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: associated functions `authenticate`, `test_connection`, and `reauth_source` are never used
+   --> src/services/core/auth.rs:18:18
+    |
+16  | impl AuthService {
+    | ---------------- associated functions in this implementation
+17  |     /// Authenticate with a backend
+18  |     pub async fn authenticate(
+    |                  ^^^^^^^^^^^^
+...
+183 |     pub async fn test_connection(
+    |                  ^^^^^^^^^^^^^^^
+...
+197 |     pub async fn reauth_source(
+    |                  ^^^^^^^^^^^^^
+
+warning: associated functions `test_connection` and `get_all_home_sections` are never used
+   --> src/services/core/backend.rs:211:18
+    |
+19  | impl BackendService {
+    | ------------------- associated functions in this implementation
+...
+211 |     pub async fn test_connection(db: &DatabaseConnection, source_id: &SourceId) -> Result<bool> {
+    |                  ^^^^^^^^^^^^^^^
+...
+247 |     pub async fn get_all_home_sections(
+    |                  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `is_local` is never used
+  --> src/services/core/connection_cache.rs:69:12
+   |
+54 | impl ConnectionState {
+   | -------------------- method in this implementation
+...
+69 |     pub fn is_local(&self) -> bool {
+   |            ^^^^^^^^
+
+warning: associated functions `get_trending`, `get_continue_watching`, `clear_library`, and `clear_source` are never used
+   --> src/services/core/media.rs:422:18
+    |
+18  | impl MediaService {
+    | ----------------- associated functions in this implementation
+...
+422 |     pub async fn get_trending(db: &DatabaseConnection, limit: u32) -> Result<Vec<MediaItem>> {
+    |                  ^^^^^^^^^^^^
+...
+451 |     pub async fn get_continue_watching(
+    |                  ^^^^^^^^^^^^^^^^^^^^^
+...
+510 |     pub async fn clear_library(db: &DatabaseConnection, library_id: &LibraryId) -> Result<()> {
+    |                  ^^^^^^^^^^^^^
+...
+518 |     pub async fn clear_source(db: &DatabaseConnection, source_id: &SourceId) -> Result<()> {
+    |                  ^^^^^^^^^^^^
+
+warning: fields `is_syncing`, `items_synced`, `total_items`, and `percentage` are never read
+   --> src/services/core/sync.rs:585:9
+    |
+584 | pub struct SyncProgress {
+    |            ------------ fields in this struct
+585 |     pub is_syncing: bool,
+    |         ^^^^^^^^^^
+586 |     pub items_synced: usize,
+    |         ^^^^^^^^^^^^
+587 |     pub total_items: usize,
+    |         ^^^^^^^^^^^
+588 |     pub percentage: u32,
+    |         ^^^^^^^^^^
+    |
+    = note: `SyncProgress` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variant `Jellyfin` is never constructed
+  --> src/ui/dialogs/auth_dialog.rs:18:5
+   |
+16 | pub enum BackendType {
+   |          ----------- variant in this enum
+17 |     Plex,
+18 |     Jellyfin,
+   |     ^^^^^^^^
+   |
+   = note: `BackendType` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `Hide`, `SelectBackend`, `ConfirmJellyfinUrl`, `ChangeJellyfinUrl`, and `RetryJellyfinQuickConnect` are never constructed
+  --> src/ui/dialogs/auth_dialog.rs:24:5
+   |
+22 | pub enum AuthDialogInput {
+   |          --------------- variants in this enum
+23 |     Show,
+24 |     Hide,
+   |     ^^^^
+25 |     SelectBackend(BackendType),
+   |     ^^^^^^^^^^^^^
+...
+39 |     ConfirmJellyfinUrl,
+   |     ^^^^^^^^^^^^^^^^^^
+40 |     ChangeJellyfinUrl,
+   |     ^^^^^^^^^^^^^^^^^
+...
+50 |     RetryJellyfinQuickConnect,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `AuthDialogInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: multiple fields are never read
+   --> src/ui/dialogs/auth_dialog.rs:70:5
+    |
+63  | pub struct AuthDialog {
+    |            ---------- fields in this struct
+...
+70  |     dialog_position: Option<(i32, i32)>,
+    |     ^^^^^^^^^^^^^^^
+...
+80  |     jellyfin_url_confirmed: bool,
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+...
+87  |     jellyfin_quick_connect_enabled: bool,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+102 |     pin_label: gtk4::Label,
+    |     ^^^^^^^^^
+103 |     auth_progress: gtk4::ProgressBar,
+104 |     auth_status: adw::StatusPage,
+    |     ^^^^^^^^^^^
+105 |     auth_error: adw::StatusPage,
+    |     ^^^^^^^^^^
+...
+108 |     jellyfin_url_entry: adw::EntryRow,
+    |     ^^^^^^^^^^^^^^^^^^
+109 |     jellyfin_username_entry: adw::EntryRow,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+110 |     jellyfin_password_entry: adw::PasswordEntryRow,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+111 |     jellyfin_progress: gtk4::ProgressBar,
+112 |     jellyfin_success: adw::StatusPage,
+    |     ^^^^^^^^^^^^^^^^
+113 |     jellyfin_error: adw::StatusPage,
+    |     ^^^^^^^^^^^^^^
+114 |     jellyfin_quick_connect_code_label: gtk4::Label,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `AuthDialog` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `db`, `hardware_acceleration`, `items_per_page`, `cache_size_mb`, and `auto_clean_cache` are never read
+  --> src/ui/dialogs/preferences_dialog.rs:10:5
+   |
+9  | pub struct PreferencesDialog {
+   |            ----------------- fields in this struct
+10 |     db: DatabaseConnection,
+   |     ^^
+...
+13 |     hardware_acceleration: bool,
+   |     ^^^^^^^^^^^^^^^^^^^^^
+14 |     // Display preferences
+15 |     items_per_page: i32,
+   |     ^^^^^^^^^^^^^^
+16 |     // Cache preferences
+17 |     cache_size_mb: i32,
+   |     ^^^^^^^^^^^^^
+18 |     auto_clean_cache: bool,
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `PreferencesDialog` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variants `SetHover`, `SetSelected`, `UpdateProgress`, and `Play` are never constructed
+  --> src/ui/factories/media_card.rs:34:5
+   |
+33 | pub enum MediaCardInput {
+   |          -------------- variants in this enum
+34 |     SetHover(bool),
+   |     ^^^^^^^^
+35 |     SetSelected(bool),
+   |     ^^^^^^^^^^^
+36 |     UpdateProgress(f64),
+   |     ^^^^^^^^^^^^^^
+...
+39 |     Play,
+   |     ^^^^
+   |
+   = note: `MediaCardInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `SectionRow` is never constructed
+  --> src/ui/factories/section_row.rs:11:12
+   |
+11 | pub struct SectionRow {
+   |            ^^^^^^^^^^
+
+warning: variants `SetTitle`, `SetItems`, `AppendItems`, `SetLoading`, and `ClearItems` are never constructed
+  --> src/ui/factories/section_row.rs:20:5
+   |
+19 | pub enum SectionRowInput {
+   |          --------------- variants in this enum
+20 |     SetTitle(String),
+   |     ^^^^^^^^
+21 |     SetItems(Vec<MediaItemModel>),
+   |     ^^^^^^^^
+22 |     AppendItems(Vec<MediaItemModel>),
+   |     ^^^^^^^^^^^
+23 |     SetLoading(bool),
+   |     ^^^^^^^^^^
+24 |     ClearItems,
+   |     ^^^^^^^^^^
+   |
+   = note: `SectionRowInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `MediaSelected`, `MediaPlayRequested`, and `LoadMore` are never constructed
+  --> src/ui/factories/section_row.rs:29:5
+   |
+28 | pub enum SectionRowOutput {
+   |          ---------------- variants in this enum
+29 |     MediaSelected(MediaItemId),
+   |     ^^^^^^^^^^^^^
+30 |     MediaPlayRequested(MediaItemId),
+   |     ^^^^^^^^^^^^^^^^^^
+31 |     LoadMore,
+   |     ^^^^^^^^
+   |
+   = note: `SectionRowOutput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `SourceItem` is never constructed
+ --> src/ui/factories/source_item.rs:9:12
+  |
+9 | pub struct SourceItem {
+  |            ^^^^^^^^^^
+
+warning: variants `Connected`, `Connecting`, `Disconnected`, and `Error` are never constructed
+  --> src/ui/factories/source_item.rs:21:5
+   |
+20 | pub enum ConnectionStatus {
+   |          ---------------- variants in this enum
+21 |     Connected,
+   |     ^^^^^^^^^
+22 |     Connecting,
+   |     ^^^^^^^^^^
+23 |     Disconnected,
+   |     ^^^^^^^^^^^^
+24 |     Error,
+   |     ^^^^^
+   |
+   = note: `ConnectionStatus` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: multiple variants are never constructed
+  --> src/ui/factories/source_item.rs:29:5
+   |
+28 | pub enum SourceItemInput {
+   |          --------------- variants in this enum
+29 |     SetSource(Source),
+   |     ^^^^^^^^^
+30 |     SetLibraries(Vec<Library>),
+   |     ^^^^^^^^^^^^
+31 |     SetExpanded(bool),
+   |     ^^^^^^^^^^^
+32 |     ToggleExpanded,
+   |     ^^^^^^^^^^^^^^
+33 |     SetSelectedLibrary(Option<LibraryId>),
+   |     ^^^^^^^^^^^^^^^^^^
+34 |     SetConnectionStatus(ConnectionStatus),
+   |     ^^^^^^^^^^^^^^^^^^^
+35 |     LibraryClicked(LibraryId),
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `SourceItemInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `SourceSelected`, `LibrarySelected`, `RefreshRequested`, and `ToggleExpanded` are never constructed
+  --> src/ui/factories/source_item.rs:40:5
+   |
+39 | pub enum SourceItemOutput {
+   |          ---------------- variants in this enum
+40 |     SourceSelected(SourceId),
+   |     ^^^^^^^^^^^^^^
+41 |     LibrarySelected(LibraryId),
+   |     ^^^^^^^^^^^^^^^
+42 |     RefreshRequested(SourceId),
+   |     ^^^^^^^^^^^^^^^^
+43 |     ToggleExpanded(SourceId),
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `SourceItemOutput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `rebuild_libraries_list` and `update_library_selection` are never used
+   --> src/ui/factories/source_item.rs:223:8
+    |
+222 | impl SourceItem {
+    | --------------- methods in this implementation
+223 |     fn rebuild_libraries_list(&mut self, sender: FactorySender<Self>) {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+...
+278 |     fn update_library_selection(&self) {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `NavigateToSource` and `SetHeaderStartContent` are never constructed
+  --> src/ui/main_window.rs:64:5
+   |
+62 | pub enum MainWindowInput {
+   |          --------------- variants in this enum
+63 |     Navigate(String),
+64 |     NavigateToSource(SourceId),
+   |     ^^^^^^^^^^^^^^^^
+...
+79 |     SetHeaderStartContent(Option<gtk::Widget>),
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `MainWindowInput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variant `Reconnecting` is never constructed
+  --> src/ui/main_window.rs:93:5
+   |
+90 | pub enum ConnectionStatus {
+   |          ---------------- variant in this enum
+...
+93 |     Reconnecting,
+   |     ^^^^^^^^^^^^
+   |
+   = note: `ConnectionStatus` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variant `Quit` is never constructed
+  --> src/ui/main_window.rs:98:5
+   |
+97 | pub enum MainWindowOutput {
+   |          ---------------- variant in this enum
+98 |     Quit,
+   |     ^^^^
+   |
+   = note: `MainWindowOutput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `0` is never read
+  --> src/ui/pages/home.rs:17:12
+   |
+17 |     Loaded(Vec<HomeSectionWithModels>),
+   |     ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `SectionLoadState` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+17 -     Loaded(Vec<HomeSectionWithModels>),
+17 +     Loaded(()),
+   |
+
+warning: field `0` is never read
+  --> src/ui/pages/home.rs:18:12
+   |
+18 |     Failed(String), // Error message
+   |     ------ ^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `SectionLoadState` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+18 -     Failed(String), // Error message
+18 +     Failed(()), // Error message
+   |
+
+warning: variant `HomeSectionsLoaded` is never constructed
+  --> src/ui/pages/home.rs:48:5
+   |
+44 | pub enum HomePageInput {
+   |          ------------- variant in this enum
+...
+48 |     HomeSectionsLoaded(Vec<HomeSectionWithModels>),
+   |     ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `HomePageInput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `genre_label_text` is never read
+  --> src/ui/pages/library.rs:50:5
+   |
+30 | pub struct LibraryPage {
+   |            ----------- field in this struct
+...
+50 |     genre_label_text: String,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: variant `LoadMovie` is never constructed
+  --> src/ui/pages/movie_details.rs:26:5
+   |
+25 | pub enum MovieDetailsInput {
+   |          ----------------- variant in this enum
+26 |     LoadMovie(MediaItemId),
+   |     ^^^^^^^^^
+   |
+   = note: `MovieDetailsInput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variant `NavigateBack` is never constructed
+  --> src/ui/pages/movie_details.rs:34:5
+   |
+32 | pub enum MovieDetailsOutput {
+   |          ------------------ variant in this enum
+33 |     PlayMedia(MediaItemId),
+34 |     NavigateBack,
+   |     ^^^^^^^^^^^^
+   |
+   = note: `MovieDetailsOutput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variant `ClearError` is never constructed
+   --> src/ui/pages/player.rs:248:5
+    |
+219 | pub enum PlayerInput {
+    |          ----------- variant in this enum
+...
+248 |     ClearError,
+    |     ^^^^^^^^^^
+    |
+    = note: `PlayerInput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variants `MediaLoaded` and `Error` are never constructed
+   --> src/ui/pages/player.rs:275:5
+    |
+273 | pub enum PlayerOutput {
+    |          ------------ variants in this enum
+274 |     NavigateBack,
+275 |     MediaLoaded,
+    |     ^^^^^^^^^^^
+276 |     Error(String),
+    |     ^^^^^
+    |
+    = note: `PlayerOutput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `PreferencesPage` is never constructed
+ --> src/ui/pages/preferences.rs:9:12
+  |
+9 | pub struct PreferencesPage {
+  |            ^^^^^^^^^^^^^^^
+
+warning: multiple variants are never constructed
+  --> src/ui/pages/preferences.rs:23:5
+   |
+22 | pub enum PreferencesInput {
+   |          ---------------- variants in this enum
+23 |     SetDefaultPlayer(String),
+   |     ^^^^^^^^^^^^^^^^
+24 |     SetHardwareAcceleration(bool),
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+25 |     SetItemsPerPage(i32),
+   |     ^^^^^^^^^^^^^^^
+26 |     SetCacheSize(i32),
+   |     ^^^^^^^^^^^^
+27 |     SetAutoCleanCache(bool),
+   |     ^^^^^^^^^^^^^^^^^
+28 |     SavePreferences,
+   |     ^^^^^^^^^^^^^^^
+29 |     RestoreDefaults,
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `PreferencesInput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variants `PreferencesSaved` and `Error` are never constructed
+  --> src/ui/pages/preferences.rs:34:5
+   |
+33 | pub enum PreferencesOutput {
+   |          ----------------- variants in this enum
+34 |     PreferencesSaved,
+   |     ^^^^^^^^^^^^^^^^
+35 |     Error(String),
+   |     ^^^^^
+   |
+   = note: `PreferencesOutput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variants `LoadShow` and `ToggleEpisodeWatched` are never constructed
+  --> src/ui/pages/show_details.rs:48:5
+   |
+47 | pub enum ShowDetailsInput {
+   |          ---------------- variants in this enum
+48 |     LoadShow(MediaItemId),
+   |     ^^^^^^^^
+...
+51 |     ToggleEpisodeWatched(usize),
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `ShowDetailsInput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variant `NavigateBack` is never constructed
+  --> src/ui/pages/show_details.rs:69:5
+   |
+63 | pub enum ShowDetailsOutput {
+   |          ----------------- variant in this enum
+...
+69 |     NavigateBack,
+   |     ^^^^^^^^^^^^
+   |
+   = note: `ShowDetailsOutput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variant `SyncCompleted` is never constructed
+  --> src/ui/pages/sources.rs:43:5
+   |
+29 | pub enum SourcesPageInput {
+   |          ---------------- variant in this enum
+...
+43 |     SyncCompleted(SourceId, Result<(), String>),
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `SourcesPageInput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `0` is never read
+  --> src/ui/shared/broker.rs:46:10
+   |
+46 |     Data(DataMessage),
+   |     ---- ^^^^^^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `BrokerMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+46 -     Data(DataMessage),
+46 +     Data(()),
+   |
+
+warning: variants `Navigation` and `Playback` are never constructed
+  --> src/ui/shared/broker.rs:45:5
+   |
+44 | pub enum BrokerMessage {
+   |          ------------- variants in this enum
+45 |     Navigation(NavigationMessage),
+   |     ^^^^^^^^^^
+46 |     Data(DataMessage),
+47 |     Playback(PlaybackMessage),
+   |     ^^^^^^^^
+   |
+   = note: `BrokerMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: multiple variants are never constructed
+  --> src/ui/shared/broker.rs:53:5
+   |
+52 | pub enum NavigationMessage {
+   |          ----------------- variants in this enum
+53 |     ToHome,
+   |     ^^^^^^
+54 |     ToLibrary {
+   |     ^^^^^^^^^
+...
+58 |     ToMovieDetails {
+   |     ^^^^^^^^^^^^^^
+...
+61 |     ToShowDetails {
+   |     ^^^^^^^^^^^^^
+...
+64 |     ToPlayer {
+   |     ^^^^^^^^
+...
+67 |     ToSources,
+   |     ^^^^^^^^^
+68 |     Back,
+   |     ^^^^
+   |
+   = note: `NavigationMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `source` is never read
+  --> src/ui/shared/broker.rs:77:9
+   |
+76 |     LoadComplete {
+   |     ------------ field in this variant
+77 |         source: String,
+   |         ^^^^^^
+   |
+   = note: `DataMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `source` and `error` are never read
+  --> src/ui/shared/broker.rs:80:9
+   |
+79 |     LoadError {
+   |     --------- fields in this variant
+80 |         source: String,
+   |         ^^^^^^
+81 |         error: String,
+   |         ^^^^^
+   |
+   = note: `DataMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `source_id`, `current`, and `total` are never read
+  --> src/ui/shared/broker.rs:90:9
+   |
+89 |     SyncProgress {
+   |     ------------ fields in this variant
+90 |         source_id: String,
+   |         ^^^^^^^^^
+91 |         current: usize,
+   |         ^^^^^^^
+92 |         total: usize,
+   |         ^^^^^
+   |
+   = note: `DataMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `Loading`, `MediaUpdated`, and `LibraryUpdated` are never constructed
+  --> src/ui/shared/broker.rs:73:5
+   |
+72 | pub enum DataMessage {
+   |          ----------- variants in this enum
+73 |     Loading {
+   |     ^^^^^^^
+...
+83 |     MediaUpdated {
+   |     ^^^^^^^^^^^^
+...
+86 |     LibraryUpdated {
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `DataMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `Play`, `Pause`, `Stop`, `Seek`, and `ProgressUpdate` are never constructed
+   --> src/ui/shared/broker.rs:98:5
+    |
+97  | pub enum PlaybackMessage {
+    |          --------------- variants in this enum
+98  |     Play { media_id: String },
+    |     ^^^^
+99  |     Pause,
+    |     ^^^^^
+100 |     Stop,
+    |     ^^^^
+101 |     Seek { position: f64 },
+    |     ^^^^
+102 |     ProgressUpdate { media_id: String, position: f64 },
+    |     ^^^^^^^^^^^^^^
+    |
+    = note: `PlaybackMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `Connected` and `Disconnected` are never constructed
+   --> src/ui/shared/broker.rs:107:5
+    |
+106 | pub enum SourceMessage {
+    |          ------------- variants in this enum
+107 |     Connected {
+    |     ^^^^^^^^^
+...
+110 |     Disconnected {
+    |     ^^^^^^^^^^^^
+    |
+    = note: `SourceMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `unsubscribe`, `send_to`, `notify_loading_started`, `notify_media_updated`, `notify_library_updated`, and `subscriber_count` are never used
+   --> src/ui/shared/broker.rs:168:18
+    |
+147 | impl MessageBroker {
+    | ------------------ methods in this implementation
+...
+168 |     pub async fn unsubscribe(&self, component_id: &str) {
+    |                  ^^^^^^^^^^^
+...
+204 |     pub async fn send_to(&self, component_id: &str, message: BrokerMessage) {
+    |                  ^^^^^^^
+...
+281 |     pub async fn notify_loading_started(&self, source: String) {
+    |                  ^^^^^^^^^^^^^^^^^^^^^^
+...
+287 |     pub async fn notify_media_updated(&self, media_id: String) {
+    |                  ^^^^^^^^^^^^^^^^^^^^
+...
+293 |     pub async fn notify_library_updated(&self, library_id: String) {
+    |                  ^^^^^^^^^^^^^^^^^^^^^^
+...
+333 |     pub async fn subscriber_count(&self) -> usize {
+    |                  ^^^^^^^^^^^^^^^^
+
+warning: enum `AppCommand` is never used
+  --> src/ui/shared/commands.rs:10:10
+   |
+10 | pub enum AppCommand {
+   |          ^^^^^^^^^^
+
+warning: enum `CommandResult` is never used
+  --> src/ui/shared/commands.rs:23:10
+   |
+23 | pub enum CommandResult {
+   |          ^^^^^^^^^^^^^
+
+warning: function `execute_command` is never used
+  --> src/ui/shared/commands.rs:55:14
+   |
+55 | pub async fn execute_command(command: AppCommand, db: &DatabaseConnection) -> CommandResult {
+   |              ^^^^^^^^^^^^^^^
+
+warning: function `load_initial_data` is never used
+   --> src/ui/shared/commands.rs:154:10
+    |
+154 | async fn load_initial_data(
+    |          ^^^^^^^^^^^^^^^^^
+
+warning: function `load_all_sources` is never used
+   --> src/ui/shared/commands.rs:195:10
+    |
+195 | async fn load_all_sources(db: &DatabaseConnection) -> Result<Vec<sources::Model>> {
+    |          ^^^^^^^^^^^^^^^^
+
+warning: function `load_home_data` is never used
+   --> src/ui/shared/commands.rs:200:10
+    |
+200 | async fn load_home_data(
+    |          ^^^^^^^^^^^^^^
+
+warning: function `start_playback` is never used
+   --> src/ui/shared/commands.rs:210:10
+    |
+210 | async fn start_playback(db: &DatabaseConnection, media_id: &str) -> Result<String> {
+    |          ^^^^^^^^^^^^^^
+
+warning: function `update_progress` is never used
+   --> src/ui/shared/commands.rs:221:10
+    |
+221 | async fn update_progress(db: &DatabaseConnection, media_id: &str, position: f64) -> Result<()> {
+    |          ^^^^^^^^^^^^^^^
+
+warning: enum `AppInput` is never used
+ --> src/ui/shared/messages.rs:2:10
+  |
+2 | pub enum AppInput {
+  |          ^^^^^^^^
+
+warning: enum `NavigationTarget` is never used
+  --> src/ui/shared/messages.rs:11:10
+   |
+11 | pub enum NavigationTarget {
+   |          ^^^^^^^^^^^^^^^^
+
+warning: enum `AppOutput` is never used
+  --> src/ui/shared/messages.rs:31:10
+   |
+31 | pub enum AppOutput {
+   |          ^^^^^^^^^
+
+warning: enum `CommonInput` is never used
+  --> src/ui/shared/messages.rs:36:10
+   |
+36 | pub enum CommonInput<T> {
+   |          ^^^^^^^^^^^
+
+warning: enum `CommonOutput` is never used
+  --> src/ui/shared/messages.rs:44:10
+   |
+44 | pub enum CommonOutput {
+   |          ^^^^^^^^^^^^
+
+warning: variants `LibrariesLoaded` and `UpdateSourceConnectionStatus` are never constructed
+  --> src/ui/sidebar.rs:34:5
+   |
+28 | pub enum SidebarInput {
+   |          ------------ variants in this enum
+...
+34 |     LibrariesLoaded(SourceId, Vec<Library>),
+   |     ^^^^^^^^^^^^^^^
+...
+44 |     UpdateSourceConnectionStatus {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `SidebarInput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variants `LoadLibraries` and `Refresh` are never constructed
+   --> src/ui/sidebar.rs:160:5
+    |
+158 | pub enum SourceGroupInput {
+    |          ---------------- variants in this enum
+159 |     /// Load libraries for this source
+160 |     LoadLibraries,
+    |     ^^^^^^^^^^^^^
+...
+164 |     Refresh,
+    |     ^^^^^^^
+    |
+    = note: `SourceGroupInput` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variant `Stop` is never constructed
+  --> src/workers/connection_monitor.rs:21:5
+   |
+17 | pub enum ConnectionMonitorInput {
+   |          ---------------------- variant in this enum
+...
+21 |     Stop,
+   |     ^^^^
+   |
+   = note: `ConnectionMonitorInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variant `Card` is never constructed
+  --> src/workers/image_loader.rs:12:5
+   |
+10 | pub enum ImageSize {
+   |          --------- variant in this enum
+11 |     Thumbnail, // 180x270
+12 |     Card,      // 300x450
+   |     ^^^^
+   |
+   = note: `ImageSize` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `ClearCache` and `SetCacheSize` are never constructed
+  --> src/workers/image_loader.rs:64:5
+   |
+59 | pub enum ImageLoaderInput {
+   |          ---------------- variants in this enum
+...
+64 |     ClearCache,
+   |     ^^^^^^^^^^
+65 |     SetCacheSize(usize),
+   |     ^^^^^^^^^^^^
+   |
+   = note: `ImageLoaderInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `size` is never read
+  --> src/workers/image_loader.rs:80:9
+   |
+77 |     ImageLoaded {
+   |     ----------- field in this variant
+...
+80 |         size: ImageSize,
+   |         ^^^^
+   |
+   = note: `ImageLoaderOutput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `error` is never read
+  --> src/workers/image_loader.rs:84:9
+   |
+82 |     LoadFailed {
+   |     ---------- field in this variant
+83 |         id: String,
+84 |         error: String,
+   |         ^^^^^
+   |
+   = note: `ImageLoaderOutput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `get_image_loader` is never used
+   --> src/workers/image_loader.rs:401:8
+    |
+401 | pub fn get_image_loader() -> WorkerHandle<ImageLoader> {
+    |        ^^^^^^^^^^^^^^^^
+
+warning: fields `id`, `title`, `overview`, `year`, and `genres` are never read
+  --> src/workers/search_worker.rs:17:9
+   |
+16 | pub struct SearchDocument {
+   |            -------------- fields in this struct
+17 |     pub id: MediaItemId,
+   |         ^^
+18 |     pub title: String,
+   |         ^^^^^
+19 |     pub overview: Option<String>,
+   |         ^^^^^^^^
+20 |     pub year: Option<i32>,
+   |         ^^^^
+21 |     pub genres: Vec<String>,
+   |         ^^^^^^
+   |
+   = note: `SearchDocument` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `IndexDocuments`, `UpdateDocument`, `RemoveDocument`, `Search`, `ClearIndex`, and `OptimizeIndex` are never constructed
+  --> src/workers/search_worker.rs:61:5
+   |
+60 | pub enum SearchWorkerInput {
+   |          ----------------- variants in this enum
+61 |     IndexDocuments(Vec<SearchDocument>),
+   |     ^^^^^^^^^^^^^^
+62 |     UpdateDocument(SearchDocument),
+   |     ^^^^^^^^^^^^^^
+63 |     RemoveDocument(MediaItemId),
+   |     ^^^^^^^^^^^^^^
+64 |     Search { query: String, limit: usize },
+   |     ^^^^^^
+65 |     ClearIndex,
+   |     ^^^^^^^^^^
+66 |     OptimizeIndex,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `SearchWorkerInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: multiple variants are never constructed
+  --> src/workers/search_worker.rs:71:5
+   |
+70 | pub enum SearchWorkerOutput {
+   |          ------------------ variants in this enum
+71 |     SearchResults {
+   |     ^^^^^^^^^^^^^
+...
+76 |     IndexingComplete {
+   |     ^^^^^^^^^^^^^^^^
+...
+79 |     DocumentUpdated {
+   |     ^^^^^^^^^^^^^^^
+...
+82 |     DocumentRemoved {
+   |     ^^^^^^^^^^^^^^^
+...
+85 |     IndexCleared,
+   |     ^^^^^^^^^^^^
+86 |     IndexOptimized,
+   |     ^^^^^^^^^^^^^^
+87 |     Error(String),
+   |     ^^^^^
+   |
+   = note: `SearchWorkerOutput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `SearchWorker` is never constructed
+  --> src/workers/search_worker.rs:90:12
+   |
+90 | pub struct SearchWorker {
+   |            ^^^^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> src/workers/search_worker.rs:102:8
+    |
+101 | impl SearchWorker {
+    | ----------------- associated items in this implementation
+102 |     fn new() -> Result<Self, String> {
+    |        ^^^
+...
+152 |     fn index_documents(&mut self, documents: Vec<SearchDocument>) -> Result<usize, String> {
+    |        ^^^^^^^^^^^^^^^
+...
+175 |     fn add_document(&mut self, doc: SearchDocument) -> Result<(), String> {
+    |        ^^^^^^^^^^^^
+...
+208 |     fn remove_document_internal(&mut self, id: &MediaItemId) -> Result<(), String> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+217 |     fn search(&self, query_str: &str, limit: usize) -> Result<(Vec<MediaItemId>, usize), String> {
+    |        ^^^^^^
+...
+260 |     fn clear_index(&mut self) -> Result<(), String> {
+    |        ^^^^^^^^^^^
+...
+279 |     fn optimize_index(&mut self) -> Result<(), String> {
+    |        ^^^^^^^^^^^^^^
+
+warning: function `get_search_worker` is never used
+   --> src/workers/search_worker.rs:452:8
+    |
+452 | pub fn get_search_worker() -> WorkerHandle<SearchWorker> {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: field `library_id` is never read
+  --> src/workers/sync_worker.rs:14:9
+   |
+12 | pub struct SyncProgress {
+   |            ------------ field in this struct
+13 |     pub source_id: SourceId,
+14 |     pub library_id: Option<LibraryId>,
+   |         ^^^^^^^^^^
+   |
+   = note: `SyncProgress` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `StopSync`, `StopAllSyncs`, `SetSyncInterval`, and `EnableAutoSync` are never constructed
+  --> src/workers/sync_worker.rs:27:5
+   |
+21 | pub enum SyncWorkerInput {
+   |          --------------- variants in this enum
+...
+27 |     StopSync {
+   |     ^^^^^^^^
+...
+30 |     StopAllSyncs,
+   |     ^^^^^^^^^^^^
+31 |     SetSyncInterval(Duration),
+   |     ^^^^^^^^^^^^^^^
+32 |     EnableAutoSync(bool),
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `SyncWorkerInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `library_id` is never read
+  --> src/workers/sync_worker.rs:42:9
+   |
+40 |     SyncStarted {
+   |     ----------- field in this variant
+41 |         source_id: SourceId,
+42 |         library_id: Option<LibraryId>,
+   |         ^^^^^^^^^^
+   |
+   = note: `SyncWorkerOutput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `library_id` and `duration` are never read
+  --> src/workers/sync_worker.rs:47:9
+   |
+45 |     SyncCompleted {
+   |     ------------- fields in this variant
+46 |         source_id: SourceId,
+47 |         library_id: Option<LibraryId>,
+   |         ^^^^^^^^^^
+48 |         items_synced: usize,
+49 |         duration: Duration,
+   |         ^^^^^^^^
+   |
+   = note: `SyncWorkerOutput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `library_id` is never read
+  --> src/workers/sync_worker.rs:53:9
+   |
+51 |     SyncFailed {
+   |     ---------- field in this variant
+52 |         source_id: SourceId,
+53 |         library_id: Option<LibraryId>,
+   |         ^^^^^^^^^^
+   |
+   = note: `SyncWorkerOutput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variant `SyncProgress` is never constructed
+  --> src/workers/sync_worker.rs:44:5
+   |
+39 | pub enum SyncWorkerOutput {
+   |          ---------------- variant in this enum
+...
+44 |     SyncProgress(SyncProgress),
+   |     ^^^^^^^^^^^^
+   |
+   = note: `SyncWorkerOutput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `create_sync_worker` is never used
+   --> src/workers/sync_worker.rs:267:8
+    |
+267 | pub fn create_sync_worker(db: Arc<DatabaseConnection>) -> WorkerHandle<SyncWorker> {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: method `connection` is never used
+  --> src/test_utils.rs:35:12
+   |
+15 | impl TestDatabase {
+   | ----------------- method in this implementation
+...
+35 |     pub fn connection(&self) -> Arc<SeaOrmConnection> {
+   |            ^^^^^^^^^^
+
+warning: function `create_test_db` is never used
+  --> src/test_utils.rs:41:14
+   |
+41 | pub async fn create_test_db() -> Result<TestDatabase> {
+   |              ^^^^^^^^^^^^^^
+
+warning: function `wait_for_async` is never used
+  --> src/test_utils.rs:52:18
+   |
+52 |     pub async fn wait_for_async<F, Fut>(mut condition: F, max_wait: Duration) -> bool
+   |                  ^^^^^^^^^^^^^^
+
+warning: function `timeout_future` is never used
+  --> src/test_utils.rs:70:18
+   |
+70 |     pub async fn timeout_future<T>(
+   |                  ^^^^^^^^^^^^^^
+
+warning: methods `add_library` and `add_movie` are never used
+   --> src/test_utils.rs:112:16
+    |
+97  |     impl MockBackend {
+    |     ---------------- methods in this implementation
+...
+112 |         pub fn add_library(&self, library: Library) {
+    |                ^^^^^^^^^^^
+...
+116 |         pub fn add_movie(&self, movie: Movie) {
+    |                ^^^^^^^^^
+
+warning: function `create_test_movie` is never used
+   --> src/test_utils.rs:252:12
+    |
+252 |     pub fn create_test_movie(id: &str) -> Movie {
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: function `create_test_library` is never used
+   --> src/test_utils.rs:277:12
+    |
+277 |     pub fn create_test_library(id: &str, library_type: LibraryType) -> Library {
+    |            ^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_test_user` is never used
+   --> src/test_utils.rs:287:12
+    |
+287 |     pub fn create_test_user(id: &str) -> User {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: `reel` (bin "reel" test) generated 217 warnings (run `cargo fix --bin "reel" --tests` to apply 25 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.73s
+     Running unittests src/main.rs (target/debug/deps/reel-3be3066ba82a625a)
+
+running 175 tests
+test backends::plex::tests::tests::test_error_handling_invalid_credentials ... ok
+test backends::jellyfin::tests::tests::test_username_password_authentication ... ok
+test backends::plex::tests::tests::test_empty_library_handling ... ok
+test backends::jellyfin::tests::tests::test_api_version_compatibility ... ok
+test backends::jellyfin::tests::tests::test_error_handling_invalid_credentials ... ok
+test backends::plex::tests::tests::test_oauth_authentication_flow ... ok
+test backends::plex::tests::tests::test_error_handling_server_error ... ok
+test backends::plex::tests::tests::test_library_retrieval ... ok
+test backends::jellyfin::tests::tests::test_streaming_url_generation ... ok
+test backends::jellyfin::tests::tests::test_error_handling_server_error ... ok
+test backends::traits::tests::test_backend_info_creation ... ok
+test backends::traits::tests::test_backend_info_minimal ... ok
+test backends::traits::tests::test_backend_offline_info ... ok
+test backends::traits::tests::test_backend_type_display ... ok
+test backends::traits::tests::test_connection_type_equality ... ok
+test backends::traits::tests::test_offline_status ... ok
+test backends::traits::tests::test_search_results_creation ... ok
+test backends::traits::tests::test_sync_priority ... ok
+test backends::traits::tests::test_sync_result ... ok
+test backends::traits::tests::test_sync_status_completed ... ok
+test backends::traits::tests::test_sync_status_failed ... ok
+test backends::traits::tests::test_sync_status_idle ... ok
+test backends::traits::tests::test_sync_status_in_progress ... ok
+test backends::traits::tests::test_sync_task ... ok
+test backends::traits::tests::test_sync_type_variants ... ok
+test backends::traits::tests::test_watch_status_default ... ok
+test backends::traits::tests::test_watch_status_with_data ... ok
+test config::tests::test_backend_config_with_token ... ok
+test config::tests::test_config_roundtrip ... ok
+test config::tests::test_default_config_serializes_minimal ... ok
+test config::tests::test_modified_field_serializes ... ok
+test config::tests::test_multiple_modifications_serialize ... ok
+test config::tests::test_partial_playback_config ... ok
+test config::tests::test_runtime_config_with_data ... ok
+test backends::jellyfin::tests::tests::test_library_enumeration ... ok
+test backends::jellyfin::tests::tests::test_media_item_retrieval_movies ... ok
+test backends::jellyfin::tests::tests::test_empty_library_handling ... ok
+test backends::jellyfin::tests::tests::test_malformed_response_handling ... ok
+test backends::jellyfin::tests::tests::test_playback_progress_reporting ... ok
+test backends::jellyfin::tests::tests::test_media_item_retrieval_shows ... ok
+test backends::plex::tests::tests::test_malformed_response_handling ... ok
+test backends::plex::tests::tests::test_progress_update ... ok
+test backends::jellyfin::tests::tests::test_connection_retry_logic ... ok
+test backends::plex::tests::tests::test_movie_fetching ... ok
+test backends::plex::tests::tests::test_rate_limiting_response ... ok
+test backends::plex::tests::tests::test_show_fetching ... ok
+test backends::plex::tests::tests::test_stream_url_generation ... ok
+test db::repository::media_repository::tests::test_find_by_genre ... ok
+test db::repository::media_repository::tests::test_bulk_insert ... ok
+test db::repository::media_repository::tests::test_update_metadata ... ok
+test db::repository::media_repository::tests::test_media_repository_crud_operations ... ok
+test db::repository::media_repository::tests::test_delete_by_library ... ok
+test db::repository::media_repository::tests::test_find_recently_added ... ok
+test db::repository::media_repository::tests::test_find_by_library ... ok
+test db::repository::media_repository::tests::test_find_episodes_by_show ... ok
+test db::repository::media_repository::tests::test_search ... ok
+test db::repository::media_repository::tests::test_find_episodes_by_season ... ok
+test db::repository::media_repository::tests::test_find_by_library_and_type ... ok
+test db::repository::media_repository::tests::test_find_next_and_previous_episode ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_concurrent_sync_updates ... ok
+test mapper::tests::tests::test_episode_to_model_conversion ... ok
+test mapper::tests::tests::test_model_to_episode_conversion ... ok
+test mapper::tests::tests::test_model_to_movie_conversion ... ok
+test mapper::tests::tests::test_model_to_show_conversion ... ok
+test mapper::tests::tests::test_movie_to_model_conversion ... ok
+test mapper::tests::tests::test_round_trip_conversion ... ok
+test mapper::tests::tests::test_show_to_model_conversion ... ok
+test mapper::tests::tests::test_unknown_media_type_error ... ok
+test models::identifiers::tests::backend_id::test_clone ... ok
+test models::identifiers::tests::backend_id::test_creation_and_conversion ... ok
+test models::identifiers::tests::backend_id::test_debug ... ok
+test models::identifiers::tests::backend_id::test_equality ... ok
+test models::identifiers::tests::backend_id::test_from_str ... ok
+test models::identifiers::tests::backend_id::test_from_string ... ok
+test models::identifiers::tests::backend_id::test_hashing ... ok
+test models::identifiers::tests::backend_id::test_serialization ... ok
+test models::identifiers::tests::library_id::test_clone ... ok
+test models::identifiers::tests::library_id::test_creation_and_conversion ... ok
+test models::identifiers::tests::library_id::test_debug ... ok
+test models::identifiers::tests::library_id::test_equality ... ok
+test models::identifiers::tests::library_id::test_from_str ... ok
+test models::identifiers::tests::library_id::test_from_string ... ok
+test models::identifiers::tests::library_id::test_hashing ... ok
+test models::identifiers::tests::library_id::test_serialization ... ok
+test models::identifiers::tests::media_item_id::test_clone ... ok
+test models::identifiers::tests::media_item_id::test_creation_and_conversion ... ok
+test models::identifiers::tests::media_item_id::test_debug ... ok
+test models::identifiers::tests::media_item_id::test_equality ... ok
+test models::identifiers::tests::media_item_id::test_from_str ... ok
+test models::identifiers::tests::media_item_id::test_from_string ... ok
+test models::identifiers::tests::media_item_id::test_hashing ... ok
+test models::identifiers::tests::media_item_id::test_serialization ... ok
+test models::identifiers::tests::provider_id::test_clone ... ok
+test models::identifiers::tests::provider_id::test_creation_and_conversion ... ok
+test models::identifiers::tests::provider_id::test_debug ... ok
+test models::identifiers::tests::provider_id::test_equality ... ok
+test models::identifiers::tests::provider_id::test_from_str ... ok
+test models::identifiers::tests::provider_id::test_from_string ... ok
+test models::identifiers::tests::provider_id::test_hashing ... ok
+test models::identifiers::tests::provider_id::test_serialization ... ok
+test models::identifiers::tests::show_id::test_clone ... ok
+test models::identifiers::tests::show_id::test_creation_and_conversion ... ok
+test models::identifiers::tests::show_id::test_debug ... ok
+test models::identifiers::tests::show_id::test_equality ... ok
+test models::identifiers::tests::show_id::test_from_str ... ok
+test models::identifiers::tests::show_id::test_from_string ... ok
+test models::identifiers::tests::show_id::test_hashing ... ok
+test models::identifiers::tests::show_id::test_serialization ... ok
+test models::identifiers::tests::source_id::test_clone ... ok
+test models::identifiers::tests::source_id::test_creation_and_conversion ... ok
+test models::identifiers::tests::source_id::test_debug ... ok
+test models::identifiers::tests::source_id::test_equality ... ok
+test models::identifiers::tests::source_id::test_from_str ... ok
+test models::identifiers::tests::source_id::test_from_string ... ok
+test models::identifiers::tests::source_id::test_hashing ... ok
+test models::identifiers::tests::source_id::test_serialization ... ok
+test models::identifiers::tests::user_id::test_clone ... ok
+test models::identifiers::tests::user_id::test_creation_and_conversion ... ok
+test models::identifiers::tests::user_id::test_debug ... ok
+test models::identifiers::tests::user_id::test_equality ... ok
+test models::identifiers::tests::user_id::test_from_str ... ok
+test models::identifiers::tests::user_id::test_from_string ... ok
+test models::identifiers::tests::user_id::test_hashing ... ok
+test models::identifiers::tests::user_id::test_serialization ... ok
+test services::cache_keys::tests::test_home_sections_key ... ok
+test services::cache_keys::tests::test_invalid_parse ... ok
+test services::cache_keys::tests::test_libraries_key ... ok
+test services::cache_keys::tests::test_library_items_key ... ok
+test services::cache_keys::tests::test_media_item_key ... ok
+test services::cache_keys::tests::test_media_key ... ok
+test services::cache_keys::tests::test_round_trip_conversion ... ok
+test services::cache_keys::tests::test_show_episodes_key ... ok
+test services::commands::tests::test_command_executor_failure ... ok
+test services::commands::tests::test_command_executor_success ... ok
+test services::commands::tests::test_command_result_creation ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_cleanup_old_records ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_error_handling ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_large_error_messages ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_find_by_source ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_sync_status_crud_operations ... ok
+test services::core::media::tests::test_get_libraries ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_sync_lifecycle ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_sync_with_null_total_items ... ok
+test test_utils::tests::test_mock_backend ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_sync_type_variations ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_find_running_syncs ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_repository_trait_implementation ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_find_latest_for_source ... ok
+test services::core::media::tests::test_get_libraries_for_source ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_sync_stats ... ok
+test db::repository::sync_repository::sync_repository_tests::tests::test_multiple_source_handling ... ok
+test workers::sync_worker::tests::test_auto_sync_flag ... ok
+test workers::sync_worker::tests::test_auto_sync_stops_all_on_disable ... ok
+test workers::sync_worker::tests::test_concurrent_sync_tracking ... ok
+test workers::sync_worker::tests::test_stop_specific_sync ... ok
+test workers::sync_worker::tests::test_sync_cancellation_behavior ... ok
+test workers::sync_worker::tests::test_sync_interval_prevents_rapid_syncs ... ok
+test workers::sync_worker::tests::test_sync_interval_updates ... ok
+test workers::sync_worker::tests::test_sync_time_recording ... ok
+test workers::sync_worker::tests::test_sync_worker_initialization ... ok
+test services::core::media::tests::test_get_library ... ok
+test services::core::media::tests::test_get_media_items ... ok
+test test_utils::tests::test_database_creation ... ok
+test workers::connection_monitor::tests::tests::test_health_check_intervals ... ok
+test services::core::media::tests::test_save_library ... ok
+test workers::connection_monitor::tests::tests::test_should_check_source ... ok
+test workers::connection_monitor::tests::tests::test_multiple_source_monitoring ... ok
+test services::core::media::tests::test_get_recently_added ... ok
+test services::core::media::tests::test_search_media ... ok
+test workers::connection_monitor::tests::tests::test_check_all_sources_with_timing ... ok
+test workers::connection_monitor::tests::tests::test_update_check_times_message ... ok
+test workers::connection_monitor::tests::tests::test_connection_lost_detection ... ok
+test workers::connection_monitor::tests::tests::test_status_reporting_through_messages ... ok
+test backends::plex::tests::tests::test_connection_timeout ... ok
+test backends::jellyfin::tests::tests::test_connection_timeout ... ok
+
+test result: ok. 175 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.18s
+
