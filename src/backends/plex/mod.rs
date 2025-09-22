@@ -3,7 +3,7 @@ mod auth;
 mod tests;
 
 pub use api::{PlexApi, create_standard_headers};
-pub use auth::{PlexAuth, PlexConnection, PlexPin, PlexServer};
+pub use auth::{PlexAuth, PlexConnection, PlexHomeUser, PlexPin, PlexServer};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;

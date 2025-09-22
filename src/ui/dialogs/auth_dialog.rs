@@ -6,7 +6,7 @@ use tracing::{error, info};
 
 use crate::backends::MediaBackend;
 use crate::backends::jellyfin::JellyfinBackend;
-use crate::backends::plex::{PlexAuth, PlexPin};
+use crate::backends::plex::{PlexAuth, PlexHomeUser, PlexPin};
 use crate::db::connection::DatabaseConnection;
 use crate::models::{Credentials, SourceId};
 use crate::services::commands::Command;
@@ -28,6 +28,11 @@ pub enum AuthDialogInput {
     PlexPinReceived(PlexPin),
     PlexAuthError(String),
     PlexTokenReceived(String),
+    PlexHomeUsersReceived(Vec<PlexHomeUser>),
+    SelectPlexProfile(PlexHomeUser),
+    PlexPinRequested(String),         // PIN from user input
+    PlexProfileTokenReceived(String), // Token after switching profile
+    SkipProfileSelection,             // For accounts without Home users
     SourceCreated(SourceId),
     CancelPlexAuth,
     RetryPlexAuth,
@@ -75,6 +80,13 @@ pub struct AuthDialog {
     plex_auth_success: bool,
     plex_auth_error: Option<String>,
 
+    // Plex profile selection state
+    plex_home_users: Vec<PlexHomeUser>,
+    plex_selected_profile: Option<PlexHomeUser>,
+    plex_profile_selection_active: bool,
+    plex_primary_token: Option<String>, // Store primary token during profile selection
+    plex_pin_input_active: bool,
+
     // Jellyfin state
     jellyfin_url: String,
     jellyfin_url_confirmed: bool,
@@ -117,6 +129,193 @@ pub struct AuthDialog {
     // Manual Plex widgets
     server_url_entry: adw::EntryRow,
     token_entry: adw::PasswordEntryRow,
+
+    // Profile selection widgets
+    profile_flowbox: gtk4::FlowBox,
+}
+
+impl AuthDialog {
+    /// Helper method to proceed with Plex source creation after authentication
+    fn proceed_with_plex_source_creation(
+        &self,
+        token: String,
+        sender: AsyncComponentSender<AuthDialog>,
+    ) {
+        let db = self.db.clone();
+        let server_url = if self.plex_server_url.is_empty() {
+            None
+        } else {
+            Some(self.plex_server_url.clone())
+        };
+
+        let sender_clone = sender.clone();
+        sender.oneshot_command(async move {
+            use crate::backends::plex::PlexBackend;
+
+            // Discover available servers
+            let servers = match PlexAuth::discover_servers(&token).await {
+                Ok(servers) => servers,
+                Err(e) => {
+                    sender_clone.input(AuthDialogInput::PlexAuthError(format!(
+                        "Failed to discover servers: {}",
+                        e
+                    )));
+                    return;
+                }
+            };
+
+            if servers.is_empty() {
+                sender_clone.input(AuthDialogInput::PlexAuthError(
+                    "No Plex servers found".to_string(),
+                ));
+                return;
+            }
+
+            // Check if we have a manual URL
+            let is_manual = server_url.is_some();
+
+            // Select the best server URL
+            let selected_server_url = if let Some(manual_url) = server_url {
+                // User provided a manual URL
+                manual_url
+            } else {
+                // Find the best connection from discovered servers
+                // Priority: owned servers > home servers > shared servers
+                let best_server = servers
+                    .iter()
+                    .find(|s| s.owned)
+                    .or_else(|| servers.iter().find(|s| s.home))
+                    .unwrap_or(&servers[0]);
+
+                // Find the best connection for this server
+                // Priority: local connections > remote direct > relay
+                let best_connection = best_server
+                    .connections
+                    .iter()
+                    .find(|c| c.local && !c.relay)
+                    .or_else(|| best_server.connections.iter().find(|c| !c.relay))
+                    .or_else(|| best_server.connections.first());
+
+                match best_connection {
+                    Some(conn) => conn.uri.clone(),
+                    None => {
+                        sender_clone.input(AuthDialogInput::PlexAuthError(format!(
+                            "No connections available for server '{}'",
+                            best_server.name
+                        )));
+                        return;
+                    }
+                }
+            };
+
+            // Get the best server info for creating the source
+            let best_server = if is_manual {
+                // For manual entry, we don't have server details
+                None
+            } else {
+                // Find the best server from discovered servers
+                servers
+                    .iter()
+                    .find(|s| s.owned)
+                    .or_else(|| servers.iter().find(|s| s.home))
+                    .or_else(|| servers.first())
+            };
+
+            // Create credentials
+            let credentials = Credentials::Token {
+                token: token.clone(),
+            };
+
+            // Create PlexBackend for authentication
+            let plex_backend =
+                PlexBackend::new_for_auth(selected_server_url.clone(), token.clone());
+
+            // For manual auth or when best_server is None, fetch machine_id
+            let machine_id_to_use = if let Some(server) = best_server {
+                Some(server.client_identifier.clone())
+            } else if is_manual {
+                // Fetch machine_id from the server for manual auth
+                use crate::backends::plex::PlexApi;
+                let api = PlexApi::with_backend_id(
+                    selected_server_url.clone(),
+                    token.clone(),
+                    "temp".to_string(),
+                );
+
+                match api.get_machine_id().await {
+                    Ok(machine_id) => {
+                        info!("Fetched machine_id for manual auth: {}", machine_id);
+                        Some(machine_id)
+                    }
+                    Err(e) => {
+                        info!("Failed to fetch machine_id for manual auth: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            // Create the source using CreateSourceCommand with machine_id
+            let command = CreateSourceCommand {
+                db: db.clone(),
+                backend: &plex_backend as &dyn MediaBackend,
+                source_type: "plex".to_string(),
+                name: best_server
+                    .map(|s| s.name.clone())
+                    .unwrap_or_else(|| "Plex".to_string()),
+                credentials,
+                server_url: Some(selected_server_url),
+                machine_id: machine_id_to_use,
+                is_owned: best_server.map(|s| s.owned),
+            };
+
+            match command.execute().await {
+                Ok(source) => {
+                    info!(
+                        "Successfully created Plex source: {} with machine_id",
+                        source.id
+                    );
+
+                    // Update connections if we have them
+                    if let Some(server) = best_server {
+                        use crate::db::repository::source_repository::{
+                            SourceRepository, SourceRepositoryImpl,
+                        };
+                        use crate::models::ServerConnections;
+                        use crate::services::core::ConnectionService;
+
+                        let repo = SourceRepositoryImpl::new(db.clone());
+
+                        // Convert all discovered connections to our ServerConnection model
+                        let connections =
+                            ConnectionService::from_plex_connections(server.connections.clone());
+                        let server_connections = ServerConnections::new(connections);
+
+                        // Update just the connections
+                        if let Err(e) = SourceRepository::update_connections(
+                            &repo,
+                            &source.id,
+                            serde_json::to_value(&server_connections)
+                                .unwrap_or(serde_json::Value::Null),
+                        )
+                        .await
+                        {
+                            info!("Warning: Failed to update source connections: {}", e);
+                        }
+                    }
+
+                    sender_clone.input(AuthDialogInput::SourceCreated(SourceId::new(source.id)));
+                }
+                Err(e) => {
+                    sender_clone.input(AuthDialogInput::PlexAuthError(format!(
+                        "Failed to create source: {}",
+                        e
+                    )));
+                }
+            }
+        });
+    }
 }
 
 #[relm4::component(pub async)]
@@ -242,6 +441,93 @@ impl AsyncComponent for AuthDialog {
                                     gtk4::Button {
                                         set_label: "Cancel",
                                         set_margin_top: 12,
+                                        connect_clicked => AuthDialogInput::CancelPlexAuth,
+                                    },
+                                },
+                            },
+                        },
+
+                        // Profile Selection state
+                        gtk4::Box {
+                            set_orientation: gtk4::Orientation::Vertical,
+                            set_spacing: 24,
+                            set_valign: gtk4::Align::Center,
+                            set_vexpand: true,
+                            #[watch]
+                            set_visible: model.plex_profile_selection_active,
+
+                            adw::StatusPage {
+                                set_icon_name: Some("avatar-default-symbolic"),
+                                set_title: "Select Profile",
+                                set_description: Some("Choose which profile to use"),
+                                #[wrap(Some)]
+                                set_child = &gtk4::Box {
+                                    set_orientation: gtk4::Orientation::Vertical,
+                                    set_spacing: 16,
+
+                                    gtk4::ScrolledWindow {
+                                        set_min_content_height: 200,
+                                        set_max_content_height: 400,
+                                        set_propagate_natural_width: true,
+
+                                        #[name = "profile_flowbox"]
+                                        gtk4::FlowBox {
+                                            set_homogeneous: true,
+                                            set_column_spacing: 12,
+                                            set_row_spacing: 12,
+                                            set_selection_mode: gtk4::SelectionMode::None,
+                                            set_margin_start: 24,
+                                            set_margin_end: 24,
+                                        },
+                                    },
+
+                                    gtk4::Button {
+                                        set_label: "Use Primary Account",
+                                        set_halign: gtk4::Align::Center,
+                                        add_css_class: "pill",
+                                        connect_clicked => AuthDialogInput::SkipProfileSelection,
+                                    },
+                                },
+                            },
+                        },
+
+                        // PIN Input Dialog for protected profiles
+                        gtk4::Box {
+                            set_orientation: gtk4::Orientation::Vertical,
+                            set_spacing: 24,
+                            set_valign: gtk4::Align::Center,
+                            set_vexpand: true,
+                            #[watch]
+                            set_visible: model.plex_pin_input_active,
+
+                            adw::StatusPage {
+                                set_icon_name: Some("dialog-password-symbolic"),
+                                set_title: "Enter Profile PIN",
+                                #[watch]
+                                set_description: {
+                                    if let Some(ref profile) = model.plex_selected_profile {
+                                        Some("Enter your profile PIN")
+                                    } else {
+                                        Some("Enter PIN")
+                                    }
+                                },
+                                #[wrap(Some)]
+                                set_child = &gtk4::Box {
+                                    set_orientation: gtk4::Orientation::Vertical,
+                                    set_spacing: 16,
+
+                                    adw::PasswordEntryRow {
+                                        set_title: "PIN",
+                                        set_show_apply_button: true,
+                                        connect_apply[sender] => move |entry| {
+                                            let pin = entry.text().to_string();
+                                            sender.input(AuthDialogInput::PlexPinRequested(pin));
+                                        },
+                                    },
+
+                                    gtk4::Button {
+                                        set_label: "Cancel",
+                                        set_halign: gtk4::Align::Center,
                                         connect_clicked => AuthDialogInput::CancelPlexAuth,
                                     },
                                 },
@@ -572,6 +858,13 @@ impl AsyncComponent for AuthDialog {
             plex_auth_success: false,
             plex_auth_error: None,
 
+            // Plex profile selection state
+            plex_home_users: Vec::new(),
+            plex_selected_profile: None,
+            plex_profile_selection_active: false,
+            plex_primary_token: None,
+            plex_pin_input_active: false,
+
             // Jellyfin state
             jellyfin_url: String::new(),
             jellyfin_url_confirmed: false,
@@ -608,6 +901,7 @@ impl AsyncComponent for AuthDialog {
             jellyfin_quick_connect_progress: gtk4::ProgressBar::new(),
             server_url_entry: adw::EntryRow::new(),
             token_entry: adw::PasswordEntryRow::new(),
+            profile_flowbox: gtk4::FlowBox::new(),
         };
 
         let widgets = view_output!();
@@ -719,185 +1013,185 @@ impl AsyncComponent for AuthDialog {
             AuthDialogInput::PlexTokenReceived(token) => {
                 info!("Successfully received Plex token");
                 self.plex_auth_in_progress = false;
-                self.plex_auth_success = true;
 
-                // Create the source in the database
-                let db = self.db.clone();
-                let server_url = if self.plex_server_url.is_empty() {
-                    None
-                } else {
-                    Some(self.plex_server_url.clone())
-                };
+                // Store the primary token
+                self.plex_primary_token = Some(token.clone());
 
+                // Fetch Home users to see if we need profile selection
                 let sender_clone = sender.clone();
                 sender.oneshot_command(async move {
-                    use crate::backends::plex::PlexBackend;
-
-                    // Discover available servers
-                    let servers = match PlexAuth::discover_servers(&token).await {
-                        Ok(servers) => servers,
+                    match PlexAuth::get_home_users(&token).await {
+                        Ok(users) => {
+                            info!("Found {} Home users", users.len());
+                            if users.is_empty() {
+                                // No Home users, proceed with primary token
+                                sender_clone.input(AuthDialogInput::SkipProfileSelection);
+                            } else {
+                                // Show profile selection
+                                sender_clone.input(AuthDialogInput::PlexHomeUsersReceived(users));
+                            }
+                        }
                         Err(e) => {
-                            sender_clone.input(AuthDialogInput::PlexAuthError(format!(
-                                "Failed to discover servers: {}",
-                                e
-                            )));
-                            return;
-                        }
-                    };
-
-                    if servers.is_empty() {
-                        sender_clone.input(AuthDialogInput::PlexAuthError(
-                            "No Plex servers found".to_string(),
-                        ));
-                        return;
-                    }
-
-                    // Check if we have a manual URL
-                    let is_manual = server_url.is_some();
-
-                    // Select the best server URL
-                    let selected_server_url = if let Some(manual_url) = server_url {
-                        // User provided a manual URL
-                        manual_url
-                    } else {
-                        // Find the best connection from discovered servers
-                        // Priority: owned servers > home servers > shared servers
-                        let best_server = servers
-                            .iter()
-                            .find(|s| s.owned)
-                            .or_else(|| servers.iter().find(|s| s.home))
-                            .unwrap_or(&servers[0]);
-
-                        // Find the best connection for this server
-                        // Priority: local connections > remote direct > relay
-                        let best_connection = best_server
-                            .connections
-                            .iter()
-                            .find(|c| c.local && !c.relay)
-                            .or_else(|| best_server.connections.iter().find(|c| !c.relay))
-                            .or_else(|| best_server.connections.first());
-
-                        match best_connection {
-                            Some(conn) => conn.uri.clone(),
-                            None => {
-                                sender_clone.input(AuthDialogInput::PlexAuthError(format!(
-                                    "No connections available for server '{}'",
-                                    best_server.name
-                                )));
-                                return;
-                            }
-                        }
-                    };
-
-                    // Get the best server info for creating the source
-                    let best_server = if is_manual {
-                        // For manual entry, we don't have server details
-                        None
-                    } else {
-                        // Find the best server from discovered servers
-                        servers
-                            .iter()
-                            .find(|s| s.owned)
-                            .or_else(|| servers.iter().find(|s| s.home))
-                            .or_else(|| servers.first())
-                    };
-
-                    // Create credentials
-                    let credentials = Credentials::Token {
-                        token: token.clone(),
-                    };
-
-                    // Create PlexBackend for authentication
-                    let plex_backend =
-                        PlexBackend::new_for_auth(selected_server_url.clone(), token.clone());
-
-                    // For manual auth or when best_server is None, fetch machine_id
-                    let machine_id_to_use = if let Some(server) = best_server {
-                        Some(server.client_identifier.clone())
-                    } else if is_manual {
-                        // Fetch machine_id from the server for manual auth
-                        use crate::backends::plex::PlexApi;
-                        let api = PlexApi::with_backend_id(
-                            selected_server_url.clone(),
-                            token.clone(),
-                            "temp".to_string(),
-                        );
-
-                        match api.get_machine_id().await {
-                            Ok(machine_id) => {
-                                info!("Fetched machine_id for manual auth: {}", machine_id);
-                                Some(machine_id)
-                            }
-                            Err(e) => {
-                                info!("Failed to fetch machine_id for manual auth: {}", e);
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
-
-                    // Create the source using CreateSourceCommand with machine_id
-                    let command = CreateSourceCommand {
-                        db: db.clone(),
-                        backend: &plex_backend as &dyn MediaBackend,
-                        source_type: "plex".to_string(),
-                        name: best_server
-                            .map(|s| s.name.clone())
-                            .unwrap_or_else(|| "Plex".to_string()),
-                        credentials,
-                        server_url: Some(selected_server_url),
-                        machine_id: machine_id_to_use,
-                        is_owned: best_server.map(|s| s.owned),
-                    };
-
-                    match command.execute().await {
-                        Ok(source) => {
                             info!(
-                                "Successfully created Plex source: {} with machine_id",
-                                source.id
-                            );
-
-                            // Update connections if we have them
-                            if let Some(server) = best_server {
-                                use crate::db::repository::source_repository::{
-                                    SourceRepository, SourceRepositoryImpl,
-                                };
-                                use crate::models::ServerConnections;
-                                use crate::services::core::ConnectionService;
-
-                                let repo = SourceRepositoryImpl::new(db.clone());
-
-                                // Convert all discovered connections to our ServerConnection model
-                                let connections = ConnectionService::from_plex_connections(
-                                    server.connections.clone(),
-                                );
-                                let server_connections = ServerConnections::new(connections);
-
-                                // Update just the connections
-                                if let Err(e) = SourceRepository::update_connections(
-                                    &repo,
-                                    &source.id,
-                                    serde_json::to_value(&server_connections)
-                                        .unwrap_or(serde_json::Value::Null),
-                                )
-                                .await
-                                {
-                                    info!("Warning: Failed to update source connections: {}", e);
-                                }
-                            }
-
-                            sender_clone
-                                .input(AuthDialogInput::SourceCreated(SourceId::new(source.id)));
-                        }
-                        Err(e) => {
-                            sender_clone.input(AuthDialogInput::PlexAuthError(format!(
-                                "Failed to create source: {}",
+                                "Failed to get Home users (likely not a Home account): {}",
                                 e
-                            )));
+                            );
+                            // Not a Home account or error, proceed with primary token
+                            sender_clone.input(AuthDialogInput::SkipProfileSelection);
                         }
                     }
                 });
+            }
+
+            AuthDialogInput::PlexHomeUsersReceived(users) => {
+                info!("Showing profile selection with {} users", users.len());
+                self.plex_home_users = users.clone();
+
+                // Clear previous profile cards
+                while let Some(child) = self.profile_flowbox.first_child() {
+                    self.profile_flowbox.remove(&child);
+                }
+
+                // Add profile cards for each user
+                for user in users {
+                    let button = gtk4::Button::new();
+                    button.add_css_class("flat");
+                    button.set_tooltip_text(Some(&user.name));
+
+                    let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+                    vbox.set_width_request(120);
+
+                    let avatar_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+                    avatar_box.set_halign(gtk4::Align::Center);
+
+                    let avatar = adw::Avatar::new(64, Some(&user.name), true);
+                    // TODO: Set custom image from user.thumb if available
+                    avatar_box.append(&avatar);
+
+                    if user.is_protected {
+                        let lock_icon = gtk4::Image::from_icon_name("dialog-password-symbolic");
+                        lock_icon.add_css_class("warning");
+                        lock_icon.set_icon_size(gtk4::IconSize::Normal);
+                        lock_icon.set_margin_top(-16);
+                        lock_icon.set_margin_start(48);
+                        lock_icon.set_halign(gtk4::Align::End);
+                        avatar_box.append(&lock_icon);
+                    }
+
+                    vbox.append(&avatar_box);
+
+                    let name_label = gtk4::Label::new(Some(&user.name));
+                    name_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+                    name_label.set_max_width_chars(15);
+                    vbox.append(&name_label);
+
+                    if user.is_admin {
+                        let admin_label = gtk4::Label::new(Some("Admin"));
+                        admin_label.add_css_class("dim-label");
+                        admin_label.add_css_class("caption");
+                        vbox.append(&admin_label);
+                    }
+
+                    button.set_child(Some(&vbox));
+
+                    let sender_clone = sender.clone();
+                    let user_clone = user.clone();
+                    button.connect_clicked(move |_| {
+                        sender_clone.input(AuthDialogInput::SelectPlexProfile(user_clone.clone()));
+                    });
+
+                    self.profile_flowbox.append(&button);
+                }
+
+                self.plex_profile_selection_active = true;
+            }
+
+            AuthDialogInput::SelectPlexProfile(profile) => {
+                info!("Selected profile: {}", profile.name);
+
+                if profile.is_protected {
+                    // Need PIN input
+                    self.plex_selected_profile = Some(profile);
+                    self.plex_profile_selection_active = false;
+                    self.plex_pin_input_active = true;
+                } else {
+                    // Switch to profile without PIN
+                    self.plex_selected_profile = Some(profile.clone());
+                    self.plex_profile_selection_active = false;
+
+                    let token = self.plex_primary_token.clone().unwrap();
+                    let user_id = profile.id.clone();
+                    let sender_clone = sender.clone();
+
+                    sender.oneshot_command(async move {
+                        match PlexAuth::switch_to_user(&token, &user_id, None).await {
+                            Ok(profile_token) => {
+                                info!("Successfully switched to profile");
+                                sender_clone.input(AuthDialogInput::PlexProfileTokenReceived(
+                                    profile_token,
+                                ));
+                            }
+                            Err(e) => {
+                                sender_clone.input(AuthDialogInput::PlexAuthError(format!(
+                                    "Failed to switch to profile: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    });
+                }
+            }
+
+            AuthDialogInput::PlexPinRequested(pin) => {
+                info!("PIN entered for protected profile");
+                self.plex_pin_input_active = false;
+
+                let token = self.plex_primary_token.clone().unwrap();
+                let profile = self.plex_selected_profile.clone().unwrap();
+                let sender_clone = sender.clone();
+
+                sender.oneshot_command(async move {
+                    match PlexAuth::switch_to_user(&token, &profile.id, Some(&pin)).await {
+                        Ok(profile_token) => {
+                            info!("Successfully switched to protected profile");
+                            sender_clone
+                                .input(AuthDialogInput::PlexProfileTokenReceived(profile_token));
+                        }
+                        Err(e) => {
+                            // Check if it's a PIN error specifically
+                            if e.to_string().contains("Invalid PIN")
+                                || e.to_string().contains("authentication failed")
+                            {
+                                // Show PIN input again with error message
+                                sender_clone.input(AuthDialogInput::PlexAuthError(
+                                    "Invalid PIN. Please try again.".to_string(),
+                                ));
+                                // TODO: Re-show PIN input with error
+                            } else {
+                                sender_clone.input(AuthDialogInput::PlexAuthError(format!(
+                                    "Failed to switch to profile: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    }
+                });
+            }
+
+            AuthDialogInput::PlexProfileTokenReceived(profile_token) => {
+                info!("Profile token received, proceeding with source creation");
+                self.plex_auth_success = true;
+                self.proceed_with_plex_source_creation(profile_token, sender);
+            }
+
+            AuthDialogInput::SkipProfileSelection => {
+                info!("Skipping profile selection, using primary token");
+                self.plex_auth_success = true;
+                let token = self
+                    .plex_primary_token
+                    .clone()
+                    .unwrap_or_else(|| self.plex_token.clone());
+                self.proceed_with_plex_source_creation(token, sender);
             }
 
             AuthDialogInput::SourceCreated(source_id) => {
@@ -912,12 +1206,21 @@ impl AsyncComponent for AuthDialog {
                 info!("Cancelling Plex auth");
                 self.plex_auth_in_progress = false;
                 self.plex_pin = None;
+                self.plex_profile_selection_active = false;
+                self.plex_pin_input_active = false;
+                self.plex_primary_token = None;
+                self.plex_selected_profile = None;
             }
 
             AuthDialogInput::RetryPlexAuth => {
                 info!("Retrying Plex auth");
                 self.plex_auth_error = None;
                 self.plex_auth_success = false;
+                self.plex_profile_selection_active = false;
+                self.plex_pin_input_active = false;
+                self.plex_primary_token = None;
+                self.plex_selected_profile = None;
+                self.plex_home_users.clear();
                 sender.input(AuthDialogInput::StartPlexAuth);
             }
 
