@@ -1,11 +1,11 @@
 ---
 id: task-027
 title: Move database save location to XDG data folder instead of cache folder
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-09-15 14:56'
-updated_date: '2025-09-18 16:45'
+updated_date: '2025-09-22 01:14'
 labels:
   - database
   - storage
@@ -14,7 +14,9 @@ dependencies: []
 
 ## Description
 
+<!-- SECTION:DESCRIPTION:BEGIN -->
 Currently the database is stored in the XDG cache folder, but it should be in the XDG data folder for proper persistence. The cache folder is meant for temporary data that can be regenerated, while the data folder is for persistent application data like databases.
+<!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
@@ -23,17 +25,18 @@ Currently the database is stored in the XDG cache folder, but it should be in th
 - [x] #3 Old cache location is not migrated (clean break)
 <!-- AC:END -->
 
-
 ## Implementation Plan
 
+<!-- SECTION:PLAN:BEGIN -->
 1. Identify current database location in src/db/connection.rs
 2. Replace dirs::cache_dir() with dirs::data_dir() for proper persistence
 3. Test database connection with new path
 4. Verify no migration logic exists (clean break)
-
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
+<!-- SECTION:NOTES:BEGIN -->
 Changed database location from XDG cache directory to XDG data directory in src/db/connection.rs:84. Updated the db_path() function to use dirs::data_dir() instead of dirs::cache_dir(). This ensures the database is stored in a persistent location appropriate for application data. No migration was implemented as requested - users will start fresh with the new location.
 
 ## Problem Identified
@@ -48,3 +51,4 @@ The logs show:
 5. Only Plex completes successfully - Jellyfin sync task starts but never completes or reports an error
 
 The issue is that Jellyfin sync is failing silently somewhere in the BackendService::sync_source call. Added enhanced error logging to the SyncWorker to capture the actual error and its full error chain when the sync fails.
+<!-- SECTION:NOTES:END -->
