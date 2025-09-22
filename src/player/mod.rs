@@ -2,6 +2,7 @@ pub mod controller;
 pub mod factory;
 pub mod gstreamer_player;
 pub mod mpv_player;
+pub mod shaders;
 pub use controller::{PlayerController, PlayerHandle};
 pub use factory::Player;
 #[allow(unused_imports)]
