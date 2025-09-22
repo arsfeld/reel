@@ -42,7 +42,7 @@ impl BackendService {
     }
 
     /// Create a backend instance for a source - stateless factory
-    async fn create_backend_for_source(
+    pub async fn create_backend_for_source(
         db: &DatabaseConnection,
         source_entity: &crate::db::entities::sources::Model,
     ) -> Result<Box<dyn MediaBackend>> {

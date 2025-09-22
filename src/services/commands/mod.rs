@@ -3,7 +3,9 @@ pub mod media_commands;
 pub mod sync_commands;
 
 // Re-export commonly used commands
-pub use media_commands::{GetPlaybackProgressCommand, UpdatePlaybackProgressCommand};
+pub use media_commands::{
+    GetPlayQueueStateCommand, GetPlaybackProgressCommand, UpdatePlaybackProgressCommand,
+};
 
 use anyhow::Result;
 use async_trait::async_trait;

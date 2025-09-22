@@ -171,6 +171,7 @@ impl FactoryComponent for SectionRow {
                         show_progress: false, // Could be made conditional
                         watched: false,
                         progress_percent: 0.0,
+                        show_media_type_icon: false,
                     });
                 }
             }
@@ -182,6 +183,7 @@ impl FactoryComponent for SectionRow {
                         show_progress: false,
                         watched: false,
                         progress_percent: 0.0,
+                        show_media_type_icon: false,
                     });
                 }
             }

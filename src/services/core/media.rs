@@ -274,6 +274,10 @@ impl MediaService {
                             view_count: movie.view_count as i32,
                             last_watched_at: movie.last_watched_at.map(|dt| dt.naive_utc()),
                             updated_at: chrono::Utc::now().naive_utc(),
+                            play_queue_id: None,
+                            play_queue_version: None,
+                            play_queue_item_id: None,
+                            source_id: None,
                         };
                         playback_repo.insert(progress).await?;
                     }
@@ -311,6 +315,10 @@ impl MediaService {
                             view_count: episode.view_count as i32,
                             last_watched_at: episode.last_watched_at.map(|dt| dt.naive_utc()),
                             updated_at: chrono::Utc::now().naive_utc(),
+                            play_queue_id: None,
+                            play_queue_version: None,
+                            play_queue_item_id: None,
+                            source_id: None,
                         };
                         playback_repo.insert(progress).await?;
                     }

@@ -635,6 +635,7 @@ impl HomePage {
                         show_progress,
                         watched,
                         progress_percent,
+                        show_media_type_icon: false,
                     });
 
                     // Queue image load if poster URL exists

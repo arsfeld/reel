@@ -1,8 +1,8 @@
-mod api;
+pub mod api;
 mod auth;
 mod tests;
 
-pub use api::PlexApi;
+pub use api::{PlayQueueResponse, PlexApi, create_standard_headers};
 pub use auth::{PlexAuth, PlexConnection, PlexPin, PlexServer};
 
 use anyhow::{Result, anyhow};
@@ -12,7 +12,8 @@ use dirs;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
+use tracing::{debug, info, warn};
 
 use super::traits::MediaBackend;
 use crate::models::{
@@ -38,6 +39,15 @@ pub struct PlexBackend {
     last_discovery: Arc<RwLock<Option<Instant>>>,
     /// Track the original URL to detect changes
     original_url: Arc<RwLock<Option<String>>>,
+    /// Current PlayQueue state for proper playback tracking
+    play_queue_state: Arc<Mutex<PlayQueueState>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PlayQueueState {
+    play_queue_id: Option<i64>,
+    play_queue_item_id: Option<i64>,
+    play_queue_version: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +67,11 @@ impl PlexBackend {
         has_token && has_api && has_url
     }
 
+    /// Get the Plex API client if available (for PlayQueue operations)
+    pub async fn get_api_for_playqueue(&self) -> Option<PlexApi> {
+        self.api.read().await.clone()
+    }
+
     /// Create a temporary PlexBackend for authentication purposes
     pub fn new_for_auth(base_url: String, token: String) -> Self {
         let url = Some(base_url);
@@ -73,6 +88,7 @@ impl PlexBackend {
             cached_connections: Arc::new(RwLock::new(Vec::new())),
             last_discovery: Arc::new(RwLock::new(None)),
             original_url: Arc::new(RwLock::new(url)),
+            play_queue_state: Arc::new(Mutex::new(PlayQueueState::default())),
         }
     }
 
@@ -102,6 +118,7 @@ impl PlexBackend {
             cached_connections: Arc::new(RwLock::new(Vec::new())),
             last_discovery: Arc::new(RwLock::new(None)),
             original_url: Arc::new(RwLock::new(original_url)),
+            play_queue_state: Arc::new(Mutex::new(PlayQueueState::default())),
         })
     }
 
@@ -130,7 +147,7 @@ impl PlexBackend {
             if let Ok(client) = client {
                 let response = client
                     .get(format!("{}/identity", base_url))
-                    .header("X-Plex-Token", token)
+                    .headers(create_standard_headers(Some(token)))
                     .send()
                     .await;
 
@@ -173,8 +190,7 @@ impl PlexBackend {
                 // Try to access the server identity endpoint
                 let response = client
                     .get(format!("{}/identity", uri))
-                    .header("X-Plex-Token", &token)
-                    .header("Accept", "application/json")
+                    .headers(create_standard_headers(Some(&token)))
                     .send()
                     .await;
 
@@ -232,8 +248,7 @@ impl PlexBackend {
 
                     let response = client
                         .get(format!("{}/identity", conn.uri))
-                        .header("X-Plex-Token", token)
-                        .header("Accept", "application/json")
+                        .headers(create_standard_headers(Some(token)))
                         .send()
                         .await;
 
@@ -349,7 +364,7 @@ impl PlexBackend {
 
         match client
             .get(format!("{}/identity", url))
-            .header("X-Plex-Token", &token)
+            .headers(create_standard_headers(Some(&token)))
             .send()
             .await
         {
@@ -380,7 +395,7 @@ impl PlexBackend {
 
                 let response = client
                     .get(format!("{}/identity", uri))
-                    .header("X-Plex-Token", &token)
+                    .headers(create_standard_headers(Some(&token)))
                     .send()
                     .await;
 
@@ -482,6 +497,7 @@ impl PlexBackend {
             cached_connections: self.cached_connections.clone(),
             last_discovery: self.last_discovery.clone(),
             original_url: self.original_url.clone(),
+            play_queue_state: self.play_queue_state.clone(),
         }
     }
 
@@ -502,6 +518,63 @@ impl PlexBackend {
         Err(anyhow::anyhow!(
             "Plex API not initialized. Please authenticate first."
         ))
+    }
+
+    // PlayQueue Management Methods
+
+    /// Create a PlayQueue for a media item and store its state
+    pub async fn create_play_queue(&self, media_id: &str, media_type: &str) -> Result<()> {
+        let api = self.get_api().await?;
+
+        // Create the PlayQueue
+        let play_queue = api.create_play_queue(media_id, media_type).await?;
+
+        // Store the PlayQueue state
+        if let Some(container) = Some(&play_queue.media_container) {
+            let mut state = self.play_queue_state.lock().await;
+            state.play_queue_id = container.play_queue_id;
+            state.play_queue_version = container.play_queue_version;
+
+            // Find the current item ID (usually the first one)
+            if let Some(first_item) = container.metadata.first() {
+                state.play_queue_item_id = Some(first_item.play_queue_item_id);
+            }
+
+            debug!(
+                "Created PlayQueue - ID: {:?}, Version: {:?}, Item: {:?}",
+                state.play_queue_id, state.play_queue_version, state.play_queue_item_id
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Clear the current PlayQueue state
+    pub async fn clear_play_queue(&self) {
+        let mut state = self.play_queue_state.lock().await;
+        state.play_queue_id = None;
+        state.play_queue_item_id = None;
+        state.play_queue_version = None;
+        debug!("Cleared PlayQueue state");
+    }
+
+    /// Update the current PlayQueue item when playback progresses to the next item
+    pub async fn set_play_queue_item(&self, item_id: i64) {
+        let mut state = self.play_queue_state.lock().await;
+        state.play_queue_item_id = Some(item_id);
+        debug!("Updated PlayQueue item to: {}", item_id);
+    }
+
+    /// Get the current PlayQueue ID if available
+    pub async fn get_play_queue_id(&self) -> Option<i64> {
+        let state = self.play_queue_state.lock().await;
+        state.play_queue_id
+    }
+
+    /// Check if we have an active PlayQueue
+    pub async fn has_play_queue(&self) -> bool {
+        let state = self.play_queue_state.lock().await;
+        state.play_queue_id.is_some()
     }
 }
 
@@ -725,7 +798,7 @@ impl MediaBackend for PlexBackend {
 
                 let test_result = test_client
                     .get(format!("{}/identity", url))
-                    .header("X-Plex-Token", &token)
+                    .headers(create_standard_headers(Some(&token)))
                     .send()
                     .await;
 
@@ -1109,7 +1182,31 @@ impl MediaBackend for PlexBackend {
         };
 
         let api = self.get_api().await?;
-        api.update_progress(rating_key, position, duration).await
+
+        // Check if we have an active PlayQueue
+        let play_queue_state = self.play_queue_state.lock().await;
+        if let (Some(queue_id), Some(item_id)) = (
+            play_queue_state.play_queue_id,
+            play_queue_state.play_queue_item_id,
+        ) {
+            drop(play_queue_state); // Release the lock early
+
+            // Use PlayQueue-based progress tracking
+            debug!(
+                "Using PlayQueue progress tracking - queue: {}, item: {}",
+                queue_id, item_id
+            );
+            api.update_play_queue_progress(
+                queue_id, item_id, rating_key, position, duration, "playing",
+            )
+            .await
+        } else {
+            drop(play_queue_state); // Release the lock early
+
+            // Fall back to direct timeline updates
+            debug!("Using direct timeline progress tracking");
+            api.update_progress(rating_key, position, duration).await
+        }
     }
 
     // Removed unused trait methods: mark_watched, mark_unwatched, get_watch_status, search,
@@ -1123,6 +1220,51 @@ impl MediaBackend for PlexBackend {
 
     async fn get_backend_id(&self) -> BackendId {
         BackendId::new(&self.backend_id)
+    }
+}
+
+impl PlexBackend {
+    /// Perform a global search across all libraries
+    pub async fn search(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<crate::models::MediaItem>> {
+        let api = self.get_api().await?;
+        api.search_global(query, limit).await
+    }
+
+    /// Search within a specific library
+    pub async fn search_library(
+        &self,
+        library_id: &str,
+        query: &str,
+        media_type: Option<&str>,
+        sort: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<crate::models::MediaItem>> {
+        let api = self.get_api().await?;
+        api.search_library(library_id, query, media_type, sort, limit)
+            .await
+    }
+
+    /// Search with filters
+    pub async fn search_with_filters(
+        &self,
+        library_id: &str,
+        query: Option<&str>,
+        genre: Option<&str>,
+        year: Option<u32>,
+        rating_min: Option<f32>,
+        unwatched: Option<bool>,
+        sort: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<crate::models::MediaItem>> {
+        let api = self.get_api().await?;
+        api.search_with_filters(
+            library_id, query, genre, year, rating_min, unwatched, sort, limit,
+        )
+        .await
     }
 }
 
