@@ -519,4 +519,163 @@ mod tests {
         let result = backend.get_libraries().await;
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_get_home_users() {
+        let mut server = Server::new_async().await;
+
+        let home_users_response = json!([
+            {
+                "id": "user1",
+                "title": "Main User",
+                "protected": false,
+                "admin": true,
+                "thumb": "https://plex.tv/users/abc/avatar"
+            },
+            {
+                "id": "user2",
+                "title": "Kids Profile",
+                "protected": true,
+                "admin": false,
+                "thumb": null
+            }
+        ]);
+
+        let _m = server
+            .mock("GET", "/api/v2/home/users")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(home_users_response.to_string())
+            .create_async()
+            .await;
+
+        let result = PlexAuth::get_home_users_with_url("test_token", &server.url()).await;
+
+        assert!(result.is_ok());
+        let users = result.unwrap();
+        assert_eq!(users.len(), 2);
+
+        assert_eq!(users[0].id, "user1");
+        assert_eq!(users[0].name, "Main User");
+        assert_eq!(users[0].is_protected, false);
+        assert_eq!(users[0].is_admin, true);
+        assert!(users[0].thumb.is_some());
+
+        assert_eq!(users[1].id, "user2");
+        assert_eq!(users[1].name, "Kids Profile");
+        assert_eq!(users[1].is_protected, true);
+        assert_eq!(users[1].is_admin, false);
+        assert!(users[1].thumb.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_home_users_unauthorized() {
+        let mut server = Server::new_async().await;
+
+        let _m = server
+            .mock("GET", "/api/v2/home/users")
+            .with_status(401)
+            .with_body("Unauthorized")
+            .create_async()
+            .await;
+
+        let result = PlexAuth::get_home_users_with_url("invalid_token", &server.url()).await;
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Authentication failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_switch_to_user_success() {
+        let mut server = Server::new_async().await;
+
+        let switch_response = json!({
+            "authToken": "new_user_token_12345"
+        });
+
+        let _m = server
+            .mock("POST", "/api/v2/home/users/user2/switch")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(switch_response.to_string())
+            .create_async()
+            .await;
+
+        let result =
+            PlexAuth::switch_to_user_with_url("main_token", "user2", None, &server.url()).await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "new_user_token_12345");
+    }
+
+    #[tokio::test]
+    async fn test_switch_to_user_with_pin() {
+        let mut server = Server::new_async().await;
+
+        let switch_response = json!({
+            "authToken": "protected_user_token"
+        });
+
+        let _m = server
+            .mock("POST", "/api/v2/home/users/user3/switch")
+            .match_body(mockito::Matcher::Json(json!({"pin": "1234"})))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(switch_response.to_string())
+            .create_async()
+            .await;
+
+        let result =
+            PlexAuth::switch_to_user_with_url("main_token", "user3", Some("1234"), &server.url())
+                .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "protected_user_token");
+    }
+
+    #[tokio::test]
+    async fn test_switch_to_user_invalid_pin() {
+        let mut server = Server::new_async().await;
+
+        let _m = server
+            .mock("POST", "/api/v2/home/users/user3/switch")
+            .with_status(401)
+            .with_body("Invalid PIN")
+            .create_async()
+            .await;
+
+        let result = PlexAuth::switch_to_user_with_url(
+            "main_token",
+            "user3",
+            Some("wrong_pin"),
+            &server.url(),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid PIN"));
+    }
+
+    #[tokio::test]
+    async fn test_switch_to_user_pin_required() {
+        let mut server = Server::new_async().await;
+
+        let _m = server
+            .mock("POST", "/api/v2/home/users/user3/switch")
+            .with_status(403)
+            .with_body("PIN required")
+            .create_async()
+            .await;
+
+        let result =
+            PlexAuth::switch_to_user_with_url("main_token", "user3", None, &server.url()).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("PIN required"));
+    }
 }

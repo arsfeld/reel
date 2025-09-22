@@ -216,6 +216,184 @@ impl PlexAuth {
         info!("Found {} Plex servers", servers.len());
         Ok(servers)
     }
+
+    /// Get list of Home users available for the authenticated account
+    pub async fn get_home_users(auth_token: &str) -> Result<Vec<PlexHomeUser>> {
+        let client = reqwest::Client::new();
+
+        let response = client
+            .get(format!("{}/api/v2/home/users", PLEX_TV_URL))
+            .headers(create_standard_headers(Some(auth_token)))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            debug!("Failed to get Home users with status {}: {}", status, text);
+
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(anyhow!("Authentication failed: Invalid or expired token"));
+            }
+
+            return Err(anyhow!("Failed to get Home users: {}", status));
+        }
+
+        let users: Vec<PlexHomeUser> = response
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse Home users response: {}", e))?;
+
+        info!("Found {} Home users", users.len());
+        Ok(users)
+    }
+
+    /// Switch to a specific Home user and get their auth token
+    ///
+    /// # Arguments
+    /// * `auth_token` - The primary account auth token
+    /// * `user_id` - The ID of the Home user to switch to
+    /// * `pin` - Optional PIN for protected users
+    pub async fn switch_to_user(
+        auth_token: &str,
+        user_id: &str,
+        pin: Option<&str>,
+    ) -> Result<String> {
+        let client = reqwest::Client::new();
+
+        let mut json_body = serde_json::json!({});
+        if let Some(pin_code) = pin {
+            json_body["pin"] = serde_json::json!(pin_code);
+        }
+
+        let response = client
+            .post(format!(
+                "{}/api/v2/home/users/{}/switch",
+                PLEX_TV_URL, user_id
+            ))
+            .headers(create_standard_headers(Some(auth_token)))
+            .json(&json_body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            debug!("Failed to switch user with status {}: {}", status, text);
+
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(anyhow!("Invalid PIN or authentication failed"));
+            }
+
+            if status == reqwest::StatusCode::FORBIDDEN {
+                return Err(anyhow!("PIN required for this protected user"));
+            }
+
+            return Err(anyhow!("Failed to switch to user: {}", status));
+        }
+
+        #[derive(Deserialize)]
+        struct SwitchResponse {
+            #[serde(rename = "authToken")]
+            auth_token: String,
+        }
+
+        let switch_response: SwitchResponse = response
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse switch user response: {}", e))?;
+
+        info!("Successfully switched to Home user {}", user_id);
+        Ok(switch_response.auth_token)
+    }
+
+    /// Test-only version that accepts a custom base URL
+    #[cfg(test)]
+    pub async fn get_home_users_with_url(
+        auth_token: &str,
+        base_url: &str,
+    ) -> Result<Vec<PlexHomeUser>> {
+        let client = reqwest::Client::new();
+
+        let response = client
+            .get(format!("{}/api/v2/home/users", base_url))
+            .headers(create_standard_headers(Some(auth_token)))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            debug!("Failed to get Home users with status {}: {}", status, text);
+
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(anyhow!("Authentication failed: Invalid or expired token"));
+            }
+
+            return Err(anyhow!("Failed to get Home users: {}", status));
+        }
+
+        let users: Vec<PlexHomeUser> = response
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse Home users response: {}", e))?;
+
+        info!("Found {} Home users", users.len());
+        Ok(users)
+    }
+
+    /// Test-only version that accepts a custom base URL
+    #[cfg(test)]
+    pub async fn switch_to_user_with_url(
+        auth_token: &str,
+        user_id: &str,
+        pin: Option<&str>,
+        base_url: &str,
+    ) -> Result<String> {
+        let client = reqwest::Client::new();
+
+        let mut json_body = serde_json::json!({});
+        if let Some(pin_code) = pin {
+            json_body["pin"] = serde_json::json!(pin_code);
+        }
+
+        let response = client
+            .post(format!("{}/api/v2/home/users/{}/switch", base_url, user_id))
+            .headers(create_standard_headers(Some(auth_token)))
+            .json(&json_body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            debug!("Failed to switch user with status {}: {}", status, text);
+
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(anyhow!("Invalid PIN or authentication failed"));
+            }
+
+            if status == reqwest::StatusCode::FORBIDDEN {
+                return Err(anyhow!("PIN required for this protected user"));
+            }
+
+            return Err(anyhow!("Failed to switch to user: {}", status));
+        }
+
+        #[derive(Deserialize)]
+        struct SwitchResponse {
+            #[serde(rename = "authToken")]
+            auth_token: String,
+        }
+
+        let switch_response: SwitchResponse = response
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse switch user response: {}", e))?;
+
+        info!("Successfully switched to Home user {}", user_id);
+        Ok(switch_response.auth_token)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -223,6 +401,19 @@ pub struct PlexUser {
     pub id: i64,
     pub username: String,
     pub email: String,
+    pub thumb: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlexHomeUser {
+    pub id: String,
+    #[serde(rename = "title")]
+    pub name: String,
+    #[serde(rename = "protected")]
+    pub is_protected: bool,
+    #[serde(rename = "admin")]
+    pub is_admin: bool,
     pub thumb: Option<String>,
 }
 

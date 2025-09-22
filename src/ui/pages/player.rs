@@ -76,6 +76,10 @@ pub struct PlayerPage {
     // Auto-play state
     auto_play_triggered: bool,
     auto_play_timeout: Option<SourceId>,
+    // Video quality (upscaling) state
+    quality_menu_button: gtk::MenuButton,
+    current_upscaling_mode: crate::player::UpscalingMode,
+    is_mpv_backend: bool,
 }
 
 impl PlayerPage {
@@ -179,6 +183,78 @@ impl PlayerPage {
                 }
             });
         }
+    }
+
+    fn populate_quality_menu(&self, sender: AsyncComponentSender<Self>) {
+        let quality_menu_button = self.quality_menu_button.clone();
+        let current_mode = self.current_upscaling_mode;
+        let is_mpv = self.is_mpv_backend;
+
+        if !is_mpv {
+            // Disable button for non-MPV backends
+            quality_menu_button.set_sensitive(false);
+            quality_menu_button.set_tooltip_text(Some("Upscaling only available with MPV player"));
+            return;
+        }
+
+        quality_menu_button.set_sensitive(true);
+        quality_menu_button.set_tooltip_text(Some("Video Quality"));
+
+        // Create menu
+        let menu = gtk::gio::Menu::new();
+
+        // Add upscaling modes
+        let modes = [
+            (crate::player::UpscalingMode::None, "None", "No upscaling"),
+            (
+                crate::player::UpscalingMode::HighQuality,
+                "High Quality",
+                "Enhanced quality upscaling",
+            ),
+            (
+                crate::player::UpscalingMode::FSR,
+                "FSR",
+                "AMD FidelityFX Super Resolution",
+            ),
+            (
+                crate::player::UpscalingMode::Anime,
+                "Anime",
+                "Optimized for anime content",
+            ),
+        ];
+
+        for (mode, label, _description) in modes {
+            let item = gtk::gio::MenuItem::new(Some(label), None);
+            let action_name = format!("player.quality-{}", label.to_lowercase().replace(' ', "-"));
+            item.set_action_and_target_value(Some(&action_name), None);
+
+            // Add checkmark for current mode
+            if mode == current_mode {
+                item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
+            }
+
+            menu.append_item(&item);
+        }
+
+        // Create popover from menu model
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+
+        // Add actions for each mode
+        let action_group = gtk::gio::SimpleActionGroup::new();
+        for (mode, label, _) in modes {
+            let action_name = format!("quality-{}", label.to_lowercase().replace(' ', "-"));
+            let action = gtk::gio::SimpleAction::new(&action_name, None);
+            let sender_clone = sender.clone();
+            let mode_copy = mode;
+            action.connect_activate(move |_, _| {
+                sender_clone.input(PlayerInput::SetUpscalingMode(mode_copy));
+            });
+            action_group.add_action(&action);
+        }
+
+        // Insert the action group
+        quality_menu_button.insert_action_group("player", Some(&action_group));
+        quality_menu_button.set_popover(Some(&popover));
     }
 
     fn update_playlist_position_label(&self, context: &PlaylistContext) {
@@ -290,6 +366,9 @@ pub enum PlayerInput {
     MouseLeaveControls,
     // Relative seeking
     SeekRelative(i64), // Positive for forward, negative for backward
+    // Upscaling mode
+    SetUpscalingMode(crate::player::UpscalingMode),
+    UpdateQualityMenu,
 }
 
 #[derive(Debug, Clone)]
@@ -608,7 +687,7 @@ impl AsyncComponent for PlayerPage {
                         },
 
                         // Quality/Resolution button
-                        gtk::MenuButton {
+                        model.quality_menu_button.clone() {
                             set_icon_name: "preferences-system-symbolic",
                             add_css_class: "flat",
                             set_tooltip_text: Some("Video Quality"),
@@ -722,6 +801,7 @@ impl AsyncComponent for PlayerPage {
         // Create menu buttons for track selection
         let audio_menu_button = gtk::MenuButton::new();
         let subtitle_menu_button = gtk::MenuButton::new();
+        let quality_menu_button = gtk::MenuButton::new();
 
         // Load config once at initialization
         let config = Config::load().unwrap_or_default();
@@ -771,6 +851,15 @@ impl AsyncComponent for PlayerPage {
             current_subtitle_track: None,
             auto_play_triggered: false,
             auto_play_timeout: None,
+            quality_menu_button: quality_menu_button.clone(),
+            current_upscaling_mode: match config.playback.mpv_upscaling_mode.as_str() {
+                "High Quality" => crate::player::UpscalingMode::HighQuality,
+                "FSR" => crate::player::UpscalingMode::FSR,
+                "Anime" => crate::player::UpscalingMode::Anime,
+                _ => crate::player::UpscalingMode::None,
+            },
+            is_mpv_backend: config.playback.player_backend == "mpv"
+                || config.playback.player_backend.is_empty(),
         };
 
         // Initialize the player controller
@@ -809,7 +898,16 @@ impl AsyncComponent for PlayerPage {
                     }
                 });
 
-                model.player = Some(handle);
+                model.player = Some(handle.clone());
+
+                // Apply saved upscaling mode if MPV backend
+                if model.is_mpv_backend {
+                    let saved_mode = model.current_upscaling_mode;
+                    let handle_for_upscaling = handle;
+                    glib::spawn_future_local(async move {
+                        let _ = handle_for_upscaling.set_upscaling_mode(saved_mode).await;
+                    });
+                }
             }
             Err(e) => {
                 error!("Failed to initialize player controller: {}", e);
@@ -1026,6 +1124,9 @@ impl AsyncComponent for PlayerPage {
             });
             root.add_controller(key_controller);
         }
+
+        // Populate quality menu
+        model.populate_quality_menu(sender.clone());
 
         // Start position update timer (1Hz)
         {
@@ -1781,6 +1882,7 @@ impl AsyncComponent for PlayerPage {
                 // Populate the track selection menus
                 self.populate_audio_menu(sender.clone());
                 self.populate_subtitle_menu(sender.clone());
+                self.populate_quality_menu(sender.clone());
 
                 // Also get current track selections
                 if let Some(player) = &self.player {
@@ -1922,6 +2024,28 @@ impl AsyncComponent for PlayerPage {
                 // Navigate back
                 sender.output(PlayerOutput::NavigateBack).unwrap();
             }
+            PlayerInput::SetUpscalingMode(mode) => {
+                if let Some(player) = &self.player {
+                    self.current_upscaling_mode = mode;
+                    let player_handle = player.clone();
+                    sender.oneshot_command(async move {
+                        let _ = player_handle.set_upscaling_mode(mode).await;
+                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    });
+
+                    // Save preference to config
+                    if let Ok(mut config) = Config::load() {
+                        config.playback.mpv_upscaling_mode = mode.to_string().to_string();
+                        let _ = config.save();
+                    }
+
+                    // Update menu to reflect new selection
+                    self.populate_quality_menu(sender.clone());
+                }
+            }
+            PlayerInput::UpdateQualityMenu => {
+                self.populate_quality_menu(sender.clone());
+            }
         }
     }
 
@@ -2003,7 +2127,7 @@ impl AsyncComponent for PlayerPage {
 
                             // If we have a PlayQueue context, also sync with Plex server
                             if let Some(ref context) = self.playlist_context
-                                && let Some(queue_info) = context.get_play_queue_info()
+                                && let Some(_queue_info) = context.get_play_queue_info()
                             {
                                 // Clone the context for the async task
                                 let context_clone = context.clone();

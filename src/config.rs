@@ -107,6 +107,12 @@ pub struct PlaybackConfig {
         skip_serializing_if = "is_default_progress_update_interval"
     )]
     pub progress_update_interval_seconds: u32,
+
+    #[serde(
+        default = "default_upscaling_mode",
+        skip_serializing_if = "is_default_upscaling_mode"
+    )]
+    pub mpv_upscaling_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -382,6 +388,7 @@ impl Default for PlaybackConfig {
             auto_resume: default_true(),
             resume_threshold_seconds: default_resume_threshold(),
             progress_update_interval_seconds: default_progress_update_interval(),
+            mpv_upscaling_mode: default_upscaling_mode(),
         }
     }
 }
@@ -453,6 +460,9 @@ fn default_resume_threshold() -> u32 {
 fn default_progress_update_interval() -> u32 {
     10 // Update progress every 10 seconds
 }
+fn default_upscaling_mode() -> String {
+    "None".to_string() // Default to no upscaling
+}
 
 // Skip serializing helper functions
 fn is_default_theme(value: &str) -> bool {
@@ -521,6 +531,9 @@ fn is_default_resume_threshold(value: &u32) -> bool {
 
 fn is_default_progress_update_interval(value: &u32) -> bool {
     *value == default_progress_update_interval()
+}
+fn is_default_upscaling_mode(value: &str) -> bool {
+    value == default_upscaling_mode()
 }
 
 // is_default implementations for structs
