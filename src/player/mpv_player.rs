@@ -58,6 +58,86 @@ impl UpscalingMode {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    #[tokio::test]
+    async fn test_audio_track_enumeration() {
+        // Create player instance
+        let config = Config::default();
+        let player = MpvPlayer::new(&config).expect("Failed to create MpvPlayer");
+
+        // Since we can't actually load media in unit tests without a real file,
+        // we'll just verify the methods exist and return expected empty results
+        let audio_tracks = player.get_audio_tracks().await;
+        assert_eq!(
+            audio_tracks.len(),
+            0,
+            "Should return empty list when no media is loaded"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_subtitle_track_enumeration() {
+        let config = Config::default();
+        let player = MpvPlayer::new(&config).expect("Failed to create MpvPlayer");
+
+        // Subtitle tracks should always have at least "None" option
+        let subtitle_tracks = player.get_subtitle_tracks().await;
+        assert_eq!(
+            subtitle_tracks.len(),
+            1,
+            "Should have 'None' option even when no media is loaded"
+        );
+        assert_eq!(subtitle_tracks[0], (-1, "None".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_set_audio_track() {
+        let config = Config::default();
+        let player = MpvPlayer::new(&config).expect("Failed to create MpvPlayer");
+
+        // Setting track when no media is loaded should succeed (MPV handles it gracefully)
+        let result = player.set_audio_track(0).await;
+        assert!(result.is_ok(), "Setting audio track should not fail");
+    }
+
+    #[tokio::test]
+    async fn test_set_subtitle_track() {
+        let config = Config::default();
+        let player = MpvPlayer::new(&config).expect("Failed to create MpvPlayer");
+
+        // Test disabling subtitles
+        let result = player.set_subtitle_track(-1).await;
+        assert!(result.is_ok(), "Disabling subtitles should not fail");
+
+        // Test setting a specific track
+        let result = player.set_subtitle_track(0).await;
+        assert!(result.is_ok(), "Setting subtitle track should not fail");
+    }
+
+    #[tokio::test]
+    async fn test_get_current_tracks() {
+        let config = Config::default();
+        let player = MpvPlayer::new(&config).expect("Failed to create MpvPlayer");
+
+        // Test getting current track when no media is loaded
+        let current_audio = player.get_current_audio_track().await;
+        assert_eq!(
+            current_audio, -1,
+            "Should return -1 when no audio track is set"
+        );
+
+        let current_subtitle = player.get_current_subtitle_track().await;
+        assert_eq!(
+            current_subtitle, -1,
+            "Should return -1 when no subtitle track is set"
+        );
+    }
+}
+
 struct MpvPlayerInner {
     mpv: Arc<Mutex<Option<Mpv>>>,
     mpv_gl: Arc<Mutex<Option<MpvRenderContextPtr>>>,

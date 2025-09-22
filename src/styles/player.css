@@ -1,7 +1,8 @@
 /* Player OSD Controls Styling */
 
 /* Video container background */
-.video-container, .video-area {
+.video-container,
+.video-area {
     background-color: black;
 }
 
@@ -196,7 +197,9 @@
     font-weight: 500;
     color: rgba(255, 255, 255, 0.65);
     letter-spacing: 0.3px;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+    font-family:
+        -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto,
+        sans-serif;
 }
 
 .player-controls label.numeric {
@@ -389,7 +392,7 @@ volumebutton {
 }
 
 volumebutton:hover {
-    opacity: 1.0;
+    opacity: 1;
 }
 
 volumebutton button {
@@ -403,14 +406,27 @@ volumebutton scale {
 
 /* OSD overlay wrapper for smooth transitions */
 .osd-overlay {
-    transition: opacity 300ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Smooth fade animations - subtle and quick */
-@keyframes fadeIn {
+.osd-overlay.controls-visible {
+    transform: translateY(0);
+    opacity: 1;
+    transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.osd-overlay.controls-hidden {
+    transform: translateY(8px);
+    opacity: 0;
+    transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
+}
+
+/* Smooth fade animations for fullscreen mode */
+@keyframes fadeInControls {
     from {
         opacity: 0;
-        transform: translateY(4px);
+        transform: translateY(12px);
     }
     to {
         opacity: 1;
@@ -418,30 +434,33 @@ volumebutton scale {
     }
 }
 
-@keyframes fadeOut {
+@keyframes fadeOutControls {
     from {
         opacity: 1;
         transform: translateY(0);
     }
     to {
         opacity: 0;
-        transform: translateY(2px);
+        transform: translateY(8px);
     }
 }
 
-/* Apply animations to controls visibility */
-.osd.player-controls {
-    animation: fadeIn 200ms ease-out;
+/* Apply fade animations in fullscreen */
+.fullscreen .osd-overlay.controls-visible {
+    animation: fadeInControls 250ms ease-out;
 }
 
-.osd.player-controls.hiding {
-    animation: fadeOut 150ms ease-in;
+.fullscreen .osd-overlay.controls-hidden {
+    animation: fadeOutControls 200ms ease-in;
 }
 
-/* OSD overlay wrapper transitions - quick and smooth */
-.osd-overlay {
-    transition: opacity 200ms ease,
-                transform 200ms ease;
+/* Player controls container animations */
+.player-controls.fade-in {
+    animation: fadeInControls 200ms ease-out;
+}
+
+.player-controls.fade-out {
+    animation: fadeOutControls 150ms ease-in;
 }
 
 /* Top controls positioning - compact */
