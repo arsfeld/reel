@@ -9,8 +9,8 @@ use crate::services::core::connection::ConnectionService;
 
 #[derive(Debug)]
 pub struct ConnectionMonitor {
-    db: DatabaseConnection,
-    next_check_times: HashMap<SourceId, Instant>,
+    pub(crate) db: DatabaseConnection,
+    pub(crate) next_check_times: HashMap<SourceId, Instant>,
 }
 
 #[derive(Debug, Clone)]
