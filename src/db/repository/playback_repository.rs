@@ -53,6 +53,34 @@ pub trait PlaybackRepository: Repository<PlaybackProgressModel> {
 
     /// Clean up old progress entries
     async fn cleanup_old_entries(&self, days: i64) -> Result<u64>;
+
+    /// Save PlayQueue state for a media item
+    async fn save_playqueue_state(
+        &self,
+        media_id: &str,
+        user_id: Option<&str>,
+        play_queue_id: i64,
+        play_queue_version: i32,
+        play_queue_item_id: i64,
+        source_id: i32,
+    ) -> Result<()>;
+
+    /// Get PlayQueue state for a media item
+    async fn get_playqueue_state(
+        &self,
+        media_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<Option<(i64, i32, i64, i32)>>;
+
+    /// Clear PlayQueue state for a media item
+    async fn clear_playqueue_state(&self, media_id: &str, user_id: Option<&str>) -> Result<()>;
+
+    /// Find progress by PlayQueue ID
+    async fn find_by_playqueue_id(
+        &self,
+        play_queue_id: i64,
+        source_id: i32,
+    ) -> Result<Option<PlaybackProgressModel>>;
 }
 
 #[derive(Debug)]
@@ -94,6 +122,10 @@ impl Repository<PlaybackProgressModel> for PlaybackRepositoryImpl {
             view_count: Set(entity.view_count),
             last_watched_at: Set(entity.last_watched_at),
             updated_at: Set(chrono::Utc::now().naive_utc()),
+            play_queue_id: Set(entity.play_queue_id),
+            play_queue_version: Set(entity.play_queue_version),
+            play_queue_item_id: Set(entity.play_queue_item_id),
+            source_id: Set(entity.source_id),
         };
 
         Ok(active_model.insert(self.base.db.as_ref()).await?)
@@ -208,6 +240,10 @@ impl PlaybackRepository for PlaybackRepositoryImpl {
                 view_count: Set(0),
                 last_watched_at: Set(Some(now)),
                 updated_at: Set(now),
+                play_queue_id: Set(None),
+                play_queue_version: Set(None),
+                play_queue_item_id: Set(None),
+                source_id: Set(None),
             };
 
             Ok(active_model.insert(self.base.db.as_ref()).await?)
@@ -279,5 +315,111 @@ impl PlaybackRepository for PlaybackRepositoryImpl {
             .await?;
 
         Ok(result.rows_affected)
+    }
+
+    async fn save_playqueue_state(
+        &self,
+        media_id: &str,
+        user_id: Option<&str>,
+        play_queue_id: i64,
+        play_queue_version: i32,
+        play_queue_item_id: i64,
+        source_id: i32,
+    ) -> Result<()> {
+        // Find existing progress entry
+        let existing = if let Some(uid) = user_id {
+            self.find_by_media_and_user(media_id, uid).await?
+        } else {
+            self.find_by_media_id(media_id).await?
+        };
+
+        if let Some(progress) = existing {
+            // Update existing progress with PlayQueue state
+            let mut active_model: PlaybackProgressActiveModel = progress.into();
+            active_model.play_queue_id = Set(Some(play_queue_id));
+            active_model.play_queue_version = Set(Some(play_queue_version));
+            active_model.play_queue_item_id = Set(Some(play_queue_item_id));
+            active_model.source_id = Set(Some(source_id));
+            active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+            active_model.update(self.base.db.as_ref()).await?;
+        } else {
+            // Create new progress entry with PlayQueue state
+            let now = chrono::Utc::now().naive_utc();
+            let active_model = PlaybackProgressActiveModel {
+                id: NotSet,
+                media_id: Set(media_id.to_string()),
+                user_id: Set(user_id.map(|s| s.to_string())),
+                position_ms: Set(0),
+                duration_ms: Set(0),
+                watched: Set(false),
+                view_count: Set(0),
+                last_watched_at: Set(None),
+                updated_at: Set(now),
+                play_queue_id: Set(Some(play_queue_id)),
+                play_queue_version: Set(Some(play_queue_version)),
+                play_queue_item_id: Set(Some(play_queue_item_id)),
+                source_id: Set(Some(source_id)),
+            };
+            active_model.insert(self.base.db.as_ref()).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn get_playqueue_state(
+        &self,
+        media_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<Option<(i64, i32, i64, i32)>> {
+        let progress = if let Some(uid) = user_id {
+            self.find_by_media_and_user(media_id, uid).await?
+        } else {
+            self.find_by_media_id(media_id).await?
+        };
+
+        if let Some(p) = progress {
+            if let (Some(queue_id), Some(version), Some(item_id), Some(source)) = (
+                p.play_queue_id,
+                p.play_queue_version,
+                p.play_queue_item_id,
+                p.source_id,
+            ) {
+                return Ok(Some((queue_id, version, item_id, source)));
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn clear_playqueue_state(&self, media_id: &str, user_id: Option<&str>) -> Result<()> {
+        let progress = if let Some(uid) = user_id {
+            self.find_by_media_and_user(media_id, uid).await?
+        } else {
+            self.find_by_media_id(media_id).await?
+        };
+
+        if let Some(p) = progress {
+            let mut active_model: PlaybackProgressActiveModel = p.into();
+            active_model.play_queue_id = Set(None);
+            active_model.play_queue_version = Set(None);
+            active_model.play_queue_item_id = Set(None);
+            active_model.source_id = Set(None);
+            active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+            active_model.update(self.base.db.as_ref()).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn find_by_playqueue_id(
+        &self,
+        play_queue_id: i64,
+        source_id: i32,
+    ) -> Result<Option<PlaybackProgressModel>> {
+        Ok(PlaybackProgress::find()
+            .filter(playback_progress::Column::PlayQueueId.eq(play_queue_id))
+            .filter(playback_progress::Column::SourceId.eq(source_id))
+            .one(self.base.db.as_ref())
+            .await?)
     }
 }

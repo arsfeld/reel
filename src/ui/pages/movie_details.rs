@@ -378,6 +378,9 @@ impl AsyncComponent for MovieDetailsPage {
                 sender.oneshot_command(async { MovieDetailsCommand::LoadDetails });
             }
             MovieDetailsInput::PlayMovie => {
+                // For now, movies play without PlayQueue context
+                // TODO: Consider creating PlayQueue for movies to enable features like
+                // continue watching from different devices
                 sender
                     .output(MovieDetailsOutput::PlayMedia(self.item_id.clone()))
                     .unwrap();

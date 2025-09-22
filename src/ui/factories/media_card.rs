@@ -10,6 +10,7 @@ pub struct MediaCardInit {
     pub show_progress: bool,
     pub watched: bool,
     pub progress_percent: f64,
+    pub show_media_type_icon: bool, // For mixed libraries
 }
 
 #[tracker::track]
@@ -19,6 +20,7 @@ pub struct MediaCard {
     #[do_not_track]
     item_id: MediaItemId,
     show_progress: bool,
+    show_media_type_icon: bool,
     hover: bool,
     selected: bool,
     progress_percent: f64,
@@ -115,6 +117,31 @@ impl FactoryComponent for MediaCard {
                     }
                 },
 
+                // Media type icon (top-left for mixed libraries)
+                add_overlay = &gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_halign: gtk::Align::Start,
+                    set_valign: gtk::Align::Start,
+                    set_margin_top: 8,
+                    set_margin_start: 8,
+                    #[track(self.changed(MediaCard::show_media_type_icon()))]
+                    set_visible: self.show_media_type_icon,
+
+                    gtk::Box {
+                        set_width_request: 32,
+                        set_height_request: 32,
+                        add_css_class: "osd",
+                        add_css_class: "circular",
+                        set_halign: gtk::Align::Center,
+                        set_valign: gtk::Align::Center,
+
+                        gtk::Image {
+                            set_icon_name: Some(&self.get_media_type_icon()),
+                            set_pixel_size: 16,
+                        }
+                    }
+                },
+
                 // Unwatched indicator (top-right glowing dot)
                 add_overlay = &gtk::Box {
                     set_orientation: gtk::Orientation::Horizontal,
@@ -164,6 +191,7 @@ impl FactoryComponent for MediaCard {
             item: init.item,
             item_id,
             show_progress: init.show_progress,
+            show_media_type_icon: init.show_media_type_icon,
             hover: false,
             selected: false,
             progress_percent: init.progress_percent,
@@ -274,5 +302,18 @@ impl MediaCard {
     fn is_partially_watched(&self) -> bool {
         // Check if progress is between 0 and 90%
         self.progress_percent > 0.0 && self.progress_percent < 0.9
+    }
+
+    fn get_media_type_icon(&self) -> String {
+        match self.item.media_type.as_str() {
+            "movie" => "video-x-generic-symbolic",
+            "show" => "video-display-symbolic",
+            "episode" => "video-display-symbolic",
+            "album" => "media-optical-cd-audio-symbolic",
+            "track" => "audio-x-generic-symbolic",
+            "photo" => "image-x-generic-symbolic",
+            _ => "folder-symbolic",
+        }
+        .to_string()
     }
 }

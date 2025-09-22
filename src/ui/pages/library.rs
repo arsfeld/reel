@@ -48,6 +48,10 @@ pub struct LibraryPage {
     genre_popover: Option<gtk::Popover>,
     genre_menu_button: Option<gtk::MenuButton>,
     genre_label_text: String,
+    // Media type filtering (for mixed libraries)
+    library_type: Option<String>, // 'movies', 'shows', 'music', 'photos', 'mixed'
+    selected_media_type: Option<String>, // Filter for mixed libraries
+    media_type_buttons: Vec<gtk::ToggleButton>,
     // Viewport tracking
     visible_start_idx: usize,
     visible_end_idx: usize,
@@ -82,7 +86,10 @@ pub enum LibraryPageInput {
     /// Load more items into view
     LoadMoreBatch,
     /// All media items loaded from database
-    AllItemsLoaded { items: Vec<MediaItemModel> },
+    AllItemsLoaded {
+        items: Vec<MediaItemModel>,
+        library_type: Option<String>,
+    },
     /// Render next batch of items
     RenderBatch,
     /// Media item selected
@@ -97,6 +104,8 @@ pub enum LibraryPageInput {
     ToggleGenreFilter(String),
     /// Clear all genre filters
     ClearGenreFilters,
+    /// Set media type filter (for mixed libraries)
+    SetMediaTypeFilter(Option<String>),
     /// Clear all items and reload
     Refresh,
     /// Show search bar
@@ -228,6 +237,73 @@ impl AsyncComponent for LibraryPage {
                         add_css_class: "flat",
                         connect_clicked[sender] => move |_| {
                             sender.input(LibraryPageInput::ShowSearch);
+                        }
+                    },
+                },
+
+                // Media type filter buttons (only visible for mixed libraries)
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 6,
+                    set_margin_start: 12,
+                    set_margin_end: 12,
+                    set_margin_bottom: 6,
+                    #[watch]
+                    set_visible: model.library_type.as_ref().map_or(false, |t| t == "mixed"),
+                    add_css_class: "linked",
+
+                    gtk::ToggleButton {
+                        set_label: "All",
+                        #[watch]
+                        set_active: model.selected_media_type.is_none(),
+                        connect_toggled[sender] => move |btn| {
+                            if btn.is_active() {
+                                sender.input(LibraryPageInput::SetMediaTypeFilter(None));
+                            }
+                        }
+                    },
+
+                    gtk::ToggleButton {
+                        set_label: "Movies",
+                        #[watch]
+                        set_active: model.selected_media_type.as_ref().map_or(false, |t| t == "movie"),
+                        connect_toggled[sender] => move |btn| {
+                            if btn.is_active() {
+                                sender.input(LibraryPageInput::SetMediaTypeFilter(Some("movie".to_string())));
+                            }
+                        }
+                    },
+
+                    gtk::ToggleButton {
+                        set_label: "Shows",
+                        #[watch]
+                        set_active: model.selected_media_type.as_ref().map_or(false, |t| t == "show"),
+                        connect_toggled[sender] => move |btn| {
+                            if btn.is_active() {
+                                sender.input(LibraryPageInput::SetMediaTypeFilter(Some("show".to_string())));
+                            }
+                        }
+                    },
+
+                    gtk::ToggleButton {
+                        set_label: "Music",
+                        #[watch]
+                        set_active: model.selected_media_type.as_ref().map_or(false, |t| t == "album"),
+                        connect_toggled[sender] => move |btn| {
+                            if btn.is_active() {
+                                sender.input(LibraryPageInput::SetMediaTypeFilter(Some("album".to_string())));
+                            }
+                        }
+                    },
+
+                    gtk::ToggleButton {
+                        set_label: "Photos",
+                        #[watch]
+                        set_active: model.selected_media_type.as_ref().map_or(false, |t| t == "photo"),
+                        connect_toggled[sender] => move |btn| {
+                            if btn.is_active() {
+                                sender.input(LibraryPageInput::SetMediaTypeFilter(Some("photo".to_string())));
+                            }
                         }
                     },
                 },
@@ -382,6 +458,10 @@ impl AsyncComponent for LibraryPage {
             genre_popover: None,
             genre_menu_button: None,
             genre_label_text: String::new(),
+            // Media type filtering (for mixed libraries)
+            library_type: None,
+            selected_media_type: None,
+            media_type_buttons: Vec::new(),
             // Viewport tracking
             visible_start_idx: 0,
             visible_end_idx: 0,
@@ -449,8 +529,14 @@ impl AsyncComponent for LibraryPage {
                 }
             }
 
-            LibraryPageInput::AllItemsLoaded { items } => {
+            LibraryPageInput::AllItemsLoaded {
+                items,
+                library_type,
+            } => {
                 debug!("Loaded all {} items from database", items.len());
+
+                // Store library type
+                self.library_type = library_type;
 
                 // Extract all unique genres from items
                 let mut genres_set = std::collections::HashSet::new();
@@ -561,6 +647,10 @@ impl AsyncComponent for LibraryPage {
                                 show_progress: false,
                                 watched,
                                 progress_percent,
+                                show_media_type_icon: self
+                                    .library_type
+                                    .as_ref()
+                                    .map_or(false, |t| t == "mixed"),
                             });
 
                             // Store the mapping but don't request images yet
@@ -624,6 +714,7 @@ impl AsyncComponent for LibraryPage {
                 if !self.total_items.is_empty() {
                     sender.input(LibraryPageInput::AllItemsLoaded {
                         items: self.total_items.clone(),
+                        library_type: self.library_type.clone(),
                     });
                 } else {
                     self.load_all_items(sender.clone());
@@ -670,6 +761,17 @@ impl AsyncComponent for LibraryPage {
                 }
 
                 // Apply filter and re-render
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
+            }
+
+            LibraryPageInput::SetMediaTypeFilter(media_type) => {
+                debug!("Setting media type filter: {:?}", media_type);
+                self.selected_media_type = media_type;
+
+                // Clear and reload with new filter
                 self.loaded_count = 0;
                 self.media_factory.guard().clear();
                 self.image_requests.clear();
@@ -986,6 +1088,7 @@ impl LibraryPage {
             let library_id = library_id.clone();
             let sort_by = self.sort_by;
             let sort_order = self.sort_order;
+            let selected_media_type = self.selected_media_type.clone();
 
             relm4::spawn(async move {
                 use crate::db::repository::{
@@ -997,29 +1100,49 @@ impl LibraryPage {
                 // First, get the library to determine its type
                 let library_result = library_repo.find_by_id(&library_id.to_string()).await;
 
-                let media_result = match library_result {
+                let (library_type, media_result) = match library_result {
                     Ok(Some(library)) => {
-                        // Determine the appropriate media type filter based on library type
-                        let media_type = match library.library_type.to_lowercase().as_str() {
-                            "movies" => Some("movie"),
-                            "shows" => Some("show"),
-                            "music" => Some("album"), // For music libraries, show albums, not individual tracks
-                            _ => None,                // For mixed or unknown types, get all items
+                        let lib_type = library.library_type.to_lowercase();
+
+                        // For mixed libraries, check if we have a media type filter
+                        let media_result = if lib_type == "mixed" {
+                            // Use the selected media type filter if set
+                            if let Some(media_type) = selected_media_type {
+                                media_repo
+                                    .find_by_library_and_type(&library_id.to_string(), &media_type)
+                                    .await
+                            } else {
+                                // Get all items if no filter is set
+                                media_repo.find_by_library(&library_id.to_string()).await
+                            }
+                        } else {
+                            // Determine the appropriate media type filter based on library type
+                            let media_type = match lib_type.as_str() {
+                                "movies" => Some("movie"),
+                                "shows" => Some("show"),
+                                "music" => Some("album"), // For music libraries, show albums, not individual tracks
+                                _ => None,                // For unknown types, get all items
+                            };
+
+                            // Get ALL items for this library without pagination
+                            if let Some(media_type) = media_type {
+                                media_repo
+                                    .find_by_library_and_type(&library_id.to_string(), media_type)
+                                    .await
+                            } else {
+                                // For unknown types, get all items
+                                media_repo.find_by_library(&library_id.to_string()).await
+                            }
                         };
 
-                        // Get ALL items for this library without pagination
-                        if let Some(media_type) = media_type {
-                            media_repo
-                                .find_by_library_and_type(&library_id.to_string(), media_type)
-                                .await
-                        } else {
-                            // For mixed or unknown types, get all items
-                            media_repo.find_by_library(&library_id.to_string()).await
-                        }
+                        (Some(lib_type), media_result)
                     }
                     _ => {
                         // If we can't get library info, get all items
-                        media_repo.find_by_library(&library_id.to_string()).await
+                        (
+                            None,
+                            media_repo.find_by_library(&library_id.to_string()).await,
+                        )
                     }
                 };
 
@@ -1061,11 +1184,17 @@ impl LibraryPage {
                             }
                         }
 
-                        sender.input(LibraryPageInput::AllItemsLoaded { items });
+                        sender.input(LibraryPageInput::AllItemsLoaded {
+                            items,
+                            library_type,
+                        });
                     }
                     Err(e) => {
                         error!("Failed to load library items: {}", e);
-                        sender.input(LibraryPageInput::AllItemsLoaded { items: Vec::new() });
+                        sender.input(LibraryPageInput::AllItemsLoaded {
+                            items: Vec::new(),
+                            library_type,
+                        });
                     }
                 }
             });

@@ -73,6 +73,9 @@ pub struct PlayerPage {
     subtitle_menu_button: gtk::MenuButton,
     current_audio_track: Option<i32>,
     current_subtitle_track: Option<i32>,
+    // Auto-play state
+    auto_play_triggered: bool,
+    auto_play_timeout: Option<SourceId>,
 }
 
 impl PlayerPage {
@@ -197,6 +200,21 @@ impl PlayerPage {
                         current_episode.episode_number,
                         current_index + 1,
                         episodes.len()
+                    );
+                    self.playlist_position_label.set_text(&text);
+                }
+            }
+            PlaylistContext::PlayQueue {
+                current_index,
+                items,
+                ..
+            } => {
+                if let Some(current_item) = items.get(*current_index) {
+                    let text = format!(
+                        "{} - Item {} of {}",
+                        current_item.title,
+                        current_index + 1,
+                        items.len()
                     );
                     self.playlist_position_label.set_text(&text);
                 }
@@ -751,6 +769,8 @@ impl AsyncComponent for PlayerPage {
             subtitle_menu_button: subtitle_menu_button.clone(),
             current_audio_track: None,
             current_subtitle_track: None,
+            auto_play_triggered: false,
+            auto_play_timeout: None,
         };
 
         // Initialize the player controller
@@ -1049,6 +1069,11 @@ impl AsyncComponent for PlayerPage {
                 self.playlist_position_label.set_text("");
                 // Clear any existing error message
                 self.error_message = None;
+                // Reset auto-play state
+                self.auto_play_triggered = false;
+                if let Some(timeout) = self.auto_play_timeout.take() {
+                    timeout.remove();
+                }
 
                 // Get actual media URL from backend using GetStreamUrlCommand
                 let db_clone = self.db.clone();
@@ -1102,10 +1127,13 @@ impl AsyncComponent for PlayerPage {
                                 sender_clone.input(PlayerInput::UpdateTrackMenus);
 
                                 // Check for saved playback progress and resume if configured
-                                use crate::services::commands::GetPlaybackProgressCommand;
+                                use crate::services::commands::{GetPlaybackProgressCommand, GetPlayQueueStateCommand};
 
                                 // Use cached config values
                                 if auto_resume {
+                                    // TODO: Restore PlayQueue state when loading without context
+                                    // This requires restructuring to avoid Send/Sync issues with backend.as_any()
+
                                     // Get saved progress
                                     if let Ok(Some((position_ms, _duration_ms))) =
                                         (GetPlaybackProgressCommand {
@@ -1196,6 +1224,11 @@ impl AsyncComponent for PlayerPage {
                 self.playlist_context = Some(context);
                 // Clear any existing error message
                 self.error_message = None;
+                // Reset auto-play state
+                self.auto_play_triggered = false;
+                if let Some(timeout) = self.auto_play_timeout.take() {
+                    timeout.remove();
+                }
 
                 // Get actual media URL from backend using GetStreamUrlCommand
                 let db_clone = self.db.clone();
@@ -1249,10 +1282,13 @@ impl AsyncComponent for PlayerPage {
                                 sender_clone.input(PlayerInput::UpdateTrackMenus);
 
                                 // Check for saved playback progress and resume if configured
-                                use crate::services::commands::GetPlaybackProgressCommand;
+                                use crate::services::commands::{GetPlaybackProgressCommand, GetPlayQueueStateCommand};
 
                                 // Use cached config values
                                 if auto_resume {
+                                    // TODO: Restore PlayQueue state when loading without context
+                                    // This requires restructuring to avoid Send/Sync issues with backend.as_any()
+
                                     // Get saved progress
                                     if let Ok(Some((position_ms, _duration_ms))) =
                                         (GetPlaybackProgressCommand {
@@ -1937,6 +1973,30 @@ impl AsyncComponent for PlayerPage {
                         // Always save if watched (>90%) or if interval has passed
                         let watched = pos.as_secs_f64() / dur.as_secs_f64() > 0.9;
 
+                        // Check for auto-play when episode is nearly complete (>95%)
+                        let should_auto_play = pos.as_secs_f64() / dur.as_secs_f64() > 0.95;
+                        if should_auto_play && !self.auto_play_triggered {
+                            self.auto_play_triggered = true;
+
+                            // Check if we have a playlist context with auto-play enabled
+                            if let Some(ref context) = self.playlist_context {
+                                if context.is_auto_play_enabled() && context.has_next() {
+                                    info!("Auto-play triggered, loading next episode");
+
+                                    // Load next item after a short delay to let current one finish
+                                    let sender_clone = sender.clone();
+                                    let timeout_id =
+                                        glib::timeout_add_seconds_local(3, move || {
+                                            sender_clone.input(PlayerInput::Next);
+                                            glib::ControlFlow::Break
+                                        });
+
+                                    // Store timeout ID in case we need to cancel (e.g., user manually navigates)
+                                    self.auto_play_timeout = Some(timeout_id);
+                                }
+                            }
+                        }
+
                         if watched || elapsed >= save_interval_secs {
                             self.last_progress_save = std::time::Instant::now();
 
@@ -1944,6 +2004,63 @@ impl AsyncComponent for PlayerPage {
                             let media_id = media_id.clone();
                             let position_ms = pos.as_millis() as i64;
                             let duration_ms = dur.as_millis() as i64;
+
+                            // If we have a PlayQueue context, also sync with Plex server
+                            if let Some(ref context) = self.playlist_context {
+                                if let Some(queue_info) = context.get_play_queue_info() {
+                                    // Clone the context for the async task
+                                    let context_clone = context.clone();
+                                    let db_clone = db.clone();
+                                    let media_id_clone = media_id.clone();
+                                    let position = pos;
+                                    let duration = dur;
+
+                                    glib::spawn_future_local(async move {
+                                        use crate::db::repository::source_repository::{
+                                            SourceRepository, SourceRepositoryImpl,
+                                        };
+                                        use crate::db::repository::{
+                                            MediaRepository, MediaRepositoryImpl, Repository,
+                                        };
+                                        use crate::services::core::BackendService;
+                                        use crate::services::core::playqueue::PlayQueueService;
+
+                                        // Get the media's source
+                                        let media_repo = MediaRepositoryImpl::new(db_clone.clone());
+                                        if let Ok(Some(media)) =
+                                            media_repo.find_by_id(media_id_clone.as_ref()).await
+                                        {
+                                            if let Ok(_source_id) = media.source_id.parse::<i32>() {
+                                                let source_repo =
+                                                    SourceRepositoryImpl::new(db_clone.clone());
+                                                if let Ok(Some(source)) =
+                                                    source_repo.find_by_id(&media.source_id).await
+                                                {
+                                                    // Create backend and sync PlayQueue progress
+                                                    if let Ok(backend) =
+                                                        BackendService::create_backend_for_source(
+                                                            &db_clone, &source,
+                                                        )
+                                                        .await
+                                                    {
+                                                        // PlayQueueService will handle the sync
+                                                        if let Err(e) = PlayQueueService::update_progress_with_queue(
+                                                            backend.as_any(),
+                                                            &context_clone,
+                                                            &media_id_clone,
+                                                            position,
+                                                            duration,
+                                                            if watched { "stopped" } else { "playing" },
+                                                        ).await {
+                                                            debug!("Failed to sync PlayQueue progress: {}", e);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            }
 
                             relm4::spawn(async move {
                                 use crate::services::commands::{

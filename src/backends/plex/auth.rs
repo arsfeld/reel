@@ -5,9 +5,9 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tracing::{debug, info};
 
+use super::api::create_standard_headers;
+
 const PLEX_TV_URL: &str = "https://plex.tv";
-const CLIENT_ID: &str = "reel-media-player";
-const PRODUCT_NAME: &str = "Reel";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlexPin {
@@ -33,9 +33,7 @@ impl PlexAuth {
 
         let response = client
             .post(format!("{}/api/v2/pins", PLEX_TV_URL))
-            .header("X-Plex-Product", PRODUCT_NAME)
-            .header("X-Plex-Client-Identifier", CLIENT_ID)
-            .header("Accept", "application/json")
+            .headers(create_standard_headers(None))
             .send()
             .await?;
 
@@ -80,9 +78,7 @@ impl PlexAuth {
 
             let response = client
                 .get(format!("{}/api/v2/pins/{}", PLEX_TV_URL, pin_id))
-                .header("X-Plex-Client-Identifier", CLIENT_ID)
-                .header("X-Plex-Product", PRODUCT_NAME)
-                .header("Accept", "application/json")
+                .headers(create_standard_headers(None))
                 .send()
                 .await;
 
@@ -160,8 +156,7 @@ impl PlexAuth {
 
         let response = match client
             .get(format!("{}/api/v2/user", PLEX_TV_URL))
-            .header("X-Plex-Token", auth_token)
-            .header("Accept", "application/json")
+            .headers(create_standard_headers(Some(auth_token)))
             .send()
             .await
         {
@@ -194,10 +189,7 @@ impl PlexAuth {
 
         let response = client
             .get(format!("{}/api/v2/resources", PLEX_TV_URL))
-            .header("X-Plex-Token", auth_token)
-            .header("X-Plex-Product", PRODUCT_NAME)
-            .header("X-Plex-Client-Identifier", CLIENT_ID)
-            .header("Accept", "application/json")
+            .headers(create_standard_headers(Some(auth_token)))
             .query(&[("includeHttps", "1"), ("includeRelay", "1")])
             .send()
             .await?;

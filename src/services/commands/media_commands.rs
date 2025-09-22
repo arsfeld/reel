@@ -161,6 +161,22 @@ impl Command<Option<(i64, i64)>> for GetPlaybackProgressCommand {
     }
 }
 
+/// Get PlayQueue state for a media item
+pub struct GetPlayQueueStateCommand {
+    pub db: DatabaseConnection,
+    pub media_id: MediaItemId,
+    pub user_id: String,
+}
+
+#[async_trait]
+impl Command<Option<(i64, i32, i64, i32)>> for GetPlayQueueStateCommand {
+    async fn execute(&self) -> Result<Option<(i64, i32, i64, i32)>> {
+        use crate::services::core::playback::PlaybackService;
+
+        PlaybackService::get_playqueue_state(&self.db, &self.user_id, &self.media_id).await
+    }
+}
+
 /// Update playback progress
 pub struct UpdatePlaybackProgressCommand {
     pub db: DatabaseConnection,
