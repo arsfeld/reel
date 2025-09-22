@@ -43,6 +43,8 @@ pub struct PlayerPage {
     is_fullscreen: bool,
     controls_timer: Option<SourceId>,
     cursor_timer: Option<SourceId>,
+    controls_fade_out: bool,
+    mouse_over_controls: bool,
     // Widgets for seeking
     seek_bar: gtk::Scale,
     position_label: gtk::Label,
@@ -69,8 +71,8 @@ pub struct PlayerPage {
     // Track selection menus
     audio_menu_button: gtk::MenuButton,
     subtitle_menu_button: gtk::MenuButton,
-    current_audio_track: i32,
-    current_subtitle_track: i32,
+    current_audio_track: Option<i32>,
+    current_subtitle_track: Option<i32>,
 }
 
 impl PlayerPage {
@@ -265,6 +267,9 @@ pub enum PlayerInput {
     CycleAudioTrack,
     // Control visibility
     ToggleControlsVisibility,
+    HideControlsImmediate,
+    MouseEnterControls,
+    MouseLeaveControls,
     // Relative seeking
     SeekRelative(i64), // Positive for forward, negative for backward
 }
@@ -342,7 +347,7 @@ impl AsyncComponent for PlayerPage {
                 #[watch]
                 set_visible: model.show_controls,
                 #[watch]
-                set_opacity: if model.show_controls { 1.0 } else { 0.0 },
+                add_css_class: if model.show_controls && !model.controls_fade_out { "controls-visible" } else { "controls-hidden" },
 
                 gtk::Button {
                     set_icon_name: "go-previous-symbolic",
@@ -365,7 +370,7 @@ impl AsyncComponent for PlayerPage {
                 #[watch]
                 set_visible: model.show_controls,
                 #[watch]
-                set_opacity: if model.show_controls { 1.0 } else { 0.0 },
+                add_css_class: if model.show_controls && !model.controls_fade_out { "controls-visible" } else { "controls-hidden" },
 
                 gtk::Button {
                     #[watch]
@@ -437,11 +442,11 @@ impl AsyncComponent for PlayerPage {
                 set_width_request: 700,
                 #[watch]
                 set_visible: model.show_controls && model.error_message.is_none(),
-                #[watch]
-                set_opacity: if model.show_controls && model.error_message.is_none() { 1.0 } else { 0.0 },
                 add_css_class: "osd",
                 add_css_class: "player-controls",
                 add_css_class: "minimal",
+                #[watch]
+                add_css_class: if model.show_controls && !model.controls_fade_out { "fade-in" } else { "fade-out" },
 
                 // Playlist position indicator
                 model.playlist_position_label.clone() {
@@ -720,6 +725,8 @@ impl AsyncComponent for PlayerPage {
             is_fullscreen: false,
             controls_timer: None,
             cursor_timer: None,
+            controls_fade_out: false,
+            mouse_over_controls: false,
             seek_bar: seek_bar.clone(),
             position_label: position_label.clone(),
             duration_label: duration_label.clone(),
@@ -742,8 +749,8 @@ impl AsyncComponent for PlayerPage {
             playback_speed: 1.0,
             audio_menu_button: audio_menu_button.clone(),
             subtitle_menu_button: subtitle_menu_button.clone(),
-            current_audio_track: -1,
-            current_subtitle_track: -1,
+            current_audio_track: None,
+            current_subtitle_track: None,
         };
 
         // Initialize the player controller
@@ -837,13 +844,27 @@ impl AsyncComponent for PlayerPage {
             });
         }
 
-        // Setup mouse motion handler for showing controls and cursor
+        // Setup motion detection with hover area awareness
         {
-            let sender = sender.clone();
+            let sender_motion = sender.clone();
             let motion_controller = gtk::EventControllerMotion::new();
-            motion_controller.connect_motion(move |_, _, _| {
-                sender.input(PlayerInput::ShowControls);
-                sender.input(PlayerInput::ShowCursor);
+            motion_controller.connect_motion(move |_, x, y| {
+                debug!("Motion at ({}, {})", x, y);
+
+                // Simple heuristic: if mouse is in bottom 20% of window, consider it over controls
+                // This is a reasonable approximation for the control area
+                let control_area_threshold = 0.8; // Bottom 20% of screen
+
+                if y / 600.0 > control_area_threshold {
+                    // Assume typical window height
+                    sender_motion.input(PlayerInput::MouseEnterControls);
+                } else {
+                    sender_motion.input(PlayerInput::MouseLeaveControls);
+                }
+
+                // Always show controls and cursor on motion (existing behavior)
+                sender_motion.input(PlayerInput::ShowControls);
+                sender_motion.input(PlayerInput::ShowCursor);
             });
             root.add_controller(motion_controller);
         }
@@ -1422,38 +1443,80 @@ impl AsyncComponent for PlayerPage {
             }
             PlayerInput::ToggleFullscreen => {
                 self.is_fullscreen = !self.is_fullscreen;
+                debug!("Toggling fullscreen to: {}", self.is_fullscreen);
                 if self.is_fullscreen {
                     self.window.fullscreen();
-                    // Hide cursor immediately in fullscreen
+                    // In fullscreen mode: show controls briefly, then start auto-hide timer
+                    self.show_controls = true;
                     sender.input(PlayerInput::HideCursor);
+                    sender.input(PlayerInput::ResetControlsTimer);
                 } else {
                     self.window.unfullscreen();
-                    // Show cursor when exiting fullscreen
+                    // When exiting fullscreen: show controls and cursor
+                    self.show_controls = true;
                     sender.input(PlayerInput::ShowCursor);
+                    sender.input(PlayerInput::ResetControlsTimer);
                 }
             }
             PlayerInput::ShowControls => {
+                debug!(
+                    "ShowControls called, fullscreen: {}, current show_controls: {}",
+                    self.is_fullscreen, self.show_controls
+                );
                 self.show_controls = true;
+                self.controls_fade_out = false;
                 sender.input(PlayerInput::ResetControlsTimer);
                 // Also reset cursor timer when controls are shown
                 sender.input(PlayerInput::ResetCursorTimer);
             }
             PlayerInput::HideControls => {
-                self.show_controls = false;
-                self.controls_timer = None;
+                debug!(
+                    "HideControls called, fullscreen: {}, current show_controls: {}, mouse_over_controls: {}",
+                    self.is_fullscreen, self.show_controls, self.mouse_over_controls
+                );
+
+                // Only hide if mouse is not over controls
+                if !self.mouse_over_controls {
+                    // Start fade out animation first
+                    self.controls_fade_out = true;
+
+                    // Hide controls after animation duration (200ms)
+                    let sender = sender.clone();
+                    glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+                        sender.input(PlayerInput::HideControlsImmediate);
+                        glib::ControlFlow::Break
+                    });
+
+                    self.controls_timer = None;
+                } else {
+                    debug!("Not hiding controls - mouse is over controls, resetting timer");
+                    // Reset timer to try again later
+                    sender.input(PlayerInput::ResetControlsTimer);
+                }
             }
             PlayerInput::ResetControlsTimer => {
+                debug!(
+                    "ResetControlsTimer called, fullscreen: {}, show_controls: {}",
+                    self.is_fullscreen, self.show_controls
+                );
                 // Cancel existing timer
                 if let Some(timer) = self.controls_timer.take() {
                     timer.remove();
+                    debug!("Cancelled existing controls timer");
                 }
 
-                // Start new 3-second timer
-                let sender = sender.clone();
-                self.controls_timer = Some(glib::timeout_add_seconds_local(3, move || {
-                    sender.input(PlayerInput::HideControls);
-                    glib::ControlFlow::Break
-                }));
+                // Only start timer if controls are visible
+                if self.show_controls {
+                    let sender = sender.clone();
+                    let is_fullscreen = self.is_fullscreen;
+                    self.controls_timer = Some(glib::timeout_add_seconds_local(3, move || {
+                        debug!("Controls timer fired! Fullscreen was: {}", is_fullscreen);
+                        // Send hide request - the handler will check current mouse state
+                        sender.input(PlayerInput::HideControls);
+                        glib::ControlFlow::Break
+                    }));
+                    debug!("Started new 3-second controls timer");
+                }
             }
             PlayerInput::Previous => {
                 debug!("Previous track requested");
@@ -1704,7 +1767,7 @@ impl AsyncComponent for PlayerPage {
             }
             PlayerInput::SetAudioTrack(track_id) => {
                 if let Some(player) = &self.player {
-                    self.current_audio_track = track_id;
+                    self.current_audio_track = Some(track_id);
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
                         let _ = player_handle.set_audio_track(track_id).await;
@@ -1714,7 +1777,7 @@ impl AsyncComponent for PlayerPage {
             }
             PlayerInput::SetSubtitleTrack(track_id) => {
                 if let Some(player) = &self.player {
-                    self.current_subtitle_track = track_id;
+                    self.current_subtitle_track = Some(track_id);
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
                         let _ = player_handle.set_subtitle_track(track_id).await;
@@ -1793,6 +1856,26 @@ impl AsyncComponent for PlayerPage {
                     sender.input(PlayerInput::ToggleFullscreen);
                 } else {
                     sender.input(PlayerInput::NavigateBack);
+                }
+            }
+            PlayerInput::HideControlsImmediate => {
+                self.show_controls = false;
+                self.controls_fade_out = false;
+            }
+            PlayerInput::MouseEnterControls => {
+                debug!("Mouse entered controls area");
+                self.mouse_over_controls = true;
+                // Show controls and reset timer when mouse enters
+                if !self.show_controls {
+                    sender.input(PlayerInput::ShowControls);
+                }
+            }
+            PlayerInput::MouseLeaveControls => {
+                debug!("Mouse left controls area");
+                self.mouse_over_controls = false;
+                // Reset timer when mouse leaves to start countdown
+                if self.show_controls {
+                    sender.input(PlayerInput::ResetControlsTimer);
                 }
             }
             PlayerInput::NavigateBack => {

@@ -1,11 +1,11 @@
 ---
 id: task-186
 title: Fix sync status UI updates not reflecting in sidebar
-status: In Progress
+status: To Do
 assignee:
-  - '@claude'
+  - ''
 created_date: '2025-09-18 16:52'
-updated_date: '2025-09-18 19:49'
+updated_date: '2025-09-22 01:23'
 labels:
   - bug
   - ui
