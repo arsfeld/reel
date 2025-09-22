@@ -284,12 +284,11 @@ impl SourceItem {
             if let Some(list_row) = row.downcast_ref::<gtk::ListBoxRow>() {
                 list_row.remove_css_class("selected");
 
-                if index < self.libraries.len() {
-                    if Some(LibraryId::from(self.libraries[index].id.clone()))
+                if index < self.libraries.len()
+                    && Some(LibraryId::from(self.libraries[index].id.clone()))
                         == self.selected_library
-                    {
-                        list_row.add_css_class("selected");
-                    }
+                {
+                    list_row.add_css_class("selected");
                 }
             }
 

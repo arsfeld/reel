@@ -186,11 +186,11 @@ impl SearchWorker {
         }
 
         if let Some(year) = doc.year {
-            tantivy_doc.add_text(self.year_field, &year.to_string());
+            tantivy_doc.add_text(self.year_field, year.to_string());
         }
 
         if !doc.genres.is_empty() {
-            tantivy_doc.add_text(self.genres_field, &doc.genres.join(" "));
+            tantivy_doc.add_text(self.genres_field, doc.genres.join(" "));
         }
 
         // Check if we have a writer available and add the document
@@ -208,7 +208,7 @@ impl SearchWorker {
     fn remove_document_internal(&mut self, id: &MediaItemId) -> Result<(), String> {
         // Check if we have a writer available
         if let Some(writer) = self.writer.as_mut() {
-            let term = tantivy::Term::from_field_text(self.id_field, &id.to_string());
+            let term = tantivy::Term::from_field_text(self.id_field, id.as_ref());
             writer.delete_term(term);
         }
         Ok(())
@@ -246,11 +246,11 @@ impl SearchWorker {
                 .doc(*doc_address)
                 .map_err(|e| format!("Failed to retrieve document: {}", e))?;
 
-            if let Some(id_value) = retrieved_doc.get_first(self.id_field) {
-                if let tantivy::schema::OwnedValue::Str(id_str) = id_value {
-                    let id = id_str.parse::<MediaItemId>().unwrap();
-                    results.push(id);
-                }
+            if let Some(id_value) = retrieved_doc.get_first(self.id_field)
+                && let tantivy::schema::OwnedValue::Str(id_str) = id_value
+            {
+                let id = id_str.parse::<MediaItemId>().unwrap();
+                results.push(id);
             }
         }
 

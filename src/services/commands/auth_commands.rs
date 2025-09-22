@@ -140,10 +140,7 @@ impl Command<Vec<Source>> for LoadSourcesCommand {
         let source_models = repo.find_all().await?;
 
         // Convert SourceModel to Source
-        let sources: Vec<Source> = source_models
-            .into_iter()
-            .map(|model| Source::from(model))
-            .collect();
+        let sources: Vec<Source> = source_models.into_iter().map(Source::from).collect();
 
         Ok(sources)
     }

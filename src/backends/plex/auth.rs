@@ -65,11 +65,11 @@ impl PlexAuth {
 
         loop {
             // Check for cancellation
-            if let Some(ref mut cancel) = cancel_rx {
-                if cancel.try_recv().is_ok() {
-                    debug!("Polling cancelled by user");
-                    return Err(anyhow!("Authentication cancelled"));
-                }
+            if let Some(ref mut cancel) = cancel_rx
+                && cancel.try_recv().is_ok()
+            {
+                debug!("Polling cancelled by user");
+                return Err(anyhow!("Authentication cancelled"));
             }
 
             if attempts >= MAX_ATTEMPTS {

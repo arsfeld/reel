@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::db::{
     connection::DatabaseConnection,
@@ -38,7 +38,7 @@ impl MediaService {
     ) -> Result<Vec<Library>> {
         let repo = LibraryRepositoryImpl::new(db.clone());
         let models = repo
-            .find_by_source(&source_id.to_string())
+            .find_by_source(source_id.as_ref())
             .await
             .context("Failed to get libraries from database")?;
 
@@ -56,7 +56,7 @@ impl MediaService {
     ) -> Result<Option<Library>> {
         let repo = LibraryRepositoryImpl::new(db.clone());
         let model = repo
-            .find_by_id(&library_id.to_string())
+            .find_by_id(library_id.as_ref())
             .await
             .context("Failed to get library from database")?;
 
@@ -108,14 +108,14 @@ impl MediaService {
         // Use paginated query if no media type filter is needed
         let items = if media_type.is_none() {
             // Use efficient pagination at database level
-            repo.find_by_library_paginated(&library_id.to_string(), offset as u64, limit as u64)
+            repo.find_by_library_paginated(library_id.as_ref(), offset as u64, limit as u64)
                 .await
                 .context("Failed to get paginated media items from database")?
         } else {
             // For filtered queries, we still need to get all items and filter manually
             // TODO: Add media type filtering at database level for better performance
             let all_items = repo
-                .find_by_library(&library_id.to_string())
+                .find_by_library(library_id.as_ref())
                 .await
                 .context("Failed to get media items from database")?;
 
@@ -150,7 +150,7 @@ impl MediaService {
     ) -> Result<Option<MediaItem>> {
         let repo = MediaRepositoryImpl::new(db.clone());
         let model = repo
-            .find_by_id(&item_id.to_string())
+            .find_by_id(item_id.as_ref())
             .await
             .context("Failed to get media item from database")?;
 
@@ -187,56 +187,60 @@ impl MediaService {
             let _result = repo.update(entity.clone()).await?;
 
             // Verify update for Shows
-            if entity.media_type == "show" {
-                if let Ok(Some(updated)) = repo.find_by_id(&entity.id).await {
-                    if let Some(ref metadata) = updated.metadata {
-                        // metadata is already a serde_json::Value
-                        if let Some(seasons_value) = metadata.get("seasons") {
-                            if let Err(_) = serde_json::from_value::<Vec<crate::models::Season>>(
-                                seasons_value.clone(),
-                            ) {
-                                warn!(
-                                    "Failed to parse seasons for Show '{}' after update: {:?}",
-                                    updated.title, seasons_value
-                                );
-                            }
-                        } else {
+            if entity.media_type == "show"
+                && let Ok(Some(updated)) = repo.find_by_id(&entity.id).await
+            {
+                if let Some(ref metadata) = updated.metadata {
+                    // metadata is already a serde_json::Value
+                    if let Some(seasons_value) = metadata.get("seasons") {
+                        if serde_json::from_value::<Vec<crate::models::Season>>(
+                            seasons_value.clone(),
+                        )
+                        .is_err()
+                        {
                             warn!(
-                                "No seasons field in metadata for Show '{}' after update",
-                                updated.title
+                                "Failed to parse seasons for Show '{}' after update: {:?}",
+                                updated.title, seasons_value
                             );
                         }
                     } else {
-                        warn!("No metadata for Show '{}' after update", updated.title);
+                        warn!(
+                            "No seasons field in metadata for Show '{}' after update",
+                            updated.title
+                        );
                     }
+                } else {
+                    warn!("No metadata for Show '{}' after update", updated.title);
                 }
             }
         } else {
             repo.insert(entity.clone()).await?;
 
             // Verify insert for Shows
-            if entity.media_type == "show" {
-                if let Ok(Some(inserted)) = repo.find_by_id(&entity.id).await {
-                    if let Some(ref metadata) = inserted.metadata {
-                        // metadata is already a serde_json::Value
-                        if let Some(seasons_value) = metadata.get("seasons") {
-                            if let Err(_) = serde_json::from_value::<Vec<crate::models::Season>>(
-                                seasons_value.clone(),
-                            ) {
-                                warn!(
-                                    "Failed to parse seasons for Show '{}' after insert: {:?}",
-                                    inserted.title, seasons_value
-                                );
-                            }
-                        } else {
+            if entity.media_type == "show"
+                && let Ok(Some(inserted)) = repo.find_by_id(&entity.id).await
+            {
+                if let Some(ref metadata) = inserted.metadata {
+                    // metadata is already a serde_json::Value
+                    if let Some(seasons_value) = metadata.get("seasons") {
+                        if serde_json::from_value::<Vec<crate::models::Season>>(
+                            seasons_value.clone(),
+                        )
+                        .is_err()
+                        {
                             warn!(
-                                "No seasons field in metadata for Show '{}' after insert",
-                                inserted.title
+                                "Failed to parse seasons for Show '{}' after insert: {:?}",
+                                inserted.title, seasons_value
                             );
                         }
                     } else {
-                        warn!("No metadata for Show '{}' after insert", inserted.title);
+                        warn!(
+                            "No seasons field in metadata for Show '{}' after insert",
+                            inserted.title
+                        );
                     }
+                } else {
+                    warn!("No metadata for Show '{}' after insert", inserted.title);
                 }
             }
         }
@@ -380,10 +384,10 @@ impl MediaService {
             .into_iter()
             .filter(|item| {
                 // Filter by library if specified
-                if let Some(lib_id) = library_id {
-                    if item.library_id != lib_id.to_string() {
-                        return false;
-                    }
+                if let Some(lib_id) = library_id
+                    && item.library_id != lib_id.to_string()
+                {
+                    return false;
                 }
                 // Filter by media type if specified
                 if let Some(media_type) = &media_type {
@@ -517,7 +521,7 @@ impl MediaService {
     /// Clear all media for a library
     pub async fn clear_library(db: &DatabaseConnection, library_id: &LibraryId) -> Result<()> {
         let repo = MediaRepositoryImpl::new(db.clone());
-        repo.delete_by_library(&library_id.to_string())
+        repo.delete_by_library(library_id.as_ref())
             .await
             .context("Failed to clear library")
     }
@@ -526,10 +530,10 @@ impl MediaService {
     pub async fn clear_source(db: &DatabaseConnection, source_id: &SourceId) -> Result<()> {
         // Use repositories without transactions for now - they handle their own transactions
         let media_repo = MediaRepositoryImpl::new(db.clone());
-        media_repo.delete_by_source(&source_id.to_string()).await?;
+        media_repo.delete_by_source(source_id.as_ref()).await?;
 
         let lib_repo = LibraryRepositoryImpl::new(db.clone());
-        lib_repo.delete_by_source(&source_id.to_string()).await?;
+        lib_repo.delete_by_source(source_id.as_ref()).await?;
 
         Ok(())
     }
@@ -546,9 +550,9 @@ impl MediaService {
 
         // Use None for user_id for now (single-user system)
         if watched {
-            repo.mark_watched(&media_id.to_string(), None).await?;
+            repo.mark_watched(media_id.as_ref(), None).await?;
         } else {
-            repo.upsert_progress(&media_id.to_string(), None, position_ms, duration_ms)
+            repo.upsert_progress(media_id.as_ref(), None, position_ms, duration_ms)
                 .await?;
         }
 

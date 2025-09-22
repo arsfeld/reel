@@ -1,6 +1,5 @@
 use anyhow::Result;
 use std::collections::HashMap;
-use tracing::debug;
 
 use super::client::PlexApi;
 use super::search::PlexSearch;

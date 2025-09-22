@@ -1,13 +1,11 @@
 use crate::backends::plex::PlexBackend;
-use crate::backends::plex::api::playqueue::{PlayQueueContainer, PlayQueueItem, PlayQueueResponse};
+use crate::backends::plex::api::playqueue::{PlayQueueContainer, PlayQueueResponse};
 use crate::db::connection::DatabaseConnection;
-use crate::db::repository::{
-    MediaRepository, MediaRepositoryImpl, PlaybackRepository, PlaybackRepositoryImpl, Repository,
-};
+use crate::db::repository::{MediaRepository, MediaRepositoryImpl, PlaybackRepository, Repository};
 use crate::models::{EpisodeInfo, MediaItemId, PlayQueueInfo, PlaylistContext, QueueItem, ShowId};
 use anyhow::{Result, anyhow};
 use std::any::Any;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Service for managing Plex PlayQueue contexts
 pub struct PlayQueueService;
@@ -21,26 +19,25 @@ impl PlayQueueService {
         media_type: &str,
     ) -> Result<PlaylistContext> {
         // Try to downcast to PlexBackend
-        if let Some(plex_backend) = backend.downcast_ref::<PlexBackend>() {
-            if let Some(api) = plex_backend.get_api_for_playqueue().await {
-                debug!(
-                    "Creating PlayQueue for media_id: {}, type: {}",
-                    media_id, media_type
-                );
+        if let Some(plex_backend) = backend.downcast_ref::<PlexBackend>()
+            && let Some(api) = plex_backend.get_api_for_playqueue().await
+        {
+            debug!(
+                "Creating PlayQueue for media_id: {}, type: {}",
+                media_id, media_type
+            );
 
-                // Create the PlayQueue on the Plex server
-                let play_queue_response =
-                    api.create_play_queue(media_id.as_ref(), media_type).await?;
+            // Create the PlayQueue on the Plex server
+            let play_queue_response = api.create_play_queue(media_id.as_ref(), media_type).await?;
 
-                // Convert the response to a PlaylistContext
-                return Self::build_context_from_response(
-                    db,
-                    play_queue_response,
-                    media_id,
-                    media_type,
-                )
-                .await;
-            }
+            // Convert the response to a PlaylistContext
+            return Self::build_context_from_response(
+                db,
+                play_queue_response,
+                media_id,
+                media_type,
+            )
+            .await;
         }
 
         // Fall back to regular playlist context for non-Plex or if API not available
@@ -55,16 +52,16 @@ impl PlayQueueService {
         playlist_id: &str,
     ) -> Result<PlaylistContext> {
         // Try to downcast to PlexBackend
-        if let Some(plex_backend) = backend.downcast_ref::<PlexBackend>() {
-            if let Some(api) = plex_backend.get_api_for_playqueue().await {
-                debug!("Creating PlayQueue from playlist: {}", playlist_id);
+        if let Some(plex_backend) = backend.downcast_ref::<PlexBackend>()
+            && let Some(api) = plex_backend.get_api_for_playqueue().await
+        {
+            debug!("Creating PlayQueue from playlist: {}", playlist_id);
 
-                // Create the PlayQueue on the Plex server
-                let play_queue_response = api.create_play_queue_from_playlist(playlist_id).await?;
+            // Create the PlayQueue on the Plex server
+            let play_queue_response = api.create_play_queue_from_playlist(playlist_id).await?;
 
-                // Build generic PlayQueue context
-                return Self::build_playqueue_context(db, play_queue_response).await;
-            }
+            // Build generic PlayQueue context
+            return Self::build_playqueue_context(db, play_queue_response).await;
         }
 
         Err(anyhow!(
@@ -79,16 +76,16 @@ impl PlayQueueService {
         play_queue_id: i64,
     ) -> Result<PlaylistContext> {
         // Try to downcast to PlexBackend
-        if let Some(plex_backend) = backend.downcast_ref::<PlexBackend>() {
-            if let Some(api) = plex_backend.get_api_for_playqueue().await {
-                debug!("Retrieving PlayQueue: {}", play_queue_id);
+        if let Some(plex_backend) = backend.downcast_ref::<PlexBackend>()
+            && let Some(api) = plex_backend.get_api_for_playqueue().await
+        {
+            debug!("Retrieving PlayQueue: {}", play_queue_id);
 
-                // Get the PlayQueue from the Plex server
-                let play_queue_response = api.get_play_queue(play_queue_id).await?;
+            // Get the PlayQueue from the Plex server
+            let play_queue_response = api.get_play_queue(play_queue_id).await?;
 
-                // Build generic PlayQueue context
-                return Self::build_playqueue_context(db, play_queue_response).await;
-            }
+            // Build generic PlayQueue context
+            return Self::build_playqueue_context(db, play_queue_response).await;
         }
 
         Err(anyhow!(
@@ -110,33 +107,30 @@ impl PlayQueueService {
             // Try to build a TV show context with PlayQueue info
             if let Ok(mut context) = PlaylistService::build_local_show_context(db, media_id).await {
                 // Add PlayQueue info to the TV show context
-                if let PlaylistContext::TvShow { .. } = &mut context {
-                    if let Some(play_queue_id) = container.play_queue_id {
-                        let queue_info = Self::extract_queue_info(container)?;
+                if let PlaylistContext::TvShow { .. } = &mut context
+                    && let Some(play_queue_id) = container.play_queue_id
+                {
+                    let queue_info = Self::extract_queue_info(container)?;
 
-                        // Update episode info with PlayQueue item IDs
-                        if let PlaylistContext::TvShow {
-                            ref mut episodes,
-                            ref mut play_queue_info,
-                            ..
-                        } = context
-                        {
-                            for (episode, queue_item) in
-                                episodes.iter_mut().zip(&container.metadata)
-                            {
-                                if episode.id.as_ref() == queue_item.rating_key {
-                                    episode.play_queue_item_id =
-                                        Some(queue_item.play_queue_item_id);
-                                }
+                    // Update episode info with PlayQueue item IDs
+                    if let PlaylistContext::TvShow {
+                        ref mut episodes,
+                        ref mut play_queue_info,
+                        ..
+                    } = context
+                    {
+                        for (episode, queue_item) in episodes.iter_mut().zip(&container.metadata) {
+                            if episode.id.as_ref() == queue_item.rating_key {
+                                episode.play_queue_item_id = Some(queue_item.play_queue_item_id);
                             }
-                            *play_queue_info = Some(queue_info);
                         }
-
-                        info!(
-                            "Created TvShow PlayQueue context with ID: {}",
-                            play_queue_id
-                        );
+                        *play_queue_info = Some(queue_info);
                     }
+
+                    info!(
+                        "Created TvShow PlayQueue context with ID: {}",
+                        play_queue_id
+                    );
                 }
                 return Ok(context);
             }
@@ -236,16 +230,16 @@ impl PlayQueueService {
         play_queue_id: i64,
         media_id: &MediaItemId,
     ) -> Result<()> {
-        if let Some(plex_backend) = backend.downcast_ref::<PlexBackend>() {
-            if let Some(api) = plex_backend.get_api_for_playqueue().await {
-                debug!("Adding media {} to PlayQueue {}", media_id, play_queue_id);
+        if let Some(plex_backend) = backend.downcast_ref::<PlexBackend>()
+            && let Some(api) = plex_backend.get_api_for_playqueue().await
+        {
+            debug!("Adding media {} to PlayQueue {}", media_id, play_queue_id);
 
-                api.add_to_play_queue(play_queue_id, media_id.as_ref())
-                    .await?;
+            api.add_to_play_queue(play_queue_id, media_id.as_ref())
+                .await?;
 
-                info!("Successfully added item to PlayQueue");
-                return Ok(());
-            }
+            info!("Successfully added item to PlayQueue");
+            return Ok(());
         }
 
         Err(anyhow!(
@@ -259,19 +253,19 @@ impl PlayQueueService {
         play_queue_id: i64,
         play_queue_item_id: i64,
     ) -> Result<()> {
-        if let Some(plex_backend) = backend.downcast_ref::<PlexBackend>() {
-            if let Some(api) = plex_backend.get_api_for_playqueue().await {
-                debug!(
-                    "Removing item {} from PlayQueue {}",
-                    play_queue_item_id, play_queue_id
-                );
+        if let Some(plex_backend) = backend.downcast_ref::<PlexBackend>()
+            && let Some(api) = plex_backend.get_api_for_playqueue().await
+        {
+            debug!(
+                "Removing item {} from PlayQueue {}",
+                play_queue_item_id, play_queue_id
+            );
 
-                api.remove_from_play_queue(play_queue_id, play_queue_item_id)
-                    .await?;
+            api.remove_from_play_queue(play_queue_id, play_queue_item_id)
+                .await?;
 
-                info!("Successfully removed item from PlayQueue");
-                return Ok(());
-            }
+            info!("Successfully removed item from PlayQueue");
+            return Ok(());
         }
 
         Err(anyhow!(
@@ -288,28 +282,27 @@ impl PlayQueueService {
         duration: std::time::Duration,
         state: &str,
     ) -> Result<()> {
-        if let Some(queue_info) = context.get_play_queue_info() {
-            if let Some(plex_backend) = backend.downcast_ref::<PlexBackend>() {
-                if let Some(api) = plex_backend.get_api_for_playqueue().await {
-                    debug!(
-                        "Updating PlayQueue progress - queue: {}, item: {}, media: {}",
-                        queue_info.play_queue_id, queue_info.play_queue_item_id, media_id
-                    );
+        if let Some(queue_info) = context.get_play_queue_info()
+            && let Some(plex_backend) = backend.downcast_ref::<PlexBackend>()
+            && let Some(api) = plex_backend.get_api_for_playqueue().await
+        {
+            debug!(
+                "Updating PlayQueue progress - queue: {}, item: {}, media: {}",
+                queue_info.play_queue_id, queue_info.play_queue_item_id, media_id
+            );
 
-                    // Use the PlayQueue-aware timeline update
-                    api.update_play_queue_progress(
-                        queue_info.play_queue_id,
-                        queue_info.play_queue_item_id,
-                        media_id.as_ref(),
-                        position,
-                        duration,
-                        state,
-                    )
-                    .await?;
+            // Use the PlayQueue-aware timeline update
+            api.update_play_queue_progress(
+                queue_info.play_queue_id,
+                queue_info.play_queue_item_id,
+                media_id.as_ref(),
+                position,
+                duration,
+                state,
+            )
+            .await?;
 
-                    return Ok(());
-                }
-            }
+            return Ok(());
         }
 
         // Fall back to regular progress update
@@ -333,56 +326,54 @@ impl PlaylistService {
 
         // First, get the media item to check its source
         let media_repo = MediaRepositoryImpl::new(db.clone());
-        if let Ok(Some(media)) = media_repo.find_by_id(episode_id.as_ref()).await {
-            if let Ok(source_id_num) = media.source_id.parse::<i32>() {
-                // Check if this is a Plex source
-                let source_repo = SourceRepositoryImpl::new(db.clone());
-                if let Ok(Some(source)) = source_repo.find_by_id(&media.source_id).await {
-                    if source.source_type == "plex" || source.source_type == "PlexServer" {
-                        // Try to create a backend and get PlayQueue context
-                        match BackendService::create_backend_for_source(db, &source).await {
-                            Ok(backend) => {
-                                // Try to create PlayQueue context
-                                // We need to pass the backend as Any, which requires downcasting
-                                // For now, we skip PlayQueue integration here and rely on direct calls
-                                if let Ok(context) = PlayQueueService::create_from_media(
-                                    backend.as_any(),
-                                    db,
-                                    episode_id,
-                                    "episode",
-                                )
-                                .await
+        if let Ok(Some(media)) = media_repo.find_by_id(episode_id.as_ref()).await
+            && let Ok(source_id_num) = media.source_id.parse::<i32>()
+        {
+            // Check if this is a Plex source
+            let source_repo = SourceRepositoryImpl::new(db.clone());
+            if let Ok(Some(source)) = source_repo.find_by_id(&media.source_id).await
+                && (source.source_type == "plex" || source.source_type == "PlexServer")
+            {
+                // Try to create a backend and get PlayQueue context
+                match BackendService::create_backend_for_source(db, &source).await {
+                    Ok(backend) => {
+                        // Try to create PlayQueue context
+                        // We need to pass the backend as Any, which requires downcasting
+                        // For now, we skip PlayQueue integration here and rely on direct calls
+                        if let Ok(context) = PlayQueueService::create_from_media(
+                            backend.as_any(),
+                            db,
+                            episode_id,
+                            "episode",
+                        )
+                        .await
+                        {
+                            info!("Created PlayQueue context for episode {}", episode_id);
+
+                            // Save PlayQueue state in database for resume
+                            if let Some(queue_info) = context.get_play_queue_info() {
+                                let playback_repo =
+                                    crate::db::repository::PlaybackRepositoryImpl::new(db.clone());
+                                if let Err(e) = playback_repo
+                                    .save_playqueue_state(
+                                        episode_id.as_ref(),
+                                        None, // TODO: Get actual user ID
+                                        queue_info.play_queue_id,
+                                        queue_info.play_queue_version,
+                                        queue_info.play_queue_item_id,
+                                        source_id_num,
+                                    )
+                                    .await
                                 {
-                                    info!("Created PlayQueue context for episode {}", episode_id);
-
-                                    // Save PlayQueue state in database for resume
-                                    if let Some(queue_info) = context.get_play_queue_info() {
-                                        let playback_repo =
-                                            crate::db::repository::PlaybackRepositoryImpl::new(
-                                                db.clone(),
-                                            );
-                                        if let Err(e) = playback_repo
-                                            .save_playqueue_state(
-                                                episode_id.as_ref(),
-                                                None, // TODO: Get actual user ID
-                                                queue_info.play_queue_id,
-                                                queue_info.play_queue_version,
-                                                queue_info.play_queue_item_id,
-                                                source_id_num,
-                                            )
-                                            .await
-                                        {
-                                            warn!("Failed to save PlayQueue state: {}", e);
-                                        }
-                                    }
-
-                                    return Ok(context);
+                                    warn!("Failed to save PlayQueue state: {}", e);
                                 }
                             }
-                            Err(e) => {
-                                debug!("Failed to create backend for PlayQueue: {}", e);
-                            }
+
+                            return Ok(context);
                         }
+                    }
+                    Err(e) => {
+                        debug!("Failed to create backend for PlayQueue: {}", e);
                     }
                 }
             }
