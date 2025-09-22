@@ -399,13 +399,11 @@ impl AsyncComponent for MovieDetailsPage {
 
                         let repo = PlaybackRepositoryImpl::new(db);
                         if watched {
-                            if let Err(e) = repo.mark_watched(&media_id.to_string(), None).await {
+                            if let Err(e) = repo.mark_watched(media_id.as_ref(), None).await {
                                 error!("Failed to mark as watched: {}", e);
                             }
-                        } else {
-                            if let Err(e) = repo.mark_unwatched(&media_id.to_string(), None).await {
-                                error!("Failed to mark as unwatched: {}", e);
-                            }
+                        } else if let Err(e) = repo.mark_unwatched(media_id.as_ref(), None).await {
+                            error!("Failed to mark as unwatched: {}", e);
                         }
                     });
                 }
@@ -471,7 +469,7 @@ impl AsyncComponent for MovieDetailsPage {
                             }
 
                             for person in movie.cast.iter().take(10) {
-                                let card = create_person_card(&person);
+                                let card = create_person_card(person);
                                 self.cast_box.append(&card);
                             }
                         }
@@ -564,11 +562,11 @@ fn create_person_card(person: &Person) -> gtk::Box {
         .content_fit(gtk::ContentFit::Cover)
         .build();
 
-    if let Some(image_url) = &person.image_url {
-        if let Ok(pixbuf) = gtk::gdk_pixbuf::Pixbuf::from_file_at_size(image_url, 120, 120) {
-            let texture = gtk::gdk::Texture::for_pixbuf(&pixbuf);
-            picture.set_paintable(Some(&texture));
-        }
+    if let Some(image_url) = &person.image_url
+        && let Ok(pixbuf) = gtk::gdk_pixbuf::Pixbuf::from_file_at_size(image_url, 120, 120)
+    {
+        let texture = gtk::gdk::Texture::for_pixbuf(&pixbuf);
+        picture.set_paintable(Some(&texture));
     }
 
     // Info container with gradient background

@@ -28,22 +28,22 @@ impl ConnectionService {
     ) -> Result<Option<String>> {
         // Check cache first
         let cache = Self::cache();
-        if cache.should_skip_test(source_id).await {
-            if let Some(state) = cache.get(source_id).await {
-                debug!(
-                    "Using cached connection for {}: {} (age: {:?})",
-                    source_id,
-                    state.url,
-                    state.age()
-                );
-                return Ok(Some(state.url));
-            }
+        if cache.should_skip_test(source_id).await
+            && let Some(state) = cache.get(source_id).await
+        {
+            debug!(
+                "Using cached connection for {}: {} (age: {:?})",
+                source_id,
+                state.url,
+                state.age()
+            );
+            return Ok(Some(state.url));
         }
         use crate::db::repository::Repository;
         use crate::db::repository::source_repository::{SourceRepository, SourceRepositoryImpl};
 
         let repo = SourceRepositoryImpl::new(db.clone());
-        let source = Repository::find_by_id(&repo, &source_id.to_string())
+        let source = Repository::find_by_id(&repo, source_id.as_ref())
             .await?
             .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
 
@@ -69,12 +69,12 @@ impl ConnectionService {
                 );
 
                 // Update the primary URL in the database
-                repo.update_connection_url(&source_id.to_string(), Some(best_conn.uri.clone()))
+                repo.update_connection_url(source_id.as_ref(), Some(best_conn.uri.clone()))
                     .await?;
 
                 // Store updated connections with test results
                 repo.update_connections(
-                    &source_id.to_string(),
+                    source_id.as_ref(),
                     serde_json::to_value(&server_connections)?,
                 )
                 .await?;

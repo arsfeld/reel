@@ -171,10 +171,10 @@ impl PlaylistContext {
                 if let Some(new_index) = items.iter().position(|i| &i.id == item_id) {
                     *current_index = new_index;
                     // Update the selected item ID in PlayQueue info
-                    if let Some(item) = items.get(new_index) {
-                        if let Some(item_id) = item.play_queue_item_id {
-                            play_queue_info.play_queue_item_id = item_id;
-                        }
+                    if let Some(item) = items.get(new_index)
+                        && let Some(item_id) = item.play_queue_item_id
+                    {
+                        play_queue_info.play_queue_item_id = item_id;
                     }
                     true
                 } else {

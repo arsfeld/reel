@@ -285,12 +285,12 @@ impl AsyncComponent for MainWindow {
         root.add_action(&quit_action);
 
         // Set keyboard shortcuts at the application level if available
-        if let Some(app) = root.application() {
-            if let Some(adw_app) = app.downcast_ref::<adw::Application>() {
-                adw_app.set_accels_for_action("win.preferences", &["<primary>comma"]);
-                adw_app.set_accels_for_action("win.quit", &["<primary>q"]);
-                adw_app.set_accels_for_action("window.close", &["<primary>w"]);
-            }
+        if let Some(app) = root.application()
+            && let Some(adw_app) = app.downcast_ref::<adw::Application>()
+        {
+            adw_app.set_accels_for_action("win.preferences", &["<primary>comma"]);
+            adw_app.set_accels_for_action("win.quit", &["<primary>q"]);
+            adw_app.set_accels_for_action("window.close", &["<primary>w"]);
         }
 
         // Initialize the sidebar
@@ -363,7 +363,7 @@ impl AsyncComponent for MainWindow {
             .forward(sender.input_sender(), |output| match output {
                 SyncWorkerOutput::SyncStarted { source_id, .. } => {
                     tracing::info!("Sync started for source: {:?}", source_id);
-                    MainWindowInput::ShowToast(format!("Syncing source..."))
+                    MainWindowInput::ShowToast("Syncing source...".to_string())
                 }
                 SyncWorkerOutput::SyncProgress(progress) => {
                     tracing::debug!(
@@ -471,10 +471,10 @@ impl AsyncComponent for MainWindow {
         );
 
         // Also verify the actions are enabled
-        if let Some(pref_action) = root.lookup_action("preferences") {
-            if let Some(simple_action) = pref_action.downcast_ref::<gio::SimpleAction>() {
-                tracing::info!("Preferences action enabled: {}", simple_action.is_enabled());
-            }
+        if let Some(pref_action) = root.lookup_action("preferences")
+            && let Some(simple_action) = pref_action.downcast_ref::<gio::SimpleAction>()
+        {
+            tracing::info!("Preferences action enabled: {}", simple_action.is_enabled());
         }
 
         tracing::info!("Primary menu configured with Preferences, About, and Quit actions");
@@ -535,18 +535,18 @@ impl AsyncComponent for MainWindow {
                         // Check if we have pages to pop (more than 1 page in stack)
                         if self.navigation_view.navigation_stack().n_items() > 1 {
                             // Check if we're leaving the player page and need to stop it
-                            if let Some(page) = self.navigation_view.visible_page() {
-                                if page.title() == "Player" {
-                                    // Stop the player before leaving the page
-                                    if let Some(ref player_page) = self.player_page {
-                                        tracing::info!("Stopping player before navigation back");
-                                        player_page
-                                            .sender()
-                                            .send(crate::ui::pages::player::PlayerInput::Stop)
-                                            .unwrap_or_else(|_| {
-                                                tracing::error!("Failed to stop player");
-                                            });
-                                    }
+                            if let Some(page) = self.navigation_view.visible_page()
+                                && page.title() == "Player"
+                            {
+                                // Stop the player before leaving the page
+                                if let Some(ref player_page) = self.player_page {
+                                    tracing::info!("Stopping player before navigation back");
+                                    player_page
+                                        .sender()
+                                        .send(crate::ui::pages::player::PlayerInput::Stop)
+                                        .unwrap_or_else(|_| {
+                                            tracing::error!("Failed to stop player");
+                                        });
                                 }
                             }
 
@@ -556,26 +556,25 @@ impl AsyncComponent for MainWindow {
                             sender.input(MainWindowInput::ClearHeaderContent);
 
                             // Check if we're back on Sources page and restore its header button
-                            if let Some(page) = self.navigation_view.visible_page() {
-                                if page.title() == "Sources" {
-                                    // Re-add the "Add Source" button to the header
-                                    let add_button = gtk::Button::builder()
-                                        .icon_name("list-add-symbolic")
-                                        .tooltip_text("Add Source")
-                                        .css_classes(vec!["suggested-action"])
-                                        .build();
+                            if let Some(page) = self.navigation_view.visible_page()
+                                && page.title() == "Sources"
+                            {
+                                // Re-add the "Add Source" button to the header
+                                let add_button = gtk::Button::builder()
+                                    .icon_name("list-add-symbolic")
+                                    .tooltip_text("Add Source")
+                                    .css_classes(vec!["suggested-action"])
+                                    .build();
 
-                                    let sender_clone = sender.input_sender().clone();
-                                    add_button.connect_clicked(move |_| {
-                                        sender_clone.emit(MainWindowInput::Navigate(
-                                            "auth_dialog".to_string(),
-                                        ));
-                                    });
+                                let sender_clone = sender.input_sender().clone();
+                                add_button.connect_clicked(move |_| {
+                                    sender_clone
+                                        .emit(MainWindowInput::Navigate("auth_dialog".to_string()));
+                                });
 
-                                    sender.input(MainWindowInput::SetHeaderEndContent(Some(
-                                        add_button.upcast(),
-                                    )));
-                                }
+                                sender.input(MainWindowInput::SetHeaderEndContent(Some(
+                                    add_button.upcast(),
+                                )));
                             }
                         }
                     }
@@ -653,19 +652,15 @@ impl AsyncComponent for MainWindow {
                         let stack = self.navigation_view.navigation_stack();
 
                         // If there's only 1 page in stack, check if it's the home page
-                        if stack.n_items() == 1 {
-                            if let Some(page) = stack.item(0) {
-                                if let Ok(nav_page) = page.downcast::<adw::NavigationPage>() {
-                                    if nav_page.title() == "Home" {
-                                        // Already on home page with clean stack, just trigger header update
-                                        sender.input(MainWindowInput::ClearHeaderContent);
-                                        sender.input(MainWindowInput::Navigate(
-                                            "update_header".to_string(),
-                                        ));
-                                        return;
-                                    }
-                                }
-                            }
+                        if stack.n_items() == 1
+                            && let Some(page) = stack.item(0)
+                            && let Ok(nav_page) = page.downcast::<adw::NavigationPage>()
+                            && nav_page.title() == "Home"
+                        {
+                            // Already on home page with clean stack, just trigger header update
+                            sender.input(MainWindowInput::ClearHeaderContent);
+                            sender.input(MainWindowInput::Navigate("update_header".to_string()));
+                            return;
                         }
 
                         // Pop all pages except the root page
@@ -721,13 +716,12 @@ impl AsyncComponent for MainWindow {
                         let mut sources_page_index = None;
 
                         for i in 0..stack.n_items() {
-                            if let Some(page) = stack.item(i) {
-                                if let Ok(nav_page) = page.downcast::<adw::NavigationPage>() {
-                                    if nav_page.title() == "Sources" {
-                                        sources_page_index = Some(i);
-                                        break;
-                                    }
-                                }
+                            if let Some(page) = stack.item(i)
+                                && let Ok(nav_page) = page.downcast::<adw::NavigationPage>()
+                                && nav_page.title() == "Sources"
+                            {
+                                sources_page_index = Some(i);
+                                break;
                             }
                         }
 
@@ -739,16 +733,14 @@ impl AsyncComponent for MainWindow {
                             }
 
                             // If Sources page is not visible, make it visible
-                            if let Some(visible_page) = self.navigation_view.visible_page() {
-                                if visible_page.title() != "Sources" {
-                                    // Navigate to the Sources page that's already in the stack
-                                    if let Some(page) = stack.item(index) {
-                                        if let Ok(_nav_page) =
-                                            page.downcast::<adw::NavigationPage>()
-                                        {
-                                            // The page should now be visible after popping
-                                        }
-                                    }
+                            if let Some(visible_page) = self.navigation_view.visible_page()
+                                && visible_page.title() != "Sources"
+                            {
+                                // Navigate to the Sources page that's already in the stack
+                                if let Some(page) = stack.item(index)
+                                    && let Ok(_nav_page) = page.downcast::<adw::NavigationPage>()
+                                {
+                                    // The page should now be visible after popping
                                 }
                             }
                         } else {
@@ -813,11 +805,11 @@ impl AsyncComponent for MainWindow {
                         self.content_stack.set_visible_child_name("content");
 
                         // Check if we're already on the preferences page
-                        if let Some(visible_page) = self.navigation_view.visible_page() {
-                            if visible_page.title() == "Preferences" {
-                                // Already on preferences page, don't push again
-                                return;
-                            }
+                        if let Some(visible_page) = self.navigation_view.visible_page()
+                            && visible_page.title() == "Preferences"
+                        {
+                            // Already on preferences page, don't push again
+                            return;
                         }
 
                         // Create and show preferences dialog
@@ -886,7 +878,7 @@ impl AsyncComponent for MainWindow {
                 // TODO: Create and push source page
                 // For now, just create a placeholder page
                 let page = adw::NavigationPage::builder()
-                    .title(&format!("Source: {}", source_id))
+                    .title(format!("Source: {}", source_id))
                     .child(&gtk::Label::new(Some(&format!(
                         "Source {} content",
                         source_id
@@ -898,11 +890,11 @@ impl AsyncComponent for MainWindow {
                 tracing::info!("Navigating to library: {}", library_id);
 
                 // Check if we're already on this library page
-                if let Some(ref current_id) = self.current_library_id {
-                    if current_id == &library_id {
-                        tracing::debug!("Already on library: {}, skipping navigation", library_id);
-                        return;
-                    }
+                if let Some(ref current_id) = self.current_library_id
+                    && current_id == &library_id
+                {
+                    tracing::debug!("Already on library: {}, skipping navigation", library_id);
+                    return;
                 }
 
                 // Check if we're already on a library page in the navigation stack
@@ -1285,10 +1277,10 @@ impl AsyncComponent for MainWindow {
                     .set_top_bar_style(adw::ToolbarStyle::Raised);
 
                 // Restore cursor visibility when leaving player
-                if let Some(surface) = root.surface() {
-                    if let Some(cursor) = gtk::gdk::Cursor::from_name("default", None) {
-                        surface.set_cursor(Some(&cursor));
-                    }
+                if let Some(surface) = root.surface()
+                    && let Some(cursor) = gtk::gdk::Cursor::from_name("default", None)
+                {
+                    surface.set_cursor(Some(&cursor));
                 }
 
                 // Restore window size and state

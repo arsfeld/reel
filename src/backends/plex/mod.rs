@@ -2,7 +2,7 @@ pub mod api;
 mod auth;
 mod tests;
 
-pub use api::{PlayQueueResponse, PlexApi, create_standard_headers};
+pub use api::{PlexApi, create_standard_headers};
 pub use auth::{PlexAuth, PlexConnection, PlexPin, PlexServer};
 
 use anyhow::{Result, anyhow};
@@ -13,7 +13,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
-use tracing::{debug, info, warn};
+use tracing::debug;
 
 use super::traits::MediaBackend;
 use crate::models::{
@@ -860,23 +860,19 @@ impl MediaBackend for PlexBackend {
                     match PlexAuth::discover_servers(&token).await {
                         Ok(servers) => {
                             // Find the server that matches our current URL
-                            if let Some(ref source) = self.source {
-                                if let SourceType::PlexServer { ref machine_id, .. } =
+                            if let Some(ref source) = self.source
+                                && let SourceType::PlexServer { ref machine_id, .. } =
                                     source.source_type
-                                {
-                                    if let Some(server) =
-                                        servers.iter().find(|s| &s.client_identifier == machine_id)
-                                    {
-                                        tracing::info!(
-                                            "Found {} connections for server {}",
-                                            server.connections.len(),
-                                            server.name
-                                        );
-                                        *self.cached_connections.write().await =
-                                            server.connections.clone();
-                                        *self.last_discovery.write().await = Some(Instant::now());
-                                    }
-                                }
+                                && let Some(server) =
+                                    servers.iter().find(|s| &s.client_identifier == machine_id)
+                            {
+                                tracing::info!(
+                                    "Found {} connections for server {}",
+                                    server.connections.len(),
+                                    server.name
+                                );
+                                *self.cached_connections.write().await = server.connections.clone();
+                                *self.last_discovery.write().await = Some(Instant::now());
                             }
                         }
                         Err(e) => {
@@ -1055,24 +1051,24 @@ impl MediaBackend for PlexBackend {
 
     async fn get_movies(&self, library_id: &LibraryId) -> Result<Vec<Movie>> {
         let api = self.get_api().await?;
-        api.get_movies(&library_id.to_string()).await
+        api.get_movies(library_id.as_ref()).await
     }
 
     async fn get_shows(&self, library_id: &LibraryId) -> Result<Vec<Show>> {
         let api = self.get_api().await?;
-        api.get_shows(&library_id.to_string()).await
+        api.get_shows(library_id.as_ref()).await
     }
 
     async fn get_seasons(&self, show_id: &ShowId) -> Result<Vec<Season>> {
         let api = self.get_api().await?;
-        api.get_seasons(&show_id.to_string()).await
+        api.get_seasons(show_id.as_ref()).await
     }
 
     async fn get_episodes(&self, show_id: &ShowId, season_number: u32) -> Result<Vec<Episode>> {
         let api = self.get_api().await?;
 
         // First, get the seasons for this show to find the correct season ID
-        let seasons = api.get_seasons(&show_id.to_string()).await?;
+        let seasons = api.get_seasons(show_id.as_ref()).await?;
 
         // Find the season with the matching season number
         let season = seasons

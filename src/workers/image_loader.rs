@@ -236,12 +236,12 @@ impl Worker for ImageLoader {
                         request.id
                     );
                     // Update priority if this request has higher priority
-                    if let Some(existing) = self.pending_loads.get_mut(&request.id) {
-                        if request.priority < existing.priority {
-                            existing.priority = request.priority;
-                            // Re-sort the queue
-                            self.rebuild_priority_queue();
-                        }
+                    if let Some(existing) = self.pending_loads.get_mut(&request.id)
+                        && request.priority < existing.priority
+                    {
+                        existing.priority = request.priority;
+                        // Re-sort the queue
+                        self.rebuild_priority_queue();
                     }
                     return;
                 }

@@ -14,5 +14,4 @@ pub use backend::BackendService;
 pub use connection::ConnectionService;
 pub use media::MediaService;
 pub use playlist::PlaylistService;
-pub use playqueue::PlayQueueService;
-pub use sync::{SyncProgress, SyncService, SyncStatus};
+pub use sync::{SyncProgress, SyncStatus};

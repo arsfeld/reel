@@ -377,15 +377,15 @@ impl PlaybackRepository for PlaybackRepositoryImpl {
             self.find_by_media_id(media_id).await?
         };
 
-        if let Some(p) = progress {
-            if let (Some(queue_id), Some(version), Some(item_id), Some(source)) = (
+        if let Some(p) = progress
+            && let (Some(queue_id), Some(version), Some(item_id), Some(source)) = (
                 p.play_queue_id,
                 p.play_queue_version,
                 p.play_queue_item_id,
                 p.source_id,
-            ) {
-                return Ok(Some((queue_id, version, item_id, source)));
-            }
+            )
+        {
+            return Ok(Some((queue_id, version, item_id, source)));
         }
 
         Ok(None)

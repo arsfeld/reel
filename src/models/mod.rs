@@ -396,7 +396,7 @@ pub struct JellyfinCredentials {
 pub mod source_utils {
     /// Create a friendly display name for a source based on its type and name
     pub fn create_friendly_name(source_name: &str, source_type: &str) -> String {
-        let result = match source_type {
+        match source_type {
             "plex" => {
                 // For Plex sources, the name should already be the server name (e.g., "Storage")
                 // If it starts with "Plex - ", extract the server name
@@ -454,8 +454,6 @@ pub mod source_utils {
                 // For unknown types, use the original name
                 source_name.to_string()
             }
-        };
-
-        result
+        }
     }
 }
