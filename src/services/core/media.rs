@@ -356,7 +356,7 @@ impl MediaService {
 
         // Process items without holding a transaction lock
         // This prevents blocking other database operations during sync
-        for (index, item) in items.iter().enumerate() {
+        for (_index, item) in items.iter().enumerate() {
             Self::save_media_item(db, item.clone(), library_id, source_id).await?;
         }
 
