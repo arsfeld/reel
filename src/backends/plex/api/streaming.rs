@@ -21,7 +21,16 @@ impl PlexApi {
             return Err(anyhow!("Failed to get media info: {}", response.status()));
         }
 
-        let plex_response: PlexMediaResponse = response.json().await?;
+        // Get response text first so we can provide context on error
+        let response_text = response.text().await?;
+
+        // Try to parse the response and provide better error context
+        let plex_response: PlexMediaResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
+                tracing::error!("Failed to decode Plex response: {}", e);
+                tracing::error!("Response was: {}", response_text);
+                anyhow!("Failed to decode Plex stream response: {}", e)
+            })?;
 
         if let Some(metadata) = plex_response.media_container.metadata.first()
             && let Some(media) = metadata.media.first()
@@ -101,6 +110,22 @@ impl PlexApi {
             });
         }
 
-        Err(anyhow!("Failed to get stream info for media"))
+        // Provide more detailed error information
+        tracing::error!(
+            "Failed to get stream info for media {}: metadata={:?}, container={:?}",
+            media_id,
+            plex_response.media_container.metadata.is_empty(),
+            plex_response
+                .media_container
+                .metadata
+                .first()
+                .map(|m| m.media.is_empty())
+        );
+
+        Err(anyhow!(
+            "Failed to get stream info for media {}. Response parsed but missing required media/parts data. Metadata count: {}",
+            media_id,
+            plex_response.media_container.metadata.len()
+        ))
     }
 }
