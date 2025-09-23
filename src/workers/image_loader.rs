@@ -356,32 +356,32 @@ impl ImageLoader {
         let handle = relm4::spawn(async move {
             match Self::load_image_async(req_clone.clone(), cache_path).await {
                 Ok(texture) => {
-                    // Store in cache
-                    sender_clone.input(ImageLoaderInput::StoreInCache {
-                        key: cache_key_clone,
-                        texture: texture.clone(),
-                    });
+                    // Store in cache - ignore errors if channel is closed
+                    let _ = sender_clone
+                        .input_sender()
+                        .send(ImageLoaderInput::StoreInCache {
+                            key: cache_key_clone,
+                            texture: texture.clone(),
+                        });
 
-                    sender_clone
-                        .output(ImageLoaderOutput::ImageLoaded {
-                            id: req_clone.id.clone(),
-                            texture,
-                            size: req_clone.size,
-                        })
-                        .ok();
+                    let _ = sender_clone.output(ImageLoaderOutput::ImageLoaded {
+                        id: req_clone.id.clone(),
+                        texture,
+                        size: req_clone.size,
+                    });
                 }
                 Err(error) => {
-                    sender_clone
-                        .output(ImageLoaderOutput::LoadFailed {
-                            id: req_clone.id.clone(),
-                            error,
-                        })
-                        .ok();
+                    let _ = sender_clone.output(ImageLoaderOutput::LoadFailed {
+                        id: req_clone.id.clone(),
+                        error,
+                    });
                 }
             }
 
-            // Notify that this load is complete so we can process more
-            sender_clone.input(ImageLoaderInput::LoadCompleted { id: req_clone.id });
+            // Notify that this load is complete so we can process more - ignore if channel closed
+            let _ = sender_clone
+                .input_sender()
+                .send(ImageLoaderInput::LoadCompleted { id: req_clone.id });
         });
 
         self.active_loads.insert(id, handle);
