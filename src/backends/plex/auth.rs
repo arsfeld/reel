@@ -300,7 +300,7 @@ impl PlexAuth {
             json_body["pin"] = serde_json::json!(pin_code);
         }
 
-        let url = format!("{}/api/home/users/{}/switch", PLEX_TV_URL, user_id);
+        let url = format!("{}/api/v2/home/users/{}/switch", PLEX_TV_URL, user_id);
         info!("Attempting to switch to user with URL: {}", url);
         info!(
             "User ID being used: '{}' (length: {})",
@@ -423,7 +423,7 @@ impl PlexAuth {
         }
 
         let response = client
-            .post(format!("{}/api/home/users/{}/switch", base_url, user_id))
+            .post(format!("{}/api/v2/home/users/{}/switch", base_url, user_id))
             .headers(create_standard_headers(Some(auth_token)))
             .json(&json_body)
             .send()
