@@ -34,107 +34,125 @@ impl SyncService {
 
         let mut result = SyncResult::default();
 
-        // Try to get total items count for better progress tracking
-        let total_items = Self::estimate_total_items(backend).await.ok().flatten();
+        // First, get all libraries to estimate total work
+        let libraries = match backend.get_libraries().await {
+            Ok(libs) => libs,
+            Err(e) => {
+                result
+                    .errors
+                    .push(format!("Failed to get libraries: {}", e));
+                Self::update_sync_status(db, source_id, SyncStatus::Failed, None).await?;
+                BROKER
+                    .notify_sync_error(source_id.to_string(), e.to_string())
+                    .await;
+                return Err(e.context("Failed to sync source"));
+            }
+        };
 
-        // Notify sync started with total items if available
+        result.libraries_synced = libraries.len();
+
+        // Estimate total items to sync (rough estimate based on library types)
+        let mut estimated_total_items = 0;
+        for library in &libraries {
+            // Rough estimates per library type
+            estimated_total_items += match library.library_type {
+                crate::models::LibraryType::Movies => 100, // Estimate 100 movies per library
+                crate::models::LibraryType::Shows => 500,  // Estimate shows + episodes
+                _ => 50,
+            };
+        }
+
+        // Track cumulative progress across entire sync
+        let mut cumulative_items_synced = 0;
+
+        // Notify sync started with estimated total
         BROKER
-            .notify_sync_started(source_id.to_string(), total_items.map(|v| v as usize))
+            .notify_sync_started(source_id.to_string(), Some(estimated_total_items))
             .await;
 
         // Mark sync as in progress
         Self::update_sync_status(db, source_id, SyncStatus::InProgress, None).await?;
 
         // Sync libraries
-        match backend.get_libraries().await {
-            Ok(libraries) => {
-                result.libraries_synced = libraries.len();
+        for library in libraries {
+            // Save library
+            MediaService::save_library(db, library.clone(), source_id).await?;
 
-                for library in libraries {
-                    // Save library
-                    MediaService::save_library(db, library.clone(), source_id).await?;
+            // Notify library sync started
+            BROKER
+                .notify_library_sync_started(
+                    source_id.to_string(),
+                    library.id.clone(),
+                    library.title.clone(),
+                )
+                .await;
 
-                    // Notify library sync started
+            // Sync library content with cumulative progress tracking
+            match Self::sync_library_with_progress(
+                db,
+                backend,
+                source_id,
+                &library,
+                &mut cumulative_items_synced,
+                estimated_total_items,
+            )
+            .await
+            {
+                Ok(items_count) => {
+                    info!(
+                        "Successfully synced {} items for library {}",
+                        items_count, library.title
+                    );
+
+                    // Notify library sync completed
                     BROKER
-                        .notify_library_sync_started(
+                        .notify_library_sync_completed(
                             source_id.to_string(),
                             library.id.clone(),
                             library.title.clone(),
+                            items_count,
                         )
                         .await;
 
-                    // Sync library content
-                    match Self::sync_library(db, backend, source_id, &library).await {
-                        Ok(items_count) => {
-                            info!(
-                                "Successfully synced {} items for library {}",
-                                items_count, library.title
-                            );
-
-                            // Notify library sync completed
-                            BROKER
-                                .notify_library_sync_completed(
-                                    source_id.to_string(),
-                                    library.id.clone(),
-                                    library.title.clone(),
-                                    items_count,
-                                )
-                                .await;
-
-                            result.items_synced += items_count;
-                        }
-                        Err(e) => {
-                            warn!("Failed to sync library {}: {}", library.id, e);
-                            // Also log the full error chain for debugging
-                            let mut error_chain = vec![e.to_string()];
-                            let mut source = e.source();
-                            while let Some(err) = source {
-                                error_chain.push(err.to_string());
-                                source = err.source();
-                            }
-                            warn!(
-                                "Error chain for library {}: {:?}",
-                                library.title, error_chain
-                            );
-                            result
-                                .errors
-                                .push(format!("Library {}: {}", library.title, e));
-                        }
-                    }
+                    result.items_synced += items_count;
                 }
-
-                // Mark sync as complete
-                Self::update_sync_status(
-                    db,
-                    source_id,
-                    SyncStatus::Completed,
-                    Some(chrono::Utc::now().naive_utc()),
-                )
-                .await?;
-
-                // Update the source's last_sync timestamp
-                let source_repo = SourceRepositoryImpl::new(db.clone());
-                source_repo.update_last_sync(source_id.as_str()).await?;
-
-                // Notify sync completed
-                BROKER
-                    .notify_sync_completed(source_id.to_string(), result.items_synced)
-                    .await;
-            }
-            Err(e) => {
-                result
-                    .errors
-                    .push(format!("Failed to get libraries: {}", e));
-                Self::update_sync_status(db, source_id, SyncStatus::Failed, None).await?;
-
-                // Notify sync error
-                BROKER
-                    .notify_sync_error(source_id.to_string(), e.to_string())
-                    .await;
-
-                return Err(e.context("Failed to sync source"));
+                Err(e) => {
+                    warn!("Failed to sync library {}: {}", library.id, e);
+                    // Also log the full error chain for debugging
+                    let mut error_chain = vec![e.to_string()];
+                    let mut source = e.source();
+                    while let Some(err) = source {
+                        error_chain.push(err.to_string());
+                        source = err.source();
+                    }
+                    warn!(
+                        "Error chain for library {}: {:?}",
+                        library.title, error_chain
+                    );
+                    result
+                        .errors
+                        .push(format!("Library {}: {}", library.title, e));
+                }
             }
         }
+
+        // Mark sync as complete
+        Self::update_sync_status(
+            db,
+            source_id,
+            SyncStatus::Completed,
+            Some(chrono::Utc::now().naive_utc()),
+        )
+        .await?;
+
+        // Update the source's last_sync timestamp
+        let source_repo = SourceRepositoryImpl::new(db.clone());
+        source_repo.update_last_sync(source_id.as_str()).await?;
+
+        // Notify sync completed
+        BROKER
+            .notify_sync_completed(source_id.to_string(), result.items_synced)
+            .await;
 
         info!(
             "Completed sync for source {}: {} libraries, {} items",
@@ -144,12 +162,26 @@ impl SyncService {
         Ok(result)
     }
 
-    /// Sync a single library
+    /// Sync a single library (legacy method without progress tracking)
     pub async fn sync_library(
         db: &DatabaseConnection,
         backend: &dyn MediaBackend,
         source_id: &SourceId,
         library: &Library,
+    ) -> Result<usize> {
+        let mut dummy_progress = 0;
+        Self::sync_library_with_progress(db, backend, source_id, library, &mut dummy_progress, 0)
+            .await
+    }
+
+    /// Sync a single library with cumulative progress tracking
+    pub async fn sync_library_with_progress(
+        db: &DatabaseConnection,
+        backend: &dyn MediaBackend,
+        source_id: &SourceId,
+        library: &Library,
+        cumulative_items_synced: &mut usize,
+        estimated_total: usize,
     ) -> Result<usize> {
         info!(
             "Syncing library: {} ({}) of type {:?}",
@@ -215,8 +247,7 @@ impl SyncService {
 
         // Save items in batches
         let batch_size = 100;
-        let total_items = items.len();
-        for (index, chunk) in items.chunks(batch_size).enumerate() {
+        for chunk in items.chunks(batch_size) {
             MediaService::save_media_items_batch(
                 db,
                 chunk.to_vec(),
@@ -225,11 +256,15 @@ impl SyncService {
             )
             .await?;
             items_synced += chunk.len();
+            *cumulative_items_synced += chunk.len();
 
-            // Notify progress
-            let current = std::cmp::min((index + 1) * batch_size, total_items);
+            // Notify cumulative progress for the entire source
             BROKER
-                .notify_sync_progress(source_id.to_string(), current, total_items)
+                .notify_sync_progress(
+                    source_id.to_string(),
+                    *cumulative_items_synced,
+                    estimated_total,
+                )
                 .await;
         }
 
@@ -317,12 +352,15 @@ impl SyncService {
                             }
                         }
                     }
-                    match Self::sync_show_episodes(
+                    match Self::sync_show_episodes_with_progress(
                         db,
                         backend,
                         source_id,
                         &library.id.clone().into(),
                         &show_data.id.clone().into(),
+                        &show_data.title,
+                        cumulative_items_synced,
+                        estimated_total,
                     )
                     .await
                     {
@@ -376,7 +414,7 @@ impl SyncService {
         Ok(items_synced)
     }
 
-    /// Sync episodes for a TV show
+    /// Sync episodes for a TV show (legacy method)
     pub async fn sync_show_episodes(
         db: &DatabaseConnection,
         backend: &dyn MediaBackend,
@@ -384,7 +422,36 @@ impl SyncService {
         library_id: &crate::models::LibraryId,
         show_id: &crate::models::ShowId,
     ) -> Result<usize> {
-        debug!("Syncing episodes for show: {}", show_id.as_str());
+        let mut dummy_progress = 0;
+        Self::sync_show_episodes_with_progress(
+            db,
+            backend,
+            source_id,
+            library_id,
+            show_id,
+            "Show",
+            &mut dummy_progress,
+            0,
+        )
+        .await
+    }
+
+    /// Sync episodes for a TV show with cumulative progress tracking
+    pub async fn sync_show_episodes_with_progress(
+        db: &DatabaseConnection,
+        backend: &dyn MediaBackend,
+        source_id: &SourceId,
+        library_id: &crate::models::LibraryId,
+        show_id: &crate::models::ShowId,
+        show_title: &str,
+        cumulative_items_synced: &mut usize,
+        estimated_total: usize,
+    ) -> Result<usize> {
+        debug!(
+            "Syncing episodes for show: {} ({})",
+            show_title,
+            show_id.as_str()
+        );
 
         // Fetch seasons directly from the backend API
         let seasons = match backend.get_seasons(show_id).await {
@@ -406,9 +473,8 @@ impl SyncService {
         // Iterate through all seasons
         for season in &seasons {
             debug!(
-                "Syncing season {} for show {}",
-                season.season_number,
-                show_id.as_str()
+                "Syncing {} - Season {} ({} episodes expected)",
+                show_title, season.season_number, season.episode_count
             );
 
             match backend.get_episodes(show_id, season.season_number).await {
@@ -427,21 +493,19 @@ impl SyncService {
                         .await?;
 
                         total_episodes_synced += episode_count;
+                        *cumulative_items_synced += episode_count;
+
                         debug!(
                             "Synced {} episodes for season {}",
                             episode_count, season.season_number
                         );
 
-                        // Calculate estimated total episode count from seasons
-                        let total_estimate: usize =
-                            seasons.iter().map(|s| s.episode_count as usize).sum();
-
-                        // Notify progress for this season
+                        // Notify cumulative progress with current item info
                         BROKER
                             .notify_sync_progress(
                                 source_id.to_string(),
-                                total_episodes_synced,
-                                total_estimate,
+                                *cumulative_items_synced,
+                                estimated_total,
                             )
                             .await;
                     }

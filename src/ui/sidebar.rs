@@ -3,7 +3,7 @@ use relm4::factory::{DynamicIndex, FactoryComponent, FactorySender, FactoryVecDe
 use relm4::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender, gtk};
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, error};
+use tracing::{debug, error, info, warn};
 
 use crate::db::connection::DatabaseConnection;
 use crate::models::auth_provider::{Source, SourceType};
@@ -76,6 +76,7 @@ pub struct SourceGroup {
     syncing_libraries: HashSet<String>,
     connection_state: ConnectionState,
     sync_error_message: Option<String>,
+    is_syncing: bool,
 }
 
 impl SourceGroup {
@@ -172,6 +173,10 @@ pub enum SourceGroupInput {
     LibrarySyncStarted(String),
     /// Library sync completed
     LibrarySyncCompleted(String),
+    /// Source sync started
+    SourceSyncStarted,
+    /// Source sync completed
+    SourceSyncCompleted,
 }
 
 #[derive(Debug)]
@@ -224,11 +229,21 @@ impl FactoryComponent for SourceGroup {
                         set_hexpand: true,
                     },
 
+                    // Sync spinner - shown when source is syncing
+                    #[name = "sync_spinner"]
+                    gtk::Spinner {
+                        #[watch]
+                        set_visible: self.is_syncing,
+                        #[watch]
+                        set_spinning: self.is_syncing,
+                        set_halign: gtk::Align::End,
+                    },
+
                     // Connection status indicator - only shown for problems
                     #[name = "connection_icon"]
                     gtk::Image {
                         #[watch]
-                        set_visible: self.connection_state != ConnectionState::Connected,
+                        set_visible: self.connection_state != ConnectionState::Connected && !self.is_syncing,
                         set_icon_name: Some("dialog-warning-symbolic"),  // Default icon
                         set_pixel_size: 16,
                     },
@@ -292,6 +307,7 @@ impl FactoryComponent for SourceGroup {
             syncing_libraries: HashSet::new(),
             connection_state: ConnectionState::Connected, // Assume connected initially
             sync_error_message: None,
+            is_syncing: false,
         }
     }
 
@@ -428,11 +444,11 @@ impl FactoryComponent for SourceGroup {
                 self.sync_error_message = error_msg.clone();
 
                 // Manually update the connection icon widget
-                // Hide icon when Connected, show for problems
-                let should_show = state != ConnectionState::Connected;
+                // Hide icon when Connected or when syncing (spinner takes precedence)
+                let should_show = state != ConnectionState::Connected && !self.is_syncing;
                 debug!(
-                    "Setting icon visibility for {} to {} (state: {:?})",
-                    self.source.name, should_show, state
+                    "Setting icon visibility for {} to {} (state: {:?}, syncing: {})",
+                    self.source.name, should_show, state, self.is_syncing
                 );
                 widgets.connection_icon.set_visible(should_show);
 
@@ -469,6 +485,35 @@ impl FactoryComponent for SourceGroup {
                     };
                     widgets.connection_icon.set_tooltip_text(Some(&tooltip));
                 }
+            }
+            SourceGroupInput::SourceSyncStarted => {
+                info!(
+                    "🔄 SOURCE SYNC STARTED for {}, setting is_syncing=true",
+                    self.source.name
+                );
+                self.is_syncing = true;
+                // Manually update widgets since #[watch] doesn't work in factory components
+                widgets.sync_spinner.set_visible(true);
+                widgets.sync_spinner.set_spinning(true);
+                widgets.connection_icon.set_visible(false);
+                info!(
+                    "🔄 Spinner manually set to visible for source {}",
+                    self.source.name
+                );
+            }
+            SourceGroupInput::SourceSyncCompleted => {
+                info!(
+                    "✅ SOURCE SYNC COMPLETED for {}, setting is_syncing=false",
+                    self.source.name
+                );
+                self.is_syncing = false;
+                // Manually update widgets
+                widgets.sync_spinner.set_visible(false);
+                widgets.sync_spinner.set_spinning(false);
+                // Re-evaluate connection icon visibility
+                let should_show = self.connection_state != ConnectionState::Connected;
+                widgets.connection_icon.set_visible(should_show);
+                info!("✅ Spinner manually hidden for source {}", self.source.name);
             }
         }
     }
@@ -865,20 +910,40 @@ impl Component for Sidebar {
             SidebarInput::BrokerMsg(msg) => {
                 match msg {
                     BrokerMessage::Source(SourceMessage::SyncStarted { source_id, .. }) => {
+                        info!(
+                            "📨 SIDEBAR RECEIVED SyncStarted message for source: {}",
+                            source_id
+                        );
                         self.is_syncing = true;
 
-                        // Find source name
-                        let source_name = {
+                        // Find source name and send sync started message
+                        let (source_name, idx_to_update) = {
                             let guard = self.source_groups.guard();
-                            guard.iter().find_map(|sg| {
+                            let result = guard.iter().enumerate().find_map(|(idx, sg)| {
                                 if sg.source.id == source_id {
-                                    Some(sg.source.name.clone())
+                                    Some((sg.source.name.clone(), idx))
                                 } else {
                                     None
                                 }
-                            })
+                            });
+
+                            match result {
+                                Some((name, idx)) => (name, Some(idx)),
+                                None => (source_id.clone(), None),
+                            }
+                        };
+
+                        // Send sync started message to the source group
+                        if let Some(idx) = idx_to_update {
+                            info!(
+                                "📨 Sending SourceSyncStarted to source group at index {} for source {}",
+                                idx, source_name
+                            );
+                            self.source_groups
+                                .send(idx, SourceGroupInput::SourceSyncStarted);
+                        } else {
+                            warn!("⚠️ Could not find source group for source {}", source_id);
                         }
-                        .unwrap_or_else(|| source_id.clone());
 
                         self.syncing_sources.insert(source_id, source_name.clone());
                         self.update_status_text();
@@ -913,6 +978,10 @@ impl Component for Sidebar {
 
                         // Send reload message and update connection status if we found the source
                         if let Some(idx) = idx_to_update {
+                            // Mark sync as completed
+                            self.source_groups
+                                .send(idx, SourceGroupInput::SourceSyncCompleted);
+
                             self.source_groups
                                 .send(idx, SourceGroupInput::ReloadLibraries);
 
@@ -960,6 +1029,10 @@ impl Component for Sidebar {
                         };
 
                         if let Some(idx) = idx_to_update {
+                            // Mark sync as completed (with error)
+                            self.source_groups
+                                .send(idx, SourceGroupInput::SourceSyncCompleted);
+
                             self.source_groups.send(
                                 idx,
                                 SourceGroupInput::UpdateConnectionStatus(
