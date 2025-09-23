@@ -166,7 +166,7 @@ impl AuthDialog {
 
             if servers.is_empty() {
                 sender_clone.input(AuthDialogInput::PlexAuthError(
-                    "No Plex servers found".to_string(),
+                    "No Plex servers found. You can add a server manually or switch to a different profile.".to_string(),
                 ));
                 return;
             }
@@ -372,7 +372,7 @@ impl AsyncComponent for AuthDialog {
                             set_valign: gtk4::Align::Center,
                             set_vexpand: true,
                             #[watch]
-                            set_visible: !model.plex_auth_in_progress && !model.plex_auth_success && model.plex_auth_error.is_none(),
+                            set_visible: !model.plex_auth_in_progress && !model.plex_auth_success && !model.plex_profile_selection_active && !model.plex_pin_input_active && model.plex_auth_error.is_none(),
 
                             adw::StatusPage {
                                 set_icon_name: Some("network-server-symbolic"),
@@ -456,37 +456,45 @@ impl AsyncComponent for AuthDialog {
                             #[watch]
                             set_visible: model.plex_profile_selection_active,
 
-                            adw::StatusPage {
-                                set_icon_name: Some("avatar-default-symbolic"),
-                                set_title: "Select Profile",
-                                set_description: Some("Choose which profile to use"),
-                                #[wrap(Some)]
-                                set_child = &gtk4::Box {
-                                    set_orientation: gtk4::Orientation::Vertical,
-                                    set_spacing: 16,
+                            gtk4::Box {
+                                set_orientation: gtk4::Orientation::Vertical,
+                                set_spacing: 24,
+                                set_margin_start: 48,
+                                set_margin_end: 48,
+                                set_halign: gtk4::Align::Center,
 
-                                    gtk4::ScrolledWindow {
-                                        set_min_content_height: 200,
-                                        set_max_content_height: 400,
-                                        set_propagate_natural_width: true,
+                                gtk4::Label {
+                                    set_label: "Select Profile",
+                                    add_css_class: "title-2",
+                                    set_halign: gtk4::Align::Center,
+                                },
 
-                                        #[name = "profile_flowbox"]
-                                        gtk4::FlowBox {
-                                            set_homogeneous: true,
-                                            set_column_spacing: 12,
-                                            set_row_spacing: 12,
-                                            set_selection_mode: gtk4::SelectionMode::None,
-                                            set_margin_start: 24,
-                                            set_margin_end: 24,
-                                        },
-                                    },
+                                gtk4::Label {
+                                    set_label: "Choose which profile to use",
+                                    add_css_class: "dim-label",
+                                    set_halign: gtk4::Align::Center,
+                                },
 
-                                    gtk4::Button {
-                                        set_label: "Use Primary Account",
-                                        set_halign: gtk4::Align::Center,
-                                        add_css_class: "pill",
-                                        connect_clicked => AuthDialogInput::SkipProfileSelection,
-                                    },
+                                #[name = "profile_flowbox"]
+                                gtk4::FlowBox {
+                                    set_homogeneous: true,
+                                    set_column_spacing: 16,
+                                    set_row_spacing: 16,
+                                    set_selection_mode: gtk4::SelectionMode::None,
+                                    set_min_children_per_line: 2,
+                                    set_max_children_per_line: 5,
+                                    set_vexpand: false,
+                                    set_hexpand: true,
+                                    set_halign: gtk4::Align::Center,
+                                    set_margin_top: 24,
+                                    set_margin_bottom: 24,
+                                },
+
+                                gtk4::Button {
+                                    set_label: "Use Primary Account",
+                                    set_halign: gtk4::Align::Center,
+                                    add_css_class: "pill",
+                                    connect_clicked => AuthDialogInput::SkipProfileSelection,
                                 },
                             },
                         },
@@ -500,23 +508,41 @@ impl AsyncComponent for AuthDialog {
                             #[watch]
                             set_visible: model.plex_pin_input_active,
 
-                            adw::StatusPage {
-                                set_icon_name: Some("dialog-password-symbolic"),
-                                set_title: "Enter Profile PIN",
-                                #[watch]
-                                set_description: {
-                                    if let Some(ref profile) = model.plex_selected_profile {
-                                        Some("Enter your profile PIN")
-                                    } else {
-                                        Some("Enter PIN")
-                                    }
-                                },
-                                #[wrap(Some)]
-                                set_child = &gtk4::Box {
-                                    set_orientation: gtk4::Orientation::Vertical,
-                                    set_spacing: 16,
+                            gtk4::Box {
+                                set_orientation: gtk4::Orientation::Vertical,
+                                set_spacing: 24,
+                                set_margin_start: 48,
+                                set_margin_end: 48,
+                                set_halign: gtk4::Align::Center,
+                                set_width_request: 400,
 
-                                    adw::PasswordEntryRow {
+                                gtk4::Image {
+                                    set_icon_name: Some("dialog-password-symbolic"),
+                                    set_icon_size: gtk4::IconSize::Large,
+                                    set_margin_bottom: 12,
+                                    set_halign: gtk4::Align::Center,
+                                },
+
+                                gtk4::Label {
+                                    set_label: "Enter Profile PIN",
+                                    add_css_class: "title-2",
+                                    set_halign: gtk4::Align::Center,
+                                },
+
+                                gtk4::Label {
+                                    set_label: "Enter the PIN for this profile",
+                                    add_css_class: "dim-label",
+                                    set_halign: gtk4::Align::Center,
+                                    set_wrap: true,
+                                    set_justify: gtk4::Justification::Center,
+                                },
+
+                                adw::Clamp {
+                                    set_maximum_size: 300,
+                                    set_margin_top: 24,
+                                    set_margin_bottom: 24,
+                                    #[wrap(Some)]
+                                    set_child = &adw::PasswordEntryRow {
                                         set_title: "PIN",
                                         set_show_apply_button: true,
                                         connect_apply[sender] => move |entry| {
@@ -524,12 +550,13 @@ impl AsyncComponent for AuthDialog {
                                             sender.input(AuthDialogInput::PlexPinRequested(pin));
                                         },
                                     },
+                                },
 
-                                    gtk4::Button {
-                                        set_label: "Cancel",
-                                        set_halign: gtk4::Align::Center,
-                                        connect_clicked => AuthDialogInput::CancelPlexAuth,
-                                    },
+                                gtk4::Button {
+                                    set_label: "Cancel",
+                                    set_halign: gtk4::Align::Center,
+                                    add_css_class: "pill",
+                                    connect_clicked => AuthDialogInput::CancelPlexAuth,
                                 },
                             },
                         },
@@ -909,6 +936,9 @@ impl AsyncComponent for AuthDialog {
         // Store reference to dialog for later use
         model.dialog = widgets.dialog.clone();
 
+        // Store reference to profile_flowbox from the view
+        model.profile_flowbox = widgets.profile_flowbox.clone();
+
         // Start progress bar pulse animations
         glib::timeout_add_local(std::time::Duration::from_millis(100), {
             let auth_progress = model.auth_progress.clone();
@@ -1012,21 +1042,42 @@ impl AsyncComponent for AuthDialog {
 
             AuthDialogInput::PlexTokenReceived(token) => {
                 info!("Successfully received Plex token");
+                info!(
+                    "Token received (first 10 chars): {}...",
+                    &token[..10.min(token.len())]
+                );
                 self.plex_auth_in_progress = false;
 
                 // Store the primary token
                 self.plex_primary_token = Some(token.clone());
 
+                info!("Fetching Home users to check if profile selection is needed...");
                 // Fetch Home users to see if we need profile selection
                 let sender_clone = sender.clone();
                 sender.oneshot_command(async move {
+                    info!("Making API call to get_home_users...");
                     match PlexAuth::get_home_users(&token).await {
                         Ok(users) => {
-                            info!("Found {} Home users", users.len());
+                            info!("API call successful. Found {} Home users", users.len());
+                            if !users.is_empty() {
+                                info!("Home users found:");
+                                for user in &users {
+                                    info!(
+                                        "  - {} (id: {}, admin: {}, protected: {})",
+                                        user.name, user.id, user.is_admin, user.is_protected
+                                    );
+                                }
+                            }
+
                             if users.is_empty() {
+                                info!("No Home users found, proceeding with primary token");
                                 // No Home users, proceed with primary token
                                 sender_clone.input(AuthDialogInput::SkipProfileSelection);
                             } else {
+                                info!(
+                                    "Sending PlexHomeUsersReceived message with {} users",
+                                    users.len()
+                                );
                                 // Show profile selection
                                 sender_clone.input(AuthDialogInput::PlexHomeUsersReceived(users));
                             }
@@ -1044,7 +1095,17 @@ impl AsyncComponent for AuthDialog {
             }
 
             AuthDialogInput::PlexHomeUsersReceived(users) => {
-                info!("Showing profile selection with {} users", users.len());
+                info!(
+                    "PlexHomeUsersReceived message received with {} users",
+                    users.len()
+                );
+                info!(
+                    "Current UI state - profile_selection_active: {}, auth_in_progress: {}, auth_success: {}",
+                    self.plex_profile_selection_active,
+                    self.plex_auth_in_progress,
+                    self.plex_auth_success
+                );
+
                 self.plex_home_users = users.clone();
 
                 // Clear previous profile cards
@@ -1053,18 +1114,31 @@ impl AsyncComponent for AuthDialog {
                 }
 
                 // Add profile cards for each user
+                info!("Adding {} profile cards to flowbox", users.len());
                 for user in users {
+                    info!("Creating profile card for user: {}", user.name);
                     let button = gtk4::Button::new();
                     button.add_css_class("flat");
+                    button.add_css_class("card");
                     button.set_tooltip_text(Some(&user.name));
+                    button.set_visible(true);
+                    button.set_can_focus(true);
+                    button.set_width_request(160);
+                    button.set_height_request(180);
 
-                    let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
-                    vbox.set_width_request(120);
+                    let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+                    vbox.set_margin_top(16);
+                    vbox.set_margin_bottom(16);
+                    vbox.set_margin_start(8);
+                    vbox.set_margin_end(8);
+                    vbox.set_visible(true);
+                    vbox.set_valign(gtk4::Align::Center);
+                    vbox.set_halign(gtk4::Align::Center);
 
                     let avatar_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
                     avatar_box.set_halign(gtk4::Align::Center);
 
-                    let avatar = adw::Avatar::new(64, Some(&user.name), true);
+                    let avatar = adw::Avatar::new(80, Some(&user.name), true);
                     // TODO: Set custom image from user.thumb if available
                     avatar_box.append(&avatar);
 
@@ -1072,8 +1146,8 @@ impl AsyncComponent for AuthDialog {
                         let lock_icon = gtk4::Image::from_icon_name("dialog-password-symbolic");
                         lock_icon.add_css_class("warning");
                         lock_icon.set_icon_size(gtk4::IconSize::Normal);
-                        lock_icon.set_margin_top(-16);
-                        lock_icon.set_margin_start(48);
+                        lock_icon.set_margin_top(-20);
+                        lock_icon.set_margin_start(60);
                         lock_icon.set_halign(gtk4::Align::End);
                         avatar_box.append(&lock_icon);
                     }
@@ -1101,9 +1175,39 @@ impl AsyncComponent for AuthDialog {
                     });
 
                     self.profile_flowbox.append(&button);
+                    info!("Added profile card for {} to flowbox", user.name);
+                    info!(
+                        "Button visible: {}, vbox visible: {}",
+                        button.is_visible(),
+                        vbox.is_visible()
+                    );
                 }
 
+                info!(
+                    "All profile cards added. Flowbox child count: {}",
+                    self.profile_flowbox.observe_children().n_items()
+                );
+
+                // Force the flowbox to resize
+                self.profile_flowbox.queue_resize();
+                self.profile_flowbox.queue_draw();
+
+                // Debug flowbox properties
+                info!(
+                    "Flowbox visible: {}, mapped: {}, realized: {}",
+                    self.profile_flowbox.is_visible(),
+                    self.profile_flowbox.is_mapped(),
+                    self.profile_flowbox.is_realized()
+                );
+
+                // Check if any children are visible
+                if let Some(first_child) = self.profile_flowbox.first_child() {
+                    info!("First child visible: {}", first_child.is_visible());
+                }
+
+                info!("Setting profile_selection_active to true");
                 self.plex_profile_selection_active = true;
+                info!("Profile selection UI should now be visible");
             }
 
             AuthDialogInput::SelectPlexProfile(profile) => {
@@ -1180,12 +1284,19 @@ impl AsyncComponent for AuthDialog {
 
             AuthDialogInput::PlexProfileTokenReceived(profile_token) => {
                 info!("Profile token received, proceeding with source creation");
+                self.plex_profile_selection_active = false; // Hide profile selection first
                 self.plex_auth_success = true;
                 self.proceed_with_plex_source_creation(profile_token, sender);
             }
 
             AuthDialogInput::SkipProfileSelection => {
-                info!("Skipping profile selection, using primary token");
+                info!("SkipProfileSelection message received");
+                info!(
+                    "Current UI state - profile_selection_active: {}, auth_success: {}",
+                    self.plex_profile_selection_active, self.plex_auth_success
+                );
+                info!("Using primary token to create source");
+
                 self.plex_auth_success = true;
                 let token = self
                     .plex_primary_token
@@ -1221,7 +1332,8 @@ impl AsyncComponent for AuthDialog {
                 self.plex_primary_token = None;
                 self.plex_selected_profile = None;
                 self.plex_home_users.clear();
-                sender.input(AuthDialogInput::StartPlexAuth);
+                // Don't automatically start auth, just reset to initial state
+                // sender.input(AuthDialogInput::StartPlexAuth);
             }
 
             AuthDialogInput::OpenPlexLink => {
@@ -1592,11 +1704,11 @@ impl AsyncComponent for AuthDialog {
                     return;
                 }
 
-                // Mark as successful since user provided token directly
+                // Don't mark as successful yet - let PlexTokenReceived handle the flow
                 self.plex_auth_in_progress = false;
-                self.plex_auth_success = true;
+                // self.plex_auth_success = true; // REMOVED - this was preventing profile selection!
 
-                // Store the token to create source later
+                // Send the token to trigger the normal flow (including profile selection check)
                 sender.input(AuthDialogInput::PlexTokenReceived(self.plex_token.clone()));
             }
         }

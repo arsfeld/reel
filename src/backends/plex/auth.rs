@@ -201,11 +201,18 @@ impl PlexAuth {
             return Err(anyhow!("Failed to discover servers: {}", status));
         }
 
-        // Parse the response as an array of resources
-        let resources: Vec<PlexServer> = response
-            .json()
-            .await
-            .map_err(|e| anyhow!("Failed to parse server discovery response: {}", e))?;
+        // The v2 resources endpoint should return JSON
+        let resources: Vec<PlexServer> = match response.json().await {
+            Ok(servers) => servers,
+            Err(e) => {
+                // If JSON parsing fails, allow manual server entry
+                info!(
+                    "Server discovery failed ({}), allowing manual server entry",
+                    e
+                );
+                Vec::new()
+            }
+        };
 
         // Filter for actual Plex Media Servers (not players/controllers)
         let servers: Vec<PlexServer> = resources
@@ -219,18 +226,27 @@ impl PlexAuth {
 
     /// Get list of Home users available for the authenticated account
     pub async fn get_home_users(auth_token: &str) -> Result<Vec<PlexHomeUser>> {
+        info!(
+            "get_home_users called with token starting: {}...",
+            &auth_token[..10.min(auth_token.len())]
+        );
         let client = reqwest::Client::new();
 
+        let url = format!("{}/api/v2/home/users", PLEX_TV_URL);
+        info!("Making request to: {}", url);
+
         let response = client
-            .get(format!("{}/api/v2/home/users", PLEX_TV_URL))
+            .get(&url)
             .headers(create_standard_headers(Some(auth_token)))
             .send()
             .await?;
 
+        info!("Response status: {}", response.status());
+
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            debug!("Failed to get Home users with status {}: {}", status, text);
+            info!("Failed to get Home users with status {}: {}", status, text);
 
             if status == reqwest::StatusCode::UNAUTHORIZED {
                 return Err(anyhow!("Authentication failed: Invalid or expired token"));
@@ -239,12 +255,30 @@ impl PlexAuth {
             return Err(anyhow!("Failed to get Home users: {}", status));
         }
 
-        let users: Vec<PlexHomeUser> = response
-            .json()
-            .await
+        let text = response.text().await?;
+        info!(
+            "Response body (first 500 chars): {}...",
+            &text[..500.min(text.len())]
+        );
+
+        // The API returns an object with a "users" array, not a direct array
+        #[derive(Deserialize)]
+        struct HomeUsersResponse {
+            users: Vec<PlexHomeUser>,
+        }
+
+        let response_data: HomeUsersResponse = serde_json::from_str(&text)
             .map_err(|e| anyhow!("Failed to parse Home users response: {}", e))?;
 
-        info!("Found {} Home users", users.len());
+        let users = response_data.users;
+
+        info!("Successfully parsed {} Home users", users.len());
+        for user in &users {
+            info!(
+                "  User: {} (id: {}, admin: {}, protected: {})",
+                user.name, user.id, user.is_admin, user.is_protected
+            );
+        }
         Ok(users)
     }
 
@@ -266,11 +300,21 @@ impl PlexAuth {
             json_body["pin"] = serde_json::json!(pin_code);
         }
 
+        let url = format!("{}/api/home/users/{}/switch", PLEX_TV_URL, user_id);
+        info!("Attempting to switch to user with URL: {}", url);
+        info!(
+            "User ID being used: '{}' (length: {})",
+            user_id,
+            user_id.len()
+        );
+        if let Some(_) = pin {
+            info!("PIN provided: yes");
+        } else {
+            info!("PIN provided: no");
+        }
+
         let response = client
-            .post(format!(
-                "{}/api/v2/home/users/{}/switch",
-                PLEX_TV_URL, user_id
-            ))
+            .post(url)
             .headers(create_standard_headers(Some(auth_token)))
             .json(&json_body)
             .send()
@@ -292,19 +336,40 @@ impl PlexAuth {
             return Err(anyhow!("Failed to switch to user: {}", status));
         }
 
-        #[derive(Deserialize)]
-        struct SwitchResponse {
-            #[serde(rename = "authToken")]
-            auth_token: String,
-        }
+        // Get the response text to log it before parsing
+        let response_text = response.text().await?;
+        debug!(
+            "Switch user response (first 500 chars): {}...",
+            &response_text[..500.min(response_text.len())]
+        );
 
-        let switch_response: SwitchResponse = response
-            .json()
-            .await
-            .map_err(|e| anyhow!("Failed to parse switch user response: {}", e))?;
+        // The API returns XML even when we request JSON, so we need to parse the XML
+        // Look for authToken="..." in the XML response
+        let auth_token = if response_text.starts_with("<?xml") {
+            // Parse authToken from XML attributes
+            let token_start = response_text
+                .find("authToken=\"")
+                .ok_or_else(|| anyhow!("authToken not found in XML response"))?;
+            let token_start = token_start + 11; // Length of 'authToken="'
+            let token_end = response_text[token_start..]
+                .find('"')
+                .ok_or_else(|| anyhow!("Failed to find end of authToken in XML"))?;
+            response_text[token_start..token_start + token_end].to_string()
+        } else {
+            // Try to parse as JSON if not XML
+            #[derive(Deserialize)]
+            struct SwitchResponse {
+                #[serde(rename = "authToken")]
+                auth_token: String,
+            }
+
+            let switch_response: SwitchResponse = serde_json::from_str(&response_text)
+                .map_err(|e| anyhow!("Failed to parse switch user response as JSON: {}", e))?;
+            switch_response.auth_token
+        };
 
         info!("Successfully switched to Home user {}", user_id);
-        Ok(switch_response.auth_token)
+        Ok(auth_token)
     }
 
     /// Test-only version that accepts a custom base URL
@@ -358,7 +423,7 @@ impl PlexAuth {
         }
 
         let response = client
-            .post(format!("{}/api/v2/home/users/{}/switch", base_url, user_id))
+            .post(format!("{}/api/home/users/{}/switch", base_url, user_id))
             .headers(create_standard_headers(Some(auth_token)))
             .json(&json_body)
             .send()
@@ -380,19 +445,36 @@ impl PlexAuth {
             return Err(anyhow!("Failed to switch to user: {}", status));
         }
 
-        #[derive(Deserialize)]
-        struct SwitchResponse {
-            #[serde(rename = "authToken")]
-            auth_token: String,
-        }
+        // Get the response text to log it before parsing
+        let response_text = response.text().await?;
 
-        let switch_response: SwitchResponse = response
-            .json()
-            .await
-            .map_err(|e| anyhow!("Failed to parse switch user response: {}", e))?;
+        // The API returns XML even when we request JSON, so we need to parse the XML
+        // Look for authToken="..." in the XML response
+        let auth_token = if response_text.starts_with("<?xml") {
+            // Parse authToken from XML attributes
+            let token_start = response_text
+                .find("authToken=\"")
+                .ok_or_else(|| anyhow!("authToken not found in XML response"))?;
+            let token_start = token_start + 11; // Length of 'authToken="'
+            let token_end = response_text[token_start..]
+                .find('"')
+                .ok_or_else(|| anyhow!("Failed to find end of authToken in XML"))?;
+            response_text[token_start..token_start + token_end].to_string()
+        } else {
+            // Try to parse as JSON if not XML
+            #[derive(Deserialize)]
+            struct SwitchResponse {
+                #[serde(rename = "authToken")]
+                auth_token: String,
+            }
+
+            let switch_response: SwitchResponse = serde_json::from_str(&response_text)
+                .map_err(|e| anyhow!("Failed to parse switch user response as JSON: {}", e))?;
+            switch_response.auth_token
+        };
 
         info!("Successfully switched to Home user {}", user_id);
-        Ok(switch_response.auth_token)
+        Ok(auth_token)
     }
 }
 
@@ -407,6 +489,7 @@ pub struct PlexUser {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexHomeUser {
+    #[serde(with = "either_string_or_number")]
     pub id: String,
     #[serde(rename = "title")]
     pub name: String,
@@ -415,6 +498,35 @@ pub struct PlexHomeUser {
     #[serde(rename = "admin")]
     pub is_admin: bool,
     pub thumb: Option<String>,
+}
+
+// Module to handle fields that can be either string or number
+mod either_string_or_number {
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &String, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(value)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum StringOrNumber {
+            String(String),
+            Number(i64),
+        }
+
+        match StringOrNumber::deserialize(deserializer)? {
+            StringOrNumber::String(s) => Ok(s),
+            StringOrNumber::Number(n) => Ok(n.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
