@@ -1,4 +1,18 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use serde_json::Value;
+
+// Helper function to deserialize fields that can be either string or number
+fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::String(s) => Ok(s),
+        Value::Number(n) => Ok(n.to_string()),
+        _ => Err(serde::de::Error::custom("expected string or number")),
+    }
+}
 
 // Plex Identity response for getting server machine ID
 #[allow(dead_code)]
@@ -234,17 +248,18 @@ pub struct PlexMediaResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct PlexMediaContainer {
-    #[serde(rename = "Metadata", default)]
+    #[serde(default)]
     pub metadata: Vec<PlexMediaMetadata>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct PlexMediaMetadata {
+    #[serde(rename = "ratingKey")]
     pub rating_key: String,
-    #[serde(rename = "Media", default)]
+    #[serde(default)]
     pub media: Vec<PlexMedia>,
     #[serde(default)]
     pub duration: Option<i64>,
@@ -253,6 +268,7 @@ pub struct PlexMediaMetadata {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexMedia {
+    #[serde(deserialize_with = "deserialize_string_or_number")]
     pub id: String,
     #[serde(default)]
     pub bitrate: Option<u64>,
@@ -271,6 +287,7 @@ pub struct PlexMedia {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexPart {
+    #[serde(deserialize_with = "deserialize_string_or_number")]
     pub id: String,
     pub key: String,
     #[serde(default)]
