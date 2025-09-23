@@ -1,7 +1,7 @@
 use anyhow::Result;
 use gtk4;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use super::gstreamer_player::PlayerState as GstPlayerState;
 use super::mpv_player::PlayerState as MpvPlayerState;
