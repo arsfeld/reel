@@ -59,11 +59,21 @@ echo "Building Docker image: $IMAGE_TAG"
 cd "$PROJECT_ROOT"
 
 # Build the image with cargo-chef caching
+# Use cache options if provided via environment variables
+CACHE_OPTS=""
+if [ -n "$BUILDX_CACHE_FROM" ]; then
+    CACHE_OPTS="--cache-from $BUILDX_CACHE_FROM"
+fi
+if [ -n "$BUILDX_CACHE_TO" ]; then
+    CACHE_OPTS="$CACHE_OPTS --cache-to $BUILDX_CACHE_TO"
+fi
+
 docker buildx build \
     --platform "$DOCKER_PLATFORM" \
     --target builder \
     --tag "$IMAGE_TAG" \
     --load \
+    $CACHE_OPTS \
     -f "$DOCKERFILE" \
     .
 
