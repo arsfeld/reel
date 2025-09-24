@@ -207,7 +207,7 @@ impl MpvPlayer {
     // Thread-safe proc address function that doesn't access GLArea
     unsafe extern "C" fn get_proc_address_cached(
         _ctx: *mut c_void,
-        name: *const i8,
+        name: *const libc::c_char,
     ) -> *mut c_void {
         unsafe {
             // Static cache for proc lookups - they never change once resolved
@@ -233,12 +233,14 @@ impl MpvPlayer {
                     // On Linux, use EGL
                     *gl_ptr = Some(libc::dlsym(
                         libc::RTLD_DEFAULT,
-                        b"eglGetProcAddress\0".as_ptr() as *const i8,
+                        b"eglGetProcAddress\0".as_ptr() as *const libc::c_char,
                     ));
                 }
             }
 
-            let name_str = CStr::from_ptr(name).to_string_lossy().to_string();
+            let name_str = CStr::from_ptr(name as *const libc::c_char)
+                .to_string_lossy()
+                .to_string();
 
             // Check cache first - use raw pointer to avoid reference issues
             let cache_ptr = &raw mut PROC_CACHE;
@@ -289,14 +291,14 @@ impl MpvPlayer {
                 if let Some(egl_get_proc) = *gl_ptr
                     && !egl_get_proc.is_null()
                 {
-                    type EglGetProcFn = unsafe extern "C" fn(*const i8) -> *mut c_void;
+                    type EglGetProcFn = unsafe extern "C" fn(*const libc::c_char) -> *mut c_void;
                     let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
-                    func = get_proc(name);
+                    func = get_proc(name as *const libc::c_char);
                 }
 
                 // Fallback to dlsym if needed
                 if func.is_null() {
-                    func = libc::dlsym(libc::RTLD_DEFAULT, name);
+                    func = libc::dlsym(libc::RTLD_DEFAULT, name as *const libc::c_char);
                 }
             }
 
@@ -590,14 +592,15 @@ impl MpvPlayer {
                             {
                                 let egl_get_proc = libc::dlsym(
                                     libc::RTLD_DEFAULT,
-                                    b"eglGetProcAddress\0".as_ptr() as *const i8,
+                                    b"eglGetProcAddress\0".as_ptr() as *const libc::c_char,
                                 );
                                 if !egl_get_proc.is_null() {
                                     type EglGetProcFn =
-                                        unsafe extern "C" fn(*const i8) -> *const c_void;
+                                        unsafe extern "C" fn(*const libc::c_char) -> *const c_void;
                                     let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
-                                    let gl_get_integerv =
-                                        get_proc(b"glGetIntegerv\0".as_ptr() as *const i8);
+                                    let gl_get_integerv = get_proc(
+                                        b"glGetIntegerv\0".as_ptr() as *const libc::c_char
+                                    );
                                     if !gl_get_integerv.is_null() {
                                         *gl_integerv_ptr =
                                             Some(std::mem::transmute(gl_get_integerv));
@@ -651,8 +654,10 @@ impl MpvPlayer {
                         static mut GL_FLUSH: Option<unsafe extern "C" fn()> = None;
                         let gl_flush_ptr = &raw mut GL_FLUSH;
                         if (*gl_flush_ptr).is_none() {
-                            let gl_flush =
-                                libc::dlsym(libc::RTLD_DEFAULT, b"glFlush\0".as_ptr() as *const i8);
+                            let gl_flush = libc::dlsym(
+                                libc::RTLD_DEFAULT,
+                                b"glFlush\0".as_ptr() as *const libc::c_char,
+                            );
                             if !gl_flush.is_null() {
                                 *gl_flush_ptr = Some(std::mem::transmute(gl_flush));
                             }

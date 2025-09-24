@@ -57,15 +57,35 @@ mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
 
 # Copy our files (assumes release binary already built)
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-  # For cross-compilation, the binary is in a different location
-  if [ -f "target/aarch64-unknown-linux-gnu/release/reel" ]; then
+  # For cross-compilation, check multiple possible locations
+  if [ -f "reel-linux-aarch64" ]; then
+    # Docker build extracts it with this name
+    cp reel-linux-aarch64 AppDir/usr/bin/reel
+  elif [ -f "target/aarch64-unknown-linux-gnu/release/reel" ]; then
     cp target/aarch64-unknown-linux-gnu/release/reel AppDir/usr/bin/
+  elif [ -f "target/release/reel" ]; then
+    # Docker build puts it in standard location
+    cp target/release/reel AppDir/usr/bin/
+  elif [ -f "reel" ]; then
+    # Or it might be extracted to current directory
+    cp reel AppDir/usr/bin/
   else
-    echo "Error: Binary not found at target/aarch64-unknown-linux-gnu/release/reel"
+    echo "Error: Binary not found in any expected location"
+    echo "Checked: reel-linux-aarch64, target/aarch64-unknown-linux-gnu/release/reel, target/release/reel, ./reel"
     exit 1
   fi
 else
-  cp target/release/reel AppDir/usr/bin/
+  if [ -f "reel-linux-x86_64" ]; then
+    # Docker build extracts it with this name
+    cp reel-linux-x86_64 AppDir/usr/bin/reel
+  elif [ -f "target/release/reel" ]; then
+    cp target/release/reel AppDir/usr/bin/
+  elif [ -f "reel" ]; then
+    cp reel AppDir/usr/bin/
+  else
+    echo "Error: Binary not found at reel-linux-x86_64, target/release/reel or ./reel"
+    exit 1
+  fi
 fi
 chmod +x AppDir/usr/bin/reel
 cp data/dev.arsfeld.Reel.desktop AppDir/usr/share/applications/
