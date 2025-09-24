@@ -183,10 +183,27 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Set up Docker buildx cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-${{ matrix.arch }}-
+            ${{ runner.os }}-buildx-
+
       - name: Build packages with Docker
         run: |
+          # Set cache environment variables for the build script
+          export BUILDX_CACHE_FROM="type=local,src=/tmp/.buildx-cache"
+          export BUILDX_CACHE_TO="type=local,dest=/tmp/.buildx-cache-new,mode=max"
+
           # Use the Docker build script to build all packages
           ./scripts/build-with-docker.sh ${{ matrix.arch }} all
+
+          # Move cache to correct location (atomic)
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
       - name: List built artifacts
         run: |
