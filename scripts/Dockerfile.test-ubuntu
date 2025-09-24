@@ -1,0 +1,26 @@
+# Test image for Ubuntu with GTK4 and GStreamer runtime dependencies
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install runtime dependencies and test tools
+RUN apt-get update && apt-get install -y \
+    # GTK4 and UI runtime
+    libgtk-4-1 \
+    libadwaita-1-0 \
+    # GStreamer runtime
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    libmpv2 \
+    # Other runtime libs
+    libsqlite3-0 \
+    libssl3 \
+    # Test utilities
+    file \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+CMD ["/bin/bash"]

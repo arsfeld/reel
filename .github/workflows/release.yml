@@ -183,163 +183,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Set up QEMU for cross-compilation
         if: matrix.arch == 'aarch64'
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
-      - name: Install cross-compilation tools
-        if: matrix.arch == 'aarch64'
+      - name: Build packages with Docker
         run: |
-          # Enable ARM64 architecture for apt
-          sudo dpkg --add-architecture arm64
-          
-          # Remove the default Ubuntu sources that don't support ARM64
-          sudo rm -f /etc/apt/sources.list.d/ubuntu.sources
-          
-          # Create proper deb822 format sources for both amd64 and arm64
-          cat <<EOF | sudo tee /etc/apt/sources.list.d/amd64.sources
-          Types: deb
-          URIs: http://azure.archive.ubuntu.com/ubuntu/
-          Suites: noble noble-updates noble-backports
-          Components: main restricted universe multiverse
-          Architectures: amd64
-          
-          Types: deb
-          URIs: http://security.ubuntu.com/ubuntu/
-          Suites: noble-security
-          Components: main restricted universe multiverse
-          Architectures: amd64
-          EOF
-          
-          cat <<EOF | sudo tee /etc/apt/sources.list.d/arm64.sources
-          Types: deb
-          URIs: http://ports.ubuntu.com/ubuntu-ports/
-          Suites: noble noble-updates noble-backports noble-security
-          Components: main restricted universe multiverse
-          Architectures: arm64
-          EOF
-          
-          sudo apt-get update
-          
-          # Install cross-compilation tools and libraries
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            pkg-config \
-            libssl-dev:arm64
+          # Use the Docker build script to build all packages
+          ./scripts/build-with-docker.sh ${{ matrix.arch }} all
 
-      - name: Install system dependencies
+      - name: List built artifacts
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgtk-4-dev \
-            libadwaita-1-dev \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            libgstreamer-plugins-bad1.0-dev \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly \
-            gstreamer1.0-libav \
-            libmpv-dev \
-            libsqlite3-dev \
-            pkg-config \
-            libssl-dev \
-            libdbus-1-dev \
-            blueprint-compiler \
-            rpm \
-            file
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || '' }}
-
-      - name: Cache cargo dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-release-
-
-      - name: Install cargo packaging tools
-        run: |
-          cargo install cargo-deb --locked || true
-          cargo install cargo-generate-rpm --locked || true
-
-      - name: Build release binary (native)
-        if: matrix.arch == 'x86_64'
-        run: |
-          cargo build --release
-          strip target/release/reel
-
-      - name: Build release binary (cross-compile ARM64)
-        if: matrix.arch == 'aarch64'
-        run: |
-          export PKG_CONFIG_ALLOW_CROSS=1
-          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
-          export CC=aarch64-linux-gnu-gcc
-          export CXX=aarch64-linux-gnu-g++
-          export AR=aarch64-linux-gnu-ar
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-          cargo build --release --target aarch64-unknown-linux-gnu
-          aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/reel
-
-      - name: Package as tarball
-        run: |
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            cp target/aarch64-unknown-linux-gnu/release/reel reel
-            tar -czf reel-linux-aarch64.tar.gz reel
-          else
-            cp target/release/reel reel
-            tar -czf reel-linux-x86_64.tar.gz reel
-          fi
-
-      - name: Build Debian package
-        run: |
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            cargo deb --no-build --target aarch64-unknown-linux-gnu
-            mv target/aarch64-unknown-linux-gnu/debian/*.deb reel-${{ needs.create-release.outputs.version }}-arm64.deb || true
-          else
-            cargo deb --no-build
-            mv target/debian/*.deb reel-${{ needs.create-release.outputs.version }}-amd64.deb || true
-          fi
-
-      - name: Build RPM package
-        run: |
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            cargo generate-rpm --target aarch64-unknown-linux-gnu
-            mv target/aarch64-unknown-linux-gnu/generate-rpm/*.rpm reel-${{ needs.create-release.outputs.version }}-aarch64.rpm || true
-          else
-            cargo generate-rpm
-            mv target/generate-rpm/*.rpm reel-${{ needs.create-release.outputs.version }}-x86_64.rpm || true
-          fi
-
-      - name: Install additional AppImage dependencies
-        run: |
-          # Install additional dependencies that LinuxDeploy might need
-          sudo apt-get install -y \
-            libfuse2 \
-            desktop-file-utils \
-            zsync \
-            patchelf
-
-      - name: Build AppImage
-        run: |
-          # Set version environment variable for the build script
-          export VERSION=${{ needs.create-release.outputs.version }}
-          export ARCH=${{ matrix.arch }}
-
-          # Use our standalone AppImage build script
-          ./scripts/build-appimage.sh
+          echo "Built artifacts:"
+          ls -la reel-* || true
 
       - name: Upload Linux Release Assets
         uses: softprops/action-gh-release@v2
@@ -347,6 +208,7 @@ jobs:
           tag_name: ${{ needs.create-release.outputs.version }}
           files: |
             reel-linux-*.tar.gz
+            reel-linux-*
             reel-*.deb
             reel-*.rpm
             reel-*.AppImage

@@ -535,7 +535,7 @@ pub struct Sidebar {
 impl Sidebar {
     fn update_status_text(&mut self) {
         if !self.has_sources {
-            self.connection_status = "No sources configured".to_string();
+            self.connection_status = String::new();
         } else if !self.syncing_sources.is_empty() || !self.syncing_libraries.is_empty() {
             // Build status message based on what's syncing
             let mut status_parts = Vec::new();
@@ -672,7 +672,9 @@ impl Component for Sidebar {
                         set_margin_all: 8,
                         set_visible: model.has_sources,
 
+                        #[name = "status_label"]
                         gtk::Label {
+                            #[watch]
                             set_text: &model.connection_status,
                             add_css_class: "dim-label",
                             add_css_class: "caption",
@@ -713,7 +715,7 @@ impl Component for Sidebar {
             db,
             source_groups,
             has_sources: false,
-            connection_status: "No sources configured".to_string(),
+            connection_status: String::new(),
             is_syncing: false,
             selected_library_id: None,
             syncing_sources: HashMap::new(),
@@ -778,7 +780,7 @@ impl Component for Sidebar {
                 self.is_syncing = false;
 
                 if sources.is_empty() {
-                    self.connection_status = "No sources configured".to_string();
+                    self.connection_status = String::new();
                 } else {
                     self.connection_status = format!("All {} sources connected", sources.len());
                 }
