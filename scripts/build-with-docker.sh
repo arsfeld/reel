@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+set -e
+
+# Script to build Reel using Docker buildx for multiple architectures
+# This uses the shared Dockerfile.build for consistent builds
+
+# Configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DOCKERFILE="$SCRIPT_DIR/Dockerfile.build"
+
+# Parse arguments
+ARCH=${1:-$(uname -m)}
+BUILD_TYPE=${2:-all} # all, binary, deb, rpm, appimage
+
+# Map architecture names
+case "$ARCH" in
+    x86_64|amd64)
+        DOCKER_PLATFORM="linux/amd64"
+        ARCH_NAME="x86_64"
+        DEB_ARCH="amd64"
+        ;;
+    aarch64|arm64)
+        DOCKER_PLATFORM="linux/arm64"
+        ARCH_NAME="aarch64"
+        DEB_ARCH="arm64"
+        ;;
+    *)
+        echo "Unsupported architecture: $ARCH"
+        echo "Supported: x86_64, amd64, aarch64, arm64"
+        exit 1
+        ;;
+esac
+
+echo "Building Reel for $ARCH_NAME using Docker buildx"
+echo "Build type: $BUILD_TYPE"
+echo "Docker platform: $DOCKER_PLATFORM"
+
+# Ensure buildx is available and set up
+if ! docker buildx version &>/dev/null; then
+    echo "Docker buildx is not available. Please install Docker Desktop or enable buildx."
+    exit 1
+fi
+
+# Create or use existing buildx builder
+BUILDER_NAME="reel-builder"
+if ! docker buildx inspect $BUILDER_NAME &>/dev/null; then
+    echo "Creating buildx builder: $BUILDER_NAME"
+    docker buildx create --name $BUILDER_NAME --use --driver docker-container
+else
+    echo "Using existing buildx builder: $BUILDER_NAME"
+    docker buildx use $BUILDER_NAME
+fi
+
+# Build the Docker image for the target architecture
+IMAGE_TAG="reel-build:$ARCH_NAME"
+echo "Building Docker image: $IMAGE_TAG"
+
+cd "$PROJECT_ROOT"
+
+# Build the image with cargo-chef caching
+docker buildx build \
+    --platform "$DOCKER_PLATFORM" \
+    --target builder \
+    --tag "$IMAGE_TAG" \
+    --load \
+    -f "$DOCKERFILE" \
+    .
+
+# Extract version from Cargo.toml
+VERSION=$(grep '^version' Cargo.toml | cut -d'"' -f2)
+echo "Version: $VERSION"
+
+# Function to run commands in the container
+run_in_container() {
+    docker run --rm \
+        -v "$PROJECT_ROOT:/host" \
+        --platform "$DOCKER_PLATFORM" \
+        "$IMAGE_TAG" \
+        bash -c "$1"
+}
+
+# Build requested package types
+case "$BUILD_TYPE" in
+    binary|all)
+        echo "=== Extracting release binary ==="
+        run_in_container "cp /workspace/target/release/reel /host/reel-linux-$ARCH_NAME && \
+                         chmod +x /host/reel-linux-$ARCH_NAME"
+        echo "✓ Binary: reel-linux-$ARCH_NAME"
+        ;;&  # Fall through for "all"
+
+    deb|all)
+        echo "=== Building Debian package ==="
+        run_in_container "cd /workspace && cargo deb --no-build && \
+                         cp target/debian/*.deb /host/reel-$VERSION-$DEB_ARCH.deb"
+        echo "✓ Debian package: reel-$VERSION-$DEB_ARCH.deb"
+        ;;&
+
+    rpm|all)
+        echo "=== Building RPM package ==="
+        run_in_container "cd /workspace && cargo generate-rpm && \
+                         cp target/generate-rpm/*.rpm /host/reel-$VERSION-$ARCH_NAME.rpm"
+        echo "✓ RPM package: reel-$VERSION-$ARCH_NAME.rpm"
+        ;;&
+
+    appimage|all)
+        echo "=== Building AppImage ==="
+        # Set environment variables for the AppImage script
+        run_in_container "cd /workspace && \
+                         export VERSION=$VERSION && \
+                         export ARCH=$ARCH_NAME && \
+                         ./scripts/build-appimage.sh && \
+                         cp reel-*.AppImage /host/"
+        echo "✓ AppImage: reel-$VERSION-$ARCH_NAME.AppImage"
+        ;;
+
+    *)
+        if [ "$BUILD_TYPE" != "all" ]; then
+            echo "Unknown build type: $BUILD_TYPE"
+            echo "Supported: all, binary, deb, rpm, appimage"
+            exit 1
+        fi
+        ;;
+esac
+
+echo ""
+echo "=== Build complete ==="
+echo "Architecture: $ARCH_NAME"
+echo "Built artifacts:"
+[ -f "reel-linux-$ARCH_NAME" ] && echo "  - reel-linux-$ARCH_NAME"
+[ -f "reel-$VERSION-$DEB_ARCH.deb" ] && echo "  - reel-$VERSION-$DEB_ARCH.deb"
+[ -f "reel-$VERSION-$ARCH_NAME.rpm" ] && echo "  - reel-$VERSION-$ARCH_NAME.rpm"
+[ -f "reel-$VERSION-$ARCH_NAME.AppImage" ] && echo "  - reel-$VERSION-$ARCH_NAME.AppImage"

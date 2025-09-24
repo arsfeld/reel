@@ -606,13 +606,36 @@ impl AsyncComponent for ShowDetailsPage {
             ShowDetailsCommand::LoadEpisodes(show_id, season_num) => {
                 let cmd = GetEpisodesCommand {
                     db: (*self.db).clone(),
-                    show_id: crate::models::ShowId::new(show_id),
+                    show_id: crate::models::ShowId::new(show_id.clone()),
                     season_number: Some(season_num),
                 };
 
                 match Command::execute(&cmd).await {
                     Ok(episodes) => {
+                        tracing::debug!(
+                            "Loaded {} episodes from database for show {} season {}",
+                            episodes.len(),
+                            show_id,
+                            season_num
+                        );
+
+                        // Debug log each episode
+                        for (index, episode) in episodes.iter().enumerate() {
+                            tracing::debug!(
+                                "Episode {}: ID={}, Title='{}', Season={}, Episode={}",
+                                index,
+                                episode.id,
+                                episode.title,
+                                episode.season_number,
+                                episode.episode_number
+                            );
+                        }
+
                         self.episodes = episodes;
+                        tracing::debug!(
+                            "About to update episode grid with {} episodes",
+                            self.episodes.len()
+                        );
                         self.update_episode_grid(&sender);
                     }
                     Err(e) => {
@@ -707,16 +730,31 @@ async fn load_image_from_url(
 
 impl ShowDetailsPage {
     fn update_episode_grid(&mut self, sender: &AsyncComponentSender<Self>) {
+        tracing::debug!(
+            "update_episode_grid called with {} episodes",
+            self.episodes.len()
+        );
+
         // Clear existing children and picture references
+        let mut child_count = 0;
         while let Some(child) = self.episode_grid.first_child() {
             self.episode_grid.remove(&child);
+            child_count += 1;
         }
+        tracing::debug!("Cleared {} existing children from grid", child_count);
         self.episode_pictures.clear();
 
         // Add episode cards
         for (index, episode) in self.episodes.iter().enumerate() {
             let (card, picture) = create_episode_card(episode, index, sender.clone());
             self.episode_grid.append(&card);
+            tracing::debug!(
+                "Added episode card {} to grid: '{}' (S{}E{})",
+                index,
+                episode.title,
+                episode.season_number,
+                episode.episode_number
+            );
 
             // Store picture reference for later updates
             self.episode_pictures.insert(index, picture.clone());
@@ -742,6 +780,23 @@ impl ShowDetailsPage {
             // Focus on the first unwatched episode for better visibility
             child.grab_focus();
         }
+
+        // Final check: ensure the grid has children and is visible
+        let final_child_count = {
+            let mut count = 0;
+            let mut child = self.episode_grid.first_child();
+            while let Some(c) = child {
+                count += 1;
+                child = c.next_sibling();
+            }
+            count
+        };
+        tracing::debug!(
+            "Episode grid update complete: {} children in grid, is_visible={}, is_realized={}",
+            final_child_count,
+            self.episode_grid.is_visible(),
+            self.episode_grid.is_realized()
+        );
     }
 }
 

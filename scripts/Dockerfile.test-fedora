@@ -1,0 +1,23 @@
+# Test image for Fedora with GTK4 and GStreamer runtime dependencies
+FROM fedora:40
+
+# Install runtime dependencies and test tools
+RUN dnf install -y \
+    # GTK4 and UI runtime
+    gtk4 \
+    libadwaita \
+    # GStreamer runtime
+    gstreamer1-plugins-base \
+    gstreamer1-plugins-good \
+    gstreamer1-plugins-bad-free \
+    gstreamer1-plugins-ugly-free \
+    gstreamer1-libav \
+    mpv-libs \
+    # Other runtime libs
+    sqlite \
+    openssl \
+    # Test utilities
+    file \
+    && dnf clean all
+
+CMD ["/bin/bash"]

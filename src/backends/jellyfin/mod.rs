@@ -508,11 +508,13 @@ impl MediaBackend for JellyfinBackend {
         if let Some(season_info) = seasons.iter().find(|s| s.season_number == season) {
             let mut episodes = api.get_episodes(&season_info.id).await?;
 
-            // Ensure show_id is set correctly for all episodes
+            // Ensure show_id and season_number are set correctly for all episodes
             for episode in &mut episodes {
                 if episode.show_id.is_none() {
                     episode.show_id = Some(show_id.to_string());
                 }
+                // Fix: Ensure season_number is set correctly
+                episode.season_number = season;
             }
 
             return Ok(episodes);

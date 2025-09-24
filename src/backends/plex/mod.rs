@@ -1079,11 +1079,13 @@ impl MediaBackend for PlexBackend {
         // Now get the episodes for the correct season
         let mut episodes = api.get_episodes(&season.id).await?;
 
-        // Ensure show_id is set correctly for all episodes
+        // Ensure show_id and season_number are set correctly for all episodes
         for episode in &mut episodes {
             if episode.show_id.is_none() {
                 episode.show_id = Some(show_id.to_string());
             }
+            // Fix: Set the correct season_number since Plex API doesn't provide it
+            episode.season_number = season_number;
         }
 
         Ok(episodes)
