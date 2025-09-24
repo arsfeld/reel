@@ -104,29 +104,20 @@ jobs:
           ## Downloads
 
           ### x86_64 (Intel/AMD)
-          - **Flatpak Bundle**: `reel-${{ steps.get_version.outputs.version }}-x86_64.flatpak` - Universal Linux package (recommended)
-          - **Linux Tarball**: `reel-linux-x86_64.tar.gz` - Extract and run `./reel`
+          - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage` - Portable, runs on most Linux distributions (recommended)
           - **Debian/Ubuntu**: `reel-${{ steps.get_version.outputs.version }}-amd64.deb` - Install with `sudo dpkg -i`
           - **Fedora/RHEL**: `reel-${{ steps.get_version.outputs.version }}-x86_64.rpm` - Install with `sudo rpm -i`
-          - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage` - Portable, runs on most Linux distributions
+          - **Linux Tarball**: `reel-linux-x86_64.tar.gz` - Extract and run `./reel`
 
           ### ARM64 (aarch64)
-          - **Flatpak Bundle**: `reel-${{ steps.get_version.outputs.version }}-aarch64.flatpak` - Universal Linux package for ARM64
-          - **Linux Tarball**: `reel-linux-aarch64.tar.gz` - Extract and run `./reel`
+          - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-aarch64.AppImage` - Portable, runs on ARM64 Linux distributions
           - **Debian/Ubuntu**: `reel-${{ steps.get_version.outputs.version }}-arm64.deb` - Install with `sudo dpkg -i`
           - **Fedora/RHEL**: `reel-${{ steps.get_version.outputs.version }}-aarch64.rpm` - Install with `sudo rpm -i`
-          - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-aarch64.AppImage` - Portable, runs on ARM64 Linux distributions
+          - **Linux Tarball**: `reel-linux-aarch64.tar.gz` - Extract and run `./reel`
 
           ## Installation
 
-          ### Flatpak (Recommended)
-          ```bash
-          # Install the bundle
-          flatpak install --user reel-${{ steps.get_version.outputs.version }}-x86_64.flatpak
-          flatpak run dev.arsfeld.Reel
-          ```
-
-          ### AppImage
+          ### AppImage (Recommended)
           ```bash
           chmod +x reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage
           ./reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage
@@ -213,112 +204,113 @@ jobs:
             reel-*.rpm
             reel-*.AppImage
 
-  build-flatpak:
-    needs: create-release
-    strategy:
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-latest
-          - arch: aarch64
-            runner: ubuntu-latest
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: write
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up QEMU for cross-compilation
-        if: matrix.arch == 'aarch64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Install cross-compilation dependencies for ARM64
-        if: matrix.arch == 'aarch64'
-        run: |
-          # Enable ARM64 architecture
-          sudo dpkg --add-architecture arm64
-          
-          # Remove the default Ubuntu sources that don't support ARM64
-          sudo rm -f /etc/apt/sources.list.d/ubuntu.sources
-          
-          # Create proper deb822 format sources for both amd64 and arm64
-          cat <<EOF | sudo tee /etc/apt/sources.list.d/amd64.sources
-          Types: deb
-          URIs: http://azure.archive.ubuntu.com/ubuntu/
-          Suites: noble noble-updates noble-backports
-          Components: main restricted universe multiverse
-          Architectures: amd64
-          
-          Types: deb
-          URIs: http://security.ubuntu.com/ubuntu/
-          Suites: noble-security
-          Components: main restricted universe multiverse
-          Architectures: amd64
-          EOF
-          
-          cat <<EOF | sudo tee /etc/apt/sources.list.d/arm64.sources
-          Types: deb
-          URIs: http://ports.ubuntu.com/ubuntu-ports/
-          Suites: noble noble-updates noble-backports noble-security
-          Components: main restricted universe multiverse
-          Architectures: arm64
-          EOF
-          
-          sudo apt-get update
-          
-          # Install cross-compilation tools
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            pkg-config \
-            libssl-dev:arm64
-
-      - name: Install Flatpak and dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder
-          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          sudo flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48 org.freedesktop.Sdk.Extension.rust-stable//23.08
-
-      - name: Setup uv for Python dependency management
-        run: |
-          # Install uv
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Build Flatpak
-        run: |
-          # Set version and architecture environment variables for the build script
-          export VERSION=${{ needs.create-release.outputs.version }}
-          export ARCH=${{ matrix.arch }}
-          
-          # Set cross-compilation environment for ARM64
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
-            export PKG_CONFIG_ALLOW_CROSS=1
-            export OPENSSL_DIR=/usr
-            export OPENSSL_INCLUDE_DIR=/usr/include
-            export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
-          fi
-
-          # Use our standalone Flatpak build script
-          ./scripts/build-flatpak.sh
-
-      - name: Package repository for distribution
-        run: |
-          # Create a tarball of the repository for hosting
-          tar -czf repo.tar.gz -C repo .
-
-      - name: Upload Flatpak Release Assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.create-release.outputs.version }}
-          files: |
-            reel-*.flatpak
-            repo.tar.gz
+  # Flatpak builds are disabled temporarily for better testing
+  # build-flatpak:
+  #   needs: create-release
+  #   strategy:
+  #     matrix:
+  #       include:
+  #         - arch: x86_64
+  #           runner: ubuntu-latest
+  #         - arch: aarch64
+  #           runner: ubuntu-latest
+  #   runs-on: ${{ matrix.runner }}
+  #   permissions:
+  #     contents: write
+  #     packages: write
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     - name: Set up QEMU for cross-compilation
+  #       if: matrix.arch == 'aarch64'
+  #       uses: docker/setup-qemu-action@v3
+  #       with:
+  #         platforms: arm64
+  #
+  #     - name: Install cross-compilation dependencies for ARM64
+  #       if: matrix.arch == 'aarch64'
+  #       run: |
+  #         # Enable ARM64 architecture
+  #         sudo dpkg --add-architecture arm64
+  #
+  #         # Remove the default Ubuntu sources that don't support ARM64
+  #         sudo rm -f /etc/apt/sources.list.d/ubuntu.sources
+  #
+  #         # Create proper deb822 format sources for both amd64 and arm64
+  #         cat <<EOF | sudo tee /etc/apt/sources.list.d/amd64.sources
+  #         Types: deb
+  #         URIs: http://azure.archive.ubuntu.com/ubuntu/
+  #         Suites: noble noble-updates noble-backports
+  #         Components: main restricted universe multiverse
+  #         Architectures: amd64
+  #
+  #         Types: deb
+  #         URIs: http://security.ubuntu.com/ubuntu/
+  #         Suites: noble-security
+  #         Components: main restricted universe multiverse
+  #         Architectures: amd64
+  #         EOF
+  #
+  #         cat <<EOF | sudo tee /etc/apt/sources.list.d/arm64.sources
+  #         Types: deb
+  #         URIs: http://ports.ubuntu.com/ubuntu-ports/
+  #         Suites: noble noble-updates noble-backports noble-security
+  #         Components: main restricted universe multiverse
+  #         Architectures: arm64
+  #         EOF
+  #
+  #         sudo apt-get update
+  #
+  #         # Install cross-compilation tools
+  #         sudo apt-get install -y \
+  #           gcc-aarch64-linux-gnu \
+  #           g++-aarch64-linux-gnu \
+  #           pkg-config \
+  #           libssl-dev:arm64
+  #
+  #     - name: Install Flatpak and dependencies
+  #       run: |
+  #         sudo apt-get update
+  #         sudo apt-get install -y flatpak flatpak-builder
+  #         sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+  #         sudo flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48 org.freedesktop.Sdk.Extension.rust-stable//23.08
+  #
+  #     - name: Setup uv for Python dependency management
+  #       run: |
+  #         # Install uv
+  #         curl -LsSf https://astral.sh/uv/install.sh | sh
+  #         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+  #
+  #     - name: Build Flatpak
+  #       run: |
+  #         # Set version and architecture environment variables for the build script
+  #         export VERSION=${{ needs.create-release.outputs.version }}
+  #         export ARCH=${{ matrix.arch }}
+  #
+  #         # Set cross-compilation environment for ARM64
+  #         if [ "${{ matrix.arch }}" = "aarch64" ]; then
+  #           export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+  #           export PKG_CONFIG_ALLOW_CROSS=1
+  #           export OPENSSL_DIR=/usr
+  #           export OPENSSL_INCLUDE_DIR=/usr/include
+  #           export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
+  #         fi
+  #
+  #         # Use our standalone Flatpak build script
+  #         ./scripts/build-flatpak.sh
+  #
+  #     - name: Package repository for distribution
+  #       run: |
+  #         # Create a tarball of the repository for hosting
+  #         tar -czf repo.tar.gz -C repo .
+  #
+  #     - name: Upload Flatpak Release Assets
+  #       uses: softprops/action-gh-release@v2
+  #       with:
+  #         tag_name: ${{ needs.create-release.outputs.version }}
+  #         files: |
+  #           reel-*.flatpak
+  #           repo.tar.gz
 
   # macOS and Windows builds are disabled for now - we only test on Linux
   # Uncomment the sections below to enable multi-platform builds
