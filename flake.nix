@@ -24,9 +24,6 @@
           rustToolchain
           pkg-config
           desktop-file-utils
-          blueprint-compiler
-          meson
-          ninja
         ] ++ lib.optionals pkgs.stdenv.isLinux [
           wrapGAppsHook4  # Linux-only for wrapping GTK apps
         ];
@@ -555,9 +552,9 @@
           GETTEXT_SYSTEM = if pkgs.stdenv.isDarwin then "1" else "";
         };
 
-        packages.default = pkgs.rustPlatform.buildRustPackage {
+        packages.default = pkgs.rustPlatform.buildRustPackage rec {
           pname = "gnome-reel";
-          version = "0.3.0";
+          version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
 
           src = ./.;
 
