@@ -6,7 +6,7 @@ This document describes the state machine for managing the visibility of media p
 
 ## Current Implementation Status
 
-As of the refactoring completed in task #230, the player controls now use a proper 3-state machine implementation that replaces the previous complex boolean flag system.
+As of the refactoring completed in task #230, the player controls now use a proper 3-state machine implementation that replaces the previous complex boolean flag system. The implementation is located in `src/ui/pages/player.rs` and correctly follows the documented state machine design.
 
 ## Core Principles
 
@@ -108,7 +108,7 @@ window_event_debounce_ms: u64,
 
 ### Timer Management
 ```
-INACTIVITY_TIMEOUT = 3 seconds (configurable)
+INACTIVITY_TIMEOUT = 3 seconds (hardcoded constant)
 
 - Start timer: When entering VISIBLE state
 - Reset timer: On any significant MouseMove in VISIBLE state
@@ -142,7 +142,6 @@ The control area detection includes:
 const DEFAULT_INACTIVITY_TIMEOUT_SECS: u64 = 3;
 const DEFAULT_MOUSE_MOVE_THRESHOLD: f64 = 5.0; // pixels
 const DEFAULT_WINDOW_EVENT_DEBOUNCE_MS: u64 = 50; // milliseconds
-const CONTROL_FADE_ANIMATION_MS: u64 = 200; // milliseconds for fade transition
 ```
 
 ## State Diagram
@@ -195,11 +194,11 @@ The state machine integrates with CSS animations for smooth transitions:
 
 @keyframes fadeOutControls {
     from { opacity: 1; transform: translateY(0); }
-    to { opacity: 0; transform: translateY(8px); }
+    to { opacity: 0; transform: translateY(12px); }  /* Corrected: Actually 12px in implementation */
 }
 ```
 
-The CSS classes are applied based on the `controls_visible()` method return value.
+The CSS classes are applied based on the `controls_visible()` method return value, which returns true for both Visible and Hovering states, false for Hidden state.
 
 ## Migration from Boolean Flag System
 
