@@ -98,6 +98,9 @@ cargo build --release
 Download the latest release from the [Releases page](https://github.com/arsfeld/reel/releases/latest).
 
 > [!WARNING]
+> **AppImage Support Temporarily Removed**: AppImage builds have been removed due to packaging bugs. The application binary is fully functional and can be used as-is, provided you have the required dependencies installed (GTK4, libadwaita, GStreamer, and libmpv2). Contributions to restore AppImage support are welcome!
+
+> [!NOTE]
 > **Pre-built packages are experimental**: These packages are automatically generated and may not be thoroughly tested. If you encounter issues, consider building from source using the Nix development environment.
 
 ### 📋 System Requirements
@@ -105,7 +108,7 @@ Download the latest release from the [Releases page](https://github.com/arsfeld/
 #### Minimum OS Versions
 - **Ubuntu/Debian**: Ubuntu 24.04 LTS or newer (packages built against Ubuntu 24.04)
 - **Fedora**: Fedora 40 or newer
-- **Other distros**: Use AppImage or Flatpak for maximum compatibility
+- **Other distros**: Use the standalone binary or build from source for maximum compatibility
 
 #### Required Libraries
 | Library | Minimum Version | Notes |
@@ -118,31 +121,40 @@ Download the latest release from the [Releases page](https://github.com/arsfeld/
 | **OpenSSL** | 3.0+ | TLS/SSL support |
 
 > [!NOTE]
-> **For older distributions**: If your system doesn't meet these requirements (e.g., Ubuntu 22.04, Fedora 39), please use the **AppImage** or **Flatpak** versions which bundle their own dependencies.
+> **For older distributions**: If your system doesn't meet these requirements (e.g., Ubuntu 22.04, Fedora 39), you can use the standalone binary with manually installed dependencies, or build from source using the Nix development environment.
 
-#### AppImage (Universal - Recommended)
+#### Standalone Binary
 ```bash
-# Download the AppImage
-wget https://github.com/arsfeld/reel/releases/latest/download/reel-v0.4.0-x86_64.AppImage
-chmod +x reel-*.AppImage
-./reel-*.AppImage
+# Download the latest standalone binary (using getbin.io)
+curl -fsSL https://getbin.io/arsfeld/reel?os=linux -o reel
+chmod +x reel
+./reel
+# Note: Requires GTK4, libadwaita, GStreamer, and libmpv2 to be installed
 ```
 
 #### Debian/Ubuntu (.deb)
 ```bash
-# Download and install the .deb package (requires Ubuntu 24.04+)
-wget https://github.com/arsfeld/reel/releases/latest/download/reel-v0.4.0-amd64.deb
-sudo dpkg -i reel-*.deb
+# Download and install the latest .deb package (requires Ubuntu 24.04+)
+# Get the latest release URL and download
+curl -s https://api.github.com/repos/arsfeld/reel/releases/latest \
+  | grep "browser_download_url.*amd64\.deb" \
+  | cut -d '"' -f 4 \
+  | xargs wget -O reel.deb
+sudo dpkg -i reel.deb
 sudo apt-get install -f  # Install dependencies if needed
 ```
 
 #### Fedora/RHEL/openSUSE (.rpm)
 ```bash
-# Download and install the .rpm package (requires Fedora 40+)
-wget https://github.com/arsfeld/reel/releases/latest/download/reel-v0.4.0-x86_64.rpm
-sudo dnf install ./reel-*.rpm
+# Download and install the latest .rpm package (requires Fedora 40+)
+# Get the latest release URL and download
+curl -s https://api.github.com/repos/arsfeld/reel/releases/latest \
+  | grep "browser_download_url.*x86_64\.rpm" \
+  | cut -d '"' -f 4 \
+  | xargs wget -O reel.rpm
+sudo dnf install ./reel.rpm
 # or for older systems:
-sudo rpm -i reel-*.rpm
+sudo rpm -i reel.rpm
 ```
 
 ### ❄️ Nix/NixOS
