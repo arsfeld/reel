@@ -1,143 +1,70 @@
-# Testing Strategy for Relm4 Application
+# Testing Strategy for Reel Media Player
 
 ## Overview
 
-This document outlines the comprehensive testing strategy for the Relm4-based media player application. The testing approach leverages Relm4's component-based architecture to ensure reliability, performance, and maintainability across all layers of the application.
+This document outlines the testing strategy for the Reel media player application. The testing approach focuses on practical, maintainable tests that verify core functionality, backend integrations, and database operations.
 
 ## Testing Philosophy
 
 ### Core Principles
-1. **Component Isolation**: Test components independently using Relm4's testing utilities
-2. **Behavior-Driven**: Focus on testing user-visible behavior rather than implementation details
-3. **Type Safety First**: Leverage Rust's type system and our typed IDs to prevent runtime errors
-4. **Async-Aware**: Properly test async components, commands, and workers
-5. **Real Database Testing**: Use in-memory SQLite for integration tests
-6. **Message-Driven Testing**: Test component communication through the MessageBroker system
-7. **Race Condition Prevention**: Ensure sync operations are properly coordinated through messages
+1. **Practical Testing**: Focus on tests that provide real value and catch actual bugs
+2. **Backend Coverage**: Comprehensive testing of Plex and Jellyfin integrations
+3. **Database Testing**: SQLite with SeaORM for repository layer testing
+4. **Mock-Based Testing**: Use mock backends for isolated component testing
+5. **Async Testing**: Proper async/await testing with tokio::test
+6. **Type Safety**: Leverage Rust's type system to prevent runtime errors
 
-### Testing Pyramid
+### Current Test Coverage
 ```
-         /\
-        /UI\        <- UI Automation (10%)
-       /----\
-      /Integ.\      <- Integration Tests (30%)
-     /--------\
-    /   Unit   \    <- Unit Tests (60%)
-   /____________\
+Backend Tests     <- Plex/Jellyfin API mocking (40%)
+Database Tests    <- Repository layer tests (30%)
+Mapper Tests      <- Data transformation tests (20%)
+Worker Tests      <- Connection monitor, search (10%)
 ```
 
 ## Test Categories
 
 ### 1. Unit Tests
 
-#### Component State Tests
-Test individual Relm4 components in isolation:
+#### Backend API Tests
+Test backend integrations with mocked HTTP responses:
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
-    use relm4::test::{TestComponent, TestMacros};
+    use mockito::Server;
+    use serde_json::json;
 
-    #[test]
-    fn test_sidebar_component_initialization() {
-        let component = TestComponent::<SidebarComponent>::new()
-            .with_model(SidebarModel::default());
+    #[tokio::test]
+    async fn test_plex_get_libraries() {
+        let mut server = Server::new_async().await;
+        
+        let mock = server.mock("GET", "/library/sections")
+            .with_header("X-Plex-Token", "test_token")
+            .with_body(json!({
+                "MediaContainer": {
+                    "Directory": [{
+                        "key": "1",
+                        "title": "Movies",
+                        "type": "movie"
+                    }]
+                }
+            }).to_string())
+            .create_async().await;
 
-        assert_eq!(component.model().selected_library, None);
-        assert!(component.model().sources.is_empty());
+        let backend = PlexBackend::new_for_auth(&server.url(), "test_token");
+        let libraries = backend.get_libraries().await.unwrap();
+        
+        assert_eq!(libraries.len(), 1);
+        assert_eq!(libraries[0].title, "Movies");
+        mock.assert_async().await;
     }
-
-    #[test]
-    fn test_sidebar_library_selection() {
-        let mut component = TestComponent::<SidebarComponent>::new()
-            .with_model(SidebarModel::default());
-
-        let library_id = LibraryId::new();
-        component.send(SidebarInput::SelectLibrary(library_id.clone()));
-
-        assert_eq!(component.model().selected_library, Some(library_id));
-        assert!(component.has_output(SidebarOutput::LibrarySelected(library_id)));
-    }
 }
 ```
 
-#### Tracker Pattern Tests
-Verify that tracker patterns minimize re-renders:
-
-```rust
-#[test]
-fn test_tracker_efficiency() {
-    #[tracker::track]
-    struct TestModel {
-        unchanged_field: String,
-        #[tracker::do_not_track]
-        changing_field: i32,
-    }
-
-    let mut model = TestModel {
-        unchanged_field: "static".to_string(),
-        changing_field: 0,
-    };
-
-    // Changing non-tracked field should not trigger update
-    model.changing_field = 42;
-    assert!(!model.changed(TestModel::unchanged_field()));
-
-    // Changing tracked field should trigger update
-    model.set_unchanged_field("new".to_string());
-    assert!(model.changed(TestModel::unchanged_field()));
-}
-```
-
-#### Factory Component Tests
-Test factory patterns for collections:
-
-```rust
-#[test]
-fn test_media_card_factory() {
-    let factory = FactoryVecDeque::<MediaCardFactory>::new();
-
-    // Add items
-    let item1 = MediaItemModel {
-        id: MediaItemId::new(),
-        title: "Test Movie".to_string(),
-        // ...
-    };
-
-    factory.guard().push_back(item1.clone());
-    assert_eq!(factory.guard().len(), 1);
-
-    // Test factory updates
-    factory.guard().get_mut(0).unwrap().set_watched(true);
-    assert!(factory.guard().get(0).unwrap().watched);
-}
-```
-
-#### Command Tests
-Test async command execution:
-
-```rust
-#[tokio::test]
-async fn test_fetch_media_command() {
-    let db = create_test_database().await;
-
-    let command = FetchMediaCommand {
-        library_id: LibraryId::new(),
-        page: 1,
-        page_size: 20,
-    };
-
-    let result = command.execute(db.clone()).await;
-    assert!(result.is_ok());
-
-    let items = result.unwrap();
-    assert!(items.len() <= 20);
-}
-```
-
-#### Service Function Tests
-Test stateless service functions:
+#### Database Repository Tests
+Test repository layer with SQLite:
 
 ```rust
 #[tokio::test]
@@ -168,56 +95,28 @@ async fn test_media_service_pagination() {
 
 ### 2. Integration Tests
 
-#### Component Communication Tests
-Test message passing between components:
+#### Sync Strategy Tests
+Test synchronization strategies for backends:
 
 ```rust
 #[tokio::test]
-async fn test_sidebar_to_library_navigation() {
-    let app = TestApp::new().await;
-
-    // Setup components
-    let sidebar = app.get_component::<SidebarComponent>();
-    let main_window = app.get_component::<MainWindowComponent>();
-
-    // Send library selection from sidebar
-    let library_id = LibraryId::new();
-    sidebar.send(SidebarInput::SelectLibrary(library_id.clone()));
-
-    // Verify main window receives navigation message
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(
-        main_window.model().current_page,
-        Page::Library(library_id)
-    );
-}
-```
-
-#### Worker Integration Tests
-Test worker components with real async operations:
-
-```rust
-#[tokio::test]
-async fn test_sync_worker_integration() {
+async fn test_full_sync_strategy() {
     let db = create_test_database().await;
-    let (tx, mut rx) = channel::<SyncWorkerOutput>(32);
-
-    let worker = SyncWorker::builder()
-        .detach_worker(move |msg| {
-            match msg {
-                SyncWorkerInput::StartSync(source_id) => {
-                    // Perform sync operation
-                    let result = perform_sync(&db, &source_id).await;
-                    tx.send(SyncWorkerOutput::SyncComplete(result)).await;
-                }
-            }
-        });
-
-    worker.emit(SyncWorkerInput::StartSync(SourceId::new()));
-
-    // Verify sync completion
-    let output = rx.recv().await.unwrap();
-    assert!(matches!(output, SyncWorkerOutput::SyncComplete(Ok(_))));
+    let backend = MockBackend::new();
+    
+    // Add test data to mock backend
+    backend.add_library(create_test_library());
+    backend.add_movie(create_test_movie());
+    
+    // Run full sync
+    let strategy = FullSyncStrategy::new();
+    let result = strategy.sync(&db, &backend, &SourceId::new()).await;
+    
+    assert!(result.is_ok());
+    
+    // Verify data was synced to database
+    let libraries = LibraryRepository::find_by_source(&db, &SourceId::new()).await.unwrap();
+    assert_eq!(libraries.len(), 1);
 }
 ```
 
@@ -244,203 +143,61 @@ async fn test_library_deletion_cascade() {
 }
 ```
 
-#### MessageBroker Tests (Implemented)
-Test inter-component messaging with the new BROKER system:
+#### Mapper Tests
+Test data transformation between backend responses and internal models:
 
 ```rust
 #[tokio::test]
-async fn test_message_broker_routing() {
-    // Use the global BROKER instance
-    let component_id = "TestComponent".to_string();
-    let (tx, mut rx) = relm4::channel::<BrokerMessage>();
-
-    // Subscribe to broker
-    BROKER.subscribe(component_id.clone(), tx).await;
-
-    // Send sync started message
-    BROKER.notify_sync_started("test-source".to_string(), Some(100)).await;
-
-    // Verify message received
-    let msg = rx.recv().await.unwrap();
-    assert!(matches!(
-        msg,
-        BrokerMessage::Source(SourceMessage::SyncStarted { .. })
-    ));
-
-    // Test progress updates
-    BROKER.notify_sync_progress("test-source".to_string(), 50, 100).await;
-
-    let msg = rx.recv().await.unwrap();
-    assert!(matches!(
-        msg,
-        BrokerMessage::Source(SourceMessage::SyncProgress { current: 50, total: 100, .. })
-    ));
-
-    // Clean up
-    BROKER.unsubscribe(&component_id).await;
-}
-
-#[tokio::test]
-async fn test_component_subscription_pattern() {
-    // Test the pattern used in SourcesPage
-    let (component_tx, mut component_rx) = relm4::channel::<TestInput>();
-    let (broker_tx, mut broker_rx) = relm4::channel::<BrokerMessage>();
-
-    // Subscribe to broker
-    BROKER.subscribe("TestComponent".to_string(), broker_tx).await;
-
-    // Spawn forwarding task (as done in components)
-    tokio::spawn(async move {
-        while let Some(msg) = broker_rx.recv().await {
-            component_tx.send(TestInput::BrokerMsg(msg)).unwrap();
-        }
+async fn test_plex_movie_mapping() {
+    let plex_response = json!({
+        "ratingKey": "123",
+        "title": "Test Movie",
+        "year": 2024,
+        "rating": 8.5,
+        "duration": 7200000,
+        "summary": "A test movie"
     });
-
-    // Send message through broker
-    BROKER.notify_sync_completed("test-source".to_string(), 42).await;
-
-    // Verify component receives wrapped message
-    let msg = component_rx.recv().await.unwrap();
-    assert!(matches!(msg, TestInput::BrokerMsg(_)));
+    
+    let movie: Movie = plex_mapper::map_movie(plex_response).unwrap();
+    
+    assert_eq!(movie.id.as_str(), "123");
+    assert_eq!(movie.title, "Test Movie");
+    assert_eq!(movie.year, Some(2024));
+    assert_eq!(movie.rating, Some(8.5));
+    assert_eq!(movie.duration_minutes, Some(120));
 }
 ```
 
-### 3. UI Automation Tests
 
-#### User Workflow Tests
-Test complete user journeys:
-
-```rust
-#[test]
-fn test_movie_playback_workflow() {
-    let app = TestApp::launch();
-
-    // Navigate to library
-    app.click(".sidebar-library-item:first-child");
-    app.wait_for(".library-grid");
-
-    // Select movie
-    app.click(".media-card:first-child");
-    app.wait_for(".movie-details");
-
-    // Start playback
-    app.click(".play-button");
-    app.wait_for(".player-view");
-
-    // Verify player state
-    assert!(app.is_visible(".player-controls"));
-    assert!(app.has_class(".play-button", "playing"));
-}
-```
-
-#### Responsive Layout Tests
-Test adaptive UI behavior:
-
-```rust
-#[test]
-fn test_responsive_breakpoints() {
-    let app = TestApp::launch();
-
-    // Test desktop layout
-    app.resize_window(1920, 1080);
-    assert!(app.is_visible(".sidebar"));
-    assert_eq!(app.get_css_property(".media-grid", "grid-template-columns"), "repeat(6, 1fr)");
-
-    // Test mobile layout
-    app.resize_window(375, 812);
-    assert!(!app.is_visible(".sidebar"));
-    assert_eq!(app.get_css_property(".media-grid", "grid-template-columns"), "repeat(2, 1fr)");
-}
-```
-
-### 4. Performance Tests
-
-#### Component Render Performance
-Measure render times and re-render efficiency:
-
-```rust
-#[bench]
-fn bench_media_grid_render(b: &mut Bencher) {
-    let items = generate_media_items(1000);
-    let factory = FactoryVecDeque::<MediaCardFactory>::new();
-
-    b.iter(|| {
-        factory.guard().clear();
-        for item in &items {
-            factory.guard().push_back(item.clone());
-        }
-    });
-}
-```
-
-#### Memory Usage Tests
-Monitor memory consumption:
-
-```rust
-#[test]
-fn test_factory_memory_efficiency() {
-    let initial_mem = get_memory_usage();
-
-    let factory = FactoryVecDeque::<MediaCardFactory>::new();
-    for _ in 0..10000 {
-        factory.guard().push_back(create_test_media_item());
-    }
-
-    let peak_mem = get_memory_usage();
-
-    factory.guard().clear();
-    force_gc();
-
-    let final_mem = get_memory_usage();
-
-    // Memory should be reclaimed after clearing
-    assert!(final_mem - initial_mem < (peak_mem - initial_mem) * 0.1);
-}
-```
 
 ## Test Infrastructure
 
 ### Test Database Setup
 ```rust
-pub async fn create_test_database() -> Arc<DatabaseConnection> {
-    let db = Database::connect("sqlite::memory:").await.unwrap();
-    migration::Migrator::up(&db, None).await.unwrap();
-    Arc::new(db)
+// Located in src/test_utils.rs
+pub struct TestDatabase {
+    pub connection: Arc<SeaOrmConnection>,
+    _temp_dir: TempDir,
 }
 
-pub async fn seed_test_data(db: &DatabaseConnection) {
-    // Implemented in tests/common/fixtures.rs
-    // Creates comprehensive test data including:
-    // - Sources (Plex, Jellyfin)
-    // - Libraries (Movies, TV Shows, Music)
-    // - Media items with metadata
-    // - Playback progress
-    // - User preferences
-}
-```
-
-### Test Component Builders
-```rust
-pub struct TestComponentBuilder<C: Component> {
-    model: C::Init,
-    parent: Option<gtk::Window>,
-}
-
-impl<C: Component> TestComponentBuilder<C> {
-    pub fn with_model(mut self, model: C::Init) -> Self {
-        self.model = model;
-        self
-    }
-
-    pub fn build(self) -> TestComponent<C> {
-        // Initialize component with test harness
+impl TestDatabase {
+    pub async fn new() -> Result<Self> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let db = Database::connect(&db_path).await?;
+        db.migrate().await?;
+        
+        Ok(Self {
+            connection: db.get_connection(),
+            _temp_dir: temp_dir,
+        })
     }
 }
 ```
 
-### Mock Services (Implemented)
+### Mock Backend Implementation
 ```rust
-// tests/common/mocks/backend.rs
+// Located in src/test_utils.rs
 pub struct MockBackend {
     responses: HashMap<String, serde_json::Value>,
     error_mode: Option<ErrorMode>,
@@ -511,45 +268,25 @@ impl MediaBackend for MockBackend {
 - Verify cascade operations
 - Test concurrent access patterns
 
-## Test Organization (Implemented)
+## Test Organization
 
-### Directory Structure
+### Current Test Structure
+Tests are currently embedded within the source modules using `#[cfg(test)]`:
 ```
-tests/
-├── common/
-│   ├── mod.rs              # Test utilities and setup
-│   ├── fixtures.rs         # Test data fixtures
-│   ├── builders.rs         # Model builders for tests
-│   └── mocks/
-│       ├── mod.rs
-│       ├── backend.rs      # MockBackend implementation
-│       ├── player.rs       # MockPlayer implementation
-│       └── keyring.rs      # MockKeyring implementation
-├── unit/
-│   ├── components/
-│   │   ├── sidebar_test.rs
-│   │   ├── main_window_test.rs
-│   │   └── factories/
-│   │       └── media_card_test.rs
-│   ├── services/
-│   │   ├── media_service_test.rs
-│   │   └── auth_service_test.rs
-│   ├── commands/
-│   │   └── media_commands_test.rs
-│   └── workers/
-│       └── sync_worker_test.rs
-├── integration/
-│   ├── navigation_test.rs
-│   ├── playback_flow_test.rs
-│   └── sync_flow_test.rs
-├── ui/
-│   ├── workflows/
-│   │   └── movie_playback_test.rs
-│   └── responsive/
-│       └── layout_test.rs
-└── performance/
-    ├── render_bench.rs
-    └── memory_bench.rs
+src/
+├── backends/
+│   ├── jellyfin/tests.rs   # Jellyfin backend tests
+│   ├── plex/tests.rs        # Plex backend tests
+│   └── sync_strategy.rs    # Sync strategy tests
+├── db/
+│   └── repository/
+│       └── sync_repository_tests.rs  # Repository tests
+├── mapper/
+│   └── tests.rs             # Data mapper tests
+├── workers/
+│   ├── connection_monitor_tests.rs   # Connection monitor tests
+│   └── search_worker_tests.rs        # Search worker tests
+└── test_utils.rs            # Shared test utilities
 ```
 
 ### Test Naming Conventions
@@ -560,191 +297,33 @@ tests/
 
 ## Continuous Integration
 
-### Test Pipeline
+### GitHub Actions CI Pipeline
+The project uses GitHub Actions for CI/CD with the following workflow:
+
 ```yaml
-test:
-  stage: test
-  script:
-    - cargo fmt --check
-    - cargo clippy -- -D warnings
-    - cargo test --all-features
-    - cargo test --no-default-features
-    - cargo bench --no-run
+# .github/workflows/ci.yml
+- Install system dependencies (GTK4, libadwaita, GStreamer, MPV, SQLite)
+- Setup Rust toolchain with rustfmt and clippy
+- Cache cargo dependencies for faster builds
+- Build release version
+- Run tests with cargo test --release
+- Generate coverage report with cargo-llvm-cov
 ```
 
-### Coverage Requirements
-- Minimum 80% overall coverage
-- 90% coverage for critical paths (commands, services)
-- 70% coverage for UI components
-- 100% coverage for type conversions and validators
+### Test Execution
+- Tests run on Ubuntu latest
+- Parallel test execution with all available cores
+- Coverage generation using llvm-cov for performance
+- Test files, migrations, and generated code excluded from coverage
 
-## Test Data Management
+## Test Helpers
 
-### Fixtures (Implemented in tests/common/fixtures.rs)
-```rust
-pub mod fixtures {
-    use crate::models::*;
-    use chrono::Utc;
-
-    pub fn movie_fixture() -> MediaItem {
-        MediaItem::Movie(Movie {
-            id: MediaItemId::from("test-movie-1"),
-            title: "Test Movie".to_string(),
-            year: Some(2024),
-            overview: Some("A test movie for unit tests".to_string()),
-            rating: Some(8.5),
-            duration: Some(120),
-            genres: vec!["Action".to_string(), "Adventure".to_string()],
-            cast: vec![],
-            crew: vec![],
-            poster_path: Some("/posters/test-movie.jpg".to_string()),
-            backdrop_path: Some("/backdrops/test-movie.jpg".to_string()),
-            trailer_url: None,
-            imdb_id: Some("tt1234567".to_string()),
-            tmdb_id: Some("12345".to_string()),
-            studio: Some("Test Studios".to_string()),
-            tagline: None,
-            added_at: Utc::now(),
-            updated_at: Utc::now(),
-        })
-    }
-
-    pub fn show_fixture() -> MediaItem {
-        MediaItem::Show(Show {
-            id: ShowId::from("test-show-1"),
-            title: "Test Show".to_string(),
-            year: Some(2024),
-            overview: Some("A test TV show".to_string()),
-            rating: Some(9.0),
-            seasons: vec![season_fixture()],
-            genres: vec!["Drama".to_string()],
-            network: Some("Test Network".to_string()),
-            status: Some("Continuing".to_string()),
-            poster_path: Some("/posters/test-show.jpg".to_string()),
-            backdrop_path: Some("/backdrops/test-show.jpg".to_string()),
-            added_at: Utc::now(),
-            updated_at: Utc::now(),
-        })
-    }
-
-    pub fn library_fixture() -> Library {
-        Library {
-            id: LibraryId::from("test-library-1"),
-            title: "Test Movies".to_string(),
-            library_type: LibraryType::Movies,
-            item_count: 100,
-            source_id: SourceId::from("test-source-1"),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        }
-    }
-
-    pub fn source_fixture(source_type: SourceType) -> Source {
-        Source {
-            id: SourceId::from("test-source-1"),
-            name: match source_type {
-                SourceType::PlexServer { .. } => "Test Plex Server",
-                SourceType::JellyfinServer => "Test Jellyfin Server",
-                _ => "Test Source",
-            }.to_string(),
-            source_type,
-            connection_info: ConnectionInfo {
-                url: "http://localhost:32400".to_string(),
-                requires_auth: true,
-            },
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        }
-    }
-}
-```
-
-### Test Data Builders (Implemented in tests/common/builders.rs)
-```rust
-pub struct MediaItemBuilder {
-    media_type: MediaType,
-    title: String,
-    year: Option<i32>,
-    rating: Option<f32>,
-    watched: bool,
-    progress: Option<f32>,
-}
-
-impl MediaItemBuilder {
-    pub fn movie() -> Self {
-        Self {
-            media_type: MediaType::Movie,
-            title: "Test Movie".to_string(),
-            year: Some(2024),
-            rating: None,
-            watched: false,
-            progress: None,
-        }
-    }
-
-    pub fn show() -> Self {
-        Self {
-            media_type: MediaType::Show,
-            title: "Test Show".to_string(),
-            year: Some(2024),
-            rating: None,
-            watched: false,
-            progress: None,
-        }
-    }
-
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
-        self.title = title.into();
-        self
-    }
-
-    pub fn with_year(mut self, year: i32) -> Self {
-        self.year = Some(year);
-        self
-    }
-
-    pub fn with_rating(mut self, rating: f32) -> Self {
-        self.rating = Some(rating);
-        self
-    }
-
-    pub fn with_watched(mut self) -> Self {
-        self.watched = true;
-        self
-    }
-
-    pub fn with_progress(mut self, progress: f32) -> Self {
-        self.progress = Some(progress);
-        self
-    }
-
-    pub fn build(self) -> MediaItem {
-        match self.media_type {
-            MediaType::Movie => MediaItem::Movie(Movie {
-                id: MediaItemId::new(),
-                title: self.title,
-                year: self.year,
-                rating: self.rating,
-                // ... other fields with defaults
-            }),
-            MediaType::Show => MediaItem::Show(Show {
-                id: ShowId::new(),
-                title: self.title,
-                year: self.year,
-                rating: self.rating,
-                // ... other fields with defaults
-            }),
-            _ => panic!("Unsupported media type in builder"),
-        }
-    }
-}
-
-// Additional builders implemented:
-// - LibraryBuilder
-// - SourceBuilder
-// - PlaybackProgressBuilder
-// - UserPreferencesBuilder
-```
+### Common Test Utilities
+The `src/test_utils.rs` module provides:
+- `TestDatabase`: Temporary SQLite database for testing
+- `MockBackend`: In-memory mock for `MediaBackend` trait
+- Helper functions for async testing with timeouts
+- Test data creation utilities
 
 ## Debugging Tests
 
@@ -760,38 +339,11 @@ fn test_with_logging() {
 }
 ```
 
-### Visual Test Debugging
-```rust
-#[test]
-fn test_with_visual_debugging() {
-    let app = TestApp::launch()
-        .with_visual_mode(true)  // Shows actual window
-        .with_slow_mode(true);   // Slows down interactions
 
-    // Test implementation
-}
-```
 
 ## Common Test Patterns
 
-### Testing State Transitions
-```rust
-#[test]
-fn test_player_state_transitions() {
-    let player = TestComponent::<PlayerComponent>::new();
 
-    // Initial state
-    assert_eq!(player.model().state, PlayerState::Stopped);
-
-    // Play transition
-    player.send(PlayerInput::Play);
-    assert_eq!(player.model().state, PlayerState::Playing);
-
-    // Pause transition
-    player.send(PlayerInput::Pause);
-    assert_eq!(player.model().state, PlayerState::Paused);
-}
-```
 
 ### Testing Error Handling
 ```rust
@@ -834,26 +386,48 @@ async fn test_concurrent_sync_operations() {
 }
 ```
 
-## Test Maintenance
+## Areas Needing Test Coverage
 
-### Regular Test Audits
-- Review and update tests when architecture changes
-- Remove redundant tests
-- Add tests for new features
-- Update test data and fixtures
+### Missing Test Coverage
+1. **UI Components**: No Relm4 component tests currently exist
+2. **Service Layer**: Core service functions lack unit tests  
+3. **Command Pattern**: No tests for command execution
+4. **MessageBroker**: Inter-component communication untested
+5. **Player Integration**: MPV and GStreamer backends lack tests
+6. **Authentication Flow**: OAuth and credential management untested
 
-### Test Documentation
-- Document complex test scenarios
-- Explain non-obvious assertions
-- Link tests to requirements/issues
-- Keep test names descriptive
+### Recommended Testing Priorities
+1. Add integration tests for critical user workflows
+2. Test database migration and schema changes
+3. Add performance benchmarks for large libraries
+4. Test error recovery and retry logic
+5. Add tests for concurrent sync operations
+6. Test offline mode and cache invalidation
 
-### Test Performance
-- Monitor test execution time
-- Parallelize independent tests
-- Use test filtering for development
-- Cache test dependencies
+## Testing Best Practices
+
+### Writing Effective Tests
+- Use descriptive test names that explain the scenario
+- Keep tests focused on a single behavior
+- Use mocks to isolate components under test
+- Test both success and failure cases
+- Verify error messages are helpful
+
+### Running Tests
+```bash
+# Run all tests
+cargo test
+
+# Run tests for a specific module
+cargo test backends::plex
+
+# Run tests with output
+cargo test -- --nocapture
+
+# Run a specific test
+cargo test test_plex_get_libraries
+```
 
 ## Conclusion
 
-This testing strategy ensures comprehensive coverage of the Relm4 application architecture. By following these guidelines and patterns, we maintain high code quality, catch regressions early, and ensure a reliable user experience. The component-based testing approach aligns perfectly with Relm4's architecture, making tests maintainable and easy to understand.
+The Reel media player currently has foundational test coverage for backend integrations, database operations, and data mapping. While the testing infrastructure is in place, significant gaps exist in UI component testing, service layer testing, and integration testing. Future development should prioritize adding tests for critical user workflows and improving coverage of the service and command layers.
