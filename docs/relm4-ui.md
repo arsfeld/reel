@@ -1,10 +1,10 @@
-# Relm4 UI Implementation Plan
+# Relm4 UI Implementation
 
 ## Overview
 
-This document outlines the Relm4-based UI implementation for Reel, which has become the PRIMARY and DEFAULT UI platform. The implementation fully leverages Relm4's reactive architecture, abandoning the ViewModel pattern in favor of Relm4's native component state management, trackers, factories, and async patterns for a truly reactive UI.
+This document describes the Relm4-based UI implementation for Reel, which is the PRIMARY and ONLY UI platform. The implementation fully leverages Relm4's reactive architecture using Relm4's native component state management, trackers, factories, and async patterns for a truly reactive UI.
 
-**Status**: The Relm4 implementation is now the default UI, with GTK serving only as a UI/UX reference. Project compiles and runs successfully with major functionality working.
+**Status**: The Relm4 implementation is the default and only UI. The project compiles and runs successfully with major functionality working. There is no separate GTK implementation - the project uses Relm4 with GTK4 and libadwaita as the underlying toolkit.
 
 ## Implementation Status (January 2025)
 
@@ -36,91 +36,64 @@ This document outlines the Relm4-based UI implementation for Reel, which has bec
 - ✅ **Player Integration**: Full OSD controls with MPV/GStreamer backends
 - ✅ **Preferences Page**: Theme switching and player settings
 
-## Current GTK4 Architecture Analysis
+## Architecture Overview
 
-### Current Structure
-```
-src/platforms/gtk/
-├── app.rs                    # GTK application initialization  
-├── mod.rs                    # Platform module exports
-├── platform_utils.rs        # Platform-specific utilities
-└── ui/
-    ├── main_window.rs        # Main window with sidebar/content split
-    ├── auth_dialog.rs        # Authentication dialog
-    ├── preferences_window.rs # Preferences window
-    ├── filters.rs           # Filter types and utilities
-    ├── pages/               # Content pages
-    │   ├── home.rs          # Home page with sections
-    │   ├── library.rs       # Library grid view
-    │   ├── library_virtual.rs # Virtual scrolling library
-    │   ├── movie_details.rs # Movie details page
-    │   ├── show_details.rs  # Show details page
-    │   ├── player.rs        # Video player page
-    │   └── sources.rs       # Sources management
-    ├── widgets/             # Reusable components
-    │   ├── player_overlay.rs
-    │   ├── virtual_media_list.rs
-    │   └── mod.rs
-    ├── viewmodels/          # UI state management
-    │   └── mod.rs           # Re-exports core ViewModels
-    ├── navigation/          # Navigation management
-    └── reactive/            # Property bindings
-```
-
-### Current Patterns (To Be Replaced)
-- **Hybrid Architecture**: Mix of direct GTK usage and reactive ViewModels
-- **Custom Property System**: Manual reactive properties with subscribers
-- **Template-based UI**: GTK composite templates with Blueprint files
-- **Manual Event Handling**: Explicit signal connections
-- **State Management**: Shared Arc<AppState> with service layer
-
-### New Relm4 Patterns
-- **Pure Relm4 Components**: No ViewModels, direct component state management
+### Core Relm4 Patterns Used
+- **Pure Relm4 Components**: Direct component state management without ViewModels
 - **Tracker Pattern**: Efficient change tracking for minimal re-renders
 - **Factory Pattern**: Dynamic collections with FactoryVecDeque
 - **AsyncComponent**: Data-heavy pages with loading states
 - **Worker Pattern**: Background tasks for sync, search, and media operations
 - **Command Pattern**: Structured async operations with proper lifecycle
-- **MessageBroker**: Inter-component communication without custom event bus
+- **MessageBroker**: Inter-component communication via Relm4's broker system
 
-## Current Relm4 Architecture
+## Current Implementation Structure
 
-### Directory Structure (Actual Implementation)
+### Directory Structure
 ```
-src/platforms/relm4/
-├── app.rs                    # ✅ Relm4 application root (properly runs MainWindow)
-├── mod.rs                    # ✅ Platform module exports
-├── platform_utils.rs        # ✅ Shared platform utilities
-└── components/
-    ├── main_window.rs        # ✅ Root window with per-pane HeaderBars
-    ├── sidebar.rs            # ✅ Sidebar with real data loading
-    ├── dialogs/
-    │   ├── auth_dialog.rs    # ✅ Plex OAuth and Jellyfin auth working
-    │   └── preferences.rs    # ⚠️ Not yet implemented as dialog
-    ├── pages/               # Page components (AsyncComponent)
-    │   ├── home.rs          # ✅ Home page with media sections
-    │   ├── library.rs       # ✅ Library with virtual scrolling
-    │   ├── movie_details.rs # ✅ Movie details with metadata
-    │   ├── show_details.rs  # ✅ Show details with episodes
-    │   ├── player.rs        # ✅ Player with full OSD controls
-    │   ├── sources.rs       # ✅ Sources management working
-    │   └── preferences.rs   # ✅ Preferences page implemented
-    ├── factories/           # Factory components
-    │   ├── media_card.rs    # ✅ Media card with hover/progress
-    │   ├── source_item.rs   # ✅ Source list item factory
-    │   └── section_row.rs   # ✅ Home section factory
-    ├── workers/             # Background workers
-    │   ├── sync_worker.rs   # ✅ Sync with BackendService
-    │   ├── search_worker.rs # ✅ Tantivy search indexing
-    │   └── image_loader.rs  # ✅ LRU + disk cache
-    ├── shared/              # Shared utilities
-    │   ├── messages.rs      # ✅ Navigation and data messages
-    │   ├── commands.rs      # ✅ 24+ async commands
-    │   └── broker.rs        # ✅ MessageBroker setup
-└── services/
-    ├── backend_service.rs    # ✅ Stateless backend operations
-    ├── connection_service.rs # ✅ Multi-URL connection selection
-    └── commands/            # ✅ Command implementations
+src/
+├── app/                      # Application root
+│   ├── mod.rs               # Platform module exports  
+│   └── app.rs               # ✅ Relm4 application initialization
+├── ui/                      # All UI components
+│   ├── main_window.rs       # ✅ Root window with per-pane HeaderBars
+│   ├── sidebar.rs           # ✅ Sidebar with real data loading
+│   ├── dialogs/
+│   │   ├── auth_dialog.rs   # ✅ Plex OAuth and Jellyfin auth working
+│   │   └── preferences_dialog.rs # ✅ Preferences dialog
+│   ├── pages/               # Page components (AsyncComponent)
+│   │   ├── home.rs          # ✅ Home page with media sections
+│   │   ├── library.rs       # ✅ Library with virtual scrolling
+│   │   ├── movie_details.rs # ✅ Movie details with metadata
+│   │   ├── show_details.rs  # ✅ Show details with episodes
+│   │   ├── player.rs        # ✅ Player with full OSD controls
+│   │   ├── sources.rs       # ✅ Sources management working
+│   │   └── preferences.rs   # ✅ Preferences page implemented
+│   ├── factories/           # Factory components
+│   │   ├── media_card.rs    # ✅ Media card with hover/progress
+│   │   ├── source_item.rs   # ✅ Source list item factory
+│   │   └── section_row.rs   # ✅ Home section factory
+│   └── shared/              # Shared utilities
+│       ├── messages.rs      # ✅ Navigation and data messages
+│       ├── commands.rs      # ✅ 24+ async commands
+│       └── broker.rs        # ✅ MessageBroker setup
+├── workers/                 # Background workers
+│   ├── connection_monitor.rs # ✅ Connection health monitoring
+│   ├── sync_worker.rs       # ✅ Sync with BackendService
+│   ├── search_worker.rs     # ✅ Tantivy search indexing
+│   └── image_loader.rs      # ✅ LRU + disk cache
+└── services/                # Service layer
+    ├── core/                # Core services
+    │   ├── auth.rs          # ✅ Authentication service
+    │   ├── backend.rs       # ✅ Stateless backend operations
+    │   ├── connection.rs    # ✅ Multi-URL connection selection
+    │   ├── media.rs         # ✅ Media operations
+    │   └── sync.rs          # ✅ Sync operations
+    ├── brokers/             # MessageBroker implementations
+    │   ├── connection_broker.rs # ✅ Connection events
+    │   ├── media_broker.rs  # ✅ Media events
+    │   └── sync_broker.rs   # ✅ Sync events
+    └── commands/            # Command implementations
         ├── media_commands.rs # ✅ 14 media commands
         ├── auth_commands.rs  # ✅ 8 auth commands
         └── sync_commands.rs  # ✅ 2 sync commands
@@ -159,146 +132,35 @@ Full player implementation with professional controls:
 - Window chrome hiding for immersive experience
 - Aspect ratio resizing
 
-## Implementation Phases (Historical Reference)
+## Implementation Details
 
-### Phase 1: Foundation (Week 1-2)
-**Goal**: Basic Relm4 app structure with main window
-**Success Criteria**: App launches with sidebar and content area
-**Tests**: Window displays, sidebar shows source list
+### Key Implementation Notes
 
-#### Tasks:
-1. **Create Relm4 platform module**
-   - Add `src/platforms/relm4/mod.rs`
-   - Add Relm4 dependencies to `Cargo.toml`
-     - `relm4 = "0.9"`
-     - `relm4-components = "0.9"`
-     - `relm4-icons = "0.9"`
-     - `tracker = "0.2"`
-   - Create platform detection in main.rs
-   - Set up MessageBroker for component communication
+1. **Application Structure**
+   - The app runs via `AppPlatform::run_relm4()` in `main.rs`
+   - Uses Relm4 with GTK4 and libadwaita as the underlying toolkit
+   - No separate platform implementations - Relm4 is the only UI
+   - MessageBroker for component communication
 
-2. **Implement root app component**
-   - Create `ReelApp` root AsyncComponent
-   - Handle GTK application initialization
-   - Set up global MessageBroker
-   - Initialize service connections (DataService, SyncManager)
-   - Set up command handler for async operations
+2. **Core Components**
+   - `ReelApp` root AsyncComponent with GTK application initialization
+   - Global MessageBroker for inter-component communication
+   - Direct service connections without ViewModels
+   - Command handler for async operations
 
-3. **Build main window component**
-   - Implement as AsyncComponent with loading states
+3. **Main Window Component**
+   - Implemented as AsyncComponent with loading states
    - Two-pane layout with AdwNavigationSplitView
    - Navigation stack management
    - Content area with page switching
    - Window state tracking with tracker
 
-4. **Create sidebar component with tracker**
-   - Implement with `#[tracker::track]` for efficient updates
+4. **Sidebar Component**
+   - Uses `#[tracker::track]` for efficient updates
    - Factory pattern for source list items
    - Home/Sources navigation buttons
    - Real-time connection status updates
    - Efficient re-renders only on state changes
-
-### Phase 2: Core Pages (Week 3-4)
-**Goal**: Home and Library pages working
-**Success Criteria**: Can browse libraries and view media
-**Tests**: Navigation works, media displays correctly
-
-#### Tasks:
-1. **Implement home page as AsyncComponent**
-   - Use AsyncComponent for data loading
-   - Implement `init_loading_widgets()` for skeleton UI
-   - Factory pattern for each section (Continue Watching, Recently Added, etc.)
-   - Horizontal scrolling with FactoryVecDeque
-   - Lazy loading of section content
-   - Commands for fetching section data
-
-2. **Build library page with virtual factory**
-   - AsyncComponent with loading states
-   - FactoryVecDeque for media grid
-   - Virtual scrolling using factory pattern
-   - Tracker for filter/sort state changes
-   - Grid/list view toggle with efficient re-render
-   - Search worker for filtering
-
-3. **Create media card factory component**
-   - Implement as FactoryComponent
-   - Image loading via worker
-   - Progress tracking with tracker
-   - Hover states and animations
-   - Output messages for selection
-
-4. **Set up Workers for background tasks**
-   - ImageLoader worker for async image fetching
-   - SearchWorker for library filtering
-   - SyncWorker for background data updates
-   - Connect workers to MessageBroker
-
-### Phase 3: Details & Player (Week 5-6)
-**Goal**: Full media browsing and playback
-**Success Criteria**: Can play movies/shows end-to-end
-**Tests**: Details load correctly, video playback works
-
-#### Tasks:
-1. **Movie details as AsyncComponent**
-   - AsyncComponent with loading skeleton
-   - Commands for fetching full metadata
-   - Factory for cast/crew list
-   - Tracker for play state
-   - Related content with lazy loading
-   - Background blur effect for poster
-
-2. **Show details with episode factory**
-   - AsyncComponent for show data
-   - FactoryVecDeque for season selector
-   - FactoryVecDeque for episode grid
-   - Tracker for watched episodes
-   - Continue watching integration
-   - Efficient updates on episode state changes
-
-3. **Player component with commands**
-   - Commands for playback control
-   - MPV integration via commands
-   - Fullscreen state with tracker
-   - Progress tracking worker
-   - OSD auto-hide with timers
-   - Subtitle/audio track selection
-
-4. **Player controls with tracker**
-   - Tracker for control visibility
-   - Seek bar with preview
-   - Volume with gesture support
-   - Playback speed controls
-   - Chapter navigation
-
-### Phase 4: Management & Polish (Week 7-8)
-**Goal**: Complete feature parity
-**Success Criteria**: All features from GTK implementation work
-**Tests**: Full user workflows pass
-
-#### Tasks:
-1. **Sources management component**
-   - Add/remove sources
-   - Authentication flow
-   - Source testing
-   - Settings management
-
-2. **Authentication dialog**
-   - Server type selection
-   - Credential input
-   - OAuth flow handling
-   - Error states
-
-3. **Preferences dialog**
-   - Theme selection
-   - Player preferences
-   - Library settings
-   - Data management
-
-4. **Polish and optimization**
-   - Performance tuning
-   - Error handling
-   - Loading states
-   - Accessibility
 
 ## Component Architecture
 
@@ -561,12 +423,11 @@ Component → Command → Async Task → CommandOutput → State Update → Trac
 3. **Medium**: Add auto-play for TV episodes
 4. **Low**: Polish error handling and edge cases
 
-## Migration Strategy (Completed)
+## Development Guidelines
 
-**Status**: Relm4 is now the DEFAULT and PRIMARY UI implementation.
-- GTK implementation deprecated (reference only)
-- All new development in Relm4
-- No more ViewModel pattern - pure Relm4 components
+**Status**: Relm4 is the ONLY UI implementation.
+- All development uses pure Relm4 components
+- No ViewModel pattern - components manage their own state
 - UI/UX follows GNOME HIG with Adwaita styling
 
 ### Testing Strategy
@@ -580,21 +441,18 @@ Component → Command → Async Task → CommandOutput → State Update → Trac
 ### Dependencies
 ```toml
 [dependencies]
-relm4 = "0.9"
+relm4 = { version = "0.9", features = ["macros", "libadwaita"] }
 relm4-components = "0.9"
 relm4-icons = "0.9"
 tracker = "0.2"
 async-trait = "0.1"
-
-[features]
-relm4-ui = ["relm4", "relm4-components", "relm4-icons", "tracker"]
 ```
 
 ### Integration Points
-- **Services**: Direct integration with DataService, SyncManager
+- **Services**: Direct integration with service layer
 - **Models**: All data models reused without modification
-- **Platform Utils**: Shared video/audio utilities
 - **Database**: Direct repository access from components
+- **Workers**: Background tasks for sync, search, and media operations
 - **No ViewModels**: Components manage their own state with trackers
 
 ### Performance Targets
@@ -690,26 +548,7 @@ fn test_media_card_factory() {
 }
 ```
 
-## Migration Path
 
-### Phase 0: Preparation
-1. Set up Relm4 dependencies with feature flag
-2. Create parallel platform module structure
-3. Set up MessageBroker infrastructure
-4. Prepare service layer for direct access
-
-### Incremental Migration
-1. Start with new features in Relm4
-2. Migrate simplest components first (widgets)
-3. Then factories (media cards, lists)
-4. Then pages (home, library)
-5. Finally complex components (player, details)
-
-### Validation Checkpoints
-- After each component: Performance benchmarks
-- After each phase: User acceptance testing
-- Continuous: Memory profiling
-- Final: Full feature parity verification
 
 ## Future Considerations
 
@@ -733,7 +572,7 @@ fn test_media_card_factory() {
 
 ## Summary
 
-This updated plan fully embraces Relm4's architecture, abandoning ViewModels in favor of:
+The Relm4 implementation fully leverages modern reactive patterns:
 - **AsyncComponents** for data-heavy pages with built-in loading states
 - **Tracker pattern** for efficient, minimal UI updates
 - **Factory pattern** for all collections and lists
@@ -741,4 +580,4 @@ This updated plan fully embraces Relm4's architecture, abandoning ViewModels in 
 - **Command pattern** for structured async operations
 - **MessageBroker** for clean inter-component communication
 
-The result will be a more performant, maintainable, and truly reactive UI that leverages Relm4's strengths while maintaining all current functionality.
+The implementation provides a performant, maintainable, and truly reactive UI that leverages Relm4's strengths. There is no separate GTK implementation - Relm4 with GTK4/libadwaita is the sole UI framework.

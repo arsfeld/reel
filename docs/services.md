@@ -2,109 +2,106 @@
 
 ## Overview
 
-This document defines the service architecture patterns for Reel's Relm4 implementation, addressing the type-safety issues identified in `service-type-safety.md` while fully embracing Relm4's reactive component model.
+This document defines the service architecture patterns for Reel's Relm4 implementation, providing a type-safe, stateless service layer that integrates seamlessly with Relm4's reactive component model.
 
 ## Core Principles
 
 ### 1. Stateless Services
-Services should be pure functions without internal state. State belongs in Components, Workers, or the Database.
+Services are implemented as structs with pure static functions. No internal state, no Arc<Self>. State belongs in Components, Workers, or the Database.
 
 ```rust
-// ❌ BAD: Stateful service with Arc<Self>
-pub struct DataService {
-    cache: Arc<RwLock<LruCache<String, MediaItem>>>,
-    db: Arc<DatabaseConnection>,
-}
-
-// ✅ GOOD: Stateless service functions
+// ✅ IMPLEMENTED: Stateless service pattern (see src/services/core/media.rs)
 pub struct MediaService;
 
 impl MediaService {
-    pub async fn fetch_library(
-        db: &DatabaseConnection,
-        library_id: &LibraryId,
-    ) -> Result<Vec<MediaItem>> {
-        MediaRepository::find_by_library(db, library_id).await
+    pub async fn get_libraries(db: &DatabaseConnection) -> Result<Vec<Library>> {
+        let repo = LibraryRepositoryImpl::new(db.clone());
+        let models = repo.find_all().await?;
+        // Convert and return
     }
 }
 ```
 
 ### 2. Type-Safe Identifiers
-Never use raw strings for identifiers. Always use strongly-typed newtypes.
+All identifiers use strongly-typed newtypes defined in `src/models/identifiers.rs` using the `impl_id_type!` macro.
 
 ```rust
-// ❌ BAD: String-based identifiers
-pub async fn get_media(source_id: &str, library_id: &str) -> Result<Vec<MediaItem>>
+// ✅ IMPLEMENTED: Type-safe identifiers (see src/models/identifiers.rs)
+impl_id_type!(SourceId);
+impl_id_type!(LibraryId);
+impl_id_type!(MediaItemId);
+impl_id_type!(ShowId);
+impl_id_type!(UserId);
+impl_id_type!(BackendId);
+impl_id_type!(ProviderId);
 
-// ✅ GOOD: Type-safe identifiers
-pub async fn get_media(source_id: &SourceId, library_id: &LibraryId) -> Result<Vec<MediaItem>>
+// Usage in services
+pub async fn get_media_item(db: &DatabaseConnection, item_id: &MediaItemId) -> Result<Option<MediaItem>>
 ```
 
 ### 3. Worker-Based Background Tasks
-Use Relm4 Workers for all background operations instead of raw Tokio tasks.
+Use Relm4 Workers for all background operations. Workers handle sync, search, image loading, and connection monitoring.
 
 ```rust
-// ❌ BAD: Raw Tokio spawn
-tokio::spawn(async move {
-    sync_library(library_id).await;
-});
-
-// ✅ GOOD: Relm4 Worker
+// ✅ IMPLEMENTED: Worker pattern (see src/workers/sync_worker.rs)
 impl Worker for SyncWorker {
-    type Input = SyncRequest;
-    type Output = SyncUpdate;
+    type Init = Arc<DatabaseConnection>;
+    type Input = SyncWorkerInput;
+    type Output = SyncWorkerOutput;
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
-            SyncRequest::SyncLibrary(id) => {
-                // Perform sync with progress updates
-                sender.output(SyncUpdate::Progress(id, 0.5));
+            SyncWorkerInput::StartSync { source_id, library_id, force } => {
+                sender.output(SyncWorkerOutput::SyncStarted { source_id, library_id });
+                // Perform sync...
             }
         }
     }
 }
 ```
 
-## Service Structure
+## Actual Service Structure
 
 ```
 src/services/
-├── core/                    # Stateless business logic
-│   ├── media.rs            # Media operations
-│   ├── auth.rs             # Authentication logic
-│   ├── sync.rs             # Synchronization logic
-│   └── playback.rs         # Playback operations
-├── workers/                 # Background task workers
-│   ├── sync_worker.rs      # Sync operations
-│   ├── image_worker.rs     # Image loading
-│   ├── search_worker.rs    # Search indexing
-│   └── connection_worker.rs # Connection management
-├── commands/                # Async command definitions
-│   ├── media_commands.rs   # Media fetch commands
-│   ├── auth_commands.rs    # Auth flow commands
-│   └── sync_commands.rs    # Sync commands
-├── brokers/                 # Inter-component messaging
-│   ├── media_broker.rs     # Media updates
-│   ├── sync_broker.rs      # Sync status
-│   └── connection_broker.rs # Connection status
-└── types/                   # Service type definitions
-    ├── identifiers.rs       # Type-safe IDs
-    ├── cache_keys.rs        # Type-safe cache keys
-    └── requests.rs          # Request/response types
+├── core/                     # Stateless business logic services
+│   ├── auth.rs              # AuthService
+│   ├── backend.rs           # BackendService - manages backend instances
+│   ├── connection.rs        # ConnectionService - source connections
+│   ├── connection_cache.rs  # Connection caching utilities
+│   ├── media.rs             # MediaService - media operations
+│   ├── playback.rs          # PlaybackService
+│   ├── playlist.rs          # PlaylistService
+│   ├── playqueue.rs         # PlayQueueService
+│   └── sync.rs              # SyncService
+├── commands/                 # Command pattern implementations
+│   ├── auth_commands.rs     # Authentication commands
+│   ├── media_commands.rs    # Media fetch commands (GetLibrariesCommand, etc.)
+│   └── sync_commands.rs     # Sync commands
+├── brokers/                  # Message brokers (currently stub implementations)
+│   ├── connection_broker.rs # Connection status messages
+│   ├── media_broker.rs      # Media update messages (uses logging, not full broker)
+│   └── sync_broker.rs       # Sync status messages
+├── cache_keys.rs            # Type-safe cache key system
+└── initialization.rs        # Service initialization logic
+
+src/workers/                  # Background workers (separate module)
+├── connection_monitor.rs    # Connection health monitoring
+├── image_loader.rs          # Async image loading
+├── search_worker.rs         # Search operations
+└── sync_worker.rs           # Synchronization worker
+
+src/models/identifiers.rs    # Type-safe ID definitions (not in services/)
 ```
 
 ## Type-Safe Identifiers
 
-### Definition
+### Implementation
 ```rust
-// services/types/identifiers.rs
-use std::fmt;
-use serde::{Serialize, Deserialize};
-
-/// Macro for creating newtype ID wrappers
-macro_rules! define_id {
+// src/models/identifiers.rs
+macro_rules! impl_id_type {
     ($name:ident) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Clone, Debug, Serialize, Deserialize)]
         pub struct $name(String);
 
         impl $name {
@@ -115,15 +112,25 @@ macro_rules! define_id {
             pub fn as_str(&self) -> &str {
                 &self.0
             }
-
-            pub fn into_string(self) -> String {
-                self.0
-            }
         }
 
         impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(f, "{}", self.0)
+            }
+        }
+
+        impl PartialEq for $name {
+            fn eq(&self, other: &Self) -> bool {
+                self.0 == other.0
+            }
+        }
+
+        impl Eq for $name {}
+
+        impl Hash for $name {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                self.0.hash(state);
             }
         }
 
@@ -138,17 +145,23 @@ macro_rules! define_id {
                 Self(s.to_string())
             }
         }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
     };
 }
 
-// Define all ID types
-define_id!(SourceId);
-define_id!(LibraryId);
-define_id!(MediaItemId);
-define_id!(ProviderId);
-define_id!(BackendId);
-define_id!(ShowId);
-define_id!(EpisodeId);
+// All ID types are defined in src/models/identifiers.rs
+impl_id_type!(SourceId);
+impl_id_type!(BackendId);
+impl_id_type!(ProviderId);
+impl_id_type!(LibraryId);
+impl_id_type!(MediaItemId);
+impl_id_type!(ShowId);
+impl_id_type!(UserId);
 ```
 
 ### Usage
@@ -169,65 +182,72 @@ let source_id = SourceId::from("source_456");
 
 ## Type-Safe Cache Keys
 
-### Definition
+### Implementation
 ```rust
-// services/types/cache_keys.rs
-use super::identifiers::*;
+// src/services/cache_keys.rs
+use crate::models::{LibraryId, MediaItemId, ShowId, SourceId};
+use crate::db::entities::media_items::MediaType;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CacheKey {
+    /// Simple cache key for any media item by ID (memory cache)
+    Media(String),
+
+    /// Cache key for list of libraries for a source
     Libraries(SourceId),
-    LibraryItems {
-        source: SourceId,
-        library: LibraryId
-    },
+
+    /// Cache key for list of items in a library
+    LibraryItems(SourceId, LibraryId),
+
+    /// Cache key for a specific media item
     MediaItem {
         source: SourceId,
         library: LibraryId,
-        item: MediaItemId,
+        media_type: MediaType,
+        item_id: MediaItemId,
     },
+
+    /// Cache key for home sections of a source
     HomeSections(SourceId),
-    ShowEpisodes {
-        source: SourceId,
-        show: ShowId,
-    },
-    PlaybackProgress {
-        user: String,
-        item: MediaItemId,
-    },
+
+    /// Cache key for episodes of a show
+    ShowEpisodes(SourceId, LibraryId, ShowId),
+
+    /// Cache key for a specific episode
+    Episode(SourceId, LibraryId, MediaItemId),
+
+    /// Cache key for a show
+    Show(SourceId, LibraryId, ShowId),
+
+    /// Cache key for a movie
+    Movie(SourceId, LibraryId, MediaItemId),
 }
 
 impl CacheKey {
-    /// Convert to string representation for storage
+    /// Convert the cache key to its string representation
     pub fn to_string(&self) -> String {
         match self {
-            Self::Libraries(source) =>
-                format!("source:{}:libraries", source),
-            Self::LibraryItems { source, library } =>
-                format!("source:{}:library:{}:items", source, library),
-            Self::MediaItem { source, library, item } =>
-                format!("source:{}:library:{}:item:{}", source, library, item),
-            Self::HomeSections(source) =>
-                format!("source:{}:home", source),
-            Self::ShowEpisodes { source, show } =>
-                format!("source:{}:show:{}:episodes", source, show),
-            Self::PlaybackProgress { user, item } =>
-                format!("user:{}:playback:{}", user, item),
-        }
-    }
-
-    /// Parse from string representation
-    pub fn parse(s: &str) -> Result<Self> {
-        let parts: Vec<&str> = s.split(':').collect();
-        match parts.as_slice() {
-            ["source", source, "libraries"] =>
-                Ok(Self::Libraries(SourceId::new(source))),
-            ["source", source, "library", library, "items"] =>
-                Ok(Self::LibraryItems {
-                    source: SourceId::new(source),
-                    library: LibraryId::new(library),
-                }),
-            _ => Err(anyhow!("Invalid cache key format: {}", s))
+            CacheKey::Media(id) => format!("media:{}", id),
+            CacheKey::Libraries(source) => 
+                format!("{}:libraries", source.as_str()),
+            CacheKey::LibraryItems(source, library) => 
+                format!("{}:library:{}:items", source.as_str(), library.as_str()),
+            CacheKey::MediaItem { source, library, media_type, item_id } => {
+                let type_str = match media_type {
+                    MediaType::Movie => "movie",
+                    MediaType::Show => "show",
+                    MediaType::Episode => "episode",
+                    MediaType::Album => "album",
+                    MediaType::Track => "track",
+                    MediaType::Photo => "photo",
+                };
+                format!("{}:{}:{}:{}", source.as_str(), library.as_str(), type_str, item_id.as_str())
+            }
+            CacheKey::HomeSections(source) => 
+                format!("{}:home_sections", source.as_str()),
+            CacheKey::ShowEpisodes(source, library, show) => 
+                format!("{}:{}:show:{}:episodes", source.as_str(), library.as_str(), show.as_str()),
+            // ... other variants
         }
     }
 }
@@ -236,10 +256,7 @@ impl CacheKey {
 ### Usage
 ```rust
 // Creating cache keys
-let key = CacheKey::LibraryItems {
-    source: source_id.clone(),
-    library: library_id.clone(),
-};
+let key = CacheKey::LibraryItems(source_id, library_id);
 
 // Using in cache operations
 cache.get(&key.to_string()).await?;
@@ -250,46 +267,59 @@ cache.set(key.to_string(), items).await?;
 
 ### Core Service Implementation
 ```rust
-// services/core/media.rs
-use crate::db::{DatabaseConnection, repository::MediaRepository};
-use crate::services::types::identifiers::*;
-
+// src/services/core/media.rs
 pub struct MediaService;
 
 impl MediaService {
-    /// Fetch all items in a library
-    pub async fn get_library_items(
+    /// Get all libraries for a specific source
+    pub async fn get_libraries_for_source(
         db: &DatabaseConnection,
-        library_id: &LibraryId,
-    ) -> Result<Vec<MediaItem>> {
-        MediaRepository::find_by_library(db, library_id).await
+        source_id: &SourceId,
+    ) -> Result<Vec<Library>> {
+        let repo = LibraryRepositoryImpl::new(db.clone());
+        let models = repo
+            .find_by_source(source_id.as_ref())
+            .await
+            .context("Failed to get libraries from database")?;
+
+        models
+            .into_iter()
+            .map(|m| m.try_into())
+            .collect::<Result<Vec<Library>, _>>()
+            .context("Failed to convert library models")
     }
 
-    /// Search for media items
-    pub async fn search(
+    /// Get media items with pagination
+    pub async fn get_media_items(
         db: &DatabaseConnection,
-        query: &str,
-        source_id: Option<&SourceId>,
+        library_id: &LibraryId,
+        media_type: Option<MediaType>,
+        offset: u32,
+        limit: u32,
     ) -> Result<Vec<MediaItem>> {
-        MediaRepository::search(db, query, source_id).await
+        let repo = MediaRepositoryImpl::new(db.clone());
+        let models = repo
+            .find_by_library_paginated(library_id.as_ref(), offset, limit)
+            .await?;
+
+        models
+            .into_iter()
+            .map(|m| m.try_into())
+            .collect::<Result<Vec<MediaItem>>>()
     }
 
     /// Get continue watching items
     pub async fn get_continue_watching(
         db: &DatabaseConnection,
-        user_id: &str,
-        limit: usize,
+        limit: Option<i64>,
     ) -> Result<Vec<MediaItem>> {
-        MediaRepository::find_in_progress(db, user_id, limit).await
-    }
+        let repo = MediaRepositoryImpl::new(db.clone());
+        let models = repo.find_continue_watching(limit).await?;
 
-    /// Update playback progress
-    pub async fn update_progress(
-        db: &DatabaseConnection,
-        item_id: &MediaItemId,
-        progress: f32,
-    ) -> Result<()> {
-        PlaybackRepository::update_progress(db, item_id, progress).await
+        models
+            .into_iter()
+            .map(|m| m.try_into())
+            .collect::<Result<Vec<MediaItem>>>()
     }
 }
 ```
@@ -321,107 +351,120 @@ impl AsyncComponent for LibraryPage {
 
 ## Worker Pattern
 
-### Background Task Worker
+### Sync Worker Implementation
 ```rust
-// services/workers/sync_worker.rs
-use crate::backends::traits::MediaBackend;
-use crate::services::types::identifiers::*;
-
+// src/workers/sync_worker.rs
 pub struct SyncWorker {
-    db: DatabaseConnection,
-    backends: HashMap<BackendId, Arc<dyn MediaBackend>>,
+    db: Arc<DatabaseConnection>,
+    active_syncs: HashMap<SourceId, relm4::JoinHandle<()>>,
+    sync_interval: Duration,
+    auto_sync_enabled: bool,
+    last_sync_times: HashMap<SourceId, Instant>,
 }
 
-#[derive(Debug)]
-pub enum SyncRequest {
-    SyncLibrary {
-        backend_id: BackendId,
-        library_id: LibraryId,
+#[derive(Debug, Clone)]
+pub enum SyncWorkerInput {
+    StartSync {
+        source_id: SourceId,
+        library_id: Option<LibraryId>,
+        force: bool,
     },
-    SyncAll {
-        backend_id: BackendId,
-    },
-    Cancel,
+    StopSync { source_id: SourceId },
+    StopAllSyncs,
+    SetSyncInterval(Duration),
+    EnableAutoSync(bool),
+    RecordSuccessfulSync { source_id: SourceId },
 }
 
-#[derive(Debug)]
-pub enum SyncUpdate {
-    Started(LibraryId),
-    Progress {
-        library_id: LibraryId,
-        current: usize,
-        total: usize,
+#[derive(Debug, Clone)]
+pub enum SyncWorkerOutput {
+    SyncStarted {
+        source_id: SourceId,
+        library_id: Option<LibraryId>,
     },
-    Completed {
-        library_id: LibraryId,
+    SyncProgress(SyncProgress),
+    SyncCompleted {
+        source_id: SourceId,
+        library_id: Option<LibraryId>,
         items_synced: usize,
+        duration: Duration,
     },
-    Failed {
-        library_id: LibraryId,
+    SyncFailed {
+        source_id: SourceId,
+        library_id: Option<LibraryId>,
         error: String,
     },
+    SyncCancelled { source_id: SourceId },
 }
 
 impl Worker for SyncWorker {
-    type Init = (DatabaseConnection, HashMap<BackendId, Arc<dyn MediaBackend>>);
-    type Input = SyncRequest;
-    type Output = SyncUpdate;
+    type Init = Arc<DatabaseConnection>;
+    type Input = SyncWorkerInput;
+    type Output = SyncWorkerOutput;
 
-    fn init(
-        (db, backends): Self::Init,
-        _sender: ComponentSender<Self>
-    ) -> Self {
-        Self { db, backends }
+    fn init(db: Self::Init, _sender: ComponentSender<Self>) -> Self {
+        Self {
+            db,
+            active_syncs: HashMap::new(),
+            sync_interval: Duration::from_secs(3600),
+            auto_sync_enabled: true,
+            last_sync_times: HashMap::new(),
+        }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
-            SyncRequest::SyncLibrary { backend_id, library_id } => {
-                sender.output(SyncUpdate::Started(library_id.clone()));
+            SyncWorkerInput::StartSync { source_id, library_id, force } => {
+                // Check if sync already running
+                if self.active_syncs.contains_key(&source_id) && !force {
+                    return;
+                }
 
-                if let Some(backend) = self.backends.get(&backend_id) {
-                    // Perform sync
-                    match backend.get_library_items(&library_id) {
-                        Ok(items) => {
-                            let total = items.len();
-                            for (i, item) in items.into_iter().enumerate() {
-                                // Store in database
-                                if let Err(e) = MediaRepository::upsert(&self.db, item) {
-                                    sender.output(SyncUpdate::Failed {
-                                        library_id: library_id.clone(),
-                                        error: e.to_string(),
-                                    });
-                                    return;
-                                }
+                // Cancel existing sync if forcing
+                if force {
+                    if let Some(handle) = self.active_syncs.remove(&source_id) {
+                        handle.abort();
+                    }
+                }
 
-                                // Send progress
-                                if i % 10 == 0 {
-                                    sender.output(SyncUpdate::Progress {
-                                        library_id: library_id.clone(),
-                                        current: i,
-                                        total,
-                                    });
-                                }
-                            }
+                // Start new sync
+                let db = self.db.clone();
+                let source_id_clone = source_id.clone();
+                let library_id_clone = library_id.clone();
+                let sender_clone = sender.clone();
 
-                            sender.output(SyncUpdate::Completed {
-                                library_id,
-                                items_synced: total,
+                let handle = relm4::spawn(async move {
+                    // Perform sync operation
+                    let result = BackendService::sync_source(
+                        &db,
+                        &source_id_clone,
+                        library_id_clone.as_ref(),
+                    ).await;
+                    
+                    // Send completion message
+                    match result {
+                        Ok(count) => {
+                            sender_clone.output(SyncWorkerOutput::SyncCompleted {
+                                source_id: source_id_clone,
+                                library_id: library_id_clone,
+                                items_synced: count,
+                                duration: Duration::from_secs(0), // TODO: track actual duration
                             });
                         }
                         Err(e) => {
-                            sender.output(SyncUpdate::Failed {
-                                library_id,
+                            sender_clone.output(SyncWorkerOutput::SyncFailed {
+                                source_id: source_id_clone,
+                                library_id: library_id_clone,
                                 error: e.to_string(),
                             });
                         }
                     }
-                }
+                });
+
+                self.active_syncs.insert(source_id.clone(), handle);
+                sender.output(SyncWorkerOutput::SyncStarted { source_id, library_id });
             }
-            SyncRequest::Cancel => {
-                // Handle cancellation
-            }
-            _ => {}
+            // ... other message handlers
         }
     }
 }
@@ -491,48 +534,74 @@ impl Worker for ImageWorker {
 
 ## Command Pattern
 
-### Async Commands
+### Command Implementation
 ```rust
-// services/commands/media_commands.rs
-use crate::services::core::MediaService;
-use crate::services::types::identifiers::*;
+// src/services/commands/media_commands.rs
+use async_trait::async_trait;
+use crate::services::commands::Command;
 
-pub enum MediaCommand {
-    FetchLibrary(LibraryId),
-    FetchDetails(MediaItemId),
-    Search { query: String, source: Option<SourceId> },
-    UpdateProgress { item: MediaItemId, position: f32 },
+/// Base Command trait
+#[async_trait]
+pub trait Command<T> {
+    async fn execute(&self) -> Result<T>;
 }
 
-pub async fn execute_media_command(
-    db: &DatabaseConnection,
-    command: MediaCommand,
-) -> Result<MediaCommandResult> {
-    match command {
-        MediaCommand::FetchLibrary(library_id) => {
-            let items = MediaService::get_library_items(db, &library_id).await?;
-            Ok(MediaCommandResult::LibraryItems(items))
-        }
-        MediaCommand::FetchDetails(item_id) => {
-            let details = MediaService::get_item_details(db, &item_id).await?;
-            Ok(MediaCommandResult::ItemDetails(details))
-        }
-        MediaCommand::Search { query, source } => {
-            let results = MediaService::search(db, &query, source.as_ref()).await?;
-            Ok(MediaCommandResult::SearchResults(results))
-        }
-        MediaCommand::UpdateProgress { item, position } => {
-            MediaService::update_progress(db, &item, position).await?;
-            Ok(MediaCommandResult::ProgressUpdated)
-        }
+/// Get all libraries command
+pub struct GetLibrariesCommand {
+    pub db: DatabaseConnection,
+}
+
+#[async_trait]
+impl Command<Vec<Library>> for GetLibrariesCommand {
+    async fn execute(&self) -> Result<Vec<Library>> {
+        MediaService::get_libraries(&self.db).await
     }
 }
 
-pub enum MediaCommandResult {
-    LibraryItems(Vec<MediaItem>),
-    ItemDetails(MediaDetails),
-    SearchResults(Vec<MediaItem>),
-    ProgressUpdated,
+/// Get media items for a library with pagination
+pub struct GetMediaItemsCommand {
+    pub db: DatabaseConnection,
+    pub library_id: LibraryId,
+    pub media_type: Option<MediaType>,
+    pub offset: u32,
+    pub limit: u32,
+}
+
+#[async_trait]
+impl Command<Vec<MediaItem>> for GetMediaItemsCommand {
+    async fn execute(&self) -> Result<Vec<MediaItem>> {
+        MediaService::get_media_items(
+            &self.db,
+            &self.library_id,
+            self.media_type,
+            self.offset,
+            self.limit,
+        )
+        .await
+    }
+}
+
+/// Search media items
+pub struct SearchMediaCommand {
+    pub db: DatabaseConnection,
+    pub query: String,
+    pub source_id: Option<SourceId>,
+    pub media_type: Option<MediaType>,
+    pub limit: Option<u32>,
+}
+
+#[async_trait]
+impl Command<Vec<MediaItem>> for SearchMediaCommand {
+    async fn execute(&self) -> Result<Vec<MediaItem>> {
+        MediaService::search(
+            &self.db,
+            &self.query,
+            self.source_id.as_ref(),
+            self.media_type,
+            self.limit,
+        )
+        .await
+    }
 }
 ```
 
@@ -581,76 +650,86 @@ impl AsyncComponent for HomePage {
 }
 ```
 
-## MessageBroker Pattern
+## Message Broker Pattern (Current Implementation)
 
-### Broker Definition
+### Broker Message Definitions
 ```rust
-// services/brokers/media_broker.rs
-use relm4::MessageBroker;
-use crate::services::types::identifiers::*;
-
-/// Broker for media-related updates across components
-#[derive(Debug, Clone)]
-pub struct MediaUpdateBroker;
+// src/services/brokers/media_broker.rs
+// NOTE: Currently using logging functions instead of full MessageBroker implementation
+// Components create their own Relm4 Sender/Receiver channels as needed
 
 #[derive(Debug, Clone)]
-pub enum MediaUpdate {
-    LibraryRefreshed(LibraryId),
-    ItemWatched(MediaItemId),
-    ProgressChanged {
-        item: MediaItemId,
-        progress: f32,
+pub enum MediaMessage {
+    /// Library added or updated
+    LibraryUpdated {
+        source_id: SourceId,
+        library_id: LibraryId,
+        item_count: usize,
     },
-    ItemAdded(MediaItem),
-    ItemRemoved(MediaItemId),
+    /// Media item added or updated
+    ItemUpdated {
+        source_id: SourceId,
+        library_id: LibraryId,
+        item: MediaItem,
+    },
+    /// Multiple items updated (bulk operation)
+    ItemsBulkUpdated {
+        source_id: SourceId,
+        library_id: LibraryId,
+        count: usize,
+    },
+    /// Item removed
+    ItemRemoved {
+        source_id: SourceId,
+        library_id: LibraryId,
+        item_id: MediaItemId,
+    },
 }
 
-impl MessageBroker for MediaUpdateBroker {
-    type Message = MediaUpdate;
+/// Current implementation uses logging functions
+pub fn log_library_updated(source_id: SourceId, library_id: LibraryId, item_count: usize) {
+    debug!(
+        "Library updated: source={}, library={}, items={}",
+        source_id, library_id, item_count
+    );
 }
 
-// Convenience functions
-impl MediaUpdateBroker {
-    pub fn notify_library_refresh(library_id: LibraryId) {
-        Self::send(MediaUpdate::LibraryRefreshed(library_id));
-    }
-
-    pub fn notify_progress(item: MediaItemId, progress: f32) {
-        Self::send(MediaUpdate::ProgressChanged { item, progress });
-    }
+pub fn log_item_updated(source_id: SourceId, library_id: LibraryId, item: &MediaItem) {
+    debug!(
+        "Item updated: source={}, library={}, item={}",
+        source_id,
+        library_id,
+        item.id()
+    );
 }
 ```
 
-### Component Subscription
+### Component Communication Pattern
 ```rust
-impl Component for LibraryPage {
-    fn init(
-        _: Self::Init,
-        root: Self::Root,
-        sender: ComponentSender<Self>,
-    ) -> ComponentParts<Self> {
-        // Subscribe to media updates
-        let mut media_rx = MediaUpdateBroker::subscribe();
-
-        sender.spawn_oneshot_command(async move {
-            while let Some(update) = media_rx.recv().await {
-                match update {
-                    MediaUpdate::LibraryRefreshed(lib_id) => {
-                        // Refresh if this is our library
-                        if lib_id == self.library_id {
-                            sender.input(LibraryMsg::Refresh);
-                        }
-                    }
-                    MediaUpdate::ItemWatched(item_id) => {
-                        // Update item status
-                        sender.input(LibraryMsg::UpdateItemStatus(item_id));
-                    }
-                    _ => {}
-                }
+// Components currently use direct Relm4 channels
+impl AsyncComponent for LibraryPage {
+    type CommandOutput = LibraryCommand;
+    
+    async fn update_cmd(
+        &mut self,
+        msg: LibraryCommand,
+        sender: AsyncComponentSender<Self>,
+    ) {
+        match msg {
+            LibraryCommand::RefreshLibrary => {
+                // Fetch updated data
+                let items = MediaService::get_media_items(
+                    &self.db,
+                    &self.library_id,
+                    None,
+                    0,
+                    100
+                ).await.unwrap();
+                
+                // Send to component
+                sender.input(LibraryMsg::ItemsLoaded(items));
             }
-        });
-
-        // ... rest of init
+        }
     }
 }
 ```
@@ -835,49 +914,70 @@ tokio::spawn(async move {
 });
 
 // ✅ GOOD
-sync_worker.emit(SyncRequest::SyncLibrary(library_id));
+sync_worker.emit(SyncWorkerInput::StartSync { 
+    source_id, 
+    library_id, 
+    force: false 
+});
 ```
 
 ### 4. Commands for Async Operations
 ```rust
-// ❌ BAD
-self.data_service.fetch_async().await;
-
-// ✅ GOOD
-sender.oneshot_command(async move {
-    CommandMsg::FetchData
-});
+// ✅ GOOD: Command pattern with trait
+let cmd = GetMediaItemsCommand {
+    db: self.db.clone(),
+    library_id: library_id.clone(),
+    media_type: None,
+    offset: 0,
+    limit: 100,
+};
+let items = cmd.execute().await?;
 ```
 
-### 5. MessageBroker for Cross-Component Communication
+### 5. Direct Component Communication
 ```rust
-// ❌ BAD
-self.event_bus.emit(Event::LibraryUpdated);
-
-// ✅ GOOD
-MediaUpdateBroker::send(MediaUpdate::LibraryRefreshed(library_id));
+// Current pattern: Components use Relm4 channels directly
+// MessageBroker infrastructure exists but uses logging currently
+sender.input(LibraryMsg::ItemsLoaded(items));
 ```
 
-## Migration Checklist
+## Current Architecture Status
 
-When migrating existing services to Relm4 patterns:
+### Implemented ✅
+- Type-safe identifiers via `impl_id_type!` macro
+- Stateless service pattern with pure functions
+- Worker-based background tasks (sync, search, image loading)
+- Command pattern with async trait
+- Cache key system with type safety
+- Repository pattern for database operations
 
-- [ ] Replace string IDs with typed identifiers
-- [ ] Convert stateful services to stateless functions
-- [ ] Move background tasks to Workers
-- [ ] Replace EventBus with MessageBroker
-- [ ] Use Commands for async operations
-- [ ] Add proper error types instead of anyhow::Result
-- [ ] Write tests for all service functions
-- [ ] Update documentation
+### Partially Implemented ⚠️
+- Message brokers defined but using logging instead of full broker
+- Connection monitoring worker exists but not fully integrated
+- Some services still need complete conversions
+
+### Known Gaps ❌
+- Repository layer has zero event integration
+- Transaction support exists but not integrated into sync flow
+- Some UI pages still need full Relm4 component integration
+
+## Migration Guidelines
+
+When working with services:
+
+1. **Use existing patterns**: Follow the stateless service pattern in `src/services/core/`
+2. **Type-safe IDs**: Always use the identifier types from `src/models/identifiers.rs`
+3. **Workers for background**: Put long-running tasks in `src/workers/`
+4. **Commands for async**: Define commands in `src/services/commands/`
+5. **Repository for DB**: Use repository pattern in `src/db/repository/`
 
 ## Summary
 
-This architecture provides:
+The services architecture provides:
 
-1. **Type Safety**: Strongly-typed identifiers prevent runtime errors
-2. **Stateless Services**: Easier testing and reasoning about code
-3. **Relm4 Integration**: Native use of Workers, Commands, and MessageBroker
-4. **Clear Separation**: Business logic separate from UI concerns
-5. **Testability**: Pure functions and isolated workers are easy to test
-6. **Scalability**: Easy to add new services without affecting existing ones
+1. **Type Safety**: Strongly-typed identifiers throughout
+2. **Stateless Services**: Pure functions for easier testing
+3. **Worker Integration**: Background tasks via Relm4 Workers
+4. **Command Pattern**: Structured async operations
+5. **Clear Separation**: Business logic separate from UI
+6. **Repository Pattern**: Consistent database access

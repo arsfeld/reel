@@ -9,7 +9,7 @@ Gnome Reel uses a **stateless backend architecture** where media server backends
 1. **Stateless Operations**: Backends are never cached or reused
 2. **On-Demand Creation**: Each operation creates its own backend instance
 3. **Persistent Connection Data**: Server connections are stored in database
-4. **Automatic Failover**: System automatically selects best available connection
+4. **Automatic Failover**: System automatically selects best available connection (Plex only)
 5. **Pure Functions**: Backend operations are side-effect free transformations
 
 ## Backend Creation Flow
@@ -47,15 +47,15 @@ graph TD
    - Fetch source entity from database
    - Extract connection URLs and metadata
 
-2. **Retrieve Credentials** (`backend.rs:50-54`)
+2. **Retrieve Credentials**
    - Load from secure keyring storage
    - Fall back to file storage if keyring unavailable
 
-3. **Create AuthProvider** (`backend.rs:87-112`)
+3. **Create AuthProvider** (`backend.rs:87-146`)
    - Transform credentials into provider-specific format
    - Map tokens for Plex, username/password for Jellyfin
 
-4. **Instantiate Backend** (`backend.rs:63-82`)
+4. **Instantiate Backend** (`backend.rs:55-85`)
    - Call backend-specific `from_auth()` factory
    - Pass AuthProvider and Source configuration
    - Initialize connection to server
@@ -89,7 +89,7 @@ When a user first authenticates with Plex (`auth_dialog.rs:608-630`):
 
 ### Runtime Selection (Per Operation)
 
-Each time a PlexBackend is created (`plex/mod.rs:480-595`):
+Each time a PlexBackend is created (`plex/mod.rs:163-230`):
 
 #### Phase 1: Server Matching
 ```rust
@@ -142,18 +142,20 @@ score = base_priority
 
 ### Background Monitor Worker
 
-The `ConnectionMonitor` (`connection_monitor.rs`) runs continuously:
+The `ConnectionMonitor` (`connection_monitor.rs`) is partially integrated:
 
-1. **Periodic Health Checks**
-   - Tests all stored connections every 30 seconds
-   - Updates availability status and response times
-   - Stores results in database
+1. **Worker Implementation**
+   - Initialized in MainWindow (`main_window.rs:328-343`)
+   - Can test connections on demand via `CheckSource` message
+   - Can check all sources via `CheckAllSources` message
+   - Emits connection status events (ConnectionChanged, ConnectionLost, ConnectionRestored)
 
-2. **Automatic Failover**
-   - Detects when primary connection fails
-   - Selects next best available connection
-   - Updates database with new primary URL
-   - Emits events for UI updates
+2. **Integration Status** 
+   - Worker is created and connected to MainWindow
+   - `start_monitoring()` spawns periodic health checks every 10 seconds
+   - Handles connection status changes and updates UI (sidebar and sources page)
+   - Triggers retry checks after disconnection (5-second delay)
+   - Uses variable check frequency based on connection stability
 
 3. **Connection Testing**
    ```rust
@@ -316,20 +318,27 @@ Event::SyncFailed { source_id, error }
 3. **Database Indexing**: Fast source and media lookups
 4. **Connection Pooling**: Reuse HTTP clients (not backend instances)
 
-## Future Enhancements
+## Known Limitations
 
-### Planned Improvements
-1. **Connection Prediction**: ML-based selection using historical data
-2. **Preemptive Testing**: Check connections before user action
-3. **Regional Failover**: Geographic-based connection selection
-4. **Connection Pooling**: Share HTTP clients across backends
-5. **Metrics Collection**: Track connection reliability over time
+### Local Backend
+- **Status**: Mostly unimplemented (10% complete)
+- **Current State**: Placeholder structure with TODO stubs
+- **Missing**: File scanning, metadata extraction, playback support
+- **Note**: `from_auth` method not implemented
 
-### Experimental Features
-- WebSocket connections for real-time updates
-- P2P discovery for local media servers
-- Bluetooth/mDNS for automatic local discovery
-- Connection multiplexing for parallel operations
+### Jellyfin Backend  
+- **Connection Selection**: No multi-connection support like Plex
+- **Single URL**: Uses only the configured connection_url
+- **Cast/Crew**: Depends on server-side metadata quality
+
+### Plex Backend
+- **Cast/Crew**: Extraction not fully implemented
+- **Connection Racing**: 3-second timeout may be aggressive for slow networks
+
+### Connection Monitor
+- **Partial Integration**: Worker is started but frequency logic may need refinement
+- **Variable Frequency**: Implements dynamic check intervals based on connection stability
+- **UI Updates**: Successfully updates sidebar and sources page on connection changes
 
 ## Debugging
 
