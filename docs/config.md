@@ -1,244 +1,166 @@
-# Configuration System Review and Documentation
+# Configuration System Documentation
 
 ## Overview
-This document provides a comprehensive review of the configuration management system in the Reel application, detailing how configuration is loaded, saved, and used throughout the codebase.
+The configuration management system in the Reel application provides simplified settings management using TOML format. The system has been refactored to be minimal and focused only on playback settings.
 
 ## Configuration Architecture
 
 ### Core Configuration Module
 - **Location**: `src/config.rs`
-- **Structure**: Hierarchical configuration using Serde for serialization/deserialization
-- **Format**: TOML file format with conditional field serialization to minimize file size
+- **Structure**: Simple two-level configuration structure
+- **Format**: TOML file format
+- **Pattern**: On-demand loading by components
 
-### Configuration Hierarchy
+### Configuration Structure
 
 ```
 Config (root)
-├── GeneralConfig
-│   ├── theme: String (default: "auto")
-│   ├── language: String (default: "system")
-│   └── preferred_source_id: Option<String>
-├── PlaybackConfig
-│   ├── player_backend: String (default: "mpv")
-│   ├── hardware_acceleration: bool (default: true)
-│   ├── default_subtitle: String (default: "none")
-│   ├── default_audio: String (default: "original")
-│   ├── skip_intro: bool (default: true)
-│   ├── skip_credits: bool (default: true)
-│   ├── auto_play_next: bool (default: true)
-│   ├── auto_play_delay: u64 (default: 10)
-│   ├── mpv_verbose_logging: bool (default: false)
-│   ├── mpv_cache_size_mb: u32 (default: 1500)
-│   ├── mpv_cache_backbuffer_mb: u32 (default: 500)
-│   ├── mpv_cache_secs: u32 (default: 1800)
-│   ├── auto_resume: bool (default: true)
-│   ├── resume_threshold_seconds: u32 (default: 30)
-│   └── progress_update_interval_seconds: u32 (default: 10)
-├── NetworkConfig
-│   ├── connection_timeout: u64 (default: 30)
-│   ├── max_retries: u32 (default: 3)
-│   └── cache_size: u64 (default: 1000)
-├── BackendsConfig
-│   ├── PlexConfig
-│   │   ├── server_url: String (default: "https://plex.tv")
-│   │   └── auth_token: Option<String>
-│   └── JellyfinConfig
-│       └── server_url: String
-└── RuntimeConfig
-    ├── legacy_backends: Vec<String>
-    ├── last_sync_times: HashMap<String, String>
-    ├── library_visibility: HashMap<String, bool>
-    ├── auth_providers: HashMap<String, AuthProvider>
-    ├── cached_sources: HashMap<String, Vec<Source>>
-    └── sources_last_fetched: HashMap<String, DateTime<Utc>>
+└── PlaybackConfig
+    ├── player_backend: String (default: "mpv")
+    ├── hardware_acceleration: bool (default: true)
+    ├── mpv_verbose_logging: bool (default: false)
+    ├── mpv_cache_size_mb: u32 (default: 150)
+    ├── mpv_cache_backbuffer_mb: u32 (default: 50)
+    ├── mpv_cache_secs: u32 (default: 30)
+    ├── auto_resume: bool (default: true)
+    ├── resume_threshold_seconds: u32 (default: 10)
+    ├── progress_update_interval_seconds: u32 (default: 5)
+    └── mpv_upscaling_mode: String (default: "bilinear")
 ```
 
-## Configuration Sources
+## Configuration File Location
 
-### 1. File System
-- **Primary Source**: TOML configuration file
-- **Location**:
-  - macOS: `~/Library/Application Support/Reel/config.toml`
-  - Linux/Other: `~/.config/reel/config.toml`
-- **Loading**: Via `Config::load()` which reads and deserializes the TOML file
-- **Creation**: File is created on first save if it doesn't exist
+- **macOS**: `~/Library/Application Support/Reel/config.toml`
+- **Linux/Other**: `~/.config/reel/config.toml`
 
-### 2. Default Values
-- **Implementation**: Hardcoded defaults in `src/config.rs`
-- **Application**: Applied through Serde's `#[serde(default)]` attributes
-- **Optimization**: Default values are not serialized to keep config file minimal
+The configuration directory and file are created automatically on first save if they don't exist.
 
-### 3. Environment Variables
-- **Limited Usage**: Only specific player configurations use environment variables
-- **Examples**:
-  - `REEL_FORCE_FALLBACK_SINK` - Forces fallback audio sink in GStreamer
-  - `REEL_USE_GL_SINK` - Enables GL sink in GStreamer
-  - `GST_DEBUG_DUMP_DOT_DIR` - GStreamer debug output directory
+## Configuration Loading
 
-## Configuration Loading Flow
+### Loading Pattern
+Configuration is loaded on-demand using `Config::load()`:
+- If config file exists, it is parsed from TOML
+- If no config file exists, default values are used
+- Errors in parsing are propagated to the caller
 
-### Application Startup
-1. **Main Entry** (`src/main.rs`): Initializes platform but doesn't load config
-2. **ReelApp** (`src/platforms/relm4/app.rs`): Creates database, doesn't load config
-3. **MainWindow** (`src/platforms/relm4/components/main_window.rs`): No config loading
-4. **Component-Level Loading**: Each component loads config as needed:
-   - Player page loads config once during initialization
-   - Preferences page loads config when opened
-   - Player controller receives config as parameter
+### Usage Examples
 
-### Lazy Loading Pattern
-- Configuration is **NOT** loaded globally at startup
-- Components load configuration on-demand when needed
-- This prevents unnecessary I/O if certain features aren't used
+```rust
+// Load configuration
+let config = Config::load()?;
 
-## Configuration Save/Modify Operations
+// Access playback settings
+let player_backend = &config.playback.player_backend;
+let cache_size = config.playback.mpv_cache_size_mb;
+```
 
-### Direct Modifications
-1. **Preferences Page** (`preferences.rs:305`)
-   - Saves player backend selection
-   - Saves hardware acceleration setting
-   - Note: Some preferences shown in UI aren't saved to config yet
+## Configuration Saving
 
-### Programmatic Updates
-2. **Auth Provider Management** (`config.rs`)
-   - `add_auth_provider()`: Adds new auth provider and saves
-   - `remove_auth_provider()`: Removes provider and cleans up related data
-   - `set_auth_providers()`: Batch update of all providers
+The configuration can be saved using `Config::save()`:
+- Creates parent directory if it doesn't exist
+- Serializes to TOML format using pretty printing
+- Overwrites existing file completely
 
-3. **Runtime State** (`config.rs`)
-   - `set_library_visibility()`: Updates library visibility settings
-   - `set_cached_sources()`: Caches source lists with timestamps
-   - `set_preferred_source_id()`: Sets preferred media source
-   - `remove_legacy_backend()`: Removes legacy backend entries
+```rust
+// Modify and save configuration
+let mut config = Config::load()?;
+config.playback.player_backend = "gstreamer".to_string();
+config.save()?;
+```
 
-4. **Backend Specific** (`config.rs`)
-   - `set_plex_token()`: Updates Plex authentication token
+## Default Values
 
-### Save Mechanism
-- All modification methods call `self.save()` internally
-- Save serializes entire config to TOML
-- Parent directory is created if it doesn't exist
-- Only non-default values are written to file
+| Field | Default Value | Description |
+|-------|--------------|-------------|
+| **Playback** | | |
+| player_backend | "mpv" | Video player backend (mpv or gstreamer) |
+| hardware_acceleration | true | Enable hardware acceleration |
+| mpv_verbose_logging | false | Enable verbose MPV logging |
+| mpv_cache_size_mb | 150 | MPV cache size in MB |
+| mpv_cache_backbuffer_mb | 50 | MPV backward cache size in MB |
+| mpv_cache_secs | 30 | MPV cache duration in seconds |
+| auto_resume | true | Resume playback from last position |
+| resume_threshold_seconds | 10 | Minimum seconds watched before resuming |
+| progress_update_interval_seconds | 5 | How often to save playback progress |
+| mpv_upscaling_mode | "bilinear" | MPV upscaling algorithm |
 
-## Configuration Usage Patterns
+## Configuration Usage in Components
 
-### 1. Player Components
-**Player Page** (`player.rs`)
-- Loads config once during initialization
-- Caches frequently used values to avoid repeated I/O:
-  - `config_auto_resume`
-  - `config_resume_threshold_seconds`
-  - `config_progress_update_interval_seconds`
+### Player Components
+The player system is the primary consumer of configuration:
 
-**Player Factory** (`factory.rs`)
-- Receives config as parameter
-- Uses config to determine player backend (MPV vs GStreamer)
-- Passes config to player implementation
+1. **Player Page** (`src/ui/pages/player.rs`)
+   - Loads config during initialization
+   - Caches frequently-used values to avoid repeated I/O
+   - Passes config to player controller
 
-**MPV Player** (`mpv_player.rs`)
-- Uses config for cache settings and logging verbosity
-- Configures MPV instance based on config values
+2. **Player Controller** (`src/player/controller.rs`)
+   - Receives config from player page
+   - Passes to player factory for backend selection
 
-### 2. Backend Modules
-**Test Fixtures Only**
-- Backends create `Config::default()` in tests
-- Production backends don't directly access configuration
-- Configuration is managed at higher levels
+3. **Player Factory** (`src/player/factory.rs`)
+   - Uses `player_backend` field to select MPV or GStreamer
+   - Passes config to the selected backend
 
-### 3. Preferences Management
-**Preferences Page** (`preferences.rs`)
-- Loads config when component initializes
-- Reloads config before saving to preserve other settings
-- Limited subset of config is actually exposed in UI
+4. **MPV Player** (`src/player/mpv_player.rs`)
+   - Uses cache settings: `mpv_cache_size_mb`, `mpv_cache_backbuffer_mb`, `mpv_cache_secs`
+   - Uses `mpv_verbose_logging` for debug output
+   - Uses `mpv_upscaling_mode` for video scaling
 
-## Issues and Inconsistencies Identified
+5. **GStreamer Player** (`src/player/gstreamer_player.rs`)
+   - Currently doesn't use configuration values directly
+   - Relies on environment variables for some settings
 
-### 1. Fixed Issues
-- **Config Reload Loop** (task-057): Previously reloaded config every second in player update loop. Fixed by caching values.
+### UI Components
 
-### 2. Current Issues
+1. **Preferences Page** (`src/ui/pages/preferences.rs`)
+   - Loads current config when saving changes
+   - Updates `player_backend` and `hardware_acceleration` fields
+   - Saves configuration after modifications
 
-#### Incomplete Configuration Coverage
-- Many configuration fields exist but aren't exposed in UI
-- Some UI preferences aren't persisted to config (e.g., items_per_page)
+## Environment Variables
 
-#### No Global Configuration Instance
-- Each component loads config independently
-- Potential for inconsistency if config changes during runtime
-- Multiple file reads for the same data
+While the main configuration uses the file-based system, some player-specific settings still use environment variables:
 
-#### Missing Configuration Change Notification
-- No mechanism to notify components when config changes
-- Components must manually reload to get updates
+**GStreamer-specific**:
+- `REEL_FORCE_FALLBACK_SINK` - Forces fallback audio sink
+- `REEL_USE_GL_SINK` - Enables GL sink for video
+- `GST_DEBUG_DUMP_DOT_DIR` - GStreamer debug output directory
 
-#### Limited Validation
-- No validation of configuration values beyond type checking
-- Invalid values could cause runtime errors
+## Simplified Architecture Benefits
 
-#### Inconsistent Error Handling
-- Some components use `.unwrap_or_default()` silently
-- Others log warnings but continue with defaults
-- No user notification of config load failures
+The current simplified configuration system:
+- **Minimal Complexity**: Only playback settings, no complex hierarchies
+- **Type Safety**: All fields are strongly typed with serde
+- **Clear Defaults**: All defaults defined in one place
+- **Easy Testing**: Simple structure makes testing straightforward
 
-### 3. Architecture Observations
+## Known Limitations
 
-#### Separation of Concerns
-- Configuration is well-separated from business logic
-- Clear distinction between config structure and usage
+1. **No Configuration UI Coverage**
+   - Most config fields aren't exposed in the preferences UI
+   - Only `player_backend` and `hardware_acceleration` can be changed via UI
 
-#### Performance Optimizations
-- Conditional serialization reduces file size
-- Default values aren't written to disk
-- Recent fix prevents repeated file I/O
+2. **No Change Notification**
+   - Components must manually reload config
+   - No event system for configuration changes
 
-#### Type Safety
-- Strong typing through Rust's type system
-- Serde ensures type consistency
+3. **Limited Validation**
+   - No range validation for numeric values
+   - Invalid values could cause runtime issues
 
-## Recommendations for Improvement
+4. **No Migration Support**
+   - Old config formats aren't automatically migrated
+   - Users may need to delete old config files
 
-### 1. Implement Global Configuration Service
-- Load config once at application startup
-- Provide shared read access across components
-- Implement write synchronization for updates
+## Future Considerations
 
-### 2. Add Configuration Change Events
-- Integrate with event bus for config change notifications
-- Allow components to subscribe to specific config sections
-- Enable live configuration updates without restart
-
-### 3. Enhance UI Coverage
-- Expose all relevant config options in preferences
-- Group related settings logically
-- Add advanced settings panel for power users
-
-### 4. Improve Validation
-- Add value range validation for numeric fields
-- Validate URLs and paths before saving
-- Provide user-friendly error messages
-
-### 5. Consider Configuration Profiles
-- Allow multiple configuration profiles
-- Quick switching between profiles
-- Export/import configuration settings
-
-### 6. Add Configuration Migration
-- Version configuration schema
-- Implement migration logic for schema changes
-- Preserve user settings during updates
-
-### 7. Implement Hot Reload (Optional)
-- Watch config file for external changes
-- Reload and apply changes without restart
-- Useful for development and debugging
+While keeping the system simple, potential improvements could include:
+- Exposing more settings in the preferences UI
+- Adding basic validation for numeric ranges
+- Implementing config migration for version updates
+- Adding a configuration reload mechanism
 
 ## Summary
 
-The configuration system in Reel is functional but has room for improvement. The recent fix for the reload loop shows good progress in optimization. The main areas for enhancement are:
-
-1. **Centralization**: Moving from component-level loading to a global service
-2. **Coverage**: Exposing more settings in the UI
-3. **Reactivity**: Adding change notifications and hot reload
-4. **Robustness**: Improving validation and error handling
-
-The current architecture provides a solid foundation with good type safety and performance optimizations through conditional serialization. The recommended improvements would enhance user experience and developer ergonomics while maintaining the existing strengths.
+The configuration system is intentionally minimal, focusing only on essential playback settings. This simplification reduces complexity and maintenance burden while providing the necessary functionality for player configuration. The system uses standard Rust patterns with serde for serialization and provides clear defaults for all settings.
