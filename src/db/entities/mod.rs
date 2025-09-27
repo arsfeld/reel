@@ -1,3 +1,5 @@
+pub mod home_section_items;
+pub mod home_sections;
 pub mod libraries;
 pub mod media_items;
 pub mod offline_content;
@@ -6,6 +8,13 @@ pub mod sources;
 pub mod sync_status;
 
 // Re-export entities for convenience
+pub use home_section_items::{
+    ActiveModel as HomeSectionItemActiveModel, Entity as HomeSectionItem,
+    Model as HomeSectionItemModel,
+};
+pub use home_sections::{
+    ActiveModel as HomeSectionActiveModel, Entity as HomeSection, Model as HomeSectionModel,
+};
 pub use libraries::{ActiveModel as LibraryActiveModel, Entity as Library, Model as LibraryModel};
 pub use media_items::{
     ActiveModel as MediaItemActiveModel, Entity as MediaItem, Model as MediaItemModel,
