@@ -6,8 +6,12 @@ use std::collections::HashMap;
 use tracing::{debug, error, info, trace};
 
 use crate::db::connection::DatabaseConnection;
+use crate::db::entities::MediaItemModel;
+use crate::db::repository::{
+    Repository,
+    home_section_repository::{HomeSectionRepository, HomeSectionRepositoryImpl},
+};
 use crate::models::{HomeSectionType, HomeSectionWithModels, MediaItemId, SourceId};
-use crate::services::core::BackendService;
 use crate::ui::factories::media_card::{MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput};
 use crate::workers::{ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize};
 
@@ -28,6 +32,7 @@ pub struct HomePage {
     is_loading: bool,
     source_states: HashMap<SourceId, SectionLoadState>, // Track per-source loading states
     loading_containers: HashMap<SourceId, gtk::Box>,    // UI containers for loading/error states
+    section_ui_containers: HashMap<String, gtk::Box>, // Track actual section UI containers by section_id
 }
 
 impl std::fmt::Debug for HomePage {
@@ -177,6 +182,7 @@ impl AsyncComponent for HomePage {
             is_loading: false, // Start with no loading state for offline-first
             source_states: HashMap::new(),
             loading_containers: HashMap::new(),
+            section_ui_containers: HashMap::new(),
         };
 
         let widgets = view_output!();
@@ -208,54 +214,83 @@ impl AsyncComponent for HomePage {
                 relm4::spawn(async move {
                     info!("Loading cached home sections from database");
 
-                    // Load cached sections synchronously for instant display
-                    let cached_sections = BackendService::get_cached_home_sections(&db).await;
+                    // Load cached sections from HomeSectionRepository for instant display
+                    let section_repo = HomeSectionRepositoryImpl::new(db.clone());
 
-                    // Display cached sections immediately
-                    for (source_id, sections) in cached_sections {
-                        if !sections.is_empty() {
-                            info!(
-                                "Displaying {} cached sections for source {}",
-                                sections.len(),
-                                source_id
-                            );
-                            sender_clone.input(HomePageInput::SourceSectionsLoaded {
-                                source_id: source_id.clone(),
-                                sections: Ok(sections),
-                            });
+                    // Get all sources to load sections for
+                    use crate::db::repository::source_repository::{
+                        SourceRepository, SourceRepositoryImpl,
+                    };
+                    let source_repo = SourceRepositoryImpl::new(db.clone());
+                    if let Ok(sources) = source_repo.find_all().await {
+                        for source in sources {
+                            let source_id = SourceId::new(source.id.clone());
+
+                            // Load cached sections for this source
+                            if let Ok(persisted_sections) =
+                                section_repo.find_by_source_with_items(&source.id).await
+                            {
+                                if !persisted_sections.is_empty() {
+                                    // Convert to HomeSectionWithModels
+                                    let mut sections = Vec::new();
+                                    for (section_model, items) in persisted_sections {
+                                        if !items.is_empty() {
+                                            let section_type =
+                                                match section_model.section_type.as_str() {
+                                                    "continue_watching" => {
+                                                        HomeSectionType::ContinueWatching
+                                                    }
+                                                    "on_deck" => HomeSectionType::OnDeck,
+                                                    "suggested" => HomeSectionType::Suggested,
+                                                    "top_rated" => HomeSectionType::TopRated,
+                                                    "trending" => HomeSectionType::Trending,
+                                                    "recently_played" => {
+                                                        HomeSectionType::RecentlyPlayed
+                                                    }
+                                                    "recent_playlists" => {
+                                                        HomeSectionType::RecentPlaylists
+                                                    }
+                                                    s if s.starts_with("recently_added_") => {
+                                                        let media_type = s
+                                                            .strip_prefix("recently_added_")
+                                                            .unwrap_or("unknown");
+                                                        HomeSectionType::RecentlyAdded(
+                                                            media_type.to_string(),
+                                                        )
+                                                    }
+                                                    custom => {
+                                                        HomeSectionType::Custom(custom.to_string())
+                                                    }
+                                                };
+
+                                            sections.push(HomeSectionWithModels {
+                                                id: section_model.hub_identifier.clone(),
+                                                title: section_model.title.clone(),
+                                                section_type,
+                                                items,
+                                            });
+                                        }
+                                    }
+
+                                    if !sections.is_empty() {
+                                        info!(
+                                            "Displaying {} cached sections for source {}",
+                                            sections.len(),
+                                            source_id
+                                        );
+                                        sender_clone.input(HomePageInput::SourceSectionsLoaded {
+                                            source_id: source_id.clone(),
+                                            sections: Ok(sections),
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
 
-                    // Then, trigger background API updates (non-blocking)
-                    info!("Starting background API refresh");
-                    let source_results = BackendService::get_home_sections_per_source(&db).await;
-
-                    // Send individual source results (will update/replace cached data)
-                    for (source_id, result) in source_results {
-                        let sections_result = match result {
-                            Ok(sections) => {
-                                info!(
-                                    "API: Source {} loaded {} sections",
-                                    source_id,
-                                    sections.len()
-                                );
-                                Ok(sections)
-                            }
-                            Err(e) => {
-                                error!(
-                                    "API: Source {} failed: {} - keeping cached data",
-                                    source_id, e
-                                );
-                                // Don't send error if we already have cached data
-                                continue;
-                            }
-                        };
-
-                        sender_clone.input(HomePageInput::SourceSectionsLoaded {
-                            source_id,
-                            sections: sections_result,
-                        });
-                    }
+                    // Note: Background API refresh should be triggered by sync worker, not here
+                    // The home page should only read from cache, never fetch from API directly
+                    // This ensures data is properly persisted to the database
                 });
             }
 
@@ -343,33 +378,21 @@ impl AsyncComponent for HomePage {
                     };
                     let source_repo = SourceRepositoryImpl::new(db.clone());
 
-                    if let Ok(Some(_source_entity)) =
-                        source_repo.find_by_id(source_id_clone.as_str()).await
-                    {
-                        // Try to load sections with timeout
-                        // Note: We'll just reuse the get_home_sections_per_source method for the specific source
-                        let all_results = BackendService::get_home_sections_per_source(&db).await;
+                    // Note: Retry should trigger sync worker to refresh this source
+                    // UI should only display what's in the cache
+                    info!(
+                        "Source {} retry requested - should trigger sync worker",
+                        source_id_clone
+                    );
 
-                        // Find the result for this specific source
-                        let sections_result = all_results
-                            .into_iter()
-                            .find(|(id, _)| id == &source_id_clone)
-                            .map(|(_, result)| match result {
-                                Ok(sections) => Ok(sections),
-                                Err(e) => Err(e.to_string()),
-                            })
-                            .unwrap_or_else(|| Err("Failed to retry source".to_string()));
-
-                        sender_clone.input(HomePageInput::SourceSectionsLoaded {
-                            source_id: source_id_clone,
-                            sections: sections_result,
-                        });
-                    } else {
-                        sender_clone.input(HomePageInput::SourceSectionsLoaded {
-                            source_id: source_id_clone,
-                            sections: Err("Source not found".to_string()),
-                        });
-                    }
+                    // For now, just show an error state since we don't have sync worker integration
+                    sender_clone.input(HomePageInput::SourceSectionsLoaded {
+                        source_id: source_id_clone,
+                        sections: Err(
+                            "Refresh not yet implemented - sync worker integration needed"
+                                .to_string(),
+                        ),
+                    });
                 });
             }
 
@@ -531,6 +554,48 @@ impl HomePage {
             std::collections::HashMap::new()
         };
 
+        // Collect parent show IDs for episodes
+        let episodes_with_parents: Vec<(MediaItemModel, String)> = non_empty_sections
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .filter(|item| item.media_type == "episode")
+            .filter_map(|item| {
+                item.parent_id
+                    .as_ref()
+                    .map(|pid| (item.clone(), pid.clone()))
+            })
+            .collect();
+
+        let episode_parent_ids: Vec<String> = episodes_with_parents
+            .iter()
+            .map(|(_, pid)| pid.clone())
+            .collect();
+
+        // Batch fetch parent shows for episodes
+        let mut parent_shows_map = std::collections::HashMap::new();
+        if !episode_parent_ids.is_empty() {
+            use crate::db::repository::media_repository::{MediaRepository, MediaRepositoryImpl};
+            let media_repo = MediaRepositoryImpl::new(self.db.clone());
+
+            // Deduplicate parent IDs
+            let unique_parent_ids: std::collections::HashSet<String> =
+                episode_parent_ids.iter().cloned().collect();
+
+            for parent_id in unique_parent_ids {
+                match media_repo.find_by_id(&parent_id).await {
+                    Ok(Some(parent_show)) => {
+                        parent_shows_map.insert(parent_id, parent_show);
+                    }
+                    Ok(None) => {
+                        error!("Parent show not found in database: {}", parent_id);
+                    }
+                    Err(e) => {
+                        error!("Failed to fetch parent show {}: {}", parent_id, e);
+                    }
+                }
+            }
+        }
+
         // Add only non-empty sections to our list
         self.sections.extend(non_empty_sections.clone());
 
@@ -591,12 +656,12 @@ impl HomePage {
                 .height_request(290) // Fixed height for media cards + margin
                 .build();
 
-            // Use FlowBox but constrain it to single row
+            // Use FlowBox configured for horizontal scrolling
             let cards_box = gtk::FlowBox::builder()
                 .orientation(gtk::Orientation::Horizontal)
                 .column_spacing(12)
-                .min_children_per_line(100) // Force single row by setting high min
-                .max_children_per_line(100) // Match max to min
+                .min_children_per_line(section.items.len() as u32) // Set to actual number of items
+                .max_children_per_line(section.items.len() as u32) // Force single row with all items
                 .selection_mode(gtk::SelectionMode::None)
                 .valign(gtk::Align::Start)
                 .homogeneous(false)
@@ -630,21 +695,80 @@ impl HomePage {
                             (false, 0.0) // No progress record means unwatched
                         };
 
+                    // For episodes, we want to show the show poster instead
+                    let mut display_item = model.clone();
+                    if model.media_type == "episode" {
+                        // Check if we have the parent show data
+                        if let Some(parent_id) = &model.parent_id {
+                            if let Some(parent_show) = parent_shows_map.get(parent_id) {
+                                // Use the show's poster instead of episode thumbnail
+                                display_item.poster_url = parent_show.poster_url.clone();
+
+                                // Store original episode title in metadata for subtitle display
+                                let episode_info = if let (Some(season), Some(episode)) =
+                                    (model.season_number, model.episode_number)
+                                {
+                                    format!("S{}E{} - {}", season, episode, model.title)
+                                } else {
+                                    model.title.clone()
+                                };
+
+                                // Update title to show title
+                                display_item.title = parent_show.title.clone();
+
+                                // Store episode info in metadata for subtitle display
+                                let mut metadata_obj = if let Some(metadata) = &model.metadata {
+                                    serde_json::from_value::<
+                                        serde_json::Map<String, serde_json::Value>,
+                                    >(metadata.clone())
+                                    .unwrap_or_else(|_| serde_json::Map::new())
+                                } else {
+                                    serde_json::Map::new()
+                                };
+
+                                metadata_obj.insert(
+                                    "episode_subtitle".to_string(),
+                                    serde_json::Value::String(episode_info),
+                                );
+                                display_item.metadata =
+                                    Some(serde_json::to_value(metadata_obj).unwrap());
+                            } else {
+                                error!(
+                                    "Parent show not found for episode {} with parent_id {:?}",
+                                    model.id, parent_id
+                                );
+                                // Skip this episode if we can't find its parent show
+                                continue;
+                            }
+                        } else {
+                            error!("Episode {} has no parent_id set!", model.id);
+                            // Skip episodes without parent shows
+                            continue;
+                        }
+                    }
+
+                    // Clone the poster URL before moving display_item
+                    let poster_url_to_load = display_item.poster_url.clone();
+
                     guard.push_back(MediaCardInit {
-                        item: model.clone(),
+                        item: display_item,
                         show_progress,
                         watched,
                         progress_percent,
                         show_media_type_icon: false,
                     });
 
-                    // Queue image load if poster URL exists
-                    if let Some(poster_url) = &model.poster_url
+                    // Queue image load if poster URL exists (use the correct poster from display_item)
+                    if let Some(poster_url) = poster_url_to_load
                         && !poster_url.is_empty()
                     {
-                        // Track this request
+                        // Create a unique key for tracking that includes both section and item ID
+                        // This allows the same item to appear in multiple sections
+                        let tracking_key = format!("{}::{}", section.id, item_id);
+
+                        // Track this request with the unique key
                         self.image_requests
-                            .insert(item_id.clone(), (section.id.clone(), idx));
+                            .insert(tracking_key.clone(), (section.id.clone(), idx));
 
                         // Queue the image load with priority based on position
                         let priority = (idx / 10).min(10) as u8;
@@ -655,7 +779,7 @@ impl HomePage {
 
                         self.image_loader
                             .emit(ImageLoaderInput::LoadImage(ImageRequest {
-                                id: item_id,
+                                id: tracking_key, // Use the unique tracking key as the ID
                                 url: poster_url.clone(),
                                 size: ImageSize::Thumbnail,
                                 priority,
@@ -681,9 +805,10 @@ impl HomePage {
                 let upper = adj.upper();
                 let page_size = adj.page_size();
 
-                // Enable/disable buttons based on position
-                left_btn.set_sensitive(value > lower);
-                right_btn.set_sensitive(value < upper - page_size);
+                // Enable/disable buttons based on position with small threshold
+                // Use 1.0 pixel threshold to avoid floating point comparison issues
+                left_btn.set_sensitive(value > lower + 1.0);
+                right_btn.set_sensitive(value + 1.0 < upper - page_size);
             });
 
             // Scroll left button handler
@@ -737,6 +862,10 @@ impl HomePage {
             h_adjustment.emit_by_name::<()>("value-changed", &[]);
             section_box.append(&scrolled_window);
 
+            // Store UI container reference for proper removal later
+            self.section_ui_containers
+                .insert(section.id.clone(), section_box.clone());
+
             // Add section to container
             self.sections_container.append(&section_box);
         }
@@ -772,14 +901,18 @@ impl HomePage {
         debug!("Clearing all existing sections");
 
         // Cancel all pending image loads
-        for (id, _) in self.image_requests.iter() {
-            self.image_loader
-                .emit(ImageLoaderInput::CancelLoad { id: id.clone() });
+        for (tracking_key, _) in self.image_requests.iter() {
+            self.image_loader.emit(ImageLoaderInput::CancelLoad {
+                id: tracking_key.clone(),
+            });
         }
         self.image_requests.clear();
 
         // Clear section factories
         self.section_factories.clear();
+
+        // Clear UI container references
+        self.section_ui_containers.clear();
 
         // Remove all children from sections container
         while let Some(child) = self.sections_container.first_child() {
@@ -794,23 +927,41 @@ impl HomePage {
     fn clear_source_sections(&mut self, source_id: &SourceId) {
         debug!("Clearing sections for source {}", source_id);
 
-        // Find and remove section factories for this source
-        let mut factories_to_remove = Vec::new();
+        // Cancel image loads for this source's sections
+        let mut requests_to_remove = Vec::new();
+        for (tracking_key, (section_id, _)) in self.image_requests.iter() {
+            if section_id.starts_with(&format!("{}::", source_id)) {
+                self.image_loader.emit(ImageLoaderInput::CancelLoad {
+                    id: tracking_key.clone(),
+                });
+                requests_to_remove.push(tracking_key.clone());
+            }
+        }
+        for tracking_key in requests_to_remove {
+            self.image_requests.remove(&tracking_key);
+        }
+
+        // Find and remove section UI containers and factories for this source
+        let mut sections_to_remove = Vec::new();
         for section_id in self.section_factories.keys() {
             if section_id.starts_with(&format!("{}::", source_id)) {
-                factories_to_remove.push(section_id.clone());
+                sections_to_remove.push(section_id.clone());
             }
         }
 
-        for factory_id in factories_to_remove {
-            self.section_factories.remove(&factory_id);
+        // Remove UI containers and factories
+        for section_id in sections_to_remove {
+            // Remove factory
+            self.section_factories.remove(&section_id);
+
+            // Remove UI container
+            if let Some(container) = self.section_ui_containers.remove(&section_id) {
+                self.sections_container.remove(&container);
+            }
         }
 
         // Remove sections from data
         self.sections
             .retain(|section| !section.id.starts_with(&format!("{}::", source_id)));
-
-        // Note: We can't easily remove specific UI elements from sections_container
-        // without tracking them individually, so we rely on the full clear/rebuild approach
     }
 }

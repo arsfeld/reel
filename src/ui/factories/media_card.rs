@@ -280,7 +280,17 @@ impl MediaCard {
                 }
             }
             "episode" => {
-                // For episodes, format like GTK version
+                // For episodes, check if we have a custom episode subtitle in metadata
+                // (set when we're displaying the show poster instead of episode thumbnail)
+                if let Some(metadata) = &self.item.metadata {
+                    if let Some(episode_subtitle) =
+                        metadata.get("episode_subtitle").and_then(|v| v.as_str())
+                    {
+                        return episode_subtitle.to_string();
+                    }
+                }
+
+                // Otherwise format like normal
                 if let (Some(season), Some(episode)) =
                     (self.item.season_number, self.item.episode_number)
                 {
