@@ -655,7 +655,7 @@ impl GStreamerPlayer {
             }
         }
 
-        // Set up message handling
+        // Set up message handling with enhanced logging
         let bus = playbin.bus().context("Failed to get playbin bus")?;
         debug!("GStreamerPlayer::load_media() - Got playbin bus");
 
@@ -675,24 +675,52 @@ impl GStreamerPlayer {
         // Don't set to Ready state here - let play() handle the state transition
         debug!("GStreamerPlayer::load_media() - Playbin configured, ready for playback");
 
-        // macOS-specific: Check element availability
+        // Configure playbin for better network streaming
+        {
+            // Set connection-speed for better buffering decisions
+            if playbin.has_property("connection-speed") {
+                playbin.set_property("connection-speed", 10000u64); // 10 Mbps
+                debug!("Set playbin connection-speed for better buffering");
+            }
+
+            // Increase buffer size for network streams
+            if playbin.has_property("buffer-size") {
+                playbin.set_property("buffer-size", 10 * 1024 * 1024i32); // 10MB
+                debug!("Set playbin buffer-size to 10MB");
+            }
+
+            // Set buffer duration for smoother playback
+            if playbin.has_property("buffer-duration") {
+                playbin.set_property(
+                    "buffer-duration",
+                    gst::ClockTime::from_seconds(10).nseconds() as i64,
+                );
+                debug!("Set playbin buffer-duration to 10 seconds");
+            }
+        }
+
+        // Simple source configuration for macOS
         #[cfg(target_os = "macos")]
         {
-            // Check if uridecodebin is configured properly
-            if let Some(uridecodebin) = playbin.property::<Option<gst::Element>>("source") {
-                info!(
-                    "GStreamerPlayer::load_media() - uridecodebin source element configured: {}",
-                    uridecodebin.name()
-                );
+            // Connect to the source-setup signal to configure HTTP source elements
+            playbin.connect("source-setup", false, {
+                move |values| {
+                    let source = values[1].get::<gst::Element>().ok()?;
 
-                // Set connection-speed for better buffering
-                if uridecodebin.has_property("connection-speed") {
-                    uridecodebin.set_property("connection-speed", 10000u64); // 10 Mbps
-                    debug!("Set connection-speed for better buffering");
+                    if let Some(factory) = source.factory() {
+                        let factory_name = factory.name();
+                        info!("Source element: {}", factory_name);
+
+                        // Only set the most basic property that both sources support
+                        if source.has_property("ssl-strict") {
+                            source.set_property("ssl-strict", false);
+                            info!("Disabled SSL strict checking");
+                        }
+                    }
+
+                    None
                 }
-            } else {
-                warn!("GStreamerPlayer::load_media() - No source element found in playbin!");
-            }
+            });
         }
 
         info!("GStreamerPlayer::load_media() - Media loading complete");
