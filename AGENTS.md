@@ -735,3 +735,4 @@ Descriptions support literal newlines; shell examples may show escaped `\\n`, bu
 Full help available: `backlog --help`
 
 <!-- BACKLOG.MD GUIDELINES END -->
+- When building / checking, always use fetch the last line to get the proper number of errors

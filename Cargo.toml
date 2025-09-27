@@ -14,6 +14,7 @@ categories = ["multimedia", "gui"]
 gtk4 = { version = "0.10", features = ["v4_14"] }
 gdk4 = { version = "0.10", features = ["v4_14"] }
 gdk-pixbuf = { version = "0.21" }
+
 libadwaita = { version = "0.8", features = ["v1_5"] }
 
 # Relm4
@@ -118,7 +119,7 @@ assets = [
     ["README.md", "usr/share/doc/reel/README", "644"],
 ]
 
-# RPM package configuration for cargo-generate-rpm  
+# RPM package configuration for cargo-generate-rpm
 [package.metadata.generate-rpm]
 assets = [
     { source = "target/release/reel", dest = "/usr/bin/reel", mode = "755" },
@@ -128,3 +129,35 @@ assets = [
 ]
 auto-req = "disabled"  # We'll specify requirements manually
 requires = { gtk4 = "*", libadwaita = "*", gstreamer1 = "*", gstreamer1-plugins-base = "*", gstreamer1-plugins-good = "*", gstreamer1-plugins-bad-free = "*", gstreamer1-plugins-ugly-free = "*", gstreamer1-libav = "*", mpv-libs = "*" }
+
+# macOS bundle configuration for cargo-bundle
+[package.metadata.bundle]
+name = "Reel"
+identifier = "dev.arsfeld.Reel"
+icon = ["data/macos/icon.icns"]
+category = "public.app-category.video"
+short_description = "A modern, native media player for the GNOME desktop"
+long_description = """
+Reel brings your Plex and Jellyfin libraries to the desktop with a premium, Netflix-like experience.
+
+Features:
+• Multi-platform support with native look and feel
+• Simultaneous connections to multiple media servers
+• Offline-first architecture with instant UI loading
+• Hardware-accelerated video playback via MPV
+• Background synchronization without blocking UI
+• Beautiful GTK4/libadwaita interface
+"""
+copyright = "Copyright © 2025 Alexandre Rosenfeld"
+osx_frameworks = [
+    "CoreFoundation",
+    "CoreGraphics",
+    "CoreVideo",
+    "IOKit",
+    "Metal",
+    "Security"
+]
+osx_url_schemes = ["reel"]
+resources = [
+    "data/macos/"
+]
