@@ -230,6 +230,8 @@ pub struct PlexEpisodeMetadata {
     pub title: String,
     pub index: i32,
     #[serde(default)]
+    pub parent_index: Option<i32>,
+    #[serde(default)]
     pub summary: Option<String>,
     #[serde(default)]
     pub thumb: Option<String>,

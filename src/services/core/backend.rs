@@ -2,7 +2,7 @@ use crate::backends::{jellyfin::JellyfinBackend, plex::PlexBackend, traits::Medi
 use crate::db::connection::DatabaseConnection;
 use crate::db::repository::{
     Repository,
-    media_repository::{MediaRepository, MediaRepositoryImpl},
+    media_repository::MediaRepositoryImpl,
     source_repository::{SourceRepository, SourceRepositoryImpl},
 };
 use crate::models::{
@@ -175,36 +175,6 @@ impl BackendService {
             last_sync: entity.last_sync.map(|dt| dt.and_utc()),
             library_count: 0,
         }
-    }
-
-    /// Sync a source - creates backend on demand, performs sync, then discards
-    pub async fn sync_source(
-        db: &DatabaseConnection,
-        source_id: &SourceId,
-    ) -> Result<crate::backends::traits::SyncResult> {
-        use crate::services::core::sync::SyncService;
-
-        // Load source configuration
-        let source_repo = SourceRepositoryImpl::new(db.clone());
-        let source_entity = source_repo
-            .find_by_id(source_id.as_str())
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
-
-        // Create backend and perform sync
-        let backend = Self::create_backend_for_source(db, &source_entity).await?;
-
-        // Use SyncService to perform the actual sync with all content
-        let result = SyncService::sync_source(db, backend.as_ref(), source_id).await?;
-
-        // Convert the SyncService result to the expected return type
-        Ok(crate::backends::traits::SyncResult {
-            backend_id: crate::models::BackendId::new(source_id.as_str()),
-            success: result.errors.is_empty(),
-            items_synced: result.items_synced,
-            duration: std::time::Duration::from_secs(0), // SyncService doesn't track duration
-            errors: result.errors,
-        })
     }
 
     /// Test connection for a source - stateless connection test
@@ -464,138 +434,5 @@ impl BackendService {
 
         // Wait for all futures to complete
         futures::future::join_all(section_futures).await
-    }
-
-    /// Load cached home sections from database
-    /// Returns sections with MediaItemModel directly from database
-    pub async fn get_cached_home_sections(
-        db: &DatabaseConnection,
-    ) -> Vec<(
-        crate::models::SourceId,
-        Vec<crate::models::HomeSectionWithModels>,
-    )> {
-        use crate::db::repository::playback_repository::{
-            PlaybackRepository, PlaybackRepositoryImpl,
-        };
-        use crate::models::HomeSectionType;
-
-        tracing::info!("Loading cached home sections from database as models");
-
-        let mut cached_sections = Vec::new();
-
-        // Load all sources
-        let source_repo = SourceRepositoryImpl::new(db.clone());
-        let sources = match source_repo.find_all().await {
-            Ok(sources) => sources,
-            Err(e) => {
-                tracing::error!("Failed to load sources: {}", e);
-                return cached_sections;
-            }
-        };
-
-        for source in sources {
-            let source_id = crate::models::SourceId::new(source.id.clone());
-            let mut sections = Vec::new();
-
-            // Load continue watching items from playback progress
-            let playback_repo = PlaybackRepositoryImpl::new(db.clone());
-            if let Ok(in_progress) = playback_repo.find_in_progress(None).await
-                && !in_progress.is_empty()
-            {
-                let media_repo = MediaRepositoryImpl::new(db.clone());
-                let mut continue_watching_items = Vec::new();
-
-                // Load media items for each in-progress item
-                for progress in in_progress.iter().take(20) {
-                    // Only include items from this source
-                    if let Ok(Some(media_item)) = media_repo.find_by_id(&progress.media_id).await
-                        && media_item.source_id == source.id
-                    {
-                        // Use MediaItemModel directly
-                        continue_watching_items.push(media_item);
-                    }
-                }
-
-                if !continue_watching_items.is_empty() {
-                    sections.push(crate::models::HomeSectionWithModels {
-                        id: format!("{}::continue-watching", source.id),
-                        title: "Continue Watching".to_string(),
-                        section_type: HomeSectionType::ContinueWatching,
-                        items: continue_watching_items,
-                    });
-                }
-            }
-
-            // Load recently added items
-            let media_repo = MediaRepositoryImpl::new(db.clone());
-            if let Ok(recent_items) = media_repo.find_recently_added(20).await {
-                let mut recently_added = Vec::new();
-
-                for item in recent_items {
-                    if item.source_id == source.id {
-                        // Use MediaItemModel directly
-                        recently_added.push(item);
-                    }
-                }
-
-                if !recently_added.is_empty() {
-                    sections.push(crate::models::HomeSectionWithModels {
-                        id: format!("{}::recently-added", source.id),
-                        title: "Recently Added".to_string(),
-                        section_type: HomeSectionType::RecentlyAdded,
-                        items: recently_added,
-                    });
-                }
-            }
-
-            // Load movie and show libraries by type
-            if let Ok(movies) = media_repo
-                .find_by_source_and_type(&source.id, "movie")
-                .await
-                && !movies.is_empty()
-            {
-                // Use MediaItemModel directly
-                let movie_items: Vec<crate::db::entities::MediaItemModel> =
-                    movies.into_iter().take(20).collect();
-
-                sections.push(crate::models::HomeSectionWithModels {
-                    id: format!("{}::movies", source.id),
-                    title: "Movies".to_string(),
-                    section_type: HomeSectionType::Custom("Movies".to_string()),
-                    items: movie_items,
-                });
-            }
-
-            if let Ok(shows) = media_repo.find_by_source_and_type(&source.id, "show").await
-                && !shows.is_empty()
-            {
-                // Use MediaItemModel directly
-                let show_items: Vec<crate::db::entities::MediaItemModel> =
-                    shows.into_iter().take(20).collect();
-
-                sections.push(crate::models::HomeSectionWithModels {
-                    id: format!("{}::shows", source.id),
-                    title: "TV Shows".to_string(),
-                    section_type: HomeSectionType::Custom("TV Shows".to_string()),
-                    items: show_items,
-                });
-            }
-
-            if !sections.is_empty() {
-                tracing::info!(
-                    "Loaded {} cached sections for source {}",
-                    sections.len(),
-                    source.name
-                );
-                cached_sections.push((source_id, sections));
-            }
-        }
-
-        tracing::info!(
-            "Loaded {} sources with cached sections",
-            cached_sections.len()
-        );
-
-        cached_sections
     }
 }

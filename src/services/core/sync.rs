@@ -99,11 +99,6 @@ impl SyncService {
             .await
             {
                 Ok(items_count) => {
-                    info!(
-                        "Successfully synced {} items for library {}",
-                        items_count, library.title
-                    );
-
                     // Notify library sync completed
                     BROKER
                         .notify_library_sync_completed(
@@ -209,21 +204,7 @@ impl SyncService {
 
                 // Log detailed information about each show's seasons
                 for show in &shows {
-                    info!(
-                        "Show '{}' (id: {}) fetched from backend with {} seasons and {} total episodes",
-                        show.title,
-                        show.id,
-                        show.seasons.len(),
-                        show.total_episode_count
-                    );
-                    if !show.seasons.is_empty() {
-                        for season in &show.seasons {
-                            debug!(
-                                "  - Season {} has {} episodes",
-                                season.season_number, season.episode_count
-                            );
-                        }
-                    } else {
+                    if show.seasons.is_empty() {
                         warn!(
                             "  - Show '{}' has no seasons data from backend!",
                             show.title
@@ -284,33 +265,13 @@ impl SyncService {
 
             for show in shows {
                 if let MediaItem::Show(mut show_data) = show {
-                    info!(
-                        "Processing show: {} (id: {}), has {} seasons",
-                        show_data.title,
-                        show_data.id,
-                        show_data.seasons.len()
-                    );
-
                     // Check if show has seasons data, fetch if missing
                     let should_update_seasons =
                         show_data.seasons.is_empty() || show_data.total_episode_count == 0;
 
                     if should_update_seasons {
-                        info!(
-                            "Show {} (id: {}) needs seasons update (has {} seasons, {} episodes)",
-                            show_data.title,
-                            show_data.id,
-                            show_data.seasons.len(),
-                            show_data.total_episode_count
-                        );
-
                         match backend.get_seasons(&show_data.id.clone().into()).await {
                             Ok(seasons) => {
-                                info!(
-                                    "Fetched {} seasons for show {}",
-                                    seasons.len(),
-                                    show_data.title
-                                );
                                 show_data.seasons = seasons.clone();
 
                                 // Update episode count from seasons
@@ -318,10 +279,6 @@ impl SyncService {
                                     seasons.iter().map(|s| s.episode_count).sum();
                                 if total_episodes > 0 {
                                     show_data.total_episode_count = total_episodes;
-                                    info!(
-                                        "Updated episode count to {} for show {}",
-                                        total_episodes, show_data.title
-                                    );
                                 }
 
                                 // Update the show in database with seasons
@@ -336,11 +293,6 @@ impl SyncService {
                                     warn!(
                                         "Failed to update show {} with seasons: {}",
                                         show_data.title, e
-                                    );
-                                } else {
-                                    info!(
-                                        "Successfully updated show {} with seasons data",
-                                        show_data.title
                                     );
                                 }
                             }
@@ -407,10 +359,6 @@ impl SyncService {
             warn!("Failed to find library {} in database", library.id);
         }
 
-        debug!(
-            "Synced {} items for library {}",
-            items_synced, library.title
-        );
         Ok(items_synced)
     }
 
@@ -447,12 +395,6 @@ impl SyncService {
         cumulative_items_synced: &mut usize,
         estimated_total: usize,
     ) -> Result<usize> {
-        debug!(
-            "Syncing episodes for show: {} ({})",
-            show_title,
-            show_id.as_str()
-        );
-
         // Fetch seasons directly from the backend API
         let seasons = match backend.get_seasons(show_id).await {
             Ok(seasons) => seasons,
@@ -462,23 +404,30 @@ impl SyncService {
             }
         };
 
-        debug!(
-            "Found {} seasons for show {}",
-            seasons.len(),
-            show_id.as_str()
-        );
-
         let mut total_episodes_synced = 0;
 
         // Iterate through all seasons
         for season in &seasons {
-            debug!(
-                "Syncing {} - Season {} ({} episodes expected)",
-                show_title, season.season_number, season.episode_count
+            info!(
+                "Fetching episodes for show {} season {}",
+                show_id.as_str(),
+                season.season_number
             );
-
             match backend.get_episodes(show_id, season.season_number).await {
                 Ok(episodes) => {
+                    // Check for season_number = 0 issues
+                    for episode in &episodes {
+                        if episode.season_number == 0 {
+                            warn!(
+                                "Episode '{}' (S{}E{}) has season_number=0 for show {}",
+                                episode.title,
+                                episode.season_number,
+                                episode.episode_number,
+                                show_id.as_str()
+                            );
+                        }
+                    }
+
                     let episodes_media: Vec<MediaItem> =
                         episodes.into_iter().map(MediaItem::Episode).collect();
 
@@ -494,11 +443,6 @@ impl SyncService {
 
                         total_episodes_synced += episode_count;
                         *cumulative_items_synced += episode_count;
-
-                        debug!(
-                            "Synced {} episodes for season {}",
-                            episode_count, season.season_number
-                        );
 
                         // Notify cumulative progress with current item info
                         BROKER
@@ -521,11 +465,6 @@ impl SyncService {
             }
         }
 
-        debug!(
-            "Synced total of {} episodes for show {}",
-            total_episodes_synced,
-            show_id.as_str()
-        );
         Ok(total_episodes_synced)
     }
 
