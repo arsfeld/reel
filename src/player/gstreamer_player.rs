@@ -201,12 +201,22 @@ impl GStreamerPlayer {
                 .build()
                 .ok()?;
 
+            // Set properties for better macOS performance
+            convert.set_property("n-threads", 0u32); // Auto-detect optimal threads
+
+            // Add a videoscale element for macOS compatibility
+            let scale = gst::ElementFactory::make("videoscale")
+                .name("video_scaler")
+                .build()
+                .ok()?;
+
             // Add elements to bin
             bin.add(&convert).ok()?;
+            bin.add(&scale).ok()?;
             bin.add(&gtk_sink).ok()?;
 
             // Link elements
-            convert.link(&gtk_sink).ok()?;
+            gst::Element::link_many([&convert, &scale, &gtk_sink]).ok()?;
 
             // Create ghost pad
             let sink_pad = convert.static_pad("sink")?;
@@ -214,7 +224,7 @@ impl GStreamerPlayer {
             ghost_pad.set_active(true).ok()?;
             bin.add_pad(&ghost_pad).ok()?;
 
-            info!("Using gtk4paintablesink with videoconvert for macOS");
+            info!("Using gtk4paintablesink with videoconvert+videoscale for macOS");
             return Some(bin.upcast());
         }
 
@@ -595,14 +605,28 @@ impl GStreamerPlayer {
             playbin.set_property("video-sink", sink);
             info!("GStreamerPlayer::load_media() - Video sink configured");
         } else {
-            // Create a fallback video sink
-            info!("GStreamerPlayer::load_media() - No pre-configured sink, creating fallback");
+            // On macOS, sometimes it's better to let playbin choose its own sink
+            #[cfg(target_os = "macos")]
+            {
+                info!(
+                    "GStreamerPlayer::load_media() - No pre-configured sink on macOS, letting playbin auto-select"
+                );
+                // Don't set any video-sink, let playbin use autovideosink internally
+            }
 
-            if let Some(fallback_sink) = self.create_auto_fallback_sink() {
-                playbin.set_property("video-sink", &fallback_sink);
-                info!("GStreamerPlayer::load_media() - Fallback video sink configured");
-            } else {
-                error!("GStreamerPlayer::load_media() - Failed to create any fallback video sink!");
+            #[cfg(not(target_os = "macos"))]
+            {
+                // Create a fallback video sink on other platforms
+                info!("GStreamerPlayer::load_media() - No pre-configured sink, creating fallback");
+
+                if let Some(fallback_sink) = self.create_auto_fallback_sink() {
+                    playbin.set_property("video-sink", &fallback_sink);
+                    info!("GStreamerPlayer::load_media() - Fallback video sink configured");
+                } else {
+                    error!(
+                        "GStreamerPlayer::load_media() - Failed to create any fallback video sink!"
+                    );
+                }
             }
         }
 
@@ -647,12 +671,29 @@ impl GStreamerPlayer {
             })
             .context("Failed to add bus watch")?;
 
-        // Set to ready state first
-        debug!("GStreamerPlayer::load_media() - Setting playbin to Ready state");
-        playbin
-            .set_state(gst::State::Ready)
-            .context("Failed to set playbin to ready state")?;
-        info!("GStreamerPlayer::load_media() - Playbin set to Ready state");
+        // On macOS, we need to handle async state changes differently
+        // Don't set to Ready state here - let play() handle the state transition
+        debug!("GStreamerPlayer::load_media() - Playbin configured, ready for playback");
+
+        // macOS-specific: Check element availability
+        #[cfg(target_os = "macos")]
+        {
+            // Check if uridecodebin is configured properly
+            if let Some(uridecodebin) = playbin.property::<Option<gst::Element>>("source") {
+                info!(
+                    "GStreamerPlayer::load_media() - uridecodebin source element configured: {}",
+                    uridecodebin.name()
+                );
+
+                // Set connection-speed for better buffering
+                if uridecodebin.has_property("connection-speed") {
+                    uridecodebin.set_property("connection-speed", 10000u64); // 10 Mbps
+                    debug!("Set connection-speed for better buffering");
+                }
+            } else {
+                warn!("GStreamerPlayer::load_media() - No source element found in playbin!");
+            }
+        }
 
         info!("GStreamerPlayer::load_media() - Media loading complete");
         Ok(())
@@ -662,7 +703,80 @@ impl GStreamerPlayer {
         info!("GStreamerPlayer::play() - Starting playback");
 
         if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            debug!("GStreamerPlayer::play() - Setting playbin to Playing state");
+            // On macOS, ensure we transition through states properly
+            #[cfg(target_os = "macos")]
+            {
+                // Get current state
+                let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
+                info!(
+                    "GStreamerPlayer::play() - Current state before play: {:?}",
+                    current
+                );
+
+                // If we're in Null state, first go to Ready, then Paused, then Playing
+                if current == gst::State::Null {
+                    info!("GStreamerPlayer::play() - Transitioning from Null -> Ready");
+                    match playbin.set_state(gst::State::Ready) {
+                        Ok(_) => {
+                            // Wait for state change to complete
+                            let (state_result, new_state, _) =
+                                playbin.state(gst::ClockTime::from_seconds(1));
+                            match state_result {
+                                Ok(_) => info!("Transitioned to Ready state: {:?}", new_state),
+                                Err(_) => warn!("Failed to transition to Ready state"),
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to set Ready state: {:?}", e);
+                            return Err(anyhow::anyhow!("Failed to set Ready state"));
+                        }
+                    }
+
+                    // Now go to Paused to allow preroll
+                    info!(
+                        "GStreamerPlayer::play() - Transitioning from Ready -> Paused for preroll"
+                    );
+                    match playbin.set_state(gst::State::Paused) {
+                        Ok(gst::StateChangeSuccess::Success) => {
+                            info!("Successfully transitioned to Paused");
+                        }
+                        Ok(gst::StateChangeSuccess::Async) => {
+                            info!("Async transition to Paused, waiting for preroll...");
+                            // Wait for preroll to complete
+                            let (state_result, new_state, _) =
+                                playbin.state(gst::ClockTime::from_seconds(5));
+                            match state_result {
+                                Ok(_) => info!("Preroll complete, now in {:?}", new_state),
+                                Err(_) => {
+                                    warn!("Preroll timeout, checking for errors...");
+                                    // Check bus for errors
+                                    if let Some(bus) = playbin.bus() {
+                                        while let Some(msg) = bus.pop() {
+                                            use gst::MessageView;
+                                            if let MessageView::Error(err) = msg.view() {
+                                                error!(
+                                                    "Bus error during preroll: {} ({:?})",
+                                                    err.error(),
+                                                    err.debug()
+                                                );
+                                                return Err(anyhow::anyhow!(
+                                                    "Preroll failed: {}",
+                                                    err.error()
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            warn!("Failed to transition to Paused for preroll");
+                        }
+                    }
+                }
+            }
+
+            info!("GStreamerPlayer::play() - Setting playbin to Playing state");
             match playbin.set_state(gst::State::Playing) {
                 Ok(gst::StateChangeSuccess::Success) => {
                     info!("GStreamerPlayer::play() - Successfully set playbin to playing state");
@@ -772,25 +886,89 @@ impl GStreamerPlayer {
                 }
                 Err(gst::StateChangeError) => {
                     // Get more details about the error
-                    let state = playbin.state(gst::ClockTime::from_seconds(1));
+                    let (state_result, current, pending) =
+                        playbin.state(gst::ClockTime::from_seconds(1));
                     error!("GStreamerPlayer::play() - Failed to set playbin to playing state");
-                    error!("GStreamerPlayer::play() - Current state: {:?}", state);
+                    error!(
+                        "GStreamerPlayer::play() - State result: {:?}, Current: {:?}, Pending: {:?}",
+                        state_result, current, pending
+                    );
 
-                    // Get the bus to check for error messages
-                    if let Some(bus) = playbin.bus() {
-                        while let Some(msg) = bus.pop() {
-                            use gst::MessageView;
-                            if let MessageView::Error(err) = msg.view() {
-                                error!(
-                                    "GStreamerPlayer::play() - Bus error: {} ({:?})",
-                                    err.error(),
-                                    err.debug()
+                    // Try to recover by resetting the pipeline
+                    warn!("GStreamerPlayer::play() - Attempting pipeline recovery...");
+
+                    // First, try to go back to Null state
+                    if let Err(e) = playbin.set_state(gst::State::Null) {
+                        error!(
+                            "GStreamerPlayer::play() - Failed to reset to Null state: {:?}",
+                            e
+                        );
+                    } else {
+                        // Wait for null state to be reached
+                        let _ = playbin.state(gst::ClockTime::from_seconds(1));
+
+                        // Try once more with a simpler approach
+                        info!(
+                            "GStreamerPlayer::play() - Retrying playback with direct Playing state"
+                        );
+                        match playbin.set_state(gst::State::Playing) {
+                            Ok(_) => {
+                                info!(
+                                    "GStreamerPlayer::play() - Recovery successful, playback started"
                                 );
+                                let mut state = self.state.write().await;
+                                *state = PlayerState::Playing;
+                                return Ok(());
+                            }
+                            Err(_) => {
+                                error!("GStreamerPlayer::play() - Recovery failed");
                             }
                         }
                     }
 
-                    return Err(anyhow::anyhow!("Failed to set playbin to playing state"));
+                    // Get the bus to check for error messages
+                    let mut error_details = Vec::new();
+                    if let Some(bus) = playbin.bus() {
+                        while let Some(msg) = bus.pop() {
+                            use gst::MessageView;
+                            match msg.view() {
+                                MessageView::Error(err) => {
+                                    let error_msg = format!(
+                                        "{} (from: {:?})",
+                                        err.error(),
+                                        err.src().map(|s| s.path_string())
+                                    );
+                                    error!(
+                                        "GStreamerPlayer::play() - Bus error: {} ({:?})",
+                                        err.error(),
+                                        err.debug()
+                                    );
+                                    error_details.push(error_msg);
+                                }
+                                MessageView::Warning(warn) => {
+                                    warn!(
+                                        "GStreamerPlayer::play() - Bus warning: {} ({:?})",
+                                        warn.error(),
+                                        warn.debug()
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    // Update state to Error
+                    let mut state = self.state.write().await;
+                    *state = PlayerState::Error;
+
+                    let error_msg = if !error_details.is_empty() {
+                        format!("Failed to play media: {}", error_details.join("; "))
+                    } else {
+                        "Failed to set playbin to playing state (no specific error available)"
+                            .to_string()
+                    };
+
+                    return Err(anyhow::anyhow!(error_msg));
                 }
             }
 
