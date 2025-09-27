@@ -1,5 +1,6 @@
 use anyhow::Result;
 use gtk4;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info};
@@ -123,6 +124,7 @@ pub enum PlayerCommand {
 pub struct PlayerController {
     player: Player,
     receiver: mpsc::UnboundedReceiver<PlayerCommand>,
+    error_sender: Option<mpsc::UnboundedSender<String>>,
 }
 
 impl PlayerController {
@@ -130,16 +132,37 @@ impl PlayerController {
     pub fn new(config: &Config) -> Result<(PlayerHandle, PlayerController)> {
         let player = Player::new(config)?;
         let (sender, receiver) = mpsc::unbounded_channel();
+        let (error_tx, error_rx) = mpsc::unbounded_channel();
 
-        let controller = PlayerController { player, receiver };
-        let handle = PlayerHandle { sender };
+        let controller = PlayerController {
+            player,
+            receiver,
+            error_sender: Some(error_tx.clone()),
+        };
+        let handle = PlayerHandle {
+            sender,
+            error_receiver: Arc::new(Mutex::new(Some(error_rx))),
+        };
 
         Ok((handle, controller))
+    }
+
+    /// Set up error callback from player
+    fn setup_error_callback(&mut self) {
+        if let Some(ref error_sender) = self.error_sender {
+            let sender = error_sender.clone();
+            self.player.set_error_callback(move |error_msg| {
+                let _ = sender.send(error_msg);
+            });
+        }
     }
 
     /// Run the controller event loop
     pub async fn run(mut self) {
         info!("🎮 PlayerController: Starting event loop");
+
+        // Set up error callback
+        self.setup_error_callback();
 
         while let Some(command) = self.receiver.recv().await {
             match command {
@@ -151,6 +174,38 @@ impl PlayerController {
                 PlayerCommand::LoadMedia { url, respond_to } => {
                     debug!("🎮 PlayerController: Loading media: {}", url);
                     let result = self.player.load_media(&url).await;
+
+                    // If initial load succeeded, wait a moment and check if media actually loaded
+                    if result.is_ok() {
+                        // Give MPV time to process the file
+                        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+                        // Check if we have a valid duration (indicates successful load)
+                        if let Some(duration) = self.player.get_duration().await {
+                            if duration.as_secs() == 0 {
+                                // Media failed to load properly
+                                let _ = respond_to.send(Err(anyhow::anyhow!(
+                                    "Media failed to load - no valid duration detected"
+                                )));
+                                continue;
+                            }
+                        } else {
+                            // Check if player is in error or idle state
+                            let state = self.player.get_state().await;
+                            if matches!(state, PlayerState::Error | PlayerState::Idle) {
+                                let _ = respond_to.send(Err(anyhow::anyhow!(
+                                    "Media failed to load - player is in {} state",
+                                    match state {
+                                        PlayerState::Error => "error",
+                                        PlayerState::Idle => "idle",
+                                        _ => "invalid",
+                                    }
+                                )));
+                                continue;
+                            }
+                        }
+                    }
+
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::Play { respond_to } => {
@@ -298,9 +353,18 @@ impl PlayerController {
 }
 
 /// Handle to send commands to the player controller
-#[derive(Clone)]
 pub struct PlayerHandle {
     sender: mpsc::UnboundedSender<PlayerCommand>,
+    error_receiver: Arc<Mutex<Option<mpsc::UnboundedReceiver<String>>>>,
+}
+
+impl Clone for PlayerHandle {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            error_receiver: self.error_receiver.clone(),
+        }
+    }
 }
 
 // PlayerHandle is safe to send between threads since the mpsc channel is Send-safe
@@ -310,6 +374,10 @@ unsafe impl Send for PlayerHandle {}
 unsafe impl Sync for PlayerHandle {}
 
 impl PlayerHandle {
+    /// Take the error receiver (can only be done once)
+    pub fn take_error_receiver(&self) -> Option<mpsc::UnboundedReceiver<String>> {
+        self.error_receiver.lock().unwrap().take()
+    }
     /// Create a video widget for rendering
     pub async fn create_video_widget(&self) -> Result<gtk4::Widget> {
         let (respond_to, response) = oneshot::channel();

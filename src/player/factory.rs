@@ -174,6 +174,19 @@ impl Player {
         }
     }
 
+    pub fn set_error_callback<F>(&self, callback: F)
+    where
+        F: Fn(String) + Send + 'static,
+    {
+        match self {
+            Player::Mpv(mpv) => mpv.set_error_callback(callback),
+            Player::GStreamer(_) => {
+                // GStreamer doesn't have this callback mechanism yet
+                // TODO: Implement error callbacks for GStreamer
+            }
+        }
+    }
+
     pub fn create_video_widget(&self) -> gtk4::Widget {
         match self {
             Player::GStreamer(p) => p.create_video_widget(),
@@ -313,7 +326,7 @@ impl Player {
                 MpvPlayerState::Playing => PlayerState::Playing,
                 MpvPlayerState::Paused => PlayerState::Paused,
                 MpvPlayerState::Stopped => PlayerState::Stopped,
-                // MpvPlayerState::Error => PlayerState::Error, // Removed unused Error variant
+                MpvPlayerState::Error => PlayerState::Error,
             },
         }
     }
