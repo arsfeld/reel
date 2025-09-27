@@ -234,12 +234,23 @@ pub struct HomeSectionWithModels {
 /// Type of homepage section
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HomeSectionType {
-    RecentlyAdded,
+    // Progress tracking sections
     ContinueWatching,
+    OnDeck,
+
+    // Recently added sections with media type
+    RecentlyAdded(String), // e.g., RecentlyAdded("movies"), RecentlyAdded("shows")
+
+    // Discovery sections
     Suggested,
     TopRated,
     Trending,
+
+    // Activity sections
     RecentlyPlayed,
+    RecentPlaylists,
+
+    // Fallback for unknown types
     Custom(String),
 }
 

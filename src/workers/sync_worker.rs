@@ -1,6 +1,7 @@
 use crate::db::DatabaseConnection;
 use crate::models::{LibraryId, SourceId};
 use crate::services::core::backend::BackendService;
+use crate::services::core::sync::SyncService;
 use relm4::prelude::*;
 use relm4::{ComponentSender, Worker, WorkerHandle};
 use std::collections::HashMap;
@@ -15,6 +16,7 @@ pub struct SyncProgress {
     pub current: usize,
     pub total: usize,
     pub message: String,
+    pub home_sections_synced: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +48,7 @@ pub enum SyncWorkerOutput {
         source_id: SourceId,
         library_id: Option<LibraryId>,
         items_synced: usize,
+        sections_synced: usize,
         duration: Duration,
     },
     SyncFailed {
@@ -87,6 +90,7 @@ impl SyncWorker {
     ) {
         info!("perform_sync called for source: {:?}", source_id);
         let start_time = Instant::now();
+        let mut sections_synced = 0;
 
         // Send sync started
         sender
@@ -96,21 +100,73 @@ impl SyncWorker {
             })
             .ok();
 
-        info!("Calling BackendService::sync_source for {:?}", source_id);
-        // Call actual sync service using stateless BackendService
-        match BackendService::sync_source(&db, &source_id).await {
+        // Load source configuration to create backend
+        use crate::db::repository::Repository;
+        use crate::db::repository::source_repository::{SourceRepository, SourceRepositoryImpl};
+
+        let source_repo = SourceRepositoryImpl::new(db.as_ref().clone());
+        let source_entity = match source_repo.find_by_id(source_id.as_str()).await {
+            Ok(Some(entity)) => entity,
+            Ok(None) => {
+                tracing::error!("Source not found: {:?}", source_id);
+                sender
+                    .output(SyncWorkerOutput::SyncFailed {
+                        source_id: source_id.clone(),
+                        library_id,
+                        error: "Source not found".to_string(),
+                    })
+                    .ok();
+                return;
+            }
+            Err(e) => {
+                tracing::error!("Failed to load source: {}", e);
+                sender
+                    .output(SyncWorkerOutput::SyncFailed {
+                        source_id: source_id.clone(),
+                        library_id,
+                        error: e.to_string(),
+                    })
+                    .ok();
+                return;
+            }
+        };
+
+        // Create backend for this source
+        let backend = match BackendService::create_backend_for_source(&db, &source_entity).await {
+            Ok(backend) => backend,
+            Err(e) => {
+                tracing::error!("Failed to create backend: {}", e);
+                sender
+                    .output(SyncWorkerOutput::SyncFailed {
+                        source_id: source_id.clone(),
+                        library_id,
+                        error: e.to_string(),
+                    })
+                    .ok();
+                return;
+            }
+        };
+
+        info!("Calling SyncService::sync_source for {:?}", source_id);
+        // Call sync service directly with the backend
+        match SyncService::sync_source(&db, backend.as_ref(), &source_id).await {
             Ok(sync_result) => {
                 info!(
                     "Sync succeeded for {:?}: {} items",
                     source_id, sync_result.items_synced
                 );
 
-                // Send the sync completed output
+                // After successful library/media sync, fetch and save home sections
+                info!("Fetching home sections for source: {:?}", source_id);
+                sections_synced = Self::sync_home_sections(&db, &source_id, &sender).await;
+
+                // Send the sync completed output with sections count
                 sender
                     .output(SyncWorkerOutput::SyncCompleted {
                         source_id: source_id.clone(),
                         library_id,
                         items_synced: sync_result.items_synced,
+                        sections_synced,
                         duration: start_time.elapsed(),
                     })
                     .ok();
@@ -140,6 +196,246 @@ impl SyncWorker {
                     .ok();
             }
         }
+    }
+
+    /// Sync home sections for a source
+    async fn sync_home_sections(
+        db: &Arc<DatabaseConnection>,
+        source_id: &SourceId,
+        sender: &ComponentSender<SyncWorker>,
+    ) -> usize {
+        use crate::db::repository::Repository;
+        use crate::db::repository::home_section_repository::{
+            HomeSectionRepository, HomeSectionRepositoryImpl,
+        };
+        use crate::db::repository::source_repository::{SourceRepository, SourceRepositoryImpl};
+
+        // Send progress notification for home sections sync
+        sender
+            .output(SyncWorkerOutput::SyncProgress(SyncProgress {
+                source_id: source_id.clone(),
+                library_id: None,
+                current: 0,
+                total: 1,
+                message: "Syncing home sections...".to_string(),
+                home_sections_synced: false,
+            }))
+            .ok();
+
+        // Load source configuration to create backend
+        let source_repo = SourceRepositoryImpl::new(db.as_ref().clone());
+        let source_entity = match source_repo.find_by_id(source_id.as_str()).await {
+            Ok(Some(entity)) => entity,
+            Ok(None) => {
+                tracing::warn!("Source not found for home sections sync: {:?}", source_id);
+                return 0;
+            }
+            Err(e) => {
+                tracing::error!("Failed to load source for home sections sync: {}", e);
+                return 0;
+            }
+        };
+
+        // Create backend for this source
+        let backend = match BackendService::create_backend_for_source(db, &source_entity).await {
+            Ok(backend) => backend,
+            Err(e) => {
+                tracing::error!("Failed to create backend for home sections sync: {}", e);
+                return 0;
+            }
+        };
+
+        // Fetch home sections from the backend
+        let sections = match backend.get_home_sections().await {
+            Ok(sections) => sections,
+            Err(e) => {
+                tracing::error!("Failed to fetch home sections from backend: {}", e);
+                return 0;
+            }
+        };
+
+        let sections_count = sections.len();
+        info!(
+            "Fetched {} home sections from source: {:?}",
+            sections_count, source_id
+        );
+
+        if sections_count > 0 {
+            // Convert HomeSection models to database entities
+            let home_section_repo = HomeSectionRepositoryImpl::new(db.as_ref().clone());
+            let mut section_models = Vec::new();
+            let mut section_items = Vec::new();
+
+            for (index, section) in sections.into_iter().enumerate() {
+                // Convert to HomeSectionModel
+                let section_model = crate::db::entities::home_sections::Model {
+                    id: 0, // Will be auto-generated
+                    source_id: source_id.as_str().to_string(),
+                    hub_identifier: section.id.clone(),
+                    title: section.title.clone(),
+                    section_type: match section.section_type {
+                        crate::models::HomeSectionType::ContinueWatching => {
+                            "continue_watching".to_string()
+                        }
+                        crate::models::HomeSectionType::OnDeck => "on_deck".to_string(),
+                        crate::models::HomeSectionType::RecentlyAdded(ref media_type) => {
+                            format!("recently_added_{}", media_type)
+                        }
+                        crate::models::HomeSectionType::Suggested => "suggested".to_string(),
+                        crate::models::HomeSectionType::TopRated => "top_rated".to_string(),
+                        crate::models::HomeSectionType::Trending => "trending".to_string(),
+                        crate::models::HomeSectionType::RecentlyPlayed => {
+                            "recently_played".to_string()
+                        }
+                        crate::models::HomeSectionType::RecentPlaylists => {
+                            "recent_playlists".to_string()
+                        }
+                        crate::models::HomeSectionType::Custom(ref name) => name.clone(),
+                    },
+                    position: index as i32,
+                    context: None,                       // TODO: Add context if needed
+                    style: Some("shelf".to_string()),    // Default style
+                    hub_type: Some("video".to_string()), // Default hub type
+                    size: Some(section.items.len() as i32),
+                    last_updated: chrono::Utc::now().naive_utc(),
+                    is_stale: false,
+                    created_at: chrono::Utc::now().naive_utc(),
+                    updated_at: chrono::Utc::now().naive_utc(),
+                };
+
+                // Only include media items that exist in the database
+                let mut existing_media_ids = Vec::new();
+
+                if !section.items.is_empty() {
+                    use crate::db::repository::media_repository::{
+                        MediaRepository, MediaRepositoryImpl,
+                    };
+                    let media_repo = MediaRepositoryImpl::new(db.as_ref().clone());
+
+                    for item in section.items {
+                        let media_id = item.id().to_string();
+
+                        // Log the actual item type and details for debugging
+                        let (item_type, extra_info) = match &item {
+                            crate::models::MediaItem::Movie(m) => {
+                                ("movie", format!("title: '{}'", m.title))
+                            }
+                            crate::models::MediaItem::Show(s) => {
+                                ("show", format!("title: '{}'", s.title))
+                            }
+                            crate::models::MediaItem::Episode(e) => (
+                                "episode",
+                                format!(
+                                    "show: '{}' (id: {:?}), S{}E{}, title: '{}'",
+                                    e.show_title.as_ref().unwrap_or(&"Unknown".to_string()),
+                                    e.show_id,
+                                    e.season_number,
+                                    e.episode_number,
+                                    e.title
+                                ),
+                            ),
+                            crate::models::MediaItem::MusicTrack(_) => ("track", String::new()),
+                            crate::models::MediaItem::MusicAlbum(_) => ("album", String::new()),
+                            crate::models::MediaItem::Photo(_) => ("photo", String::new()),
+                        };
+
+                        // Check if item exists in database
+                        match media_repo.find_by_id(&media_id).await {
+                            Ok(Some(_)) => {
+                                // Item exists, include it
+                                existing_media_ids.push(media_id);
+                            }
+                            Ok(None) => {
+                                // Item doesn't exist, log with full details
+                                tracing::warn!(
+                                    "Media item {} ({}) not found in database for home section '{}' - {}",
+                                    media_id,
+                                    item_type,
+                                    section.title,
+                                    extra_info
+                                );
+
+                                // For episodes, let's also check if the show exists
+                                if let crate::models::MediaItem::Episode(episode) = &item {
+                                    if let Some(show_id) = &episode.show_id {
+                                        match media_repo.find_by_id(show_id).await {
+                                            Ok(Some(_)) => {
+                                                tracing::info!(
+                                                    "  -> Parent show {} exists in database",
+                                                    show_id
+                                                );
+                                            }
+                                            Ok(None) => {
+                                                tracing::warn!(
+                                                    "  -> Parent show {} also missing from database!",
+                                                    show_id
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    "  -> Error checking parent show {}: {}",
+                                                    show_id,
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to check if media item {} exists: {}",
+                                    media_id,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Only add section if it has items that exist in the database
+                if !existing_media_ids.is_empty() {
+                    section_items.push((index as i32, existing_media_ids));
+                    section_models.push(section_model);
+                } else {
+                    tracing::warn!(
+                        "Skipping home section '{}' as none of its items exist in database",
+                        section_model.title
+                    );
+                }
+            }
+
+            // Save sections and items using repository with transaction
+            match home_section_repo
+                .save_sections(source_id.as_str(), section_models, section_items)
+                .await
+            {
+                Ok(_) => {
+                    info!(
+                        "Successfully saved {} home sections for source: {:?}",
+                        sections_count, source_id
+                    );
+
+                    // Send progress notification for completed home sections sync
+                    sender
+                        .output(SyncWorkerOutput::SyncProgress(SyncProgress {
+                            source_id: source_id.clone(),
+                            library_id: None,
+                            current: 1,
+                            total: 1,
+                            message: format!("Synced {} home sections", sections_count),
+                            home_sections_synced: true,
+                        }))
+                        .ok();
+                }
+                Err(e) => {
+                    tracing::error!("Failed to save home sections: {}", e);
+                    return 0;
+                }
+            }
+        }
+
+        sections_count
     }
 
     fn start_sync(
