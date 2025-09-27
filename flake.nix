@@ -98,6 +98,7 @@
           # Networking and crypto
           openssl
           curl
+          glib-networking  # CRITICAL: Provides TLS support for libsoup/GStreamer
 
           # Keyring support
           libsecret
