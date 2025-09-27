@@ -183,7 +183,6 @@ impl MessageBroker {
     }
 
     pub async fn broadcast(&self, message: BrokerMessage) {
-        tracing::debug!("Broadcasting message: {:?}", message);
         let subs = self.subscribers.read().await;
         let subscriber_count = subs.len();
         let mut send_count = 0;
@@ -194,11 +193,6 @@ impl MessageBroker {
                 }
             }
         }
-        tracing::debug!(
-            "Broadcast complete. Sent to {}/{} subscribers",
-            send_count,
-            subscriber_count
-        );
     }
 
     pub async fn send_to(&self, component_id: &str, message: BrokerMessage) {
