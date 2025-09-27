@@ -18,12 +18,12 @@ impl ReelApp {
         let style_manager = adw::StyleManager::default();
         style_manager.set_color_scheme(adw::ColorScheme::ForceDark);
 
-        // Load CSS files
+        // Load CSS files (no macOS-specific CSS)
         let base_css = include_str!("../styles/base.css");
         let details_css = include_str!("../styles/details.css");
         let sidebar_css = include_str!("../styles/sidebar.css");
 
-        // Combine base CSS with details CSS and sidebar CSS
+        tracing::info!("Loading standard CSS styles");
         let combined_css = format!("{}{}{}", base_css, details_css, sidebar_css);
         relm4::set_global_css(&combined_css);
 

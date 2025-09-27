@@ -209,6 +209,9 @@ impl Worker for ImageLoader {
         Self::new()
     }
 
+    // Note: shutdown() is no longer part of the Worker trait in the current Relm4 version
+    // Resources will be cleaned up when the component is dropped
+
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
             ImageLoaderInput::LoadImage(request) => {
@@ -217,13 +220,12 @@ impl Worker for ImageLoader {
                 // Check memory cache first
                 if let Some(texture) = self.memory_cache.get(&cache_key) {
                     trace!("Image {} found in memory cache", request.id);
-                    sender
-                        .output(ImageLoaderOutput::ImageLoaded {
-                            id: request.id,
-                            texture: texture.clone(),
-                            size: request.size,
-                        })
-                        .ok();
+                    // Ignore send errors during shutdown
+                    let _ = sender.output(ImageLoaderOutput::ImageLoaded {
+                        id: request.id,
+                        texture: texture.clone(),
+                        size: request.size,
+                    });
                     return;
                 }
 
@@ -294,7 +296,8 @@ impl Worker for ImageLoader {
                 }
                 std::fs::create_dir_all(&self.cache_dir).ok();
 
-                sender.output(ImageLoaderOutput::CacheCleared).ok();
+                // Only send output if channel is still open
+                let _ = sender.output(ImageLoaderOutput::CacheCleared);
             }
 
             ImageLoaderInput::SetCacheSize(size) => {

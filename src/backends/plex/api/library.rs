@@ -221,7 +221,7 @@ impl PlexApi {
                     backend_id: self.backend_id.clone(),
                     show_id: None, // Not provided in response
                     title: meta.title,
-                    season_number: 0, // Not provided in this response
+                    season_number: meta.parent_index.unwrap_or(0) as u32,
                     episode_number: meta.index as u32,
                     duration,
                     thumbnail_url: meta.thumb.map(|t| self.build_image_url(&t)),

@@ -48,7 +48,7 @@ impl Default for PlaybackConfig {
         Self {
             player_backend: "mpv".to_string(),
             hardware_acceleration: true,
-            mpv_verbose_logging: false,
+            mpv_verbose_logging: true,
             mpv_cache_size_mb: 150,
             mpv_cache_backbuffer_mb: 50,
             mpv_cache_secs: 30,
