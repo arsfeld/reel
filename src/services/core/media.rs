@@ -343,13 +343,6 @@ impl MediaService {
         library_id: &LibraryId,
         source_id: &SourceId,
     ) -> Result<()> {
-        info!(
-            "Saving batch of {} media items to library {} for source {}",
-            items.len(),
-            library_id,
-            source_id
-        );
-
         if items.is_empty() {
             return Ok(());
         }
@@ -359,8 +352,6 @@ impl MediaService {
         for (_index, item) in items.iter().enumerate() {
             Self::save_media_item(db, item.clone(), library_id, source_id).await?;
         }
-
-        info!("Successfully saved {} media items", items.len());
         Ok(())
     }
 

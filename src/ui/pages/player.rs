@@ -109,8 +109,6 @@ impl PlayerPage {
 
     /// Transition to the Hidden state
     fn transition_to_hidden(&mut self, _sender: AsyncComponentSender<Self>, from_timer: bool) {
-        debug!("State transition: {:?} -> Hidden", self.control_state);
-
         // Only try to cancel timer if not called from the timer itself
         if !from_timer {
             if let ControlState::Visible { timer_id } = &mut self.control_state {
@@ -134,8 +132,6 @@ impl PlayerPage {
 
     /// Transition to the Visible state
     fn transition_to_visible(&mut self, sender: AsyncComponentSender<Self>) {
-        debug!("State transition: {:?} -> Visible", self.control_state);
-
         // Cancel any existing timer first
         if let ControlState::Visible { timer_id } = &mut self.control_state {
             if let Some(timer) = timer_id.take() {
@@ -165,8 +161,6 @@ impl PlayerPage {
 
     /// Transition to the Hovering state
     fn transition_to_hovering(&mut self, _sender: AsyncComponentSender<Self>) {
-        debug!("State transition: {:?} -> Hovering", self.control_state);
-
         // Cancel any existing timer
         if let ControlState::Visible { timer_id } = &mut self.control_state {
             if let Some(timer) = timer_id.take() {
@@ -513,6 +507,7 @@ pub enum PlayerOutput {
     NavigateBack,
     MediaLoaded,
     Error(String),
+    ShowToast(String),
     WindowStateChanged { width: i32, height: i32 },
 }
 
@@ -1009,6 +1004,22 @@ impl AsyncComponent for PlayerPage {
             Ok((handle, controller)) => {
                 info!("Player controller initialized successfully");
 
+                // Set up error monitoring
+                if let Some(mut error_receiver) = handle.take_error_receiver() {
+                    let sender_clone = sender.clone();
+                    glib::spawn_future_local(async move {
+                        while let Some(error_msg) = error_receiver.recv().await {
+                            error!("Player error received: {}", error_msg);
+                            // Send toast notification
+                            sender_clone
+                                .output(PlayerOutput::ShowToast(error_msg.clone()))
+                                .unwrap();
+                            // Show error in player UI
+                            sender_clone.input(PlayerInput::ShowError(error_msg));
+                        }
+                    });
+                }
+
                 // Spawn the controller task on the main thread's executor
                 // This is needed because Player contains raw pointers that are not Send
                 glib::spawn_future_local(async move {
@@ -1354,18 +1365,10 @@ impl AsyncComponent for PlayerPage {
                             Ok(info) => info,
                             Err(e) => {
                                 error!("Failed to get stream URL: {}", e);
-                                let user_message = match e.to_string().as_str() {
-                                    s if s.contains("network") || s.contains("connection") =>
-                                        "Network connection error. Please check your internet connection.".to_string(),
-                                    s if s.contains("unauthorized") || s.contains("401") =>
-                                        "Authentication failed. Please check your server credentials.".to_string(),
-                                    s if s.contains("not found") || s.contains("404") =>
-                                        "Media not found on server. It may have been removed.".to_string(),
-                                    s if s.contains("timeout") =>
-                                        "Server connection timed out. Please try again.".to_string(),
-                                    _ => format!("Failed to load media: {}", e)
-                                };
-                                return PlayerCommandOutput::LoadError(user_message);
+                                return PlayerCommandOutput::LoadError(format!(
+                                    "Failed to load media: {}",
+                                    e
+                                ));
                             }
                         };
 
@@ -1393,16 +1396,22 @@ impl AsyncComponent for PlayerPage {
                                             db: db_clone.as_ref().clone(),
                                             media_id: media_id_for_resume.clone(),
                                             user_id: "default".to_string(), // TODO: Get actual user ID
-                                        }).execute().await
+                                        })
+                                        .execute()
+                                        .await
                                     {
                                         // Only resume if we've watched more than the threshold
                                         let threshold_ms = (resume_threshold_seconds as i64) * 1000;
                                         if position_ms > threshold_ms {
-                                            let resume_position = std::time::Duration::from_millis(position_ms as u64);
+                                            let resume_position = std::time::Duration::from_millis(
+                                                position_ms as u64,
+                                            );
                                             info!("Resuming playback from {:?}", resume_position);
 
                                             // Seek to saved position
-                                            if let Err(e) = player_handle.seek(resume_position).await {
+                                            if let Err(e) =
+                                                player_handle.seek(resume_position).await
+                                            {
                                                 warn!("Failed to seek to saved position: {}", e);
                                             }
                                         }
@@ -1412,50 +1421,41 @@ impl AsyncComponent for PlayerPage {
                                 // Try to get video dimensions and calculate appropriate window size
                                 if let Ok(Some((width, height))) =
                                     player_handle.get_video_dimensions().await
-                                    && width > 0 && height > 0 {
-                                        // Calculate window size based on video aspect ratio
-                                        // Keep width reasonable (max 1920) and scale height accordingly
-                                        let max_width = 1920.0_f32.min(width as f32);
-                                        let scale = max_width / width as f32;
-                                        let window_width = max_width as i32;
-                                        let window_height = (height as f32 * scale) as i32;
+                                    && width > 0
+                                    && height > 0
+                                {
+                                    // Calculate window size based on video aspect ratio
+                                    // Keep width reasonable (max 1920) and scale height accordingly
+                                    let max_width = 1920.0_f32.min(width as f32);
+                                    let scale = max_width / width as f32;
+                                    let window_width = max_width as i32;
+                                    let window_height = (height as f32 * scale) as i32;
 
-                                        // Add some padding for controls
-                                        let final_height = window_height + 100; // Extra space for controls
+                                    // Add some padding for controls
+                                    let final_height = window_height + 100; // Extra space for controls
 
-                                        info!(
-                                            "Video dimensions: {}x{}, window size: {}x{}",
-                                            width, height, window_width, final_height
-                                        );
+                                    info!(
+                                        "Video dimensions: {}x{}, window size: {}x{}",
+                                        width, height, window_width, final_height
+                                    );
 
-                                        // Request window resize through output
-                                        sender_clone
-                                            .output(PlayerOutput::WindowStateChanged {
-                                                width: window_width,
-                                                height: final_height,
-                                            })
-                                            .ok();
-                                    }
+                                    // Request window resize through output
+                                    sender_clone
+                                        .output(PlayerOutput::WindowStateChanged {
+                                            width: window_width,
+                                            height: final_height,
+                                        })
+                                        .ok();
+                                }
 
                                 // Get the actual state from the player after loading
-                                let actual_state = player_handle
-                                    .get_state()
-                                    .await
-                                    .unwrap_or(PlayerState::Idle);
+                                let actual_state =
+                                    player_handle.get_state().await.unwrap_or(PlayerState::Idle);
                                 PlayerCommandOutput::StateChanged(actual_state)
                             }
                             Err(e) => {
                                 error!("Failed to load media: {}", e);
-                                let user_message = match e.to_string().as_str() {
-                                    s if s.contains("codec") || s.contains("decoder") =>
-                                        "Media format not supported. The file may use an incompatible codec.".to_string(),
-                                    s if s.contains("permission") || s.contains("access") =>
-                                        "Permission denied. Check file or server access rights.".to_string(),
-                                    s if s.contains("memory") =>
-                                        "Not enough memory to play this media.".to_string(),
-                                    _ => format!("Playback error: {}", e)
-                                };
-                                PlayerCommandOutput::LoadError(user_message)
+                                PlayerCommandOutput::LoadError(format!("Playback error: {}", e))
                             }
                         }
                     });
@@ -1507,18 +1507,10 @@ impl AsyncComponent for PlayerPage {
                             Ok(info) => info,
                             Err(e) => {
                                 error!("Failed to get stream URL: {}", e);
-                                let user_message = match e.to_string().as_str() {
-                                    s if s.contains("network") || s.contains("connection") =>
-                                        "Network connection error. Please check your internet connection.".to_string(),
-                                    s if s.contains("unauthorized") || s.contains("401") =>
-                                        "Authentication failed. Please check your server credentials.".to_string(),
-                                    s if s.contains("not found") || s.contains("404") =>
-                                        "Media not found on server. It may have been removed.".to_string(),
-                                    s if s.contains("timeout") =>
-                                        "Server connection timed out. Please try again.".to_string(),
-                                    _ => format!("Failed to load media: {}", e)
-                                };
-                                return PlayerCommandOutput::LoadError(user_message);
+                                return PlayerCommandOutput::LoadError(format!(
+                                    "Failed to load media: {}",
+                                    e
+                                ));
                             }
                         };
 
@@ -1546,16 +1538,22 @@ impl AsyncComponent for PlayerPage {
                                             db: db_clone.as_ref().clone(),
                                             media_id: media_id_for_resume.clone(),
                                             user_id: "default".to_string(), // TODO: Get actual user ID
-                                        }).execute().await
+                                        })
+                                        .execute()
+                                        .await
                                     {
                                         // Only resume if we've watched more than the threshold
                                         let threshold_ms = (resume_threshold_seconds as i64) * 1000;
                                         if position_ms > threshold_ms {
-                                            let resume_position = std::time::Duration::from_millis(position_ms as u64);
+                                            let resume_position = std::time::Duration::from_millis(
+                                                position_ms as u64,
+                                            );
                                             info!("Resuming playback from {:?}", resume_position);
 
                                             // Seek to saved position
-                                            if let Err(e) = player_handle.seek(resume_position).await {
+                                            if let Err(e) =
+                                                player_handle.seek(resume_position).await
+                                            {
                                                 warn!("Failed to seek to saved position: {}", e);
                                             }
                                         }
@@ -1565,50 +1563,41 @@ impl AsyncComponent for PlayerPage {
                                 // Try to get video dimensions and calculate appropriate window size
                                 if let Ok(Some((width, height))) =
                                     player_handle.get_video_dimensions().await
-                                    && width > 0 && height > 0 {
-                                        // Calculate window size based on video aspect ratio
-                                        // Keep width reasonable (max 1920) and scale height accordingly
-                                        let max_width = 1920.0_f32.min(width as f32);
-                                        let scale = max_width / width as f32;
-                                        let window_width = max_width as i32;
-                                        let window_height = (height as f32 * scale) as i32;
+                                    && width > 0
+                                    && height > 0
+                                {
+                                    // Calculate window size based on video aspect ratio
+                                    // Keep width reasonable (max 1920) and scale height accordingly
+                                    let max_width = 1920.0_f32.min(width as f32);
+                                    let scale = max_width / width as f32;
+                                    let window_width = max_width as i32;
+                                    let window_height = (height as f32 * scale) as i32;
 
-                                        // Add some padding for controls
-                                        let final_height = window_height + 100; // Extra space for controls
+                                    // Add some padding for controls
+                                    let final_height = window_height + 100; // Extra space for controls
 
-                                        info!(
-                                            "Video dimensions: {}x{}, window size: {}x{}",
-                                            width, height, window_width, final_height
-                                        );
+                                    info!(
+                                        "Video dimensions: {}x{}, window size: {}x{}",
+                                        width, height, window_width, final_height
+                                    );
 
-                                        // Request window resize through output
-                                        sender_clone
-                                            .output(PlayerOutput::WindowStateChanged {
-                                                width: window_width,
-                                                height: final_height,
-                                            })
-                                            .ok();
-                                    }
+                                    // Request window resize through output
+                                    sender_clone
+                                        .output(PlayerOutput::WindowStateChanged {
+                                            width: window_width,
+                                            height: final_height,
+                                        })
+                                        .ok();
+                                }
 
                                 // Get the actual state from the player after loading
-                                let actual_state = player_handle
-                                    .get_state()
-                                    .await
-                                    .unwrap_or(PlayerState::Idle);
+                                let actual_state =
+                                    player_handle.get_state().await.unwrap_or(PlayerState::Idle);
                                 PlayerCommandOutput::StateChanged(actual_state)
                             }
                             Err(e) => {
                                 error!("Failed to load media: {}", e);
-                                let user_message = match e.to_string().as_str() {
-                                    s if s.contains("codec") || s.contains("decoder") =>
-                                        "Media format not supported. The file may use an incompatible codec.".to_string(),
-                                    s if s.contains("permission") || s.contains("access") =>
-                                        "Permission denied. Check file or server access rights.".to_string(),
-                                    s if s.contains("memory") =>
-                                        "Not enough memory to play this media.".to_string(),
-                                    _ => format!("Playback error: {}", e)
-                                };
-                                PlayerCommandOutput::LoadError(user_message)
+                                PlayerCommandOutput::LoadError(format!("Playback error: {}", e))
                             }
                         }
                     });
@@ -2182,7 +2171,19 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerCommandOutput::LoadError(error_msg) => {
-                sender.input(PlayerInput::ShowError(error_msg));
+                // Send toast notification for immediate feedback
+                sender
+                    .output(PlayerOutput::ShowToast(error_msg.clone()))
+                    .unwrap();
+
+                // Show error in overlay
+                sender.input(PlayerInput::ShowError(error_msg.clone()));
+
+                // Navigate back after a small delay to ensure navigation stack is ready
+                let sender_clone = sender.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+                    sender_clone.output(PlayerOutput::NavigateBack).unwrap();
+                });
             }
             PlayerCommandOutput::PositionUpdate {
                 position,

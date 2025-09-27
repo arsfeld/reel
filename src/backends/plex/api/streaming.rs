@@ -36,10 +36,22 @@ impl PlexApi {
             && let Some(media) = metadata.media.first()
             && let Some(part) = media.parts.as_ref().and_then(|p| p.first())
         {
-            let stream_url = format!(
-                "{}{}?X-Plex-Token={}",
-                self.base_url, part.key, self.auth_token
-            );
+            // Properly construct the stream URL with authentication
+            // The part.key already contains the full path with session parameters
+            let stream_url = if part.key.starts_with("http://") || part.key.starts_with("https://")
+            {
+                // part.key is a full URL, use it directly
+                part.key.clone()
+            } else {
+                // part.key is a path, combine with base URL
+                let separator = if part.key.contains('?') { "&" } else { "?" };
+                format!(
+                    "{}{}{}X-Plex-Token={}",
+                    self.base_url, part.key, separator, self.auth_token
+                )
+            };
+
+            tracing::info!("Stream URL constructed: {}", stream_url);
 
             // Generate quality options for transcoding
             let mut quality_options = Vec::new();

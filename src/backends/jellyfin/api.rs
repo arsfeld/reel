@@ -1357,7 +1357,7 @@ impl JellyfinApi {
             sections.push(HomeSection {
                 id: "latest_movies".to_string(),
                 title: "Recently Added Movies".to_string(),
-                section_type: HomeSectionType::RecentlyAdded,
+                section_type: HomeSectionType::RecentlyAdded("movies".to_string()),
                 items: latest_movies,
             });
         }

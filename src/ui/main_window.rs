@@ -284,6 +284,29 @@ impl AsyncComponent for MainWindow {
         });
         root.add_action(&quit_action);
 
+        // Apply platform-specific styling
+        crate::utils::platform::Platform::apply_platform_classes(&root);
+
+        // Configure native window controls for macOS
+        #[cfg(target_os = "macos")]
+        {
+            // TODO: Once we upgrade to libadwaita 1.8+, we should use native window controls
+            // For now, we use custom CSS styling for the window control buttons
+
+            if let Some(settings) = gtk::Settings::default() {
+                // Set decoration layout for macOS button order (left side, no title)
+                settings.set_property("gtk-decoration-layout", "close,minimize,maximize:");
+
+                // Use smaller font for compact title bar
+                settings.set_property("gtk-font-name", "SF Pro Text 11");
+            }
+
+            // Log platform detection for debugging
+            tracing::info!(
+                "Running on macOS - Applied platform-specific styles and window controls"
+            );
+        }
+
         // Set keyboard shortcuts at the application level if available
         if let Some(app) = root.application()
             && let Some(adw_app) = app.downcast_ref::<adw::Application>()
@@ -358,9 +381,10 @@ impl AsyncComponent for MainWindow {
         ConnectionMonitor::start_monitoring(connection_monitor.sender().clone());
 
         // Initialize the SyncWorker
+        let sync_sender = sender.clone();
         let sync_worker = SyncWorker::builder()
             .detach_worker(Arc::new(db.clone()))
-            .forward(sender.input_sender(), |output| match output {
+            .forward(sender.input_sender(), move |output| match output {
                 SyncWorkerOutput::SyncStarted { source_id, .. } => {
                     tracing::info!("Sync started for source: {:?}", source_id);
                     MainWindowInput::ShowToast("Syncing source...".to_string())
@@ -378,12 +402,26 @@ impl AsyncComponent for MainWindow {
                 SyncWorkerOutput::SyncCompleted {
                     source_id,
                     items_synced,
+                    sections_synced,
                     ..
                 } => {
-                    tracing::info!("Sync completed for {:?}: {} items", source_id, items_synced);
+                    tracing::info!(
+                        "Sync completed for {:?}: {} items, {} sections",
+                        source_id,
+                        items_synced,
+                        sections_synced
+                    );
+
+                    // Notify UI that home sections have been updated if any were synced
+                    if sections_synced > 0 {
+                        // Trigger a refresh of the home page by navigating to it
+                        // This will cause the home page to reload its data
+                        sync_sender.input(MainWindowInput::Navigate("home".to_string()));
+                    }
+
                     MainWindowInput::ShowToast(format!(
-                        "Sync completed: {} items synced",
-                        items_synced
+                        "Sync completed: {} items, {} sections synced",
+                        items_synced, sections_synced
                     ))
                 }
                 SyncWorkerOutput::SyncFailed {
@@ -480,6 +518,7 @@ impl AsyncComponent for MainWindow {
         tracing::info!("Primary menu configured with Preferences, About, and Quit actions");
 
         // Store references to widgets for later use
+        model.toast_overlay.clone_from(&widgets.toast_overlay);
         model.navigation_view.clone_from(&widgets.navigation_view);
         model.content_header.clone_from(&widgets.content_header);
         model.sidebar_header.clone_from(&widgets.sidebar_header);
@@ -651,13 +690,14 @@ impl AsyncComponent for MainWindow {
                         // Check if we need to navigate to home or if we're already there
                         let stack = self.navigation_view.navigation_stack();
 
-                        // If there's only 1 page in stack, check if it's the home page
-                        if stack.n_items() == 1
-                            && let Some(page) = stack.item(0)
-                            && let Ok(nav_page) = page.downcast::<adw::NavigationPage>()
-                            && nav_page.title() == "Home"
+                        // First check if the visible page is already "Home"
+                        if let Some(visible_page) = self.navigation_view.visible_page()
+                            && visible_page.title() == "Home"
                         {
-                            // Already on home page with clean stack, just trigger header update
+                            // Already on home page, don't do anything except update header
+                            // Don't pop any pages as that would remove the current Home page
+
+                            // Clear any custom header content
                             sender.input(MainWindowInput::ClearHeaderContent);
                             sender.input(MainWindowInput::Navigate("update_header".to_string()));
                             return;
@@ -1103,6 +1143,9 @@ impl AsyncComponent for MainWindow {
                                     sender_clone.input(MainWindowInput::RestoreWindowChrome);
                                     MainWindowInput::Navigate("player_error".to_string())
                                 }
+                                crate::ui::pages::player::PlayerOutput::ShowToast(msg) => {
+                                    MainWindowInput::ShowToast(msg)
+                                }
                                 crate::ui::pages::player::PlayerOutput::WindowStateChanged {
                                     width,
                                     height,
@@ -1171,6 +1214,9 @@ impl AsyncComponent for MainWindow {
                                     // Restore window chrome on error
                                     sender_clone.input(MainWindowInput::RestoreWindowChrome);
                                     MainWindowInput::Navigate("player_error".to_string())
+                                }
+                                crate::ui::pages::player::PlayerOutput::ShowToast(msg) => {
+                                    MainWindowInput::ShowToast(msg)
                                 }
                                 crate::ui::pages::player::PlayerOutput::WindowStateChanged {
                                     width,
