@@ -13,7 +13,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::traits::MediaBackend;
 use crate::models::{
@@ -1084,8 +1084,18 @@ impl MediaBackend for PlexBackend {
             if episode.show_id.is_none() {
                 episode.show_id = Some(show_id.to_string());
             }
-            // Fix: Set the correct season_number since Plex API doesn't provide it
-            episode.season_number = season_number;
+            // Fix: Override season_number with the requested one if it's incorrect
+            let original_season = episode.season_number;
+            if episode.season_number != season_number {
+                if season_number > 0 || original_season > 0 {
+                    // Only warn if we're not dealing with season 0 (specials)
+                    warn!(
+                        "Overriding episode season_number from {} to {} for episode '{}'",
+                        original_season, season_number, episode.title
+                    );
+                }
+                episode.season_number = season_number;
+            }
         }
 
         Ok(episodes)

@@ -9,7 +9,7 @@ use std::ffi::{CStr, CString, c_void};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -37,6 +37,7 @@ pub enum PlayerState {
     Playing,
     Paused,
     Stopped,
+    Error,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -159,6 +160,9 @@ struct MpvPlayerInner {
     seek_timer: Arc<Mutex<Option<glib::SourceId>>>,
     last_seek_target: Arc<Mutex<Option<f64>>>,
     upscaling_mode: Arc<Mutex<UpscalingMode>>,
+    error_callback: Arc<Mutex<Option<Box<dyn Fn(String) + Send + 'static>>>>,
+    event_monitor_handle: Arc<Mutex<Option<glib::SourceId>>>,
+    gl_area_realized: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -169,6 +173,86 @@ pub struct MpvPlayer {
 // MpvPlayer is now automatically Send + Sync because all its fields are
 
 impl MpvPlayer {
+    /// Set a callback to be called when errors occur
+    pub fn set_error_callback<F>(&self, callback: F)
+    where
+        F: Fn(String) + Send + 'static,
+    {
+        *self.inner.error_callback.lock().unwrap() = Some(Box::new(callback));
+    }
+
+    /// Start monitoring MPV events for errors
+    fn start_event_monitoring(&self) {
+        let inner = self.inner.clone();
+
+        // Cancel any existing monitor
+        if let Some(handle) = self.inner.event_monitor_handle.lock().unwrap().take() {
+            handle.remove();
+        }
+
+        // Start a new monitoring task
+        let handle = glib::timeout_add_local(Duration::from_millis(100), move || {
+            if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
+                // Check if media failed to load by checking idle state
+                if let Ok(idle) = mpv.get_property::<bool>("idle-active") {
+                    if idle {
+                        // Check if we were trying to play something
+                        if let Ok(path) = mpv.get_property::<String>("path") {
+                            if !path.is_empty() {
+                                // We have a path but are idle - this indicates an error
+                                if let Some(ref callback) = *inner.error_callback.lock().unwrap() {
+                                    callback(
+                                        "Media playback failed - player became idle unexpectedly"
+                                            .to_string(),
+                                    );
+                                }
+                                // Set state to error
+                                if let Ok(mut state) = inner.state.try_write() {
+                                    *state = PlayerState::Error;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check for EOF which can indicate errors
+                if let Ok(eof) = mpv.get_property::<bool>("eof-reached") {
+                    if eof {
+                        // Check if we have a valid duration - if not, it's likely an error
+                        if let Ok(duration) = mpv.get_property::<f64>("duration") {
+                            if duration <= 0.0 {
+                                if let Some(ref callback) = *inner.error_callback.lock().unwrap() {
+                                    callback(
+                                        "Media failed to load - no valid duration".to_string(),
+                                    );
+                                }
+                                // Set state to error
+                                if let Ok(mut state) = inner.state.try_write() {
+                                    *state = PlayerState::Error;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check demuxer cache state for errors
+                if let Ok(cache_state) = mpv.get_property::<i64>("demuxer-cache-state") {
+                    if cache_state < 0 {
+                        // Negative values often indicate errors
+                        if let Some(ref callback) = *inner.error_callback.lock().unwrap() {
+                            callback(
+                                "Media streaming error - cache state indicates failure".to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+
+        *self.inner.event_monitor_handle.lock().unwrap() = Some(handle);
+    }
+
     pub fn new(config: &Config) -> Result<Self> {
         let verbose_logging = config.playback.mpv_verbose_logging;
         let cache_size_mb = config.playback.mpv_cache_size_mb;
@@ -200,6 +284,9 @@ impl MpvPlayer {
                 seek_timer: Arc::new(Mutex::new(None)),
                 last_seek_target: Arc::new(Mutex::new(None)),
                 upscaling_mode: Arc::new(Mutex::new(UpscalingMode::None)),
+                error_callback: Arc::new(Mutex::new(None)),
+                event_monitor_handle: Arc::new(Mutex::new(None)),
+                gl_area_realized: Arc::new(AtomicBool::new(false)),
             }),
         })
     }
@@ -376,6 +463,10 @@ impl MpvPlayer {
                 get_proc_address_ctx: ptr::null_mut(), // No context needed for cached version
             };
 
+            // macOS-specific: Add advanced control flag for better compatibility
+            #[cfg(target_os = "macos")]
+            let advanced_control = 1i32;
+
             let mut params = vec![
                 mpv_render_param {
                     type_: mpv_render_param_type_MPV_RENDER_PARAM_API_TYPE,
@@ -385,11 +476,19 @@ impl MpvPlayer {
                     type_: mpv_render_param_type_MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
                     data: &opengl_params as *const _ as *mut c_void,
                 },
-                mpv_render_param {
-                    type_: mpv_render_param_type_MPV_RENDER_PARAM_INVALID,
-                    data: ptr::null_mut(),
-                },
             ];
+
+            // macOS: Add advanced control parameter for better GL handling
+            #[cfg(target_os = "macos")]
+            params.push(mpv_render_param {
+                type_: mpv_render_param_type_MPV_RENDER_PARAM_ADVANCED_CONTROL,
+                data: &advanced_control as *const _ as *mut c_void,
+            });
+
+            params.push(mpv_render_param {
+                type_: mpv_render_param_type_MPV_RENDER_PARAM_INVALID,
+                data: ptr::null_mut(),
+            });
 
             // Create render context
             let result = mpv_render_context_create(&mut mpv_gl, mpv_handle, params.as_mut_ptr());
@@ -488,10 +587,21 @@ impl MpvPlayer {
         let inner_realize = inner.clone();
         let player_self = self.clone();
         gl_area.connect_realize(move |gl_area| {
-            debug!("GLArea realized - initializing MPV render context");
+            debug!("GLArea realized - checking if MPV render context needs initialization");
+
+            // Mark as realized
+            inner_realize
+                .gl_area_realized
+                .store(true, Ordering::Release);
 
             // Make GL context current
             gl_area.make_current();
+
+            // Check if we already have a render context (might happen on macOS with re-realize)
+            if inner_realize.mpv_gl.lock().unwrap().is_some() {
+                debug!("MPV render context already exists, skipping re-initialization");
+                return;
+            }
 
             // Initialize MPV if not done
             if inner_realize.mpv.lock().unwrap().is_none() {
@@ -521,6 +631,12 @@ impl MpvPlayer {
         // Handle render signal - draw video frame
         let inner_render = inner.clone();
         gl_area.connect_render(move |gl_area, _gl_context| {
+            // Don't render if GLArea is not realized (prevents OpenGL errors on macOS)
+            if !inner_render.gl_area_realized.load(Ordering::Acquire) {
+                // Return Proceed to let GTK handle it, but skip our rendering
+                return glib::Propagation::Proceed;
+            }
+
             // Reset frame pending flag
             // inner_render.frame_pending.store(false, Ordering::Release); // Removed unused field
 
@@ -679,14 +795,32 @@ impl MpvPlayer {
 
         // Handle unrealize signal - cleanup
         let inner_unrealize = inner.clone();
+
         gl_area.connect_unrealize(move |_gl_area| {
             debug!("GLArea unrealized - cleaning up MPV render context");
 
-            // Clean up render context
-            if let Some(MpvRenderContextPtr(mpv_gl)) = inner_unrealize.mpv_gl.lock().unwrap().take()
+            // Mark as not realized
+            inner_unrealize
+                .gl_area_realized
+                .store(false, Ordering::Release);
+
+            // On macOS, don't immediately free the render context as it might be temporary
+            // The unrealize/realize cycle can happen during widget reparenting
+            #[cfg(target_os = "macos")]
             {
-                unsafe {
-                    mpv_render_context_free(mpv_gl);
+                // Just log it, don't free the context yet
+                warn!("GLArea unrealized on macOS - keeping render context alive");
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                // Clean up render context on other platforms
+                if let Some(MpvRenderContextPtr(mpv_gl)) =
+                    inner_unrealize.mpv_gl.lock().unwrap().take()
+                {
+                    unsafe {
+                        mpv_render_context_free(mpv_gl);
+                    }
                 }
             }
         });
@@ -697,8 +831,10 @@ impl MpvPlayer {
         let gl_area_timer = gl_area.clone();
         let inner_timer = inner.clone();
         let timer_id = glib::timeout_add_local(Duration::from_millis(16), move || {
-            // Only render if we have a context and video is playing
-            if inner_timer.mpv_gl.lock().unwrap().is_some() {
+            // Only render if GLArea is realized and we have a context
+            if inner_timer.gl_area_realized.load(Ordering::Acquire)
+                && inner_timer.mpv_gl.lock().unwrap().is_some()
+            {
                 // Check if we're actually playing and not seeking
                 if let Some(ref mpv) = *inner_timer.mpv.lock().unwrap() {
                     // Check if we're seeking - if so, skip automatic render
@@ -707,12 +843,8 @@ impl MpvPlayer {
                         && let Ok(paused) = mpv.get_property::<bool>("pause")
                         && !paused
                     {
-                        // Check if MPV wants a render or if we need a regular update
-                        // if inner_timer.frame_pending.swap(false, Ordering::AcqRel) { // Removed unused field
-                        {
-                            // MPV signaled it needs a render
-                            gl_area_timer.queue_render();
-                        }
+                        // Queue render - the render callback will check if it's safe
+                        gl_area_timer.queue_render();
                     }
                 }
             }
@@ -755,7 +887,10 @@ impl MpvPlayer {
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             mpv.command("loadfile", &[url, "replace"])
                 .map_err(|e| anyhow::anyhow!("Failed to load media: {:?}", e))?;
-            debug!("Media loaded successfully");
+            debug!("Media load command sent");
+
+            // Start monitoring for errors
+            self.start_event_monitoring();
         } else {
             return Err(anyhow::anyhow!("MPV not initialized"));
         }
@@ -1359,6 +1494,7 @@ impl MpvPlayerInner {
         if self.verbose_logging {
             let _ = mpv.set_property("msg-level", "all=debug");
         } else {
+            // Enable info level for network/streaming to help debug issues
             let _ = mpv.set_property("msg-level", "all=info");
         }
 
@@ -1430,43 +1566,16 @@ impl MpvPlayerInner {
         mpv.set_property("audio-file-auto", "fuzzy")
             .map_err(|e| anyhow::anyhow!("Failed to set audio-file-auto: {:?}", e))?;
 
-        // Aggressive cache settings - cache entire episodes when possible (configurable)
+        // Basic cache settings for network streaming
         mpv.set_property("cache", true)
             .map_err(|e| anyhow::anyhow!("Failed to set cache: {:?}", e))?;
-        mpv.set_property("cache-secs", self.cache_secs as i64)
+        mpv.set_property("cache-secs", 10) // Reduced from config value for stability
             .map_err(|e| anyhow::anyhow!("Failed to set cache-secs: {:?}", e))?;
-        mpv.set_property("cache-pause-initial", false) // Don't pause initially for cache
-            .map_err(|e| anyhow::anyhow!("Failed to set cache-pause-initial: {:?}", e))?;
-        mpv.set_property("cache-pause-wait", 0.1) // Resume very quickly after cache runs out
-            .map_err(|e| anyhow::anyhow!("Failed to set cache-pause-wait: {:?}", e))?;
 
-        // Configurable cache sizes
-        let cache_size = format!("{}MiB", self.cache_size_mb);
-        let backbuffer_size = format!("{}MiB", self.cache_backbuffer_mb);
+        // Don't set demuxer-max-bytes or demuxer-readahead-secs - let MPV use defaults
+        // These were conflicting and causing the packet queue error
 
-        mpv.set_property("demuxer-max-bytes", cache_size.as_str())
-            .map_err(|e| anyhow::anyhow!("Failed to set demuxer-max-bytes: {:?}", e))?;
-        mpv.set_property("demuxer-max-back-bytes", backbuffer_size.as_str())
-            .map_err(|e| anyhow::anyhow!("Failed to set demuxer-max-back-bytes: {:?}", e))?;
-        mpv.set_property("demuxer-readahead-secs", self.cache_secs as i64)
-            .map_err(|e| anyhow::anyhow!("Failed to set demuxer-readahead-secs: {:?}", e))?;
-
-        info!(
-            "MPV cache configured: {}MB forward, {}MB backward, up to {} minutes buffering",
-            self.cache_size_mb,
-            self.cache_backbuffer_mb,
-            self.cache_secs / 60
-        );
-
-        // Additional cache optimizations
-        mpv.set_property("demuxer-seekable-cache", true) // Enable seekable cache
-            .map_err(|e| anyhow::anyhow!("Failed to set demuxer-seekable-cache: {:?}", e))?;
-        mpv.set_property("cache-on-disk", false) // Keep cache in RAM for speed
-            .map_err(|e| anyhow::anyhow!("Failed to set cache-on-disk: {:?}", e))?;
-        mpv.set_property("demuxer-donate-buffer", true) // Allow demuxer to use all available cache
-            .unwrap_or(());
-        mpv.set_property("stream-buffer-size", "512KiB") // Larger network buffer
-            .unwrap_or(());
+        info!("MPV cache configured with basic settings for streaming");
 
         // Disable OSD
         mpv.set_property("osd-level", 0i64)

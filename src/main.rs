@@ -22,7 +22,7 @@ mod test_utils;
 fn main() -> Result<()> {
     use app::AppPlatform;
     use std::sync::Arc;
-    use tracing::info;
+    use tracing::{info, warn};
 
     // Initialize tracing
     tracing_subscriber::fmt()
