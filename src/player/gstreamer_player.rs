@@ -2,14 +2,13 @@ use crate::player::ZoomMode;
 use anyhow::{Context, Result};
 use gdk4 as gdk;
 use gstreamer as gst;
-use gstreamer::Rank;
 use gstreamer::glib;
 use gstreamer::prelude::*;
 use gtk4::{self, prelude::*};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug, Clone)]
 pub enum PlayerState {
@@ -21,22 +20,37 @@ pub enum PlayerState {
     Error,
 }
 
+#[derive(Debug, Clone)]
+struct StreamInfo {
+    stream_id: String,
+    stream_type: gst::StreamType,
+    tags: Option<gst::TagList>,
+    caps: Option<gst::Caps>,
+    index: i32,
+    language: Option<String>,
+    codec: Option<String>,
+}
+
 pub struct GStreamerPlayer {
     playbin: Arc<Mutex<Option<gst::Element>>>,
     state: Arc<RwLock<PlayerState>>,
     video_sink: Arc<Mutex<Option<gst::Element>>>,
-    is_playbin3: Arc<Mutex<bool>>,
     zoom_mode: Arc<Mutex<ZoomMode>>,
     video_widget: Arc<Mutex<Option<gtk4::Widget>>>,
+    stream_collection: Arc<Mutex<Option<gst::StreamCollection>>>,
+    audio_streams: Arc<Mutex<Vec<StreamInfo>>>,
+    subtitle_streams: Arc<Mutex<Vec<StreamInfo>>>,
+    current_audio_stream: Arc<Mutex<Option<String>>>,
+    current_subtitle_stream: Arc<Mutex<Option<String>>>,
 }
 
 impl GStreamerPlayer {
     pub fn new() -> Result<Self> {
-        info!("GStreamerPlayer::new() - Initializing GStreamer player");
+        debug!("Initializing GStreamer player");
 
         // Initialize GStreamer if not already done
         match gst::init() {
-            Ok(_) => info!("GStreamerPlayer::new() - GStreamer initialized successfully"),
+            Ok(_) => debug!("GStreamer initialized successfully"),
             Err(e) => {
                 error!(
                     "GStreamerPlayer::new() - Failed to initialize GStreamer: {}",
@@ -59,9 +73,13 @@ impl GStreamerPlayer {
             playbin: Arc::new(Mutex::new(None)),
             state: Arc::new(RwLock::new(PlayerState::Idle)),
             video_sink: Arc::new(Mutex::new(None)),
-            is_playbin3: Arc::new(Mutex::new(false)),
             zoom_mode: Arc::new(Mutex::new(ZoomMode::default())),
             video_widget: Arc::new(Mutex::new(None)),
+            stream_collection: Arc::new(Mutex::new(None)),
+            audio_streams: Arc::new(Mutex::new(Vec::new())),
+            subtitle_streams: Arc::new(Mutex::new(Vec::new())),
+            current_audio_stream: Arc::new(Mutex::new(None)),
+            current_subtitle_stream: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -100,9 +118,9 @@ impl GStreamerPlayer {
 
         for element in required_elements {
             if let Some(factory) = gst::ElementFactory::find(element) {
-                info!("  ✓ {} available (rank: {})", element, factory.rank());
+                debug!("{} available (rank: {})", element, factory.rank());
             } else {
-                error!("  ✗ {} NOT available", element);
+                error!("{} NOT available", element);
             }
         }
 
@@ -126,7 +144,7 @@ impl GStreamerPlayer {
     }
 
     pub fn create_video_widget(&self) -> gtk4::Widget {
-        info!("GStreamerPlayer::create_video_widget() - Starting video widget creation");
+        debug!("Starting video widget creation");
 
         // Create a GTK Picture widget for video display
         debug!("GStreamerPlayer::create_video_widget() - Creating GTK Picture widget");
@@ -158,7 +176,7 @@ impl GStreamerPlayer {
         // Store and return the widget
         let widget = picture.upcast::<gtk4::Widget>();
         *self.video_widget.lock().unwrap() = Some(widget.clone());
-        info!("GStreamerPlayer::create_video_widget() - Video widget creation complete");
+        debug!("Video widget creation complete");
         widget
     }
 
@@ -546,7 +564,7 @@ impl GStreamerPlayer {
     }
 
     pub async fn load_media(&self, url: &str, _video_sink: Option<&gst::Element>) -> Result<()> {
-        info!("GStreamerPlayer::load_media() - Loading media: {}", url);
+        info!("Loading media: {}", url);
         debug!("GStreamerPlayer::load_media() - Full URL: {}", url);
 
         // Update state
@@ -564,85 +582,87 @@ impl GStreamerPlayer {
                 .context("Failed to set old playbin to null state")?;
         }
 
-        // Try to create playbin3 first (better subtitle support)
-        let (playbin, is_playbin3) = if gst::ElementFactory::find("playbin3").is_some() {
-            info!("GStreamerPlayer::load_media() - Creating playbin3 element");
-            let pb = gst::ElementFactory::make("playbin3")
-                .name("player")
-                .property("uri", url)
-                .build()
-                .context("Failed to create playbin3 element")?;
+        // Clear stream collections from previous media
+        {
+            *self.stream_collection.lock().unwrap() = None;
+            self.audio_streams.lock().unwrap().clear();
+            self.subtitle_streams.lock().unwrap().clear();
+            *self.current_audio_stream.lock().unwrap() = None;
+            *self.current_subtitle_stream.lock().unwrap() = None;
+            debug!("GStreamerPlayer::load_media() - Cleared previous stream collections");
+        }
 
-            // Enable all features including text overlay
-            pb.set_property_from_str(
-                "flags",
-                "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
-            );
+        // Create playbin3 element - NEVER fallback
+        debug!("Creating playbin3 element");
+        let playbin = gst::ElementFactory::make("playbin3")
+            .name("player")
+            .property("uri", url)
+            .build()
+            .context("Failed to create playbin3 element - GStreamer plugins may not be properly installed")?;
 
-            // playbin3 has QoS always enabled, no property needed
+        debug!("Successfully created playbin3");
 
-            // Configure subtitle properties
-            if pb.has_property("subtitle-encoding") {
-                pb.set_property_from_str("subtitle-encoding", "UTF-8");
-                info!("Set subtitle encoding to UTF-8");
-            }
-
-            if pb.has_property("subtitle-font-desc") {
-                pb.set_property_from_str("subtitle-font-desc", "Sans, 18");
-                info!("Set subtitle font to Sans, 18");
-            }
-
-            info!("GStreamerPlayer::load_media() - Using modern playbin3");
-            (pb, true)
-        } else if gst::ElementFactory::find("playbin").is_some() {
+        // Verify we're using playbin3
+        if let Some(factory) = playbin.factory() {
             info!(
-                "GStreamerPlayer::load_media() - Falling back to playbin (playbin3 not available)"
+                "Using element: {} (factory: {})",
+                playbin.name(),
+                factory.name()
             );
-            let pb = gst::ElementFactory::make("playbin")
-                .name("player")
-                .property("uri", url)
-                .build()
-                .context("Failed to create playbin element")?;
-
-            // Enable all features including text overlay
-            pb.set_property_from_str(
-                "flags",
-                "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
+            assert_eq!(
+                factory.name(),
+                "playbin3",
+                "Must use playbin3, no fallbacks!"
             );
+        }
 
-            // Enable QoS for better performance
-            if pb.has_property("enable-qos") {
-                pb.set_property("enable-qos", true);
-                info!("Enabled QoS for better performance");
+        // Enable all features including text overlay
+        playbin.set_property_from_str(
+            "flags",
+            "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
+        );
+
+        // playbin3-specific configuration
+        info!("Configuring playbin3-specific settings...");
+        // playbin3 has QoS always enabled, no property needed
+
+        // Check available properties and signals for debugging
+        let properties = playbin.list_properties();
+        debug!("Available playbin3 properties related to streams:");
+        for prop in properties {
+            let name = prop.name();
+            if name.contains("stream")
+                || name.contains("collection")
+                || name.contains("track")
+                || name == "flags"
+            {
+                debug!("  - {}: {:?}", name, prop.type_());
             }
+        }
 
-            // Configure subtitle rendering properties
-            if pb.has_property("subtitle-encoding") {
-                pb.set_property_from_str("subtitle-encoding", "UTF-8");
-                info!("Set subtitle encoding to UTF-8");
-            }
+        // Also check what signals are available
+        debug!("Checking available playbin3 signals...");
+        // Note: GStreamer doesn't have a direct way to list signals via Rust bindings
+        // but we know playbin3 should emit stream-collection on the bus
 
-            if pb.has_property("subtitle-font-desc") {
-                pb.set_property_from_str("subtitle-font-desc", "Sans, 18");
-                info!("Set subtitle font to Sans, 18");
-            }
+        // Configure subtitle properties if available
+        if playbin.has_property("subtitle-encoding") {
+            playbin.set_property_from_str("subtitle-encoding", "UTF-8");
+            info!("Set subtitle encoding to UTF-8");
+        }
 
-            (pb, false)
-        } else {
-            error!("GStreamerPlayer::load_media() - No playbin/playbin3 element available!");
-            return Err(anyhow::anyhow!(
-                "No playbin/playbin3 element available - GStreamer plugins may not be properly installed"
-            ));
-        };
+        if playbin.has_property("subtitle-font-desc") {
+            playbin.set_property_from_str("subtitle-font-desc", "Sans, 18");
+            info!("Set subtitle font to Sans, 18");
+        }
 
-        // Store whether we're using playbin3
-        *self.is_playbin3.lock().unwrap() = is_playbin3;
+        debug!("Using playbin3");
 
         // Use our stored video sink if available
         if let Some(sink) = self.video_sink.lock().unwrap().as_ref() {
             debug!("GStreamerPlayer::load_media() - Setting video sink on playbin");
             playbin.set_property("video-sink", sink);
-            info!("GStreamerPlayer::load_media() - Video sink configured");
+            debug!("Video sink configured");
         } else {
             // On macOS, sometimes it's better to let playbin choose its own sink
             #[cfg(target_os = "macos")]
@@ -656,11 +676,11 @@ impl GStreamerPlayer {
             #[cfg(not(target_os = "macos"))]
             {
                 // Create a fallback video sink on other platforms
-                info!("GStreamerPlayer::load_media() - No pre-configured sink, creating fallback");
+                debug!("No pre-configured sink, creating fallback");
 
                 if let Some(fallback_sink) = self.create_auto_fallback_sink() {
                     playbin.set_property("video-sink", &fallback_sink);
-                    info!("GStreamerPlayer::load_media() - Fallback video sink configured");
+                    debug!("Fallback video sink configured");
                 } else {
                     error!(
                         "GStreamerPlayer::load_media() - Failed to create any fallback video sink!"
@@ -678,10 +698,10 @@ impl GStreamerPlayer {
 
         // Debug: Log the complete pipeline structure
         if let Some(sink) = playbin.property::<Option<gst::Element>>("video-sink") {
-            info!("video-sink is attached: {:?}", sink.name());
+            debug!("video-sink is attached: {:?}", sink.name());
             // Try to inspect the sink structure
             if let Some(bin) = sink.dynamic_cast_ref::<gst::Bin>() {
-                info!("video-sink is a bin, contains:");
+                debug!("video-sink is a bin, contains:");
                 let mut iter = bin.iterate_elements();
                 while let Ok(Some(elem)) = iter.next() {
                     info!(
@@ -699,30 +719,113 @@ impl GStreamerPlayer {
         debug!("GStreamerPlayer::load_media() - Got playbin bus");
 
         let state_clone = self.state.clone();
-        let _ = bus
-            .add_watch(move |_, msg| {
-                let state = state_clone.clone();
-                let msg = msg.clone();
-                glib::spawn_future_local(async move {
-                    Self::handle_bus_message(&msg, state).await;
-                });
-                glib::ControlFlow::Continue
-            })
-            .context("Failed to add bus watch")?;
+        let stream_collection_clone = self.stream_collection.clone();
+        let audio_streams_clone = self.audio_streams.clone();
+        let subtitle_streams_clone = self.subtitle_streams.clone();
+        let current_audio_clone = self.current_audio_stream.clone();
+        let current_subtitle_clone = self.current_subtitle_stream.clone();
+        let playbin_clone = self.playbin.clone();
+
+        info!("Setting up bus sync handler for immediate message processing...");
+
+        bus.set_sync_handler(move |_, msg| {
+            // Log immediately when any message arrives
+            let msg_type = msg.type_();
+            if !matches!(msg_type, gst::MessageType::Qos | gst::MessageType::Progress) {
+                let src_name = msg
+                    .src()
+                    .map(|s| s.name().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                // Highlight specific message types we're interested in
+                if matches!(msg_type, gst::MessageType::StreamCollection) {
+                    info!(
+                        "Stream collection message (sync): {:?} from {}",
+                        msg_type, src_name
+                    );
+                } else if matches!(msg_type, gst::MessageType::StreamsSelected) {
+                    info!(
+                        "Streams selected message (sync): {:?} from {}",
+                        msg_type, src_name
+                    );
+                } else if matches!(msg_type, gst::MessageType::StreamStart) {
+                    info!(
+                        "Stream start message (sync): {:?} from {}",
+                        msg_type, src_name
+                    );
+                } else if matches!(
+                    msg_type,
+                    gst::MessageType::StateChanged
+                        | gst::MessageType::Tag
+                        | gst::MessageType::StreamStatus
+                ) {
+                    // Skip StateChanged, Tag, and StreamStatus messages to reduce noise
+                } else {
+                    trace!("Bus message (sync): {:?} from {}", msg_type, src_name);
+                }
+            }
+
+            let state = state_clone.clone();
+            let stream_collection = stream_collection_clone.clone();
+            let audio_streams = audio_streams_clone.clone();
+            let subtitle_streams = subtitle_streams_clone.clone();
+            let current_audio = current_audio_clone.clone();
+            let current_subtitle = current_subtitle_clone.clone();
+            let playbin = playbin_clone.clone();
+            let msg = msg.clone();
+
+            // Handle message synchronously to avoid context issues
+            Self::handle_bus_message_sync(
+                &msg,
+                &state,
+                &stream_collection,
+                &audio_streams,
+                &subtitle_streams,
+                &current_audio,
+                &current_subtitle,
+                &playbin,
+            );
+
+            gst::BusSyncReply::Pass
+        });
+
+        info!("Bus sync handler set up successfully");
 
         // Preroll the pipeline to PAUSED state to get video dimensions early
         // This allows the video widget to resize before playback starts
         debug!("GStreamerPlayer::load_media() - Prerolling pipeline to get dimensions");
         match playbin.set_state(gst::State::Paused) {
             Ok(gst::StateChangeSuccess::Success) => {
-                info!("GStreamerPlayer::load_media() - Pipeline prerolled successfully");
+                debug!("Pipeline prerolled successfully");
+
+                // Check bus for any pending messages
+                info!("Checking for pending bus messages after preroll...");
+                let mut message_count = 0;
+                while let Some(msg) = bus.pop() {
+                    message_count += 1;
+                    let msg_type = msg.type_();
+                    let src_name = msg
+                        .src()
+                        .map(|s| s.name().to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    info!(
+                        "  Found pending message #{}: {:?} from {}",
+                        message_count, msg_type, src_name
+                    );
+
+                    // Check specifically for stream collection
+                    if matches!(msg_type, gst::MessageType::StreamCollection) {
+                        debug!("Found StreamCollection message in pending queue");
+                    }
+                }
+                info!("Total pending messages found: {}", message_count);
             }
             Ok(gst::StateChangeSuccess::Async) => {
-                info!("GStreamerPlayer::load_media() - Pipeline prerolling asynchronously");
+                debug!("Pipeline prerolling asynchronously");
                 // The AsyncDone message will signal when preroll is complete
             }
             Ok(gst::StateChangeSuccess::NoPreroll) => {
-                info!("GStreamerPlayer::load_media() - Live pipeline, no preroll needed");
+                debug!("Live pipeline, no preroll needed");
             }
             Err(e) => {
                 warn!(
@@ -758,12 +861,12 @@ impl GStreamerPlayer {
             }
         }
 
-        info!("GStreamerPlayer::load_media() - Media loading complete");
+        debug!("Media loading complete");
         Ok(())
     }
 
     pub async fn play(&self) -> Result<()> {
-        info!("GStreamerPlayer::play() - Starting playback");
+        info!("Starting playback");
 
         if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             // On macOS, ensure we transition through states properly
@@ -778,14 +881,14 @@ impl GStreamerPlayer {
 
                 // If we're in Null state, first go to Ready, then Paused, then Playing
                 if current == gst::State::Null {
-                    info!("GStreamerPlayer::play() - Transitioning from Null -> Ready");
+                    debug!("Transitioning from Null -> Ready");
                     match playbin.set_state(gst::State::Ready) {
                         Ok(_) => {
                             // Wait for state change to complete
                             let (state_result, new_state, _) =
                                 playbin.state(gst::ClockTime::from_seconds(1));
                             match state_result {
-                                Ok(_) => info!("Transitioned to Ready state: {:?}", new_state),
+                                Ok(_) => debug!("Transitioned to Ready state: {:?}", new_state),
                                 Err(_) => warn!("Failed to transition to Ready state"),
                             }
                         }
@@ -809,7 +912,7 @@ impl GStreamerPlayer {
                             let (state_result, new_state, _) =
                                 playbin.state(gst::ClockTime::from_seconds(5));
                             match state_result {
-                                Ok(_) => info!("Preroll complete, now in {:?}", new_state),
+                                Ok(_) => debug!("Preroll complete, now in {:?}", new_state),
                                 Err(_) => {
                                     warn!("Preroll timeout, checking for errors...");
                                     // Check bus for errors
@@ -839,10 +942,10 @@ impl GStreamerPlayer {
                 }
             }
 
-            info!("GStreamerPlayer::play() - Setting playbin to Playing state");
+            debug!("Setting playbin to Playing state");
             match playbin.set_state(gst::State::Playing) {
                 Ok(gst::StateChangeSuccess::Success) => {
-                    info!("GStreamerPlayer::play() - Successfully set playbin to playing state");
+                    debug!("Successfully set playbin to playing state");
 
                     // Update internal state to Playing
                     let mut state = self.state.write().await;
@@ -880,7 +983,7 @@ impl GStreamerPlayer {
                     // Dump the actual running pipeline after it starts playing
                     if let Some(bin) = playbin.dynamic_cast_ref::<gst::Bin>() {
                         bin.debug_to_dot_file(gst::DebugGraphDetails::ALL, "reel-playbin-PLAYING");
-                        info!("Dumped PLAYING state pipeline to /tmp/reel-playbin-PLAYING.dot");
+                        debug!("Dumped PLAYING state pipeline to /tmp/reel-playbin-PLAYING.dot");
 
                         // List what's actually in the pipeline now
                         let mut iter = bin.iterate_elements();
@@ -893,7 +996,7 @@ impl GStreamerPlayer {
                     }
                 }
                 Ok(gst::StateChangeSuccess::Async) => {
-                    info!("GStreamerPlayer::play() - Playbin state change is async, waiting...");
+                    debug!("Playbin state change is async, waiting...");
 
                     // On macOS, wait for the async state change to complete
                     #[cfg(target_os = "macos")]
@@ -956,7 +1059,7 @@ impl GStreamerPlayer {
                     });
                 }
                 Ok(gst::StateChangeSuccess::NoPreroll) => {
-                    info!("GStreamerPlayer::play() - Playbin state change: no preroll");
+                    debug!("Playbin state change: no preroll");
                     // Live sources don't need preroll, update state immediately
                     let mut state = self.state.write().await;
                     *state = PlayerState::Playing;
@@ -1048,12 +1151,12 @@ impl GStreamerPlayer {
                     return Err(anyhow::anyhow!(error_msg));
                 }
             }
-            info!("GStreamerPlayer::play() - Player state set to Playing");
+            debug!("Player state set to Playing");
         } else {
             error!("GStreamerPlayer::play() - No playbin available!");
             return Err(anyhow::anyhow!("No playbin available"));
         }
-        info!("GStreamerPlayer::play() - Playback started");
+        debug!("Playback started");
         Ok(())
     }
 
@@ -1091,13 +1194,145 @@ impl GStreamerPlayer {
         let position_ns = position.as_nanos() as i64;
 
         if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            playbin
-                .seek_simple(
-                    gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
-                    gst::ClockTime::from_nseconds(position_ns as u64),
-                )
-                .context("Failed to seek")?;
+            // Get current pipeline state
+            let (state_result, current_state, pending_state) =
+                playbin.state(gst::ClockTime::from_mseconds(100));
+
+            debug!(
+                "GStreamerPlayer::seek() - Current state: {:?}, Pending: {:?}, Result: {:?}",
+                current_state, pending_state, state_result
+            );
+
+            // Ensure pipeline is at least in PAUSED state for seeking to work
+            if current_state < gst::State::Paused {
+                info!(
+                    "GStreamerPlayer::seek() - Pipeline in {:?} state, need to reach PAUSED for seeking",
+                    current_state
+                );
+
+                // Try to set to PAUSED state
+                match playbin.set_state(gst::State::Paused) {
+                    Ok(gst::StateChangeSuccess::Success) => {
+                        debug!("Successfully reached PAUSED state");
+                    }
+                    Ok(gst::StateChangeSuccess::Async) => {
+                        debug!("Waiting for PAUSED state...");
+                        // Wait for state change to complete (max 2 seconds)
+                        let (wait_result, new_state, _) =
+                            playbin.state(gst::ClockTime::from_seconds(2));
+                        match wait_result {
+                            Ok(_) => {
+                                debug!("Reached {:?} state", new_state);
+                                if new_state < gst::State::Paused {
+                                    warn!(
+                                        "GStreamerPlayer::seek() - Failed to reach PAUSED state for seeking"
+                                    );
+                                    // Continue anyway, seeking might still work
+                                }
+                            }
+                            Err(_) => {
+                                warn!("GStreamerPlayer::seek() - Timeout waiting for PAUSED state");
+                                // Continue anyway, seeking might still work
+                            }
+                        }
+                    }
+                    Ok(gst::StateChangeSuccess::NoPreroll) => {
+                        debug!("Live source, no preroll needed");
+                    }
+                    Err(_) => {
+                        error!("GStreamerPlayer::seek() - Failed to set PAUSED state for seeking");
+                        // Continue anyway, seeking might still work
+                    }
+                }
+            }
+
+            // Perform the seek operation
+            // Use FLUSH to clear buffers and get immediate response
+            // Use ACCURATE for precise seeking (can use KEY_UNIT for faster but less accurate)
+            let seek_flags = gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE;
+            let seek_position = gst::ClockTime::from_nseconds(position_ns as u64);
+
+            debug!(
+                "GStreamerPlayer::seek() - Attempting seek to {} with flags {:?}",
+                seek_position.display(),
+                seek_flags
+            );
+
+            // Try seek_simple first (simpler API)
+            let seek_result = playbin.seek_simple(seek_flags, seek_position);
+
+            if seek_result.is_err() {
+                // If seek_simple fails, try the full seek API with more control
+                warn!("GStreamerPlayer::seek() - seek_simple failed, trying full seek API");
+
+                let seek_result = playbin.seek(
+                    1.0, // rate (normal speed)
+                    seek_flags,
+                    gst::SeekType::Set,
+                    seek_position,
+                    gst::SeekType::None,
+                    gst::ClockTime::NONE,
+                );
+
+                if seek_result.is_err() {
+                    error!("GStreamerPlayer::seek() - Both seek methods failed");
+
+                    // Check if media is seekable
+                    let mut query = gst::query::Seeking::new(gst::Format::Time);
+                    if playbin.query(&mut query) {
+                        let (seekable, start, end) = query.result();
+                        error!(
+                            "GStreamerPlayer::seek() - Media seekable: {}, range: {:?} - {:?}",
+                            seekable, start, end
+                        );
+
+                        if !seekable {
+                            return Err(anyhow::anyhow!("Media is not seekable"));
+                        }
+                    }
+
+                    // Check for errors on the bus
+                    if let Some(bus) = playbin.bus() {
+                        while let Some(msg) = bus.pop() {
+                            use gst::MessageView;
+                            if let MessageView::Error(err) = msg.view() {
+                                error!(
+                                    "GStreamerPlayer::seek() - Bus error: {} ({:?})",
+                                    err.error(),
+                                    err.debug()
+                                );
+                            }
+                        }
+                    }
+
+                    return Err(anyhow::anyhow!("Failed to seek to position {:?}", position));
+                } else {
+                    debug!("Seek succeeded using full API");
+                }
+            } else {
+                debug!("Seek succeeded using seek_simple");
+            }
+
+            // If we were playing before, resume playback
+            let state_before = self.state.read().await.clone();
+            if matches!(state_before, PlayerState::Playing) {
+                debug!("GStreamerPlayer::seek() - Resuming playback after seek");
+                match playbin.set_state(gst::State::Playing) {
+                    Ok(_) => {
+                        debug!("GStreamerPlayer::seek() - Resumed playing state");
+                    }
+                    Err(e) => {
+                        warn!(
+                            "GStreamerPlayer::seek() - Failed to resume playing after seek: {:?}",
+                            e
+                        );
+                    }
+                }
+            }
+        } else {
+            return Err(anyhow::anyhow!("No playbin available for seeking"));
         }
+
         Ok(())
     }
 
@@ -1173,53 +1408,52 @@ impl GStreamerPlayer {
                 }
             }
 
-            // Alternative: try to get from stream info
-            // Handle both playbin and playbin3 property names
-            let n_video = if playbin.has_property("n-video-streams") {
-                // playbin3 property
-                playbin.property::<i32>("n-video-streams")
-            } else if playbin.has_property("n-video") {
-                // playbin property
-                playbin.property::<i32>("n-video")
-            } else {
-                0
-            };
-
-            if n_video > 0 {
-                // Try to get video pad - signal names differ between playbin versions
-                let pad = if playbin.has_property("n-video-streams") {
-                    // playbin3 uses get-video-stream-pad
-                    playbin.emit_by_name::<Option<gst::Pad>>("get-video-stream-pad", &[&0i32])
-                } else {
-                    // playbin uses get-video-pad
-                    playbin.emit_by_name::<Option<gst::Pad>>("get-video-pad", &[&0i32])
-                };
-
-                if let Some(pad) = pad
-                    && let Some(caps) = pad.current_caps()
-                    && let Some(structure) = caps.structure(0)
-                {
-                    let width = structure.get::<i32>("width").ok();
-                    let height = structure.get::<i32>("height").ok();
-                    if let (Some(w), Some(h)) = (width, height) {
-                        return Some((w, h));
-                    }
-                }
-            }
+            // For playbin3, video dimensions should be available from the video sink pad
+            // TODO: Implement stream collection API for getting video stream info
             None
         } else {
             None
         }
     }
 
-    async fn handle_bus_message(msg: &gst::Message, state: Arc<RwLock<PlayerState>>) {
+    fn handle_bus_message_sync(
+        msg: &gst::Message,
+        state: &Arc<RwLock<PlayerState>>,
+        stream_collection: &Arc<Mutex<Option<gst::StreamCollection>>>,
+        audio_streams: &Arc<Mutex<Vec<StreamInfo>>>,
+        subtitle_streams: &Arc<Mutex<Vec<StreamInfo>>>,
+        current_audio: &Arc<Mutex<Option<String>>>,
+        current_subtitle: &Arc<Mutex<Option<String>>>,
+        playbin: &Arc<Mutex<Option<gst::Element>>>,
+    ) {
         use gst::MessageView;
+
+        // Log all messages for debugging
+        let msg_type = msg.type_();
+        if !matches!(msg_type, gst::MessageType::Qos | gst::MessageType::Progress) {
+            let src_name = msg
+                .src()
+                .map(|s| s.name().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            // Highlight specific message types we're interested in
+            if matches!(msg_type, gst::MessageType::StreamCollection) {
+                debug!("Stream collection message from {}", src_name);
+            } else if matches!(msg_type, gst::MessageType::StreamsSelected) {
+                debug!("Streams selected message from {}", src_name);
+            } else if matches!(msg_type, gst::MessageType::StreamStart) {
+                debug!("Stream start message from {}", src_name);
+            } else {
+                trace!("Bus message: {:?} from {}", msg_type, src_name);
+            }
+        }
 
         match msg.view() {
             MessageView::Eos(_) => {
                 info!("GStreamerPlayer - Bus message: End of stream");
-                let mut state = state.write().await;
-                *state = PlayerState::Stopped;
+                if let Ok(mut state_guard) = state.try_write() {
+                    *state_guard = PlayerState::Stopped;
+                }
             }
             MessageView::Error(err) => {
                 error!(
@@ -1228,8 +1462,9 @@ impl GStreamerPlayer {
                     err.error(),
                     err.debug()
                 );
-                let mut state = state.write().await;
-                *state = PlayerState::Error;
+                if let Ok(mut state_guard) = state.try_write() {
+                    *state_guard = PlayerState::Error;
+                }
             }
             MessageView::StateChanged(state_changed) => {
                 // Only handle state changes from the playbin element itself
@@ -1245,31 +1480,32 @@ impl GStreamerPlayer {
                         );
 
                         // Update internal state based on pipeline state
-                        let mut state_guard = state.write().await;
-                        match new_state {
-                            gst::State::Playing => {
-                                *state_guard = PlayerState::Playing;
-                                info!("GStreamerPlayer - State updated to Playing");
-                            }
-                            gst::State::Paused => {
-                                // Only set to Paused if we're not in Loading state
-                                // (Loading state transitions through Paused)
-                                if !matches!(*state_guard, PlayerState::Loading) {
-                                    *state_guard = PlayerState::Paused;
-                                    info!("GStreamerPlayer - State updated to Paused");
+                        if let Ok(mut state_guard) = state.try_write() {
+                            match new_state {
+                                gst::State::Playing => {
+                                    *state_guard = PlayerState::Playing;
+                                    debug!("State updated to Playing");
                                 }
-                            }
-                            gst::State::Ready | gst::State::Null => {
-                                // Only update to Stopped if we're not in Error or Loading state
-                                if !matches!(
-                                    *state_guard,
-                                    PlayerState::Error | PlayerState::Loading
-                                ) {
-                                    *state_guard = PlayerState::Stopped;
-                                    info!("GStreamerPlayer - State updated to Stopped");
+                                gst::State::Paused => {
+                                    // Only set to Paused if we're not in Loading state
+                                    // (Loading state transitions through Paused)
+                                    if !matches!(*state_guard, PlayerState::Loading) {
+                                        *state_guard = PlayerState::Paused;
+                                        debug!("State updated to Paused");
+                                    }
                                 }
+                                gst::State::Ready | gst::State::Null => {
+                                    // Only update to Stopped if we're not in Error or Loading state
+                                    if !matches!(
+                                        *state_guard,
+                                        PlayerState::Error | PlayerState::Loading
+                                    ) {
+                                        *state_guard = PlayerState::Stopped;
+                                        debug!("State updated to Stopped");
+                                    }
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                 }
@@ -1282,11 +1518,432 @@ impl GStreamerPlayer {
                 info!(
                     "GStreamerPlayer - AsyncDone: Pipeline ready, dimensions should be available"
                 );
-                // At this point, the pipeline has completed its async state change
-                // and video dimensions should be available
+
+                // Check if we have received a stream collection yet
+                let has_collection = stream_collection
+                    .lock()
+                    .map(|guard| guard.is_some())
+                    .unwrap_or(false);
+
+                if !has_collection {
+                    info!(
+                        "⚠️  AsyncDone but no StreamCollection received yet - this might indicate an issue"
+                    );
+
+                    // Try to manually query for stream information
+                    if let Ok(Some(pb)) = playbin.lock().map(|p| p.as_ref().cloned()) {
+                        info!("Attempting to manually query stream information from playbin3...");
+
+                        // Check if there are any stream-related signals we can query
+                        let props = pb.list_properties();
+                        for prop in props {
+                            let name = prop.name();
+                            if name.starts_with("n-")
+                                && (name.contains("audio")
+                                    || name.contains("video")
+                                    || name.contains("text"))
+                            {
+                                let value = pb.property_value(&name);
+                                info!("  {}: {:?}", name, value);
+                            }
+                        }
+                    }
+                } else {
+                    debug!("StreamCollection already received");
+                }
             }
-            _ => {}
+            MessageView::StreamCollection(collection_msg) => {
+                let collection = collection_msg.stream_collection();
+                debug!(
+                    "Stream collection received with {} streams",
+                    collection.len()
+                );
+
+                // Process the collection synchronously
+                Self::process_stream_collection_sync(
+                    &collection,
+                    stream_collection,
+                    audio_streams,
+                    subtitle_streams,
+                );
+
+                // Send default stream selection
+                if let Ok(Some(pb)) = playbin.lock().map(|p| p.as_ref().cloned()) {
+                    Self::send_default_stream_selection(&collection, &pb);
+                }
+            }
+            MessageView::StreamsSelected(selected_msg) => {
+                debug!("Processing streams selected message");
+
+                // Get the collection from the message
+                let collection = selected_msg.stream_collection();
+                debug!("StreamsSelected: {} total streams", collection.len());
+
+                // Clear current selections
+                if let Ok(mut audio_guard) = current_audio.try_lock() {
+                    *audio_guard = None;
+                }
+                if let Ok(mut subtitle_guard) = current_subtitle.try_lock() {
+                    *subtitle_guard = None;
+                }
+
+                // Count and categorize streams for summary
+                let mut video_count = 0;
+                let mut audio_count = 0;
+                let mut subtitle_count = 0;
+                let mut selected_audio: Option<String> = None;
+
+                for i in 0..collection.len() {
+                    let idx = i as u32;
+                    if let Some(stream) = collection.stream(idx) {
+                        let stream_id = stream
+                            .stream_id()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| format!("stream-{}", idx));
+                        let stream_type = stream.stream_type();
+
+                        if stream_type.contains(gst::StreamType::VIDEO) {
+                            video_count += 1;
+                        } else if stream_type.contains(gst::StreamType::AUDIO) {
+                            audio_count += 1;
+                            // Mark first audio as selected
+                            if selected_audio.is_none() {
+                                selected_audio = Some(stream_id.clone());
+                                if let Ok(mut guard) = current_audio.try_lock() {
+                                    *guard = Some(stream_id.clone());
+                                }
+                            }
+                        } else if stream_type.contains(gst::StreamType::TEXT) {
+                            subtitle_count += 1;
+                        }
+
+                        trace!("Stream {}: id={}, type={:?}", idx, stream_id, stream_type);
+                    }
+                }
+
+                info!(
+                    "Stream selection: {} video, {} audio, {} subtitle tracks",
+                    video_count, audio_count, subtitle_count
+                );
+                if let Some(audio_id) = &selected_audio {
+                    debug!("Auto-selected audio stream: {}", audio_id);
+                }
+
+                // Store this collection as our stream collection if we don't have one yet
+                if stream_collection
+                    .lock()
+                    .map(|guard| guard.is_none())
+                    .unwrap_or(false)
+                {
+                    debug!("Using StreamsSelected collection as stream collection");
+                    Self::process_stream_collection_sync(
+                        &collection,
+                        stream_collection,
+                        audio_streams,
+                        subtitle_streams,
+                    );
+                }
+            }
+            MessageView::Tag(tag_msg) => {
+                // Tags might contain stream information - only log at trace level
+                let tags = tag_msg.tags();
+                // Only log language tags at trace level since they're very verbose
+                if let Some(lang) = tags.index::<gst::tags::LanguageCode>(0) {
+                    trace!("Found language tag: {}", lang.get());
+                }
+            }
+            MessageView::StreamStart(stream_start_msg) => {
+                debug!("Stream started - collection should follow soon");
+
+                // StreamStart message doesn't provide direct stream access
+                // We'll rely on the StreamCollection message that follows
+                info!("  StreamStart received - waiting for StreamCollection");
+
+                // Check if this is from a decodebin - they should emit collections
+                if let Some(src) = msg.src() {
+                    let src_name = src.name();
+                    info!("  StreamStart source: {}", src_name);
+                    if src_name.to_string().contains("decodebin") {
+                        info!(
+                            "  ⚠️  StreamStart from decodebin - StreamCollection should have been sent!"
+                        );
+                    }
+                }
+            }
+            MessageView::Element(elem_msg) => {
+                // Some elements might send custom messages about streams
+                if let Some(s) = elem_msg.structure() {
+                    let name = s.name();
+                    if name.contains("stream")
+                        || name.contains("collection")
+                        || name.contains("select")
+                    {
+                        info!("Element message: {}", name);
+                    }
+                }
+            }
+            _ => {
+                // Log other potentially relevant unhandled messages
+                let msg_type = msg.type_();
+                if matches!(
+                    msg_type,
+                    gst::MessageType::SegmentStart
+                        | gst::MessageType::SegmentDone
+                        | gst::MessageType::DurationChanged
+                        | gst::MessageType::Latency
+                        | gst::MessageType::Toc
+                        | gst::MessageType::StreamStatus
+                ) {
+                    trace!("Unhandled message: {:?}", msg_type);
+                }
+            }
         }
+    }
+
+    fn process_stream_collection_sync(
+        collection: &gst::StreamCollection,
+        stream_collection: &Arc<Mutex<Option<gst::StreamCollection>>>,
+        audio_streams: &Arc<Mutex<Vec<StreamInfo>>>,
+        subtitle_streams: &Arc<Mutex<Vec<StreamInfo>>>,
+    ) {
+        debug!("Processing stream collection...");
+
+        // Store the collection
+        if let Ok(mut guard) = stream_collection.try_lock() {
+            *guard = Some(collection.clone());
+        }
+
+        // Parse and categorize streams
+        let mut audio = Vec::new();
+        let mut subtitles = Vec::new();
+        let mut audio_index = 0;
+        let mut subtitle_index = 0;
+        let mut video_count = 0;
+
+        for i in 0..collection.len() {
+            let idx = i as u32;
+            if let Some(stream) = collection.stream(idx) {
+                let stream_id = stream
+                    .stream_id()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("stream-{}", idx));
+                let stream_type = stream.stream_type();
+                let tags = stream.tags();
+                let caps = stream.caps();
+
+                // Extract language from tags if available
+                let language = tags.as_ref().and_then(|t| {
+                    t.index::<gst::tags::LanguageCode>(0)
+                        .map(|val| val.get().to_string())
+                });
+
+                // Extract codec from caps if available
+                let codec = caps
+                    .as_ref()
+                    .and_then(|c| c.structure(0).map(|s| s.name().to_string()));
+
+                let stream_info = StreamInfo {
+                    stream_id: stream_id.clone(),
+                    stream_type,
+                    tags,
+                    caps,
+                    index: 0,
+                    language: language.clone(),
+                    codec: codec.clone(),
+                };
+
+                if stream_type.contains(gst::StreamType::VIDEO) {
+                    video_count += 1;
+                    trace!("Found VIDEO stream: {} (codec: {:?})", stream_id, codec);
+                } else if stream_type.contains(gst::StreamType::AUDIO) {
+                    let mut info = stream_info;
+                    info.index = audio_index;
+                    audio_index += 1;
+                    trace!(
+                        "Found AUDIO stream #{}: {} (language: {:?})",
+                        info.index, info.stream_id, info.language
+                    );
+                    audio.push(info);
+                } else if stream_type.contains(gst::StreamType::TEXT) {
+                    let mut info = stream_info;
+                    info.index = subtitle_index;
+                    subtitle_index += 1;
+                    trace!(
+                        "Found TEXT stream #{}: {} (language: {:?})",
+                        info.index, info.stream_id, info.language
+                    );
+                    subtitles.push(info);
+                } else {
+                    trace!("Found OTHER stream type: {:?}", stream_type);
+                }
+            }
+        }
+
+        debug!(
+            "Stream collection: {} video, {} audio, {} subtitle streams",
+            video_count,
+            audio.len(),
+            subtitles.len()
+        );
+
+        // Update stored streams
+        if let Ok(mut guard) = audio_streams.try_lock() {
+            *guard = audio;
+        }
+        if let Ok(mut guard) = subtitle_streams.try_lock() {
+            *guard = subtitles;
+        }
+    }
+
+    fn send_default_stream_selection(collection: &gst::StreamCollection, playbin: &gst::Element) {
+        let mut selected_streams = Vec::new();
+        let mut has_video = false;
+        let mut has_audio = false;
+
+        debug!("Building default stream selection...");
+        for i in 0..collection.len() {
+            let idx = i as u32;
+            if let Some(stream) = collection.stream(idx) {
+                let stream_id = stream
+                    .stream_id()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("stream-{}", idx));
+                let stream_type = stream.stream_type();
+
+                // Select first stream of each type by default
+                if !has_video && stream_type.contains(gst::StreamType::VIDEO) {
+                    trace!("Selecting video stream: {}", stream_id);
+                    selected_streams.push(stream_id);
+                    has_video = true;
+                } else if !has_audio && stream_type.contains(gst::StreamType::AUDIO) {
+                    trace!("Selecting audio stream: {}", stream_id);
+                    selected_streams.push(stream_id);
+                    has_audio = true;
+                } else if stream_type.contains(gst::StreamType::TEXT) {
+                    // Don't select text by default - trace level only
+                    trace!(
+                        "Skipping text stream: {} (not selected by default)",
+                        stream_id
+                    );
+                }
+            }
+        }
+
+        if !selected_streams.is_empty() {
+            debug!(
+                "Sending SELECT_STREAMS event with {} streams",
+                selected_streams.len()
+            );
+            let stream_refs: Vec<&str> = selected_streams.iter().map(|s| s.as_str()).collect();
+            let event = gst::event::SelectStreams::new(stream_refs.iter().copied());
+            if playbin.send_event(event) {
+                debug!("Successfully sent SELECT_STREAMS event");
+            } else {
+                error!("Failed to send SELECT_STREAMS event");
+            }
+        } else {
+            warn!("No streams selected - this might cause playback issues");
+        }
+    }
+
+    fn process_selected_streams_sync(
+        collection: &gst::StreamCollection,
+        current_audio: &Arc<Mutex<Option<String>>>,
+        current_subtitle: &Arc<Mutex<Option<String>>>,
+    ) {
+        info!("Processing selected streams...");
+        // Placeholder for now - proper implementation would track which streams are actually selected
+        // The StreamsSelected message doesn't directly tell us which streams are selected
+        // We need to infer this from the context
+    }
+
+    fn process_stream_collection(
+        collection: &gst::StreamCollection,
+        stream_collection: &Arc<Mutex<Option<gst::StreamCollection>>>,
+        audio_streams: &Arc<Mutex<Vec<StreamInfo>>>,
+        subtitle_streams: &Arc<Mutex<Vec<StreamInfo>>>,
+    ) {
+        info!("Processing stream collection...");
+
+        // Store the collection
+        *stream_collection.lock().unwrap() = Some(collection.clone());
+
+        // Parse and categorize streams
+        let mut audio = Vec::new();
+        let mut subtitles = Vec::new();
+        let mut audio_index = 0;
+        let mut subtitle_index = 0;
+        let mut video_count = 0;
+
+        for i in 0..collection.len() {
+            let idx = i as u32;
+            if let Some(stream) = collection.stream(idx) {
+                let stream_id = stream
+                    .stream_id()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("stream-{}", idx));
+                let stream_type = stream.stream_type();
+                let tags = stream.tags();
+                let caps = stream.caps();
+
+                // Extract language from tags if available
+                let language = tags.as_ref().and_then(|t| {
+                    t.index::<gst::tags::LanguageCode>(0)
+                        .map(|val| val.get().to_string())
+                });
+
+                // Extract codec from caps if available
+                let codec = caps
+                    .as_ref()
+                    .and_then(|c| c.structure(0).map(|s| s.name().to_string()));
+
+                let stream_info = StreamInfo {
+                    stream_id: stream_id.clone(),
+                    stream_type,
+                    tags,
+                    caps,
+                    index: 0,
+                    language: language.clone(),
+                    codec: codec.clone(),
+                };
+
+                if stream_type.contains(gst::StreamType::VIDEO) {
+                    video_count += 1;
+                    trace!("Found VIDEO stream: {} (codec: {:?})", stream_id, codec);
+                } else if stream_type.contains(gst::StreamType::AUDIO) {
+                    let mut info = stream_info;
+                    info.index = audio_index;
+                    audio_index += 1;
+                    trace!(
+                        "Found AUDIO stream #{}: {} (language: {:?})",
+                        info.index, info.stream_id, info.language
+                    );
+                    audio.push(info);
+                } else if stream_type.contains(gst::StreamType::TEXT) {
+                    let mut info = stream_info;
+                    info.index = subtitle_index;
+                    subtitle_index += 1;
+                    trace!(
+                        "Found TEXT stream #{}: {} (language: {:?})",
+                        info.index, info.stream_id, info.language
+                    );
+                    subtitles.push(info);
+                } else {
+                    trace!("Found OTHER stream type: {:?}", stream_type);
+                }
+            }
+        }
+
+        debug!(
+            "Stream collection: {} video, {} audio, {} subtitle streams",
+            video_count,
+            audio.len(),
+            subtitles.len()
+        );
+
+        // Update stored streams
+        *audio_streams.lock().unwrap() = audio;
+        *subtitle_streams.lock().unwrap() = subtitles;
     }
 
     pub async fn get_state(&self) -> PlayerState {
@@ -1307,85 +1964,41 @@ impl GStreamerPlayer {
     }
 
     pub async fn get_audio_tracks(&self) -> Vec<(i32, String)> {
+        // Stream collection should have been received via bus messages
+
         let mut tracks = Vec::new();
+        let audio_streams = self.audio_streams.lock().unwrap();
 
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            // Check playbin state - tracks might not be available until PLAYING
-            // On macOS, we need to wait a bit for state to settle
-            let timeout = if cfg!(target_os = "macos") {
-                gst::ClockTime::from_mseconds(100)
+        for stream in audio_streams.iter() {
+            let track_name = if let Some(ref lang) = stream.language {
+                // Format track name with language
+                format!("Audio Track {} ({})", stream.index + 1, lang)
+            } else if let Some(ref codec) = stream.codec {
+                // Format with codec if no language
+                format!("Audio Track {} [{}]", stream.index + 1, codec)
             } else {
-                gst::ClockTime::ZERO
+                // Default format
+                format!("Audio Track {}", stream.index + 1)
             };
-            let (_, current, _) = playbin.state(timeout);
-            debug!("Getting audio tracks, playbin state: {:?}", current);
+            tracks.push((stream.index, track_name));
+        }
 
-            // Check if this is playbin3 (doesn't have n-audio property)
-            let is_playbin3 = *self.is_playbin3.lock().unwrap();
-
-            let n_audio = if is_playbin3 {
-                // playbin3 doesn't expose track count directly
-                // We need to wait for PAUSED/PLAYING state for stream collection
-                if current < gst::State::Paused {
-                    debug!("playbin3 not in PAUSED/PLAYING state yet, can't get tracks");
-                    return tracks;
-                }
-
-                // For now, try a reasonable maximum
-                // TODO: Use GstStreamCollection API when available
-                let mut count = 0;
-                for i in 0..10 {
-                    // Try to select the stream to see if it exists
-                    if playbin
-                        .emit_by_name::<Option<gst::TagList>>("get-audio-tags", &[&i])
-                        .is_some()
-                    {
-                        count = i + 1;
-                    } else {
-                        break;
-                    }
-                }
-                debug!("playbin3: Found {} audio tracks by probing", count);
-                count
-            } else if playbin.has_property("n-audio") {
-                // Regular playbin
-                let count = playbin.property::<i32>("n-audio");
-                debug!("Got n-audio: {}", count);
-                count
-            } else {
-                warn!("No audio track count property found!");
-                0
-            };
-            info!("Found {} audio tracks", n_audio);
-
-            for i in 0..n_audio {
-                // Get audio stream tags - try different signal names for compatibility
-                let tags = if playbin.has_property("n-audio-streams") {
-                    // playbin3 uses get-audio-stream-tags
-                    playbin.emit_by_name::<Option<gst::TagList>>("get-audio-stream-tags", &[&i])
+        // If no streams found yet, provide default
+        if tracks.is_empty() {
+            if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+                let timeout = if cfg!(target_os = "macos") {
+                    gst::ClockTime::from_mseconds(100)
                 } else {
-                    // playbin uses get-audio-tags
-                    playbin.emit_by_name::<Option<gst::TagList>>("get-audio-tags", &[&i])
+                    gst::ClockTime::ZERO
                 };
+                let (_, current, _) = playbin.state(timeout);
 
-                if let Some(tags) = tags {
-                    let mut title = format!("Audio Track {}", i + 1);
-
-                    // Try to get language code
-                    if let Some(lang) = tags.get::<gst::tags::LanguageCode>() {
-                        let lang_str = lang.get();
-                        title = format!("Audio {} ({})", i + 1, lang_str);
-                    }
-
-                    // Try to get title
-                    if let Some(tag_title) = tags.get::<gst::tags::Title>() {
-                        let title_str = tag_title.get();
-                        title = title_str.to_string();
-                    }
-
-                    tracks.push((i, title));
+                if current < gst::State::Paused {
+                    debug!("Playbin not in PAUSED/PLAYING state yet, no audio tracks available");
                 } else {
-                    tracks.push((i, format!("Audio Track {}", i + 1)));
+                    // Provide a default track if playbin is ready but no collection received yet
+                    debug!("No stream collection available, providing default audio track");
+                    tracks.push((0, "Audio Track 1".to_string()));
                 }
             }
         }
@@ -1394,200 +2007,256 @@ impl GStreamerPlayer {
     }
 
     pub async fn get_subtitle_tracks(&self) -> Vec<(i32, String)> {
+        // Stream collection should have been received via bus messages
+
         let mut tracks = Vec::new();
 
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            // Check playbin state - tracks might not be available until PLAYING
-            // On macOS, we need to wait a bit for state to settle
-            let timeout = if cfg!(target_os = "macos") {
-                gst::ClockTime::from_mseconds(100)
+        // Add "None" option first
+        tracks.push((-1, "None".to_string()));
+
+        let subtitle_streams = self.subtitle_streams.lock().unwrap();
+
+        for stream in subtitle_streams.iter() {
+            let track_name = if let Some(ref lang) = stream.language {
+                // Format track name with language
+                format!("Subtitle {} ({})", stream.index + 1, lang)
             } else {
-                gst::ClockTime::ZERO
+                // Default format
+                format!("Subtitle {}", stream.index + 1)
             };
-            let (_, current, _) = playbin.state(timeout);
-            debug!("Getting subtitle tracks, playbin state: {:?}", current);
-
-            // Check if this is playbin3
-            let is_playbin3 = *self.is_playbin3.lock().unwrap();
-
-            let n_text = if is_playbin3 {
-                // playbin3 doesn't expose track count directly
-                // We need to wait for PAUSED/PLAYING state for stream collection
-                if current < gst::State::Paused {
-                    debug!("playbin3 not in PAUSED/PLAYING state yet, can't get tracks");
-                    // Still add None option
-                    tracks.push((-1, "None".to_string()));
-                    return tracks;
-                }
-
-                // For now, try a reasonable maximum
-                // TODO: Use GstStreamCollection API when available
-                let mut count = 0;
-                for i in 0..10 {
-                    // Try to get tags to see if track exists
-                    if playbin
-                        .emit_by_name::<Option<gst::TagList>>("get-text-tags", &[&i])
-                        .is_some()
-                    {
-                        count = i + 1;
-                    } else {
-                        break;
-                    }
-                }
-                debug!("playbin3: Found {} subtitle tracks by probing", count);
-                count
-            } else if playbin.has_property("n-text") {
-                // Regular playbin
-                let count = playbin.property::<i32>("n-text");
-                debug!("Got n-text: {}", count);
-                count
-            } else {
-                warn!("No subtitle track count property found!");
-                0
-            };
-            info!("Found {} subtitle tracks", n_text);
-
-            // Add "None" option
-            tracks.push((-1, "None".to_string()));
-
-            for i in 0..n_text {
-                // Get subtitle stream tags - try different signal names for compatibility
-                let tags = if playbin.has_property("n-text-streams") {
-                    // playbin3 uses get-text-stream-tags
-                    playbin.emit_by_name::<Option<gst::TagList>>("get-text-stream-tags", &[&i])
-                } else {
-                    // playbin uses get-text-tags
-                    playbin.emit_by_name::<Option<gst::TagList>>("get-text-tags", &[&i])
-                };
-
-                if let Some(tags) = tags {
-                    let mut title = format!("Subtitle {}", i + 1);
-
-                    // Try to get language code
-                    if let Some(lang) = tags.get::<gst::tags::LanguageCode>() {
-                        let lang_str = lang.get();
-                        title = format!("Subtitle {} ({})", i + 1, lang_str);
-                    }
-
-                    // Try to get title
-                    if let Some(tag_title) = tags.get::<gst::tags::Title>() {
-                        let title_str = tag_title.get();
-                        title = title_str.to_string();
-                    }
-
-                    tracks.push((i, title));
-                } else {
-                    tracks.push((i, format!("Subtitle {}", i + 1)));
-                }
-            }
+            tracks.push((stream.index, track_name));
         }
 
         tracks
     }
 
     pub async fn set_audio_track(&self, track_index: i32) -> Result<()> {
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            let is_playbin3 = *self.is_playbin3.lock().unwrap();
+        debug!("Selecting audio track: {}", track_index);
 
-            if is_playbin3 {
-                // playbin3 uses signals for track selection
-                // emit select-stream signal
-                // For now, we'll use the compatibility approach
-                info!("Setting audio track on playbin3 to index {}", track_index);
-                // TODO: Implement proper stream selection for playbin3
-            } else if playbin.has_property("current-audio") {
-                // playbin property
-                playbin.set_property("current-audio", track_index);
-                info!("Set current-audio to {}", track_index);
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            let audio_streams = self.audio_streams.lock().unwrap();
+            let subtitle_streams = self.subtitle_streams.lock().unwrap();
+
+            debug!("Available audio streams: {}", audio_streams.len());
+
+            // Find the audio stream with the given index
+            let new_audio_stream = audio_streams.iter().find(|s| s.index == track_index);
+
+            if let Some(new_stream) = new_audio_stream {
+                debug!(
+                    "Found audio stream for index {}: {}",
+                    track_index, new_stream.stream_id
+                );
+
+                // Build list of streams to select
+                let mut selected_streams = Vec::new();
+
+                // Add the new audio stream
+                selected_streams.push(new_stream.stream_id.clone());
+                debug!("Adding audio: {}", new_stream.stream_id);
+
+                // Keep the current subtitle stream if one is selected
+                if let Some(ref current_sub) = *self.current_subtitle_stream.lock().unwrap() {
+                    if subtitle_streams.iter().any(|s| s.stream_id == *current_sub) {
+                        selected_streams.push(current_sub.clone());
+                        debug!("Keeping subtitle: {}", current_sub);
+                    }
+                }
+
+                // Also need to include video stream (playbin3 requires all streams)
+                // Get the current stream collection to find video streams
+                if let Some(ref collection) = *self.stream_collection.lock().unwrap() {
+                    for i in 0..collection.len() {
+                        let idx = i as u32;
+                        if let Some(stream) = collection.stream(idx) {
+                            if stream.stream_type().contains(gst::StreamType::VIDEO) {
+                                let stream_id = stream
+                                    .stream_id()
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| "video-stream".to_string());
+                                selected_streams.push(stream_id.clone());
+                                debug!("Adding video: {}", stream_id);
+                                break; // Usually only one video stream
+                            }
+                        }
+                    }
+                }
+
+                // Create and send the select-streams event
+                debug!(
+                    "Sending SELECT_STREAMS event with {} streams",
+                    selected_streams.len()
+                );
+                let stream_refs: Vec<&str> = selected_streams.iter().map(|s| s.as_str()).collect();
+                let event = gst::event::SelectStreams::new(stream_refs.iter().copied());
+                if playbin.send_event(event) {
+                    debug!("SELECT_STREAMS event sent successfully");
+                    // Update current audio stream
+                    *self.current_audio_stream.lock().unwrap() = Some(new_stream.stream_id.clone());
+                    info!(
+                        "Selected audio track {}: {}",
+                        track_index,
+                        new_stream.language.as_deref().unwrap_or("Unknown")
+                    );
+                } else {
+                    error!("Failed to send SELECT_STREAMS event");
+                    return Err(anyhow::anyhow!("Failed to select audio track"));
+                }
+            } else {
+                error!(
+                    "Audio track with index {} not found in {} available tracks",
+                    track_index,
+                    audio_streams.len()
+                );
+                return Err(anyhow::anyhow!("Audio track {} not found", track_index));
             }
+        } else {
+            error!("No playbin available for audio track selection");
+            return Err(anyhow::anyhow!("No playbin available"));
         }
+
         Ok(())
     }
 
     pub async fn set_subtitle_track(&self, track_index: i32) -> Result<()> {
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            info!("Setting subtitle track to index: {}", track_index);
+        debug!("Selecting subtitle track: {}", track_index);
 
-            if track_index < 0 {
-                // Disable subtitles
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            let audio_streams = self.audio_streams.lock().unwrap();
+            let subtitle_streams = self.subtitle_streams.lock().unwrap();
+
+            debug!("Available subtitle streams: {}", subtitle_streams.len());
+
+            // Build list of streams to select
+            let mut selected_streams = Vec::new();
+
+            // Keep the current audio stream
+            if let Some(ref current_audio) = *self.current_audio_stream.lock().unwrap() {
+                if audio_streams.iter().any(|s| s.stream_id == *current_audio) {
+                    selected_streams.push(current_audio.clone());
+                    debug!("Keeping audio: {}", current_audio);
+                }
+            } else if let Some(first_audio) = audio_streams.first() {
+                // If no current audio, select the first one
+                selected_streams.push(first_audio.stream_id.clone());
+                debug!("Adding first audio: {}", first_audio.stream_id);
+            }
+
+            // Add the subtitle stream if not "None" (-1)
+            if track_index >= 0 {
+                if let Some(subtitle_stream) =
+                    subtitle_streams.iter().find(|s| s.index == track_index)
+                {
+                    debug!("Adding subtitle: {}", subtitle_stream.stream_id);
+                    selected_streams.push(subtitle_stream.stream_id.clone());
+
+                    // Ensure text flag is enabled
+                    playbin.set_property_from_str(
+                        "flags",
+                        "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
+                    );
+                    debug!("Enabled text flag in playbin");
+                } else {
+                    error!("Subtitle track with index {} not found", track_index);
+                    return Err(anyhow::anyhow!("Subtitle track {} not found", track_index));
+                }
+            } else {
+                // Disable subtitles by not including any text stream
+                debug!("Disabling subtitles (index = -1)");
+                *self.current_subtitle_stream.lock().unwrap() = None;
+
+                // Can still keep text flag enabled, just don't select any text stream
                 playbin.set_property_from_str(
                     "flags",
                     "soft-colorbalance+deinterlace+soft-volume+audio+video",
                 );
-                info!("Disabled subtitles - flags set to audio+video only");
-            } else {
-                // Enable subtitles and set track
-                playbin.set_property_from_str(
-                    "flags",
-                    "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
-                );
-                info!("Enabled subtitles - flags set to audio+video+text");
+                debug!("Disabled text flag in playbin");
+            }
 
-                let is_playbin3 = *self.is_playbin3.lock().unwrap();
-
-                if is_playbin3 {
-                    // playbin3 uses different approach for subtitle selection
-                    info!(
-                        "Setting subtitle track on playbin3 to index {}",
-                        track_index
-                    );
-                    // TODO: Implement proper stream selection for playbin3
-                } else if playbin.has_property("current-text") {
-                    // playbin property
-                    playbin.set_property("current-text", track_index);
-                    info!("Set current-text to {} (playbin)", track_index);
-                } else {
-                    error!("No subtitle track property available!");
+            // Include video stream (required for playbin3)
+            if let Some(ref collection) = *self.stream_collection.lock().unwrap() {
+                for i in 0..collection.len() {
+                    let idx = i as u32;
+                    if let Some(stream) = collection.stream(idx) {
+                        if stream.stream_type().contains(gst::StreamType::VIDEO) {
+                            let stream_id = stream
+                                .stream_id()
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| "video-stream".to_string());
+                            selected_streams.push(stream_id.clone());
+                            debug!("Adding video: {}", stream_id);
+                            break;
+                        }
+                    }
                 }
             }
+
+            // Send the select-streams event if we have streams to select
+            if !selected_streams.is_empty() {
+                debug!(
+                    "Sending SELECT_STREAMS event with {} streams",
+                    selected_streams.len()
+                );
+                let stream_refs: Vec<&str> = selected_streams.iter().map(|s| s.as_str()).collect();
+                let event = gst::event::SelectStreams::new(stream_refs.iter().copied());
+                if playbin.send_event(event) {
+                    debug!("SELECT_STREAMS event sent successfully");
+                    // Update current subtitle stream
+                    if track_index >= 0 {
+                        if let Some(sub_stream) =
+                            subtitle_streams.iter().find(|s| s.index == track_index)
+                        {
+                            *self.current_subtitle_stream.lock().unwrap() =
+                                Some(sub_stream.stream_id.clone());
+                            info!(
+                                "Selected subtitle track {}: {}",
+                                track_index,
+                                sub_stream.language.as_deref().unwrap_or("Unknown")
+                            );
+                        }
+                    } else {
+                        *self.current_subtitle_stream.lock().unwrap() = None;
+                        info!("Disabled subtitles");
+                    }
+                } else {
+                    error!("Failed to send SELECT_STREAMS event");
+                    return Err(anyhow::anyhow!("Failed to select subtitle track"));
+                }
+            } else {
+                warn!("No streams to select - this shouldn't happen");
+            }
+        } else {
+            error!("No playbin available for subtitle track selection");
+            return Err(anyhow::anyhow!("No playbin available"));
         }
+
         Ok(())
     }
 
     pub async fn get_current_audio_track(&self) -> i32 {
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            if playbin.has_property("current-audio-stream") {
-                // playbin3 property
-                playbin.property::<i32>("current-audio-stream")
-            } else if playbin.has_property("current-audio") {
-                // playbin property
-                playbin.property::<i32>("current-audio")
-            } else {
-                -1
+        if let Some(ref current_id) = *self.current_audio_stream.lock().unwrap() {
+            // Find the index of the current audio stream
+            let audio_streams = self.audio_streams.lock().unwrap();
+            for stream in audio_streams.iter() {
+                if stream.stream_id == *current_id {
+                    return stream.index;
+                }
             }
-        } else {
-            -1
         }
+        -1
     }
 
     pub async fn get_current_subtitle_track(&self) -> i32 {
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            // Check if we have any subtitle tracks available
-            let n_text = if playbin.has_property("n-text-streams") {
-                playbin.property::<i32>("n-text-streams")
-            } else if playbin.has_property("n-text") {
-                playbin.property::<i32>("n-text")
-            } else {
-                0
-            };
-            if n_text <= 0 {
-                return -1; // No subtitle tracks available
+        if let Some(ref current_id) = *self.current_subtitle_stream.lock().unwrap() {
+            // Find the index of the current subtitle stream
+            let subtitle_streams = self.subtitle_streams.lock().unwrap();
+            for stream in subtitle_streams.iter() {
+                if stream.stream_id == *current_id {
+                    return stream.index;
+                }
             }
-
-            // Get the current subtitle track
-            // If subtitles are disabled, this will return -1
-            if playbin.has_property("current-text-stream") {
-                // playbin3 property
-                playbin.property::<i32>("current-text-stream")
-            } else if playbin.has_property("current-text") {
-                // playbin property
-                playbin.property::<i32>("current-text")
-            } else {
-                -1
-            }
-        } else {
-            -1
         }
+        -1 // No subtitle selected
     }
 
     pub async fn set_playback_speed(&self, speed: f64) -> Result<()> {
@@ -1657,27 +2326,45 @@ impl GStreamerPlayer {
     }
 
     pub async fn cycle_subtitle_track(&self) -> Result<()> {
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            let n_text = playbin.property::<i32>("n-text");
-            if n_text > 0 {
-                let current = playbin.property::<i32>("current-text");
-                let next = (current + 1) % n_text;
-                playbin.set_property("current-text", next);
+        let subtitle_streams = self.subtitle_streams.lock().unwrap();
+        let current = self.get_current_subtitle_track().await;
+
+        let next_track = if subtitle_streams.is_empty() {
+            -1 // No subtitles available
+        } else if current == -1 {
+            // Currently off, go to first subtitle
+            0
+        } else {
+            // Find next track or loop back to "None"
+            let next_idx = current + 1;
+            if next_idx >= subtitle_streams.len() as i32 {
+                -1 // Loop back to "None"
+            } else {
+                next_idx
             }
-        }
-        Ok(())
+        };
+
+        info!("Cycling subtitle track from {} to {}", current, next_track);
+        self.set_subtitle_track(next_track).await
     }
 
     pub async fn cycle_audio_track(&self) -> Result<()> {
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            let n_audio = playbin.property::<i32>("n-audio");
-            if n_audio > 0 {
-                let current = playbin.property::<i32>("current-audio");
-                let next = (current + 1) % n_audio;
-                playbin.set_property("current-audio", next);
-            }
+        let audio_streams = self.audio_streams.lock().unwrap();
+        if audio_streams.is_empty() {
+            return Ok(()); // No audio tracks to cycle
         }
-        Ok(())
+
+        let current = self.get_current_audio_track().await;
+        let next_track = if current == -1 {
+            // No current track (shouldn't happen), select first
+            0
+        } else {
+            // Cycle to next track or loop back to first
+            (current + 1) % audio_streams.len() as i32
+        };
+
+        info!("Cycling audio track from {} to {}", current, next_track);
+        self.set_audio_track(next_track).await
     }
 
     pub async fn set_zoom_mode(&self, mode: ZoomMode) -> Result<()> {

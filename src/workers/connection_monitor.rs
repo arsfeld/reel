@@ -1,6 +1,7 @@
 use relm4::Worker;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+use tokio::runtime::Handle;
 use tracing::{debug, info, warn};
 
 use crate::db::DatabaseConnection;
@@ -10,6 +11,7 @@ use crate::services::core::connection::ConnectionService;
 #[derive(Debug)]
 pub struct ConnectionMonitor {
     pub(crate) db: DatabaseConnection,
+    pub(crate) runtime: Handle,
     pub(crate) next_check_times: HashMap<SourceId, Instant>,
 }
 
@@ -37,13 +39,14 @@ pub enum ConnectionMonitorOutput {
 }
 
 impl Worker for ConnectionMonitor {
-    type Init = DatabaseConnection;
+    type Init = (DatabaseConnection, Handle);
     type Input = ConnectionMonitorInput;
     type Output = ConnectionMonitorOutput;
 
-    fn init(db: Self::Init, _sender: relm4::ComponentSender<Self>) -> Self {
+    fn init((db, runtime): Self::Init, _sender: relm4::ComponentSender<Self>) -> Self {
         Self {
             db,
+            runtime,
             next_check_times: HashMap::new(),
         }
     }
@@ -53,8 +56,9 @@ impl Worker for ConnectionMonitor {
             ConnectionMonitorInput::CheckSource(source_id) => {
                 let db = self.db.clone();
                 let sender = sender.clone();
+                let runtime = self.runtime.clone();
 
-                tokio::spawn(async move {
+                runtime.spawn(async move {
                     info!("Checking connections for source: {}", source_id);
 
                     match ConnectionService::select_best_connection(&db, &source_id).await {
@@ -84,9 +88,10 @@ impl Worker for ConnectionMonitor {
 
                 let db = self.db.clone();
                 let sender = sender.clone();
+                let runtime = self.runtime.clone();
                 let mut next_check_times = self.next_check_times.clone();
 
-                tokio::spawn(async move {
+                runtime.spawn(async move {
                     let repo = SourceRepositoryImpl::new(db.clone());
 
                     match Repository::find_all(&repo).await {
@@ -228,8 +233,8 @@ impl ConnectionMonitor {
     }
 
     /// Start periodic monitoring of all sources with variable frequency
-    pub fn start_monitoring(sender: relm4::Sender<ConnectionMonitorInput>) {
-        tokio::spawn(async move {
+    pub fn start_monitoring(sender: relm4::Sender<ConnectionMonitorInput>, runtime: Handle) {
+        runtime.spawn(async move {
             // Use a shorter base interval to check more frequently
             // Individual sources will be skipped if not due for checking
             let mut interval = tokio::time::interval(Duration::from_secs(10));

@@ -41,6 +41,7 @@ mod tests {
         let db = Arc::new(get_test_db_connection().await.unwrap());
         let monitor = ConnectionMonitor {
             db: db.clone(),
+            runtime: tokio::runtime::Handle::current(),
             next_check_times: HashMap::new(),
         };
 
@@ -73,6 +74,7 @@ mod tests {
         let db = Arc::new(get_test_db_connection().await.unwrap());
         let mut monitor = ConnectionMonitor {
             db: db.clone(),
+            runtime: tokio::runtime::Handle::current(),
             next_check_times: HashMap::new(),
         };
 
@@ -118,6 +120,7 @@ mod tests {
         let (sender, receiver) = relm4::channel::<ConnectionMonitorOutput>();
         let _monitor = ConnectionMonitor {
             db: db.clone(),
+            runtime: tokio::runtime::Handle::current(),
             next_check_times: HashMap::new(),
         };
 
@@ -211,6 +214,7 @@ mod tests {
 
         let mut monitor = ConnectionMonitor {
             db: db.clone(),
+            runtime: tokio::runtime::Handle::current(),
             next_check_times: HashMap::new(),
         };
 
@@ -292,6 +296,7 @@ mod tests {
         let db = Arc::new(get_test_db_connection().await.unwrap());
         let mut monitor = ConnectionMonitor {
             db: db.clone(),
+            runtime: tokio::runtime::Handle::current(),
             next_check_times: HashMap::new(),
         };
 
@@ -354,6 +359,7 @@ mod tests {
 
         let monitor = ConnectionMonitor {
             db: db.clone(),
+            runtime: tokio::runtime::Handle::current(),
             next_check_times: HashMap::new(),
         };
 
