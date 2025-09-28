@@ -5,7 +5,8 @@ use relm4::gtk;
 use relm4::prelude::*;
 
 use super::dialogs::{
-    AuthDialog, AuthDialogInput, AuthDialogOutput, PreferencesDialog, PreferencesDialogOutput,
+    AuthDialog, AuthDialogInput, AuthDialogOutput, PreferencesDialog, PreferencesDialogInput,
+    PreferencesDialogOutput,
 };
 use super::pages::{
     HomePage, LibraryPage, MovieDetailsPage, PlayerPage, ShowDetailsPage, SourcesPage,
@@ -26,6 +27,7 @@ pub struct MainWindow {
     home_page: AsyncController<HomePage>,
     connection_monitor: relm4::WorkerController<ConnectionMonitor>,
     sync_worker: relm4::WorkerController<SyncWorker>,
+    config_manager: relm4::WorkerController<crate::workers::config_manager::ConfigManager>,
     library_page: Option<AsyncController<LibraryPage>>,
     movie_details_page: Option<AsyncController<MovieDetailsPage>>,
     show_details_page: Option<AsyncController<ShowDetailsPage>>,
@@ -84,6 +86,7 @@ pub enum MainWindowInput {
         source_id: SourceId,
         status: ConnectionStatus,
     },
+    ConfigUpdated,
 }
 
 #[derive(Debug, Clone)]
@@ -353,6 +356,34 @@ impl AsyncComponent for MainWindow {
                 }
             });
 
+        // Initialize the ConfigManager with file watcher
+        tracing::info!("Initializing ConfigManager with file watcher...");
+        let config_manager = crate::workers::config_manager::ConfigManager::builder()
+            .detach_worker(())
+            .forward(sender.input_sender(), |output| {
+                use crate::workers::config_manager::ConfigManagerOutput;
+                match output {
+                    ConfigManagerOutput::ConfigLoaded(config) => {
+                        tracing::info!("Config reloaded from disk via file watcher");
+                        // Update the global config service
+                        let config_service = crate::services::config_service::config_service();
+                        relm4::spawn_local(async move {
+                            let _ = config_service.update_config((*config).clone()).await;
+                        });
+                        MainWindowInput::ConfigUpdated
+                    }
+                    ConfigManagerOutput::ConfigUpdated(_) => {
+                        tracing::info!("Config updated programmatically");
+                        MainWindowInput::ConfigUpdated
+                    }
+                    ConfigManagerOutput::Error(err) => {
+                        tracing::error!("Config manager error: {}", err);
+                        MainWindowInput::ConfigUpdated
+                    }
+                }
+            });
+        tracing::info!("ConfigManager with file watcher initialized successfully");
+
         // Initialize the ConnectionMonitor worker
         let connection_monitor = ConnectionMonitor::builder()
             .detach_worker(db.clone())
@@ -443,6 +474,7 @@ impl AsyncComponent for MainWindow {
             auth_dialog,
             connection_monitor,
             sync_worker,
+            config_manager,
             library_page: None,
             movie_details_page: None,
             show_details_page: None,
@@ -866,6 +898,11 @@ impl AsyncComponent for MainWindow {
                             preferences_controller.widget().present(Some(root));
                             self.preferences_dialog = Some(preferences_controller);
                         } else if let Some(ref dialog) = self.preferences_dialog {
+                            // Send reload config message to refresh with current values
+                            dialog
+                                .sender()
+                                .send(PreferencesDialogInput::ReloadConfig)
+                                .ok();
                             dialog.widget().present(Some(root));
                         }
                     }
@@ -906,6 +943,11 @@ impl AsyncComponent for MainWindow {
                     preferences_controller.widget().present(Some(root));
                     self.preferences_dialog = Some(preferences_controller);
                 } else if let Some(ref dialog) = self.preferences_dialog {
+                    // Send reload config message to refresh with current values
+                    dialog
+                        .sender()
+                        .send(PreferencesDialogInput::ReloadConfig)
+                        .ok();
                     dialog.widget().present(Some(root));
                 }
             }
@@ -1396,6 +1438,16 @@ impl AsyncComponent for MainWindow {
                 let toast = adw::Toast::new(&message);
                 toast.set_timeout(3);
                 self.toast_overlay.add_toast(toast);
+            }
+            MainWindowInput::ConfigUpdated => {
+                // Handle configuration updates from file watcher
+                tracing::info!("Configuration has been updated from disk");
+                self.toast_overlay.add_toast(
+                    adw::Toast::builder()
+                        .title("Configuration reloaded")
+                        .timeout(2)
+                        .build(),
+                );
             }
             MainWindowInput::ConnectionStatusChanged { source_id, status } => {
                 // Handle connection status changes from ConnectionMonitor

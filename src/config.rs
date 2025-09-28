@@ -94,7 +94,7 @@ impl Config {
         Ok(())
     }
 
-    fn config_path() -> Result<PathBuf> {
+    pub fn config_path() -> Result<PathBuf> {
         #[cfg(target_os = "macos")]
         {
             // On macOS, use ~/Library/Application Support/Reel/
