@@ -107,13 +107,13 @@ jobs:
           # - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage` - Portable, runs on most Linux distributions (recommended)
           - **Debian/Ubuntu**: `reel-${{ steps.get_version.outputs.version }}-amd64.deb` - Install with `sudo dpkg -i`
           - **Fedora/RHEL**: `reel-${{ steps.get_version.outputs.version }}-x86_64.rpm` - Install with `sudo rpm -i`
-          - **Linux Tarball**: `reel-linux-x86_64.tar.gz` - Extract and run `./reel`
+          - **Linux Binary**: `reel-linux-x86_64` - Standalone executable
 
           ### ARM64 (aarch64)
           # - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-aarch64.AppImage` - Portable, runs on ARM64 Linux distributions
           - **Debian/Ubuntu**: `reel-${{ steps.get_version.outputs.version }}-arm64.deb` - Install with `sudo dpkg -i`
           - **Fedora/RHEL**: `reel-${{ steps.get_version.outputs.version }}-aarch64.rpm` - Install with `sudo rpm -i`
-          - **Linux Tarball**: `reel-linux-aarch64.tar.gz` - Extract and run `./reel`
+          - **Linux Binary**: `reel-linux-aarch64` - Standalone executable
 
           ## Installation
 
@@ -136,11 +136,10 @@ jobs:
           sudo dnf install ./reel-${{ steps.get_version.outputs.version }}-x86_64.rpm
           ```
 
-          ### Manual Installation
+          ### Standalone Binary
           ```bash
-          tar -xzf reel-linux-x86_64.tar.gz
-          chmod +x reel
-          ./reel
+          chmod +x reel-linux-x86_64
+          ./reel-linux-x86_64
           ```
 
           ## System Requirements
@@ -199,7 +198,7 @@ jobs:
           export BUILDX_CACHE_TO="type=local,dest=/tmp/.buildx-cache-new,mode=max"
 
           # Use the Docker build script to build all packages (excluding AppImage)
-          ./scripts/build-with-docker.sh ${{ matrix.arch }} deb rpm tarball
+          ./scripts/build-with-docker.sh ${{ matrix.arch }} deb rpm binary
 
           # Move cache to correct location (atomic)
           rm -rf /tmp/.buildx-cache
@@ -215,7 +214,6 @@ jobs:
         with:
           tag_name: ${{ needs.create-release.outputs.version }}
           files: |
-            reel-linux-*.tar.gz
             reel-linux-*
             reel-*.deb
             reel-*.rpm
