@@ -599,7 +599,7 @@ mod tests {
         });
 
         let _m = server
-            .mock("POST", "/api/v2/home/users/user2/switch")
+            .mock("POST", "/api/home/users/user2/switch")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(switch_response.to_string())
@@ -622,7 +622,7 @@ mod tests {
         });
 
         let _m = server
-            .mock("POST", "/api/v2/home/users/user3/switch")
+            .mock("POST", "/api/home/users/user3/switch")
             .match_body(mockito::Matcher::Json(json!({"pin": "1234"})))
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -643,7 +643,7 @@ mod tests {
         let mut server = Server::new_async().await;
 
         let _m = server
-            .mock("POST", "/api/v2/home/users/user3/switch")
+            .mock("POST", "/api/home/users/user3/switch")
             .with_status(401)
             .with_body("Invalid PIN")
             .create_async()
@@ -666,7 +666,7 @@ mod tests {
         let mut server = Server::new_async().await;
 
         let _m = server
-            .mock("POST", "/api/v2/home/users/user3/switch")
+            .mock("POST", "/api/home/users/user3/switch")
             .with_status(403)
             .with_body("PIN required")
             .create_async()

@@ -10,7 +10,12 @@ keywords = ["media", "player", "plex", "jellyfin", "gnome"]
 categories = ["multimedia", "gui"]
 
 [features]
-default = ["mpv", "gstreamer"]
+# Default features depend on platform
+# On macOS: only gstreamer (no mpv)
+# On other platforms: both mpv and gstreamer
+default = ["gstreamer"]
+
+# Media player backends
 mpv = ["dep:libmpv2", "dep:libmpv2-sys"]
 gstreamer = ["dep:gstreamer", "dep:gstreamer-video", "dep:gstreamer-player", "dep:gstreamer-pbutils"]
 
@@ -33,6 +38,7 @@ gstreamer = { version = "0.24", optional = true }
 gstreamer-video = { version = "0.24", optional = true }
 gstreamer-player = { version = "0.24", optional = true }
 gstreamer-pbutils = { version = "0.24", optional = true }
+
 libmpv2 = { version = "5.0", optional = true }
 libmpv2-sys = { version = "4.0", optional = true }
 

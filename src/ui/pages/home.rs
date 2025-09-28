@@ -13,6 +13,7 @@ use crate::db::repository::{
 };
 use crate::models::{HomeSectionType, HomeSectionWithModels, MediaItemId, SourceId};
 use crate::ui::factories::media_card::{MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput};
+use crate::ui::shared::broker::{BROKER, BrokerMessage};
 use crate::workers::{ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize};
 
 #[derive(Debug, Clone)]
@@ -67,6 +68,8 @@ pub enum HomePageInput {
     },
     /// Image load failed
     ImageLoadFailed { id: String },
+    /// Message broker messages
+    BrokerMsg(BrokerMessage),
 }
 
 #[derive(Debug)]
@@ -186,6 +189,19 @@ impl AsyncComponent for HomePage {
         };
 
         let widgets = view_output!();
+
+        // Subscribe to MessageBroker for config updates
+        {
+            let broker_sender = sender.input_sender().clone();
+            relm4::spawn(async move {
+                let (tx, rx) = relm4::channel::<BrokerMessage>();
+                BROKER.subscribe("HomePage".to_string(), tx).await;
+
+                while let Some(msg) = rx.recv().await {
+                    broker_sender.send(HomePageInput::BrokerMsg(msg)).unwrap();
+                }
+            });
+        }
 
         // Load initial data
         sender.input(HomePageInput::LoadData);
@@ -439,7 +455,28 @@ impl AsyncComponent for HomePage {
                 // Remove from tracking
                 self.image_requests.remove(&id);
             }
+            HomePageInput::BrokerMsg(msg) => {
+                match msg {
+                    BrokerMessage::Config(_) => {
+                        // Home page might reload sections if config changes affect display
+                        // For now, we'll just log the config update
+                        debug!("Home page received config update");
+                        // Could potentially reload sections if display preferences changed
+                        // sender.input(HomePageInput::LoadData);
+                    }
+                    _ => {
+                        // Ignore other broker messages
+                    }
+                }
+            }
         }
+    }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        // Unsubscribe from MessageBroker
+        relm4::spawn(async move {
+            BROKER.unsubscribe("HomePage").await;
+        });
     }
 }
 

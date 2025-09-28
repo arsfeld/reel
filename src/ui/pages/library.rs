@@ -10,6 +10,7 @@ use crate::db::connection::DatabaseConnection;
 use crate::db::entities::MediaItemModel;
 use crate::models::{LibraryId, MediaItemId};
 use crate::ui::factories::media_card::{MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput};
+use crate::ui::shared::broker::{BROKER, BrokerMessage};
 use crate::workers::{ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize};
 
 impl std::fmt::Debug for LibraryPage {
@@ -125,6 +126,8 @@ pub enum LibraryPageInput {
     ProcessDebouncedScroll,
     /// Load images for visible items
     LoadVisibleImages,
+    /// Message broker messages
+    BrokerMsg(BrokerMessage),
 }
 
 #[derive(Debug)]
@@ -478,6 +481,21 @@ impl AsyncComponent for LibraryPage {
         let mut model = model;
 
         let widgets = view_output!();
+
+        // Subscribe to MessageBroker for config updates
+        {
+            let broker_sender = sender.input_sender().clone();
+            relm4::spawn(async move {
+                let (tx, rx) = relm4::channel::<BrokerMessage>();
+                BROKER.subscribe("LibraryPage".to_string(), tx).await;
+
+                while let Some(msg) = rx.recv().await {
+                    broker_sender
+                        .send(LibraryPageInput::BrokerMsg(msg))
+                        .unwrap();
+                }
+            });
+        }
 
         // Create and set the genre filter popover
         let genre_popover = gtk::Popover::new();
@@ -849,7 +867,27 @@ impl AsyncComponent for LibraryPage {
             LibraryPageInput::LoadVisibleImages => {
                 self.load_images_for_visible_range();
             }
+            LibraryPageInput::BrokerMsg(msg) => {
+                match msg {
+                    BrokerMessage::Config(_) => {
+                        // Library page might reload if display preferences changed
+                        debug!("Library page received config update");
+                        // Could potentially reload with new display preferences
+                        // sender.input(LibraryPageInput::Refresh);
+                    }
+                    _ => {
+                        // Ignore other broker messages
+                    }
+                }
+            }
         }
+    }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        // Unsubscribe from MessageBroker
+        relm4::spawn(async move {
+            BROKER.unsubscribe("LibraryPage").await;
+        });
     }
 }
 

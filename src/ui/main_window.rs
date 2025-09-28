@@ -19,10 +19,12 @@ use crate::workers::{
     SyncWorkerInput, SyncWorkerOutput,
 };
 use std::sync::Arc;
+use tokio::runtime::Runtime;
 
 #[derive(Debug)]
 pub struct MainWindow {
     db: DatabaseConnection,
+    runtime: Arc<Runtime>,
     sidebar: Controller<Sidebar>,
     home_page: AsyncController<HomePage>,
     connection_monitor: relm4::WorkerController<ConnectionMonitor>,
@@ -103,7 +105,7 @@ pub enum MainWindowOutput {
 
 #[relm4::component(pub async)]
 impl AsyncComponent for MainWindow {
-    type Init = DatabaseConnection;
+    type Init = (DatabaseConnection, Arc<Runtime>);
     type Input = MainWindowInput;
     type Output = MainWindowOutput;
     type CommandOutput = Vec<crate::models::Source>;
@@ -238,10 +240,11 @@ impl AsyncComponent for MainWindow {
     }
 
     async fn init(
-        db: Self::Init,
+        init: Self::Init,
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
+        let (db, runtime) = init;
         // Set up window actions - we'll add them to the window instead of the app
         // to ensure they're available when the menu is created
 
@@ -385,8 +388,9 @@ impl AsyncComponent for MainWindow {
         tracing::info!("ConfigManager with file watcher initialized successfully");
 
         // Initialize the ConnectionMonitor worker
+        let runtime_handle = runtime.handle().clone();
         let connection_monitor = ConnectionMonitor::builder()
-            .detach_worker(db.clone())
+            .detach_worker((db.clone(), runtime_handle.clone()))
             .forward(sender.input_sender(), |output| match output {
                 ConnectionMonitorOutput::ConnectionChanged { source_id, new_url } => {
                     MainWindowInput::ConnectionStatusChanged {
@@ -409,7 +413,10 @@ impl AsyncComponent for MainWindow {
             });
 
         // Start monitoring connections periodically
-        ConnectionMonitor::start_monitoring(connection_monitor.sender().clone());
+        ConnectionMonitor::start_monitoring(
+            connection_monitor.sender().clone(),
+            runtime_handle.clone(),
+        );
 
         // Initialize the SyncWorker
         let sync_sender = sender.clone();
@@ -443,12 +450,9 @@ impl AsyncComponent for MainWindow {
                         sections_synced
                     );
 
-                    // Notify UI that home sections have been updated if any were synced
-                    if sections_synced > 0 {
-                        // Trigger a refresh of the home page by navigating to it
-                        // This will cause the home page to reload its data
-                        sync_sender.input(MainWindowInput::Navigate("home".to_string()));
-                    }
+                    // Note: We no longer navigate to home after sync completes.
+                    // The home page will be updated through data change events
+                    // without forcing navigation away from the user's current page.
 
                     MainWindowInput::ShowToast(format!(
                         "Sync completed: {} items, {} sections synced",
@@ -469,6 +473,7 @@ impl AsyncComponent for MainWindow {
 
         let mut model = Self {
             db,
+            runtime,
             sidebar,
             home_page,
             auth_dialog,
@@ -650,45 +655,58 @@ impl AsyncComponent for MainWindow {
                         }
                     }
                     "init_sync" => {
-                        // Trigger sync for all existing sources on startup
+                        // Check for existing sources and navigate to home if they exist
                         let db_clone = self.db.clone();
-                        sender.oneshot_command(async move {
-                            // Wait a moment for the UI to fully initialize
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-                            use crate::services::commands::{
-                                Command, auth_commands::LoadSourcesCommand,
-                            };
+                        // First, delay a bit to let UI initialize, then check for sources
+                        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(500), {
+                            let sender = sender.clone();
+                            let db_clone = db_clone.clone();
+                            move || {
+                                // Use spawn_local since sender is not Send
+                                relm4::spawn_local(async move {
+                                    use crate::services::commands::{
+                                        Command, auth_commands::LoadSourcesCommand,
+                                    };
 
-                            let cmd = LoadSourcesCommand {
-                                db: db_clone.clone(),
-                            };
-                            match cmd.execute().await {
-                                Ok(sources) => {
-                                    tracing::info!(
-                                        "Found {} sources to sync on startup",
-                                        sources.len()
-                                    );
-                                    // Return the sources to be synced
-                                    sources
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        "Failed to load sources for initial sync: {}",
-                                        e
-                                    );
-                                    Vec::new()
-                                }
+                                    let cmd = LoadSourcesCommand { db: db_clone };
+                                    match cmd.execute().await {
+                                        Ok(sources) => {
+                                            tracing::info!(
+                                                "Found {} sources to sync on startup",
+                                                sources.len()
+                                            );
+
+                                            if !sources.is_empty() {
+                                                tracing::info!(
+                                                    "Sources configured, navigating to home immediately"
+                                                );
+                                                sender.input(MainWindowInput::Navigate(
+                                                    "home".to_string(),
+                                                ));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "Failed to load sources for initial sync: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                });
                             }
                         });
 
                         // Schedule a delayed sidebar refresh since sources might sync
-                        let sender_clone = sender.clone();
-                        relm4::spawn_local(async move {
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                            sender_clone
-                                .input(MainWindowInput::Navigate("refresh_sidebar".to_string()));
-                        });
+                        let sender_clone_2 = sender.clone();
+                        gtk::glib::timeout_add_local_once(
+                            std::time::Duration::from_secs(5),
+                            move || {
+                                sender_clone_2.input(MainWindowInput::Navigate(
+                                    "refresh_sidebar".to_string(),
+                                ));
+                            },
+                        );
                     }
                     "update_header" => {
                         // Update back button visibility based on navigation stack
@@ -1332,9 +1350,8 @@ impl AsyncComponent for MainWindow {
 
                 // Schedule UI refresh after sync completes
                 let sender_clone = sender.clone();
-                relm4::spawn_local(async move {
+                gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
                     // Wait for sync to complete (approximate time)
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                     sender_clone.input(MainWindowInput::Navigate("refresh_sidebar".to_string()));
                     sender_clone.input(MainWindowInput::Navigate(
                         "refresh_sources_page".to_string(),

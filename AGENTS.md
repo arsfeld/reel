@@ -130,12 +130,12 @@ cargo test -- --nocapture
 
 3. **Repository Pattern**: Each data entity has its own repository with consistent CRUD operations and type safety through SeaORM.
 
-4. **Three-Tier Caching**: 
+4. **Three-Tier Caching**:
    - Memory Cache (LRU with 1000 item limit)
    - Database Cache (SQLite with SeaORM)
    - Backend API (source-specific optimization)
 
-5. **Offline-First Architecture**: 
+5. **Offline-First Architecture**:
    - SQLite cache stores all metadata locally
    - UI loads instantly from cache
    - Background sync updates data without blocking UI
@@ -515,7 +515,7 @@ backlog task edit 42 -s "In Progress" -a @{myself}
 Previously created tasks contain the why and the what. Once you are familiar with that part you should think about a
 plan on **HOW** to tackle the task and all its acceptance criteria. This is your **Implementation Plan**.
 First do a quick check to see if all the tools that you are planning to use are available in the environment you are
-working in.   
+working in.
 When you are ready, write it down in the task so that you can refer to it later.
 
 ```bash
@@ -735,4 +735,6 @@ Descriptions support literal newlines; shell examples may show escaped `\\n`, bu
 Full help available: `backlog --help`
 
 <!-- BACKLOG.MD GUIDELINES END -->
-- When building / checking, always use fetch the last line to get the proper number of errors
+- When building / checking, always use the last line to get the proper number of errors
+- IMPORTANT: Don't add backward compatibility code, tackle the root cause
+- IMPORTANT: do not use fallbacks, they only introduce confusion and errors.

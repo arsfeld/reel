@@ -57,6 +57,7 @@
       linuxOnlyPackages = with pkgs;
         lib.optionals pkgs.stdenv.isLinux [
           gst_all_1.gst-vaapi # VA-API is Linux-only
+          mpv # MPV player backend (not working properly on macOS)
         ];
 
       darwinOnlyPackages = with pkgs;
@@ -81,9 +82,6 @@
           gst_all_1.gst-plugins-ugly
           gst_all_1.gst-libav
           gst_all_1.gst-plugins-rs # Includes gtk4paintablesink
-
-          # MPV for alternative player backend
-          mpv
 
           # System libraries
           glib

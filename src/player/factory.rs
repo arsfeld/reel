@@ -23,6 +23,14 @@ pub enum PlayerBackend {
 
 impl From<&str> for PlayerBackend {
     fn from(s: &str) -> Self {
+        // On macOS, always return GStreamer
+        if cfg!(target_os = "macos") {
+            #[cfg(feature = "gstreamer")]
+            return PlayerBackend::GStreamer;
+            #[cfg(not(feature = "gstreamer"))]
+            panic!("GStreamer backend is required on macOS but not enabled");
+        }
+
         match s.to_lowercase().as_str() {
             #[cfg(feature = "gstreamer")]
             "gstreamer" => PlayerBackend::GStreamer,
@@ -65,7 +73,14 @@ impl Player {
         #[cfg(not(any(feature = "mpv", feature = "gstreamer")))]
         compile_error!("At least one player backend (mpv or gstreamer) must be enabled");
 
-        let backend = PlayerBackend::from(config.playback.player_backend.as_str());
+        // On macOS, always use GStreamer regardless of configuration
+        // MPV has critical OpenGL issues on macOS
+        let backend = if cfg!(target_os = "macos") {
+            info!("🎬 Player Factory: macOS detected, forcing GStreamer backend");
+            PlayerBackend::GStreamer
+        } else {
+            PlayerBackend::from(config.playback.player_backend.as_str())
+        };
 
         info!("🎬 Player Factory: Creating new player instance");
         debug!(
@@ -78,6 +93,34 @@ impl Player {
         match backend {
             #[cfg(feature = "mpv")]
             PlayerBackend::Mpv => {
+                // This should never be reached on macOS due to the check above,
+                // but add an extra safety check
+                if cfg!(target_os = "macos") {
+                    error!(
+                        "❌ Player Factory: MPV backend requested on macOS, falling back to GStreamer"
+                    );
+                    #[cfg(feature = "gstreamer")]
+                    return match GStreamerPlayer::new() {
+                        Ok(player) => {
+                            info!(
+                                "✅ Player Factory: Successfully created GStreamer player (macOS fallback)"
+                            );
+                            Ok(Player::GStreamer(player))
+                        }
+                        Err(e) => {
+                            error!(
+                                "❌ Player Factory: Failed to create GStreamer player: {}",
+                                e
+                            );
+                            Err(e)
+                        }
+                    };
+                    #[cfg(not(feature = "gstreamer"))]
+                    return Err(anyhow::anyhow!(
+                        "MPV is not supported on macOS and GStreamer is not available"
+                    ));
+                }
+
                 info!("🎬 Player Factory: Creating MPV player backend");
                 debug!(
                     "🎬 Player Factory: MPV config - hardware_accel={}, cache_size={}MB",

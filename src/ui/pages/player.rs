@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::models::{MediaItemId, PlaylistContext};
 use crate::player::{PlayerController, PlayerHandle, PlayerState};
+use crate::ui::shared::broker::{BROKER, BrokerMessage, ConfigMessage};
 use adw::prelude::*;
 use gtk::glib::{self, SourceId};
 use libadwaita as adw;
@@ -98,6 +99,8 @@ pub struct PlayerPage {
     zoom_label: gtk::Label,
     // Control widgets for bounds detection
     controls_overlay: Option<gtk::Box>,
+    // Popover state tracking to prevent control hiding when popover is open
+    active_popover_count: std::rc::Rc<std::cell::RefCell<usize>>,
     // Timing configuration
     inactivity_timeout_secs: u64,
     mouse_move_threshold: f64,
@@ -113,6 +116,11 @@ impl PlayerPage {
 
     /// Transition to the Hidden state
     fn transition_to_hidden(&mut self, _sender: AsyncComponentSender<Self>, from_timer: bool) {
+        // Don't hide controls if a popover is open
+        if *self.active_popover_count.borrow() > 0 {
+            debug!("Popover is open, keeping controls visible");
+            return;
+        }
         // Only try to cancel timer if not called from the timer itself
         if !from_timer {
             if let ControlState::Visible { timer_id } = &mut self.control_state {
@@ -225,6 +233,7 @@ impl PlayerPage {
             let audio_menu_button = self.audio_menu_button.clone();
             let _current_track = self.current_audio_track;
             let sender = sender.clone();
+            let popover_count = self.active_popover_count.clone();
 
             glib::spawn_future_local(async move {
                 let tracks = player_clone.get_audio_tracks().await.unwrap_or_default();
@@ -248,6 +257,23 @@ impl PlayerPage {
 
                     // Create popover from menu model
                     let popover = gtk::PopoverMenu::from_model(Some(&menu));
+
+                    // Track popover state to prevent control hiding
+                    let popover_count_clone = popover_count.clone();
+                    popover.connect_show(move |_| {
+                        *popover_count_clone.borrow_mut() += 1;
+                        debug!(
+                            "Audio popover shown, count: {}",
+                            *popover_count_clone.borrow()
+                        );
+                    });
+                    popover.connect_hide(move |_| {
+                        let mut count = popover_count.borrow_mut();
+                        if *count > 0 {
+                            *count -= 1;
+                        }
+                        debug!("Audio popover hidden, count: {}", *count);
+                    });
 
                     // Add actions for each track
                     let action_group = gtk::gio::SimpleActionGroup::new();
@@ -276,6 +302,7 @@ impl PlayerPage {
             let subtitle_menu_button = self.subtitle_menu_button.clone();
             let _current_track = self.current_subtitle_track;
             let sender = sender.clone();
+            let popover_count = self.active_popover_count.clone();
 
             glib::spawn_future_local(async move {
                 let tracks = player_clone.get_subtitle_tracks().await.unwrap_or_default();
@@ -300,6 +327,23 @@ impl PlayerPage {
                     // Create popover from menu model
                     let popover = gtk::PopoverMenu::from_model(Some(&menu));
 
+                    // Track popover state to prevent control hiding
+                    let popover_count_clone = popover_count.clone();
+                    popover.connect_show(move |_| {
+                        *popover_count_clone.borrow_mut() += 1;
+                        debug!(
+                            "Subtitle popover shown, count: {}",
+                            *popover_count_clone.borrow()
+                        );
+                    });
+                    popover.connect_hide(move |_| {
+                        let mut count = popover_count.borrow_mut();
+                        if *count > 0 {
+                            *count -= 1;
+                        }
+                        debug!("Subtitle popover hidden, count: {}", *count);
+                    });
+
                     // Add actions for each track
                     let action_group = gtk::gio::SimpleActionGroup::new();
                     for (track_id, _) in &tracks {
@@ -323,6 +367,7 @@ impl PlayerPage {
 
     fn populate_zoom_menu(&self, sender: AsyncComponentSender<Self>) {
         let zoom_menu_button = self.zoom_menu_button.clone();
+        let popover_count = self.active_popover_count.clone();
         let current_mode = self.current_zoom_mode;
 
         zoom_menu_button.set_sensitive(true);
@@ -394,6 +439,23 @@ impl PlayerPage {
         // Create popover
         let popover = gtk::PopoverMenu::from_model(Some(&menu));
 
+        // Track popover state to prevent control hiding
+        let popover_count_clone = popover_count.clone();
+        popover.connect_show(move |_| {
+            *popover_count_clone.borrow_mut() += 1;
+            debug!(
+                "Zoom popover shown, count: {}",
+                *popover_count_clone.borrow()
+            );
+        });
+        popover.connect_hide(move |_| {
+            let mut count = popover_count.borrow_mut();
+            if *count > 0 {
+                *count -= 1;
+            }
+            debug!("Zoom popover hidden, count: {}", *count);
+        });
+
         // Create action group
         let action_group = gtk::gio::SimpleActionGroup::new();
 
@@ -432,6 +494,7 @@ impl PlayerPage {
 
     fn populate_quality_menu(&self, sender: AsyncComponentSender<Self>) {
         let quality_menu_button = self.quality_menu_button.clone();
+        let popover_count = self.active_popover_count.clone();
         let current_mode = self.current_upscaling_mode;
         let is_mpv = self.is_mpv_backend;
 
@@ -483,6 +546,23 @@ impl PlayerPage {
 
         // Create popover from menu model
         let popover = gtk::PopoverMenu::from_model(Some(&menu));
+
+        // Track popover state to prevent control hiding
+        let popover_count_clone = popover_count.clone();
+        popover.connect_show(move |_| {
+            *popover_count_clone.borrow_mut() += 1;
+            debug!(
+                "Quality popover shown, count: {}",
+                *popover_count_clone.borrow()
+            );
+        });
+        popover.connect_hide(move |_| {
+            let mut count = popover_count.borrow_mut();
+            if *count > 0 {
+                *count -= 1;
+            }
+            debug!("Quality popover hidden, count: {}", *count);
+        });
 
         // Add actions for each mode
         let action_group = gtk::gio::SimpleActionGroup::new();
@@ -608,6 +688,8 @@ pub enum PlayerInput {
     CycleAudioTrack,
     // Control visibility (for keyboard toggle)
     ToggleControlsVisibility,
+    // Message broker messages
+    BrokerMsg(BrokerMessage),
     // Zoom controls
     SetZoomMode(crate::player::ZoomMode),
     CycleZoom,
@@ -1125,6 +1207,7 @@ impl AsyncComponent for PlayerPage {
             current_zoom_mode: crate::player::ZoomMode::default(),
             zoom_label: zoom_label.clone(),
             controls_overlay: None, // Will be set when controls are created
+            active_popover_count: std::rc::Rc::new(std::cell::RefCell::new(0)),
             inactivity_timeout_secs: Self::DEFAULT_INACTIVITY_TIMEOUT_SECS,
             mouse_move_threshold: Self::DEFAULT_MOUSE_MOVE_THRESHOLD,
             window_event_debounce_ms: Self::DEFAULT_WINDOW_EVENT_DEBOUNCE_MS,
@@ -1457,6 +1540,19 @@ impl AsyncComponent for PlayerPage {
 
         // Start with controls visible with timer
         model.transition_to_visible(sender.clone());
+
+        // Subscribe to MessageBroker for config updates
+        {
+            let broker_sender = sender.input_sender().clone();
+            relm4::spawn(async move {
+                let (tx, rx) = relm4::channel::<BrokerMessage>();
+                BROKER.subscribe("PlayerPage".to_string(), tx).await;
+
+                while let Some(msg) = rx.recv().await {
+                    broker_sender.send(PlayerInput::BrokerMsg(msg)).unwrap();
+                }
+            });
+        }
 
         // Load media if provided
         if let Some(id) = &model.media_item_id {
@@ -1917,7 +2013,13 @@ impl AsyncComponent for PlayerPage {
                     timer.remove();
                 }
 
-                // Process immediately - always hide when leaving window
+                // Don't hide if a popover is open
+                if *self.active_popover_count.borrow() > 0 {
+                    debug!("Popover is open, not hiding controls on window leave");
+                    return;
+                }
+
+                // Process immediately - hide when leaving window (unless popover is open)
                 self.transition_to_hidden(sender.clone(), false);
             }
             PlayerInput::MouseMove { x, y } => {
@@ -2204,6 +2306,74 @@ impl AsyncComponent for PlayerPage {
                     }
                     _ => {
                         self.transition_to_hidden(sender.clone(), false);
+                    }
+                }
+            }
+            PlayerInput::BrokerMsg(msg) => {
+                match msg {
+                    BrokerMessage::Config(ConfigMessage::Updated { config }) => {
+                        // Update cached config values
+                        self.config_auto_resume = config.playback.auto_resume;
+                        self.config_resume_threshold_seconds =
+                            config.playback.resume_threshold_seconds as u64;
+                        self.config_progress_update_interval_seconds =
+                            config.playback.progress_update_interval_seconds as u64;
+
+                        // Handle player backend changes
+                        let new_backend = &config.playback.player_backend;
+                        let current_backend = if self.is_mpv_backend {
+                            "mpv"
+                        } else {
+                            "gstreamer"
+                        };
+
+                        if new_backend != current_backend {
+                            info!(
+                                "Player backend changed from {} to {}, will take effect on next media load",
+                                current_backend, new_backend
+                            );
+                            // Note: We don't restart the current playback, the new backend will be used for the next media load
+                        }
+
+                        // Update upscaling mode if using MPV
+                        if self.is_mpv_backend {
+                            let new_mode = match config.playback.mpv_upscaling_mode.as_str() {
+                                "high_quality" => crate::player::UpscalingMode::HighQuality,
+                                "fsr" => crate::player::UpscalingMode::FSR,
+                                "anime" => crate::player::UpscalingMode::Anime,
+                                "custom" => crate::player::UpscalingMode::Custom,
+                                _ => crate::player::UpscalingMode::None,
+                            };
+
+                            if new_mode != self.current_upscaling_mode {
+                                self.current_upscaling_mode = new_mode;
+                                if let Some(ref player) = self.player {
+                                    let player_handle = player.clone();
+                                    glib::spawn_future_local(async move {
+                                        let _ = player_handle.set_upscaling_mode(new_mode).await;
+                                    });
+                                    info!("Updated upscaling mode to: {:?}", new_mode);
+                                }
+                            }
+                        }
+                    }
+                    BrokerMessage::Config(ConfigMessage::PlayerBackendChanged { backend }) => {
+                        // Handle specific player backend change
+                        let current_backend = if self.is_mpv_backend {
+                            "mpv"
+                        } else {
+                            "gstreamer"
+                        };
+
+                        if backend != current_backend {
+                            info!(
+                                "Player backend changed to {}, will take effect on next media load",
+                                backend
+                            );
+                        }
+                    }
+                    _ => {
+                        // Ignore other broker messages
                     }
                 }
             }
@@ -2549,6 +2719,11 @@ impl AsyncComponent for PlayerPage {
     }
 
     fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        // Unsubscribe from MessageBroker
+        relm4::spawn(async move {
+            BROKER.unsubscribe("PlayerPage").await;
+        });
+
         // Restore cursor visibility when player is destroyed
         if let Some(surface) = self.window.surface() {
             if let Some(cursor) = gtk::gdk::Cursor::from_name("default", None) {

@@ -45,7 +45,7 @@ Reel is a native Linux media player that brings your Plex and Jellyfin libraries
 | **💾 Offline-First** | SQLite caching keeps your library browsable even offline |
 | **🎨 Native UI** | Built with Relm4 for seamless GNOME desktop integration |
 | **⚡ Async Everything** | Built on Tokio for responsive, non-blocking operations |
-| **🎥 Dual Players** | MPV (default) and GStreamer backends for maximum compatibility |
+| **🎥 Dual Players** | MPV (Linux/Windows) and GStreamer (all platforms) for maximum compatibility |
 
 ## 🚀 Getting Started
 
@@ -98,7 +98,7 @@ cargo build --release
 Download the latest release from the [Releases page](https://github.com/arsfeld/reel/releases/latest).
 
 > [!WARNING]
-> **AppImage Support Temporarily Removed**: AppImage builds have been removed due to packaging bugs. The application binary is fully functional and can be used as-is, provided you have the required dependencies installed (GTK4, libadwaita, GStreamer, and libmpv2). Contributions to restore AppImage support are welcome!
+> **AppImage Support Temporarily Removed**: AppImage builds have been removed due to packaging bugs. The application binary is fully functional and can be used as-is, provided you have the required dependencies installed (GTK4, libadwaita, GStreamer, and libmpv2 on Linux). Contributions to restore AppImage support are welcome!
 
 > [!NOTE]
 > **Pre-built packages are experimental**: These packages are automatically generated and may not be thoroughly tested. If you encounter issues, consider building from source using the Nix development environment.
@@ -116,7 +116,7 @@ Download the latest release from the [Releases page](https://github.com/arsfeld/
 | **libadwaita** | 1.5 | UI toolkit |
 | **Relm4** | 0.10.0 | Reactive UI framework |
 | **GStreamer** | 1.20+ | Media framework with plugins-bad |
-| **MPV** | libmpv2 0.29+ | Primary video player backend |
+| **MPV** | libmpv2 0.29+ | Primary video player backend (Linux/Windows only) |
 | **glibc** | 2.35+ | With 64-bit time_t support |
 | **OpenSSL** | 3.0+ | TLS/SSL support |
 
@@ -129,7 +129,8 @@ Download the latest release from the [Releases page](https://github.com/arsfeld/
 curl -fsSL https://getbin.io/arsfeld/reel?os=linux -o reel
 chmod +x reel
 ./reel
-# Note: Requires GTK4, libadwaita, GStreamer, and libmpv2 to be installed
+# Note: Requires GTK4, libadwaita, and GStreamer to be installed
+# MPV (libmpv2) is only required on Linux/Windows
 ```
 
 #### Debian/Ubuntu (.deb)
@@ -232,7 +233,7 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 
 - **Relm4 UI Foundation** - ~85% complete migration to reactive component architecture
 - **Multi-Backend Support** - Simultaneous Plex and Jellyfin with OAuth/credential auth
-- **Media Playback** - MPV and GStreamer backends with OSD controls and keyboard shortcuts
+- **Media Playback** - MPV (Linux/Windows) and GStreamer (all platforms) backends with OSD controls and keyboard shortcuts
 - **Library Browsing** - Movies and TV shows with virtual scrolling and pagination
 - **Continue Watching** - Progress tracking and resume functionality
 - **Offline-First** - SQLite cache for instant startup and offline browsing
@@ -259,7 +260,8 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 
 ### ⚠️ Known Limitations
 
-- GStreamer has subtitle color artifacts (use MPV player instead)
+- **macOS**: Only GStreamer backend is available (MPV has critical OpenGL issues on macOS)
+- GStreamer has subtitle color artifacts (use MPV player instead on Linux/Windows)
 - Local files backend is 10% implemented (structure only)
 - Some features require server-side support (e.g., Jellyfin chapter markers)
 
@@ -271,7 +273,7 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 - **Database**: SQLite with [SeaORM](https://www.sea-ql.org/SeaORM/) and typed IDs
 - **Async Runtime**: [Tokio](https://tokio.rs/) with MessageBroker for component communication
 - **HTTP Client**: [Reqwest](https://github.com/seanmonstar/reqwest) with HTTP/2
-- **Video Playback**: MPV (default) via libmpv2, GStreamer (fallback) via [gstreamer-rs](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
+- **Video Playback**: MPV (Linux/Windows default) via libmpv2, GStreamer (macOS default, fallback on other platforms) via [gstreamer-rs](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
 - **Caching**: Three-tier (Memory LRU → SQLite → Backend API)
 - **Serialization**: [Serde](https://serde.rs/)
 - **Security**: System keyring via [keyring-rs](https://github.com/hwchen/keyring-rs)

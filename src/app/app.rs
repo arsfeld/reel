@@ -14,6 +14,19 @@ impl ReelApp {
     }
 
     pub fn run(self) -> anyhow::Result<()> {
+        // Initialize ConfigService early before UI components
+        tracing::info!("Initializing ConfigService at application startup");
+        let config_service = crate::services::config_service::config_service();
+
+        // Load initial config synchronously to ensure it's ready
+        let initial_config = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(config_service.get_config());
+        tracing::info!(
+            "ConfigService initialized with player backend: {}",
+            initial_config.playback.player_backend
+        );
+
         // Force dark theme - no user preference
         let style_manager = adw::StyleManager::default();
         style_manager.set_color_scheme(adw::ColorScheme::ForceDark);
@@ -44,7 +57,9 @@ impl ReelApp {
 
         // Create the Relm4 application and run it
         let app = relm4::RelmApp::new("com.github.reel");
-        app.with_args(vec![]).run_async::<MainWindow>(db);
+        let main_window_init = (db, self.runtime.clone());
+        app.with_args(vec![])
+            .run_async::<MainWindow>(main_window_init);
 
         Ok(())
     }
