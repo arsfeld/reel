@@ -156,8 +156,8 @@ echo ""
 echo "=== Build complete ==="
 echo "Architecture: $ARCH_NAME"
 echo "Built artifacts:"
-[ -f "reel-linux-$ARCH_NAME" ] && echo "  - reel-linux-$ARCH_NAME"
-[ -f "reel-linux-$ARCH_NAME.tar.gz" ] && echo "  - reel-linux-$ARCH_NAME.tar.gz"
-[ -f "reel-$VERSION-$DEB_ARCH.deb" ] && echo "  - reel-$VERSION-$DEB_ARCH.deb"
-[ -f "reel-$VERSION-$ARCH_NAME.rpm" ] && echo "  - reel-$VERSION-$ARCH_NAME.rpm"
-[ -f "reel-$VERSION-$ARCH_NAME.AppImage" ] && echo "  - reel-$VERSION-$ARCH_NAME.AppImage"
+[ -f "reel-linux-$ARCH_NAME" ] && echo "  - reel-linux-$ARCH_NAME" || true
+[ -f "reel-linux-$ARCH_NAME.tar.gz" ] && echo "  - reel-linux-$ARCH_NAME.tar.gz" || true
+[ -f "reel-$VERSION-$DEB_ARCH.deb" ] && echo "  - reel-$VERSION-$DEB_ARCH.deb" || true
+[ -f "reel-$VERSION-$ARCH_NAME.rpm" ] && echo "  - reel-$VERSION-$ARCH_NAME.rpm" || true
+[ -f "reel-$VERSION-$ARCH_NAME.AppImage" ] && echo "  - reel-$VERSION-$ARCH_NAME.AppImage" || true
