@@ -2,11 +2,16 @@ use adw::prelude::*;
 use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;
+use tracker::track;
 
 use crate::db::connection::DatabaseConnection;
+use crate::services::config_service::CONFIG_SERVICE;
+use crate::ui::shared::broker::{BROKER, BrokerMessage, ConfigMessage};
 
+#[tracker::track]
 #[derive(Debug)]
 pub struct PreferencesDialog {
+    #[do_not_track]
     db: DatabaseConnection,
     // Player preferences
     default_player: String,
@@ -21,6 +26,7 @@ pub struct PreferencesDialog {
 #[derive(Debug)]
 pub enum PreferencesDialogInput {
     SetDefaultPlayer(String),
+    ReloadConfig,
     Close,
 }
 
@@ -73,6 +79,7 @@ impl AsyncComponent for PreferencesDialog {
                                     "MPV (Recommended)",
                                     "GStreamer",
                                 ])),
+                                #[track(model.changed(PreferencesDialog::default_player()))]
                                 set_selected: if model.default_player == "mpv" { 0 } else { 1 },
                                 connect_selected_notify[sender] => move |dropdown| {
                                     let selected = dropdown.selected();
@@ -92,14 +99,8 @@ impl AsyncComponent for PreferencesDialog {
         _root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
-        // Load preferences from config file
-        let config = match crate::config::Config::load() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("Failed to load config, using defaults: {}", e);
-                crate::config::Config::default()
-            }
-        };
+        // Load preferences from ConfigService
+        let config = CONFIG_SERVICE.get_config().await;
 
         let model = Self {
             db,
@@ -108,6 +109,7 @@ impl AsyncComponent for PreferencesDialog {
             items_per_page: 48,
             cache_size_mb: config.playback.mpv_cache_size_mb as i32,
             auto_clean_cache: true,
+            tracker: 0,
         };
 
         let widgets = view_output!();
@@ -121,32 +123,28 @@ impl AsyncComponent for PreferencesDialog {
         sender: AsyncComponentSender<Self>,
         root: &Self::Root,
     ) {
+        self.reset(); // Reset tracker to track changes
+
         match msg {
             PreferencesDialogInput::SetDefaultPlayer(player) => {
-                self.default_player = player;
+                self.set_default_player(player.clone());
                 tracing::info!("Default player set to: {}", self.default_player);
 
-                // Auto-save when changed (reactive)
-                let mut config = match crate::config::Config::load() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::error!("Failed to load config: {}", e);
-                        crate::config::Config::default()
-                    }
-                };
-
-                // Update config with current preference
-                config.playback.player_backend = self.default_player.clone();
-
-                // Save config to file immediately
-                match config.save() {
-                    Ok(_) => {
+                // Update via ConfigService which will handle saving and broadcasting
+                relm4::spawn_local(async move {
+                    if let Err(e) = CONFIG_SERVICE.set_player_backend(player).await {
+                        tracing::error!("Failed to save preference: {}", e);
+                    } else {
                         tracing::info!("Player preference saved successfully");
                     }
-                    Err(e) => {
-                        tracing::error!("Failed to save preference: {}", e);
-                    }
-                }
+                });
+            }
+            PreferencesDialogInput::ReloadConfig => {
+                // Reload config from ConfigService
+                let config = relm4::spawn_local(async move { CONFIG_SERVICE.get_config().await });
+
+                // This will be handled asynchronously - for now just log
+                tracing::info!("Reloading config from service");
             }
             PreferencesDialogInput::Close => {
                 root.close();

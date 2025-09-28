@@ -35,7 +35,8 @@ fn main() -> Result<()> {
     gtk4::init()?;
     libadwaita::init()?;
 
-    // Initialize GStreamer
+    // Initialize GStreamer (if available)
+    #[cfg(feature = "gstreamer")]
     gstreamer::init()?;
 
     // Initialize Tokio runtime for async operations
