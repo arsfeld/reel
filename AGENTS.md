@@ -220,7 +220,7 @@ Within the Nix development shell:
 # Build Debian package
 build-deb
 
-# Build RPM package  
+# Build RPM package
 build-rpm
 
 # Build AppImage
