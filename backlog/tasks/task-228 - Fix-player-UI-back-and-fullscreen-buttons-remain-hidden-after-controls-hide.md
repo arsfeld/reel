@@ -1,11 +1,11 @@
 ---
 id: task-228
 title: 'Fix player UI: back and fullscreen buttons remain hidden after controls hide'
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-09-23 19:05'
-updated_date: '2025-09-23 19:13'
+updated_date: '2025-09-27 23:59'
 labels:
   - bug
   - ui
@@ -36,3 +36,9 @@ When the player controls auto-hide after inactivity, clicking or moving the mous
 3. Fix the visibility logic to ensure top and bottom controls hide/show together
 4. Test the fix with mouse movements and inactivity timeout
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+The player UI controls visibility issue has been fixed. Top controls (back button and fullscreen button) now properly show/hide together with the bottom controls when user activity is detected.
+<!-- SECTION:NOTES:END -->
