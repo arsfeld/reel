@@ -761,13 +761,15 @@ impl ShowDetailsPage {
 
             // Send image load request to the worker
             if let Some(thumbnail_url) = &episode.thumbnail_url {
-                self.image_loader
-                    .emit(ImageLoaderInput::LoadImage(ImageRequest {
-                        id: index.to_string(),
-                        url: thumbnail_url.clone(),
-                        size: ImageSize::Custom(240, 135),
-                        priority: index as u8, // Earlier episodes have higher priority
-                    }));
+                let _ =
+                    self.image_loader
+                        .sender()
+                        .send(ImageLoaderInput::LoadImage(ImageRequest {
+                            id: index.to_string(),
+                            url: thumbnail_url.clone(),
+                            size: ImageSize::Custom(240, 135),
+                            priority: index as u8, // Earlier episodes have higher priority
+                        }));
             }
         }
 

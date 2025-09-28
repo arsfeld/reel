@@ -1,6 +1,8 @@
+use crate::player::ZoomMode;
 use anyhow::{Context, Result};
 use gdk4 as gdk;
 use gstreamer as gst;
+use gstreamer::Rank;
 use gstreamer::glib;
 use gstreamer::prelude::*;
 use gtk4::{self, prelude::*};
@@ -24,6 +26,8 @@ pub struct GStreamerPlayer {
     state: Arc<RwLock<PlayerState>>,
     video_sink: Arc<Mutex<Option<gst::Element>>>,
     is_playbin3: Arc<Mutex<bool>>,
+    zoom_mode: Arc<Mutex<ZoomMode>>,
+    video_widget: Arc<Mutex<Option<gtk4::Widget>>>,
 }
 
 impl GStreamerPlayer {
@@ -42,6 +46,12 @@ impl GStreamerPlayer {
             }
         }
 
+        // On macOS, prioritize curlhttpsrc over souphttpsrc for HTTPS support
+        #[cfg(target_os = "macos")]
+        {
+            Self::configure_macos_http_source_priority();
+        }
+
         // Check for required elements
         Self::check_gstreamer_plugins();
 
@@ -50,7 +60,25 @@ impl GStreamerPlayer {
             state: Arc::new(RwLock::new(PlayerState::Idle)),
             video_sink: Arc::new(Mutex::new(None)),
             is_playbin3: Arc::new(Mutex::new(false)),
+            zoom_mode: Arc::new(Mutex::new(ZoomMode::default())),
+            video_widget: Arc::new(Mutex::new(None)),
         })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn configure_macos_http_source_priority() {
+        // Get the GStreamer registry
+        let registry = gst::Registry::get();
+
+        // Prioritize curlhttpsrc over souphttpsrc for better TLS support on macOS
+        if let Some(curl_feature) =
+            registry.find_feature("curlhttpsrc", gst::ElementFactory::static_type())
+        {
+            curl_feature.set_rank(gst::Rank::PRIMARY + 100);
+            info!("Set curlhttpsrc to higher rank for macOS HTTPS support");
+        } else {
+            warn!("curlhttpsrc not found - HTTPS streaming may have issues on macOS");
+        }
     }
 
     fn check_gstreamer_plugins() {
@@ -127,8 +155,9 @@ impl GStreamerPlayer {
         // Store the video sink
         *self.video_sink.lock().unwrap() = video_sink;
 
-        // Return the widget
+        // Store and return the widget
         let widget = picture.upcast::<gtk4::Widget>();
+        *self.video_widget.lock().unwrap() = Some(widget.clone());
         info!("GStreamerPlayer::create_video_widget() - Video widget creation complete");
         widget
     }
@@ -265,6 +294,11 @@ impl GStreamerPlayer {
             .build()
             .ok()?;
 
+        // Ensure aspect ratio is preserved
+        if gtk_sink.has_property("force-aspect-ratio") {
+            gtk_sink.set_property("force-aspect-ratio", true);
+        }
+
         // Set gtk4paintablesink as the sink for glsinkbin
         glsinkbin.set_property("sink", &gtk_sink);
 
@@ -322,6 +356,11 @@ impl GStreamerPlayer {
             .name("gtk4paintablesink")
             .build()
             .ok()?;
+
+        // Ensure aspect ratio is preserved
+        if gtk_sink.has_property("force-aspect-ratio") {
+            gtk_sink.set_property("force-aspect-ratio", true);
+        }
 
         let bin = gst::Bin::new();
 
@@ -671,8 +710,28 @@ impl GStreamerPlayer {
             })
             .context("Failed to add bus watch")?;
 
-        // On macOS, we need to handle async state changes differently
-        // Don't set to Ready state here - let play() handle the state transition
+        // Preroll the pipeline to PAUSED state to get video dimensions early
+        // This allows the video widget to resize before playback starts
+        debug!("GStreamerPlayer::load_media() - Prerolling pipeline to get dimensions");
+        match playbin.set_state(gst::State::Paused) {
+            Ok(gst::StateChangeSuccess::Success) => {
+                info!("GStreamerPlayer::load_media() - Pipeline prerolled successfully");
+            }
+            Ok(gst::StateChangeSuccess::Async) => {
+                info!("GStreamerPlayer::load_media() - Pipeline prerolling asynchronously");
+                // The AsyncDone message will signal when preroll is complete
+            }
+            Ok(gst::StateChangeSuccess::NoPreroll) => {
+                info!("GStreamerPlayer::load_media() - Live pipeline, no preroll needed");
+            }
+            Err(e) => {
+                warn!(
+                    "GStreamerPlayer::load_media() - Failed to start preroll: {:?}",
+                    e
+                );
+            }
+        }
+
         debug!("GStreamerPlayer::load_media() - Playbin configured, ready for playback");
 
         // Configure playbin for better network streaming
@@ -697,30 +756,6 @@ impl GStreamerPlayer {
                 );
                 debug!("Set playbin buffer-duration to 10 seconds");
             }
-        }
-
-        // Simple source configuration for macOS
-        #[cfg(target_os = "macos")]
-        {
-            // Connect to the source-setup signal to configure HTTP source elements
-            playbin.connect("source-setup", false, {
-                move |values| {
-                    let source = values[1].get::<gst::Element>().ok()?;
-
-                    if let Some(factory) = source.factory() {
-                        let factory_name = factory.name();
-                        info!("Source element: {}", factory_name);
-
-                        // Only set the most basic property that both sources support
-                        if source.has_property("ssl-strict") {
-                            source.set_property("ssl-strict", false);
-                            info!("Disabled SSL strict checking");
-                        }
-                    }
-
-                    None
-                }
-            });
         }
 
         info!("GStreamerPlayer::load_media() - Media loading complete");
@@ -809,6 +844,10 @@ impl GStreamerPlayer {
                 Ok(gst::StateChangeSuccess::Success) => {
                     info!("GStreamerPlayer::play() - Successfully set playbin to playing state");
 
+                    // Update internal state to Playing
+                    let mut state = self.state.write().await;
+                    *state = PlayerState::Playing;
+
                     // On macOS, ensure the state change is complete
                     #[cfg(target_os = "macos")]
                     {
@@ -867,6 +906,11 @@ impl GStreamerPlayer {
                                     "GStreamerPlayer::play() - Async state change completed, now in {:?}",
                                     current
                                 );
+                                // Update state if we successfully reached Playing
+                                if current == gst::State::Playing {
+                                    let mut state = self.state.write().await;
+                                    *state = PlayerState::Playing;
+                                }
                             }
                             _ => {
                                 warn!(
@@ -876,6 +920,8 @@ impl GStreamerPlayer {
                             }
                         }
                     }
+
+                    // For non-macOS, the state will be updated by the bus message handler
 
                     // Wait a bit for the pipeline to negotiate, then dump it
                     glib::timeout_add_once(std::time::Duration::from_secs(2), {
@@ -911,6 +957,9 @@ impl GStreamerPlayer {
                 }
                 Ok(gst::StateChangeSuccess::NoPreroll) => {
                     info!("GStreamerPlayer::play() - Playbin state change: no preroll");
+                    // Live sources don't need preroll, update state immediately
+                    let mut state = self.state.write().await;
+                    *state = PlayerState::Playing;
                 }
                 Err(gst::StateChangeError) => {
                     // Get more details about the error
@@ -999,9 +1048,6 @@ impl GStreamerPlayer {
                     return Err(anyhow::anyhow!(error_msg));
                 }
             }
-
-            let mut state = self.state.write().await;
-            *state = PlayerState::Playing;
             info!("GStreamerPlayer::play() - Player state set to Playing");
         } else {
             error!("GStreamerPlayer::play() - No playbin available!");
@@ -1084,6 +1130,36 @@ impl GStreamerPlayer {
 
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
         if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            // Ensure pipeline is at least in PAUSED state for dimensions to be available
+            let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
+            if current < gst::State::Paused {
+                debug!(
+                    "GStreamerPlayer::get_video_dimensions() - Pipeline not yet in PAUSED state, attempting to reach it"
+                );
+
+                // Try to transition to PAUSED state to get dimensions
+                match playbin.set_state(gst::State::Paused) {
+                    Ok(gst::StateChangeSuccess::Success) => {
+                        debug!("Successfully reached PAUSED state");
+                    }
+                    Ok(gst::StateChangeSuccess::Async) => {
+                        // Wait for async state change to complete (max 2 seconds)
+                        match playbin.state(gst::ClockTime::from_seconds(2)) {
+                            (Ok(_), new_state, _) => {
+                                debug!("Reached state: {:?}", new_state);
+                            }
+                            _ => {
+                                warn!("Timeout waiting for PAUSED state");
+                                return None;
+                            }
+                        }
+                    }
+                    _ => {
+                        warn!("Failed to set PAUSED state for dimension detection");
+                        return None;
+                    }
+                }
+            }
             // Get video sink's pad
             if let Some(video_sink) = playbin.property::<Option<gst::Element>>("video-sink")
                 && let Some(sink_pad) = video_sink.static_pad("sink")
@@ -1156,21 +1232,58 @@ impl GStreamerPlayer {
                 *state = PlayerState::Error;
             }
             MessageView::StateChanged(state_changed) => {
-                if state_changed
-                    .src()
-                    .map(|s| s == state_changed.src().unwrap())
-                    .unwrap_or(false)
-                {
-                    debug!(
-                        "GStreamerPlayer - State changed from {:?} to {:?}",
-                        state_changed.old(),
-                        state_changed.current()
-                    );
+                // Only handle state changes from the playbin element itself
+                if let Some(src) = state_changed.src() {
+                    let element_name = src.name();
+                    if element_name.starts_with("playbin") {
+                        let new_state = state_changed.current();
+                        let old_state = state_changed.old();
+
+                        debug!(
+                            "GStreamerPlayer - Playbin state changed from {:?} to {:?}",
+                            old_state, new_state
+                        );
+
+                        // Update internal state based on pipeline state
+                        let mut state_guard = state.write().await;
+                        match new_state {
+                            gst::State::Playing => {
+                                *state_guard = PlayerState::Playing;
+                                info!("GStreamerPlayer - State updated to Playing");
+                            }
+                            gst::State::Paused => {
+                                // Only set to Paused if we're not in Loading state
+                                // (Loading state transitions through Paused)
+                                if !matches!(*state_guard, PlayerState::Loading) {
+                                    *state_guard = PlayerState::Paused;
+                                    info!("GStreamerPlayer - State updated to Paused");
+                                }
+                            }
+                            gst::State::Ready | gst::State::Null => {
+                                // Only update to Stopped if we're not in Error or Loading state
+                                if !matches!(
+                                    *state_guard,
+                                    PlayerState::Error | PlayerState::Loading
+                                ) {
+                                    *state_guard = PlayerState::Stopped;
+                                    info!("GStreamerPlayer - State updated to Stopped");
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
             MessageView::Buffering(buffering) => {
                 let percent = buffering.percent();
                 debug!("GStreamerPlayer - Buffering: {}%", percent);
+            }
+            MessageView::AsyncDone(_) => {
+                info!(
+                    "GStreamerPlayer - AsyncDone: Pipeline ready, dimensions should be available"
+                );
+                // At this point, the pipeline has completed its async state change
+                // and video dimensions should be available
             }
             _ => {}
         }
@@ -1565,5 +1678,60 @@ impl GStreamerPlayer {
             }
         }
         Ok(())
+    }
+
+    pub async fn set_zoom_mode(&self, mode: ZoomMode) -> Result<()> {
+        // Update internal state
+        *self.zoom_mode.lock().unwrap() = mode;
+
+        // Apply zoom transformation to video widget
+        if let Some(widget) = self.video_widget.lock().unwrap().as_ref() {
+            // For GStreamer, we'll use CSS transforms on the widget
+            let style_context = widget.style_context();
+
+            // Remove previous zoom class
+            style_context.remove_class("zoom-fit");
+            style_context.remove_class("zoom-fill");
+            style_context.remove_class("zoom-16-9");
+            style_context.remove_class("zoom-4-3");
+            style_context.remove_class("zoom-2-35");
+            style_context.remove_class("zoom-custom");
+
+            match mode {
+                ZoomMode::Fit => {
+                    style_context.add_class("zoom-fit");
+                    widget.set_size_request(-1, -1);
+                }
+                ZoomMode::Fill => {
+                    style_context.add_class("zoom-fill");
+                    widget.set_size_request(-1, -1);
+                }
+                ZoomMode::Zoom16_9 => {
+                    style_context.add_class("zoom-16-9");
+                    // Force aspect ratio through widget sizing hints
+                    widget.set_size_request(-1, -1);
+                }
+                ZoomMode::Zoom4_3 => {
+                    style_context.add_class("zoom-4-3");
+                    widget.set_size_request(-1, -1);
+                }
+                ZoomMode::Zoom2_35 => {
+                    style_context.add_class("zoom-2-35");
+                    widget.set_size_request(-1, -1);
+                }
+                ZoomMode::Custom(level) => {
+                    style_context.add_class("zoom-custom");
+                    // Apply custom scale transform through inline CSS
+                    let css = format!("transform: scale({});", level);
+                    widget.set_property("css-name", &css);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_zoom_mode(&self) -> ZoomMode {
+        *self.zoom_mode.lock().unwrap()
     }
 }
