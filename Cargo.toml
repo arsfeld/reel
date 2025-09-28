@@ -9,6 +9,11 @@ repository = "https://github.com/arsfeld/reel"
 keywords = ["media", "player", "plex", "jellyfin", "gnome"]
 categories = ["multimedia", "gui"]
 
+[features]
+default = ["mpv", "gstreamer"]
+mpv = ["dep:libmpv2", "dep:libmpv2-sys"]
+gstreamer = ["dep:gstreamer", "dep:gstreamer-video", "dep:gstreamer-player", "dep:gstreamer-pbutils"]
+
 [dependencies]
 # GTK and UI (required for Relm4)
 gtk4 = { version = "0.10", features = ["v4_14"] }
@@ -24,12 +29,12 @@ relm4-icons = { version = "0.10" }
 tracker = { version = "0.2" }
 
 # Media playback
-gstreamer = "0.24"
-gstreamer-video = "0.24"
-gstreamer-player = "0.24"
-gstreamer-pbutils = "0.24"
-libmpv2 = "5.0"
-libmpv2-sys = "4.0"
+gstreamer = { version = "0.24", optional = true }
+gstreamer-video = { version = "0.24", optional = true }
+gstreamer-player = { version = "0.24", optional = true }
+gstreamer-pbutils = { version = "0.24", optional = true }
+libmpv2 = { version = "5.0", optional = true }
+libmpv2-sys = { version = "4.0", optional = true }
 
 # Async runtime
 tokio = { version = "1.47", features = ["full"] }
@@ -77,6 +82,7 @@ md5 = "0.7"
 lru = "0.16"
 lazy_static = "1.5"
 tantivy = "0.22"
+notify = "7.0"
 
 # Localization
 gettext-rs = { version = "0.7", features = ["gettext-system"] }

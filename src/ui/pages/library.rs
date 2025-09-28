@@ -1009,8 +1009,10 @@ impl LibraryPage {
         // Cancel out-of-range images
         for id in to_cancel {
             trace!("Cancelling image load for out-of-range item: {}", id);
-            self.image_loader
-                .emit(ImageLoaderInput::CancelLoad { id: id.clone() });
+            let _ = self
+                .image_loader
+                .sender()
+                .send(ImageLoaderInput::CancelLoad { id: id.clone() });
             self.pending_image_cancels.push(id);
         }
 
@@ -1047,13 +1049,14 @@ impl LibraryPage {
                         idx, id, priority
                     );
 
-                    self.image_loader
-                        .emit(ImageLoaderInput::LoadImage(ImageRequest {
+                    let _ = self.image_loader.sender().send(ImageLoaderInput::LoadImage(
+                        ImageRequest {
                             id: id.clone(),
                             url: poster_url.clone(),
                             size: ImageSize::Thumbnail,
                             priority,
-                        }));
+                        },
+                    ));
 
                     // Mark this image as requested
                     self.images_requested.insert(id);
@@ -1073,8 +1076,10 @@ impl LibraryPage {
     fn cancel_pending_images(&mut self) {
         // Cancel all pending image loads
         for (id, _) in self.image_requests.iter() {
-            self.image_loader
-                .emit(ImageLoaderInput::CancelLoad { id: id.clone() });
+            let _ = self
+                .image_loader
+                .sender()
+                .send(ImageLoaderInput::CancelLoad { id: id.clone() });
         }
     }
 

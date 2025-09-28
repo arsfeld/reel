@@ -40,26 +40,7 @@ pub enum PlayerState {
     Error,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum UpscalingMode {
-    None,
-    HighQuality,
-    FSR,
-    Anime,
-    Custom, // New mode for custom shader configurations
-}
-
-impl UpscalingMode {
-    pub fn to_string(&self) -> &'static str {
-        match self {
-            UpscalingMode::None => "None",
-            UpscalingMode::HighQuality => "High Quality",
-            UpscalingMode::FSR => "FSR",
-            UpscalingMode::Anime => "Anime",
-            UpscalingMode::Custom => "Custom",
-        }
-    }
-}
+use super::types::{UpscalingMode, ZoomMode};
 
 #[cfg(test)]
 mod tests {
@@ -160,6 +141,7 @@ struct MpvPlayerInner {
     seek_timer: Arc<Mutex<Option<glib::SourceId>>>,
     last_seek_target: Arc<Mutex<Option<f64>>>,
     upscaling_mode: Arc<Mutex<UpscalingMode>>,
+    zoom_mode: Arc<Mutex<ZoomMode>>,
     error_callback: Arc<Mutex<Option<Box<dyn Fn(String) + Send + 'static>>>>,
     event_monitor_handle: Arc<Mutex<Option<glib::SourceId>>>,
     gl_area_realized: Arc<std::sync::atomic::AtomicBool>,
@@ -284,6 +266,7 @@ impl MpvPlayer {
                 seek_timer: Arc::new(Mutex::new(None)),
                 last_seek_target: Arc::new(Mutex::new(None)),
                 upscaling_mode: Arc::new(Mutex::new(UpscalingMode::None)),
+                zoom_mode: Arc::new(Mutex::new(ZoomMode::default())),
                 error_callback: Arc::new(Mutex::new(None)),
                 event_monitor_handle: Arc::new(Mutex::new(None)),
                 gl_area_realized: Arc::new(AtomicBool::new(false)),
@@ -1470,6 +1453,85 @@ impl MpvPlayer {
                 .map_err(|e| anyhow::anyhow!("Failed to cycle audio track: {:?}", e))?;
         }
         Ok(())
+    }
+
+    pub async fn set_zoom_mode(&self, mode: ZoomMode) -> Result<()> {
+        let inner = self.inner.clone();
+
+        // Update internal state
+        *inner.zoom_mode.lock().unwrap() = mode;
+
+        if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
+            match mode {
+                ZoomMode::Fit => {
+                    // Reset to fit entire video
+                    mpv.set_property("video-zoom", 0.0)
+                        .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
+                    mpv.set_property("video-pan-x", 0.0)
+                        .map_err(|e| anyhow::anyhow!("Failed to set video-pan-x: {:?}", e))?;
+                    mpv.set_property("video-pan-y", 0.0)
+                        .map_err(|e| anyhow::anyhow!("Failed to set video-pan-y: {:?}", e))?;
+                    mpv.set_property("video-aspect-override", "-1")
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
+                        })?;
+                }
+                ZoomMode::Fill => {
+                    // Calculate zoom to fill window (will be done dynamically based on aspect ratios)
+                    // For now, just zoom in slightly to demonstrate
+                    mpv.set_property("video-zoom", 0.5)
+                        .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
+                    mpv.set_property("video-aspect-override", "-1")
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
+                        })?;
+                }
+                ZoomMode::Zoom16_9 => {
+                    // Force 16:9 aspect ratio
+                    mpv.set_property("video-aspect-override", "16:9")
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
+                        })?;
+                    mpv.set_property("video-zoom", 0.0)
+                        .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
+                }
+                ZoomMode::Zoom4_3 => {
+                    // Force 4:3 aspect ratio
+                    mpv.set_property("video-aspect-override", "4:3")
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
+                        })?;
+                    mpv.set_property("video-zoom", 0.0)
+                        .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
+                }
+                ZoomMode::Zoom2_35 => {
+                    // Force 2.35:1 (cinematic) aspect ratio
+                    mpv.set_property("video-aspect-override", "2.35:1")
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
+                        })?;
+                    mpv.set_property("video-zoom", 0.0)
+                        .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
+                }
+                ZoomMode::Custom(level) => {
+                    // Custom zoom level (in log2 scale for MPV)
+                    // Convert percentage to log2 scale: 1.0 = 100% = 0 zoom, 2.0 = 200% = 1 zoom
+                    let zoom_value = (level.max(0.1)).log2();
+                    mpv.set_property("video-zoom", zoom_value)
+                        .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
+                    mpv.set_property("video-aspect-override", "-1")
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
+                        })?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_zoom_mode(&self) -> ZoomMode {
+        *self.inner.zoom_mode.lock().unwrap()
     }
 }
 

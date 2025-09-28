@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use super::{Player, PlayerState};
 use crate::config::Config;
 
-use crate::player::UpscalingMode;
+use crate::player::{UpscalingMode, ZoomMode};
 
 /// Commands that can be sent to the player controller
 #[derive(Debug)]
@@ -115,6 +115,20 @@ pub enum PlayerCommand {
     /// Cycle audio track
     CycleAudioTrack {
         respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Set zoom mode
+    SetZoomMode {
+        mode: ZoomMode,
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Get current zoom mode
+    GetZoomMode {
+        respond_to: oneshot::Sender<ZoomMode>,
+    },
+    /// Update player configuration (may recreate player)
+    UpdateConfig {
+        config: Config,
+        respond_to: oneshot::Sender<Result<bool>>, // Returns true if player was recreated
     },
     /// Shutdown the player controller
     Shutdown,
@@ -293,13 +307,17 @@ impl PlayerController {
                 PlayerCommand::SetUpscalingMode { mode, respond_to } => {
                     debug!("🎮 PlayerController: Setting upscaling mode to {:?}", mode);
                     let result = match &self.player {
+                        #[cfg(feature = "mpv")]
                         Player::Mpv(mpv) => mpv.set_upscaling_mode(mode).await,
+                        #[cfg(feature = "gstreamer")]
                         Player::GStreamer(_) => {
                             // GStreamer doesn't support upscaling modes
                             Err(anyhow::anyhow!(
                                 "Upscaling mode not supported for GStreamer backend"
                             ))
                         }
+                        #[cfg(not(any(feature = "mpv", feature = "gstreamer")))]
+                        _ => Err(anyhow::anyhow!("No player backend available")),
                     };
                     let _ = respond_to.send(result);
                 }
@@ -340,6 +358,59 @@ impl PlayerController {
                     debug!("🎮 PlayerController: Cycling audio track");
                     let result = self.player.cycle_audio_track().await;
                     let _ = respond_to.send(result);
+                }
+                PlayerCommand::SetZoomMode { mode, respond_to } => {
+                    debug!("🎮 PlayerController: Setting zoom mode to {:?}", mode);
+                    let result = self.player.set_zoom_mode(mode).await;
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::GetZoomMode { respond_to } => {
+                    debug!("🎮 PlayerController: Getting zoom mode");
+                    let mode = self.player.get_zoom_mode().await;
+                    let _ = respond_to.send(mode);
+                }
+                PlayerCommand::UpdateConfig { config, respond_to } => {
+                    info!("🎮 PlayerController: Updating configuration");
+
+                    // Check if we need to recreate the player (backend changed)
+                    let current_backend = match &self.player {
+                        #[cfg(feature = "mpv")]
+                        Player::Mpv(_) => "mpv",
+                        #[cfg(feature = "gstreamer")]
+                        Player::GStreamer(_) => "gstreamer",
+                    };
+
+                    let needs_recreation = current_backend != config.playback.player_backend;
+
+                    if needs_recreation {
+                        info!(
+                            "🎮 PlayerController: Backend changed from {} to {}, recreating player",
+                            current_backend, config.playback.player_backend
+                        );
+
+                        // Try to create new player with new config
+                        match Player::new(&config) {
+                            Ok(new_player) => {
+                                // Stop current player
+                                let _ = self.player.stop().await;
+
+                                // Replace with new player
+                                self.player = new_player;
+
+                                // Re-setup error callback
+                                self.setup_error_callback();
+
+                                let _ = respond_to.send(Ok(true));
+                            }
+                            Err(e) => {
+                                let _ = respond_to.send(Err(e));
+                            }
+                        }
+                    } else {
+                        // Just update config without recreation
+                        // For now, we don't have config updates that don't require recreation
+                        let _ = respond_to.send(Ok(false));
+                    }
                 }
                 PlayerCommand::Shutdown => {
                     info!("🎮 PlayerController: Shutting down");
@@ -670,6 +741,39 @@ impl PlayerHandle {
         let (respond_to, response) = oneshot::channel();
         self.sender
             .send(PlayerCommand::CycleAudioTrack { respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Set zoom mode
+    pub async fn set_zoom_mode(&self, mode: ZoomMode) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::SetZoomMode { mode, respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Get current zoom mode
+    pub async fn get_zoom_mode(&self) -> Result<ZoomMode> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::GetZoomMode { respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        Ok(response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?)
+    }
+
+    /// Update player configuration (may recreate player if backend changes)
+    pub async fn update_config(&self, config: Config) -> Result<bool> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::UpdateConfig { config, respond_to })
             .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
         response
             .await
