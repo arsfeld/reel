@@ -11,7 +11,8 @@ DOCKERFILE="$SCRIPT_DIR/Dockerfile.build"
 
 # Parse arguments
 ARCH=${1:-$(uname -m)}
-BUILD_TYPE=${2:-all} # all, binary, deb, rpm, appimage
+shift || true
+BUILD_TYPES=${@:-all} # Can pass multiple types: deb rpm binary
 
 # Map architecture names
 case "$ARCH" in
@@ -33,7 +34,7 @@ case "$ARCH" in
 esac
 
 echo "Building Reel for $ARCH_NAME using Docker buildx"
-echo "Build type: $BUILD_TYPE"
+echo "Build types: $BUILD_TYPES"
 echo "Docker platform: $DOCKER_PLATFORM"
 
 # Ensure buildx is available and set up
@@ -90,54 +91,73 @@ run_in_container() {
         bash -c "$1"
 }
 
-# Build requested package types
-case "$BUILD_TYPE" in
-    binary|all)
-        echo "=== Extracting release binary ==="
-        run_in_container "cp /workspace/target/release/reel /host/reel-linux-$ARCH_NAME && \
-                         chmod +x /host/reel-linux-$ARCH_NAME"
-        echo "✓ Binary: reel-linux-$ARCH_NAME"
-        ;;&  # Fall through for "all"
+# Process each build type
+for BUILD_TYPE in $BUILD_TYPES; do
+    case "$BUILD_TYPE" in
+        all)
+            # Build everything
+            for TYPE in binary deb rpm; do
+                BUILD_TYPES="$TYPE"
+                $0 "$ARCH_NAME" "$TYPE" || exit 1
+            done
+            break  # Don't process other types if 'all' was specified
+            ;;
 
-    deb|all)
-        echo "=== Building Debian package ==="
-        run_in_container "cd /workspace && cargo deb --no-build && \
-                         cp target/debian/*.deb /host/reel-$VERSION-$DEB_ARCH.deb"
-        echo "✓ Debian package: reel-$VERSION-$DEB_ARCH.deb"
-        ;;&
+        binary|tarball)
+            echo "=== Extracting release binary ==="
+            run_in_container "cp /workspace/target/release/reel /host/reel-linux-$ARCH_NAME && \
+                             chmod +x /host/reel-linux-$ARCH_NAME"
 
-    rpm|all)
-        echo "=== Building RPM package ==="
-        run_in_container "cd /workspace && cargo generate-rpm && \
-                         cp target/generate-rpm/*.rpm /host/reel-$VERSION-$ARCH_NAME.rpm"
-        echo "✓ RPM package: reel-$VERSION-$ARCH_NAME.rpm"
-        ;;&
+            # Create tarball if requested
+            if [ "$BUILD_TYPE" = "tarball" ]; then
+                echo "Creating tarball..."
+                tar -czf "reel-linux-$ARCH_NAME.tar.gz" "reel-linux-$ARCH_NAME"
+                rm "reel-linux-$ARCH_NAME"  # Remove the raw binary, keep only tarball
+                echo "✓ Tarball: reel-linux-$ARCH_NAME.tar.gz"
+            else
+                echo "✓ Binary: reel-linux-$ARCH_NAME"
+            fi
+            ;;
 
-    appimage|all)
-        echo "=== Building AppImage ==="
-        # Set environment variables for the AppImage script
-        run_in_container "cd /workspace && \
-                         export VERSION=$VERSION && \
-                         export ARCH=$ARCH_NAME && \
-                         ./scripts/build-appimage.sh && \
-                         cp reel-*.AppImage /host/"
-        echo "✓ AppImage: reel-$VERSION-$ARCH_NAME.AppImage"
-        ;;
+        deb)
+            echo "=== Building Debian package ==="
+            run_in_container "cd /workspace && cargo deb --no-build && \
+                             cp target/debian/*.deb /host/reel-$VERSION-$DEB_ARCH.deb"
+            echo "✓ Debian package: reel-$VERSION-$DEB_ARCH.deb"
+            ;;
 
-    *)
-        if [ "$BUILD_TYPE" != "all" ]; then
+        rpm)
+            echo "=== Building RPM package ==="
+            run_in_container "cd /workspace && cargo generate-rpm && \
+                             cp target/generate-rpm/*.rpm /host/reel-$VERSION-$ARCH_NAME.rpm"
+            echo "✓ RPM package: reel-$VERSION-$ARCH_NAME.rpm"
+            ;;
+
+        appimage)
+            echo "=== Building AppImage ==="
+            # Set environment variables for the AppImage script
+            run_in_container "cd /workspace && \
+                             export VERSION=$VERSION && \
+                             export ARCH=$ARCH_NAME && \
+                             ./scripts/build-appimage.sh && \
+                             cp reel-*.AppImage /host/"
+            echo "✓ AppImage: reel-$VERSION-$ARCH_NAME.AppImage"
+            ;;
+
+        *)
             echo "Unknown build type: $BUILD_TYPE"
-            echo "Supported: all, binary, deb, rpm, appimage"
+            echo "Supported: all, binary, tarball, deb, rpm, appimage"
             exit 1
-        fi
-        ;;
-esac
+            ;;
+    esac
+done
 
 echo ""
 echo "=== Build complete ==="
 echo "Architecture: $ARCH_NAME"
 echo "Built artifacts:"
 [ -f "reel-linux-$ARCH_NAME" ] && echo "  - reel-linux-$ARCH_NAME"
+[ -f "reel-linux-$ARCH_NAME.tar.gz" ] && echo "  - reel-linux-$ARCH_NAME.tar.gz"
 [ -f "reel-$VERSION-$DEB_ARCH.deb" ] && echo "  - reel-$VERSION-$DEB_ARCH.deb"
 [ -f "reel-$VERSION-$ARCH_NAME.rpm" ] && echo "  - reel-$VERSION-$ARCH_NAME.rpm"
 [ -f "reel-$VERSION-$ARCH_NAME.AppImage" ] && echo "  - reel-$VERSION-$ARCH_NAME.AppImage"
