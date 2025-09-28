@@ -1,4 +1,5 @@
 /// Consolidated worker components for background tasks
+pub mod config_manager;
 pub mod connection_monitor;
 pub mod image_loader;
 pub mod search_worker;

@@ -46,6 +46,7 @@ pub enum BrokerMessage {
     Data(DataMessage),
     Playback(PlaybackMessage),
     Source(SourceMessage),
+    Config(ConfigMessage),
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +139,14 @@ pub enum SourceMessage {
         library_name: String,
         items_synced: usize,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum ConfigMessage {
+    Updated { config: Arc<crate::config::Config> },
+    PropertyChanged { property: String, value: String },
+    PlayerBackendChanged { backend: String },
+    ThemeChanged { theme: String },
 }
 
 pub struct MessageBroker {
