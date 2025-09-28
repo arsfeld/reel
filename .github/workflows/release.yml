@@ -104,24 +104,24 @@ jobs:
           ## Downloads
 
           ### x86_64 (Intel/AMD)
-          - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage` - Portable, runs on most Linux distributions (recommended)
+          # - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage` - Portable, runs on most Linux distributions (recommended)
           - **Debian/Ubuntu**: `reel-${{ steps.get_version.outputs.version }}-amd64.deb` - Install with `sudo dpkg -i`
           - **Fedora/RHEL**: `reel-${{ steps.get_version.outputs.version }}-x86_64.rpm` - Install with `sudo rpm -i`
           - **Linux Tarball**: `reel-linux-x86_64.tar.gz` - Extract and run `./reel`
 
           ### ARM64 (aarch64)
-          - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-aarch64.AppImage` - Portable, runs on ARM64 Linux distributions
+          # - **AppImage**: `reel-${{ steps.get_version.outputs.version }}-aarch64.AppImage` - Portable, runs on ARM64 Linux distributions
           - **Debian/Ubuntu**: `reel-${{ steps.get_version.outputs.version }}-arm64.deb` - Install with `sudo dpkg -i`
           - **Fedora/RHEL**: `reel-${{ steps.get_version.outputs.version }}-aarch64.rpm` - Install with `sudo rpm -i`
           - **Linux Tarball**: `reel-linux-aarch64.tar.gz` - Extract and run `./reel`
 
           ## Installation
 
-          ### AppImage (Recommended)
-          ```bash
-          chmod +x reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage
-          ./reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage
-          ```
+          # ### AppImage (Recommended)
+          # ```bash
+          # chmod +x reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage
+          # ./reel-${{ steps.get_version.outputs.version }}-x86_64.AppImage
+          # ```
 
           ### Debian/Ubuntu
           ```bash
@@ -198,8 +198,8 @@ jobs:
           export BUILDX_CACHE_FROM="type=local,src=/tmp/.buildx-cache"
           export BUILDX_CACHE_TO="type=local,dest=/tmp/.buildx-cache-new,mode=max"
 
-          # Use the Docker build script to build all packages
-          ./scripts/build-with-docker.sh ${{ matrix.arch }} all
+          # Use the Docker build script to build all packages (excluding AppImage)
+          ./scripts/build-with-docker.sh ${{ matrix.arch }} deb rpm tarball
 
           # Move cache to correct location (atomic)
           rm -rf /tmp/.buildx-cache
@@ -219,7 +219,7 @@ jobs:
             reel-linux-*
             reel-*.deb
             reel-*.rpm
-            reel-*.AppImage
+            # reel-*.AppImage
 
   # Flatpak builds are disabled temporarily for better testing
   # build-flatpak:
