@@ -375,8 +375,8 @@ let
   macOSBundleTools = with pkgs;
     lib.optionals pkgs.stdenv.isDarwin [
       cargo-bundle
-      dylibbundler
-      rsvg # For rsvg-convert
+      macdylibbundler
+      librsvg # For rsvg-convert
     ];
 
   # macOS bundle building

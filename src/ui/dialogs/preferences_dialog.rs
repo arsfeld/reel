@@ -75,15 +75,28 @@ impl AsyncComponent for PreferencesDialog {
                             set_valign: gtk::Align::Center,
 
                             gtk::DropDown {
-                                set_model: Some(&gtk::StringList::new(&[
-                                    "MPV (Recommended)",
-                                    "GStreamer",
-                                ])),
+                                set_model: Some(&gtk::StringList::new(
+                                    if cfg!(target_os = "macos") {
+                                        // On macOS, only show GStreamer
+                                        &["GStreamer"]
+                                    } else {
+                                        // On other platforms, show both options
+                                        &["MPV (Recommended)", "GStreamer"]
+                                    }
+                                )),
                                 #[track(model.changed(PreferencesDialog::default_player()))]
-                                set_selected: if model.default_player == "mpv" { 0 } else { 1 },
+                                set_selected: if cfg!(target_os = "macos") {
+                                    0 // Always select GStreamer on macOS
+                                } else {
+                                    if model.default_player == "mpv" { 0 } else { 1 }
+                                },
                                 connect_selected_notify[sender] => move |dropdown| {
                                     let selected = dropdown.selected();
-                                    let player = if selected == 0 { "mpv" } else { "gstreamer" };
+                                    let player = if cfg!(target_os = "macos") {
+                                        "gstreamer" // Always GStreamer on macOS
+                                    } else {
+                                        if selected == 0 { "mpv" } else { "gstreamer" }
+                                    };
                                     sender.input(PreferencesDialogInput::SetDefaultPlayer(player.to_string()));
                                 }
                             }
