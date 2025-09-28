@@ -27,7 +27,7 @@ impl AuthService {
 
     /// Save authentication credentials directly to keyring
     pub async fn save_credentials(source_id: &SourceId, credentials: &Credentials) -> Result<()> {
-        let service_name = format!("gnome-reel.{}", source_id);
+        let service_name = format!("reel.{}", source_id);
 
         match credentials {
             Credentials::UsernamePassword {
@@ -60,7 +60,7 @@ impl AuthService {
 
     /// Load authentication credentials directly from keyring
     pub async fn load_credentials(source_id: &SourceId) -> Result<Option<Credentials>> {
-        let service_name = format!("gnome-reel.{}", source_id);
+        let service_name = format!("reel.{}", source_id);
 
         // Try to load as token first
         if let Ok(entry) = Entry::new(&service_name, "token")
@@ -76,7 +76,7 @@ impl AuthService {
 
     /// Remove authentication credentials directly from keyring
     pub async fn remove_credentials(source_id: &SourceId) -> Result<()> {
-        let service_name = format!("gnome-reel.{}", source_id);
+        let service_name = format!("reel.{}", source_id);
 
         // Try to remove token
         if let Ok(entry) = Entry::new(&service_name, "token") {

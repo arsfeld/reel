@@ -29,17 +29,17 @@
   <screenshots>
     <screenshot type="default">
       <caption>Main window showing media library</caption>
-      <image>https://raw.githubusercontent.com/arsfeld/gnome-reel/main/screenshots/main-window.png</image>
+      <image>https://raw.githubusercontent.com/arsfeld/reel/main/screenshots/main-window.png</image>
     </screenshot>
     <screenshot>
       <caption>TV show details with episode list</caption>
-      <image>https://raw.githubusercontent.com/arsfeld/gnome-reel/main/screenshots/show-details.png</image>
+      <image>https://raw.githubusercontent.com/arsfeld/reel/main/screenshots/show-details.png</image>
     </screenshot>
   </screenshots>
   
-  <url type="homepage">https://github.com/arsfeld/gnome-reel</url>
-  <url type="bugtracker">https://github.com/arsfeld/gnome-reel/issues</url>
-  <url type="vcs-browser">https://github.com/arsfeld/gnome-reel</url>
+  <url type="homepage">https://github.com/arsfeld/reel</url>
+  <url type="bugtracker">https://github.com/arsfeld/reel/issues</url>
+  <url type="vcs-browser">https://github.com/arsfeld/reel</url>
   
   <developer id="dev.arsfeld">
     <name>arsfeld</name>
