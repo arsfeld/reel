@@ -50,7 +50,7 @@ rm Cargo.toml.bak
 
 # Update Cargo.lock
 echo "Updating Cargo.lock..."
-cargo update --package gnome-reel
+cargo update --package reel
 
 # Run tests to ensure everything still works
 echo "Running tests..."
