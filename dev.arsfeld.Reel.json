@@ -61,7 +61,7 @@
       "sources": [
         {
           "type": "git",
-          "url": "https://github.com/arsfeld/gnome-reel.git",
+          "url": "https://github.com/arsfeld/reel.git",
           "tag": "v0.1.0"
         },
         "cargo-sources.json"

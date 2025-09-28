@@ -135,7 +135,7 @@ let
     cargo build --release
 
     # Create debian package structure
-    PKG_NAME="gnome-reel"
+    PKG_NAME="reel"
     VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
     DEB_DIR="target/debian/$PKG_NAME-$VERSION"
 
@@ -147,8 +147,8 @@ let
     mkdir -p "$DEB_DIR/usr/share/icons/hicolor/scalable/apps"
 
     # Copy binary
-    cp target/release/reel "$DEB_DIR/usr/bin/gnome-reel"
-    chmod 755 "$DEB_DIR/usr/bin/gnome-reel"
+    cp target/release/reel "$DEB_DIR/usr/bin/reel"
+    chmod 755 "$DEB_DIR/usr/bin/reel"
 
     # Copy desktop file
     if [ -f data/dev.arsfeld.Reel.desktop ]; then
@@ -194,7 +194,7 @@ let
     echo "Building release binary..."
     cargo build --release
 
-    PKG_NAME="gnome-reel"
+    PKG_NAME="reel"
     VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
 
     # Create RPM build structure
@@ -212,7 +212,7 @@ let
     Release:        1%{?dist}
     Summary:        A modern GTK frontend for Plex and other media servers
     License:        GPL-3.0+
-    URL:            https://github.com/arsfeld/gnome-reel
+    URL:            https://github.com/arsfeld/reel
     Source0:        %{name}-%{version}.tar.gz
 
     BuildRequires:  rust cargo gtk4-devel libadwaita-devel
@@ -235,12 +235,12 @@ let
     mkdir -p %{buildroot}%{_datadir}/applications
     mkdir -p %{buildroot}%{_datadir}/icons/hicolor/scalable/apps
 
-    install -m 755 target/release/reel %{buildroot}%{_bindir}/gnome-reel
+    install -m 755 target/release/reel %{buildroot}%{_bindir}/reel
     install -m 644 data/dev.arsfeld.Reel.desktop %{buildroot}%{_datadir}/applications/
     install -m 644 data/icons/dev.arsfeld.Reel.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/
 
     %files
-    %{_bindir}/gnome-reel
+    %{_bindir}/reel
     %{_datadir}/applications/dev.arsfeld.Reel.desktop
     %{_datadir}/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg
 
@@ -282,7 +282,7 @@ let
     echo "Building release binary..."
     cargo build --release
 
-    PKG_NAME="gnome-reel"
+    PKG_NAME="reel"
     VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
     APP_DIR="target/appimage/$PKG_NAME.AppDir"
 
@@ -294,8 +294,8 @@ let
     mkdir -p "$APP_DIR/usr/lib"
 
     # Copy binary
-    cp target/release/reel "$APP_DIR/usr/bin/gnome-reel"
-    chmod 755 "$APP_DIR/usr/bin/gnome-reel"
+    cp target/release/reel "$APP_DIR/usr/bin/reel"
+    chmod 755 "$APP_DIR/usr/bin/reel"
 
     # Copy desktop file
     if [ -f data/dev.arsfeld.Reel.desktop ]; then
@@ -324,7 +324,7 @@ let
     export PATH="$HERE/usr/bin:$PATH"
     export LD_LIBRARY_PATH="$HERE/usr/lib:$LD_LIBRARY_PATH"
     export XDG_DATA_DIRS="$HERE/usr/share:$XDG_DATA_DIRS"
-    exec "$HERE/usr/bin/gnome-reel" "$@"
+    exec "$HERE/usr/bin/reel" "$@"
     EOF
     chmod 755 "$APP_DIR/AppRun"
 

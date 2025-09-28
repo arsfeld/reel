@@ -269,10 +269,10 @@ impl AsyncComponent for MainWindow {
                 .application_icon("media-reel")
                 .version(env!("CARGO_PKG_VERSION"))
                 .comments("A native media player for Plex and Jellyfin")
-                .website("https://github.com/arosenfeld/gnome-reel")
-                .issue_url("https://github.com/arosenfeld/gnome-reel/issues")
+                .website("https://github.com/arsfeld/reel")
+                .issue_url("https://github.com/arsfeld/reel/issues")
                 .license_type(gtk::License::Gpl30)
-                .developers(vec!["Aaron Rosenfeld"])
+                .developers(vec!["Alex Rosenfeld"])
                 .build();
 
             about_dialog.present(Some(&window_clone));
