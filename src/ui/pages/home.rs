@@ -777,13 +777,14 @@ impl HomePage {
                             item_id, priority
                         );
 
-                        self.image_loader
-                            .emit(ImageLoaderInput::LoadImage(ImageRequest {
+                        let _ = self.image_loader.sender().send(ImageLoaderInput::LoadImage(
+                            ImageRequest {
                                 id: tracking_key, // Use the unique tracking key as the ID
                                 url: poster_url.clone(),
                                 size: ImageSize::Thumbnail,
                                 priority,
-                            }));
+                            },
+                        ));
                     }
                 }
             }
@@ -902,9 +903,12 @@ impl HomePage {
 
         // Cancel all pending image loads
         for (tracking_key, _) in self.image_requests.iter() {
-            self.image_loader.emit(ImageLoaderInput::CancelLoad {
-                id: tracking_key.clone(),
-            });
+            let _ = self
+                .image_loader
+                .sender()
+                .send(ImageLoaderInput::CancelLoad {
+                    id: tracking_key.clone(),
+                });
         }
         self.image_requests.clear();
 
@@ -931,9 +935,12 @@ impl HomePage {
         let mut requests_to_remove = Vec::new();
         for (tracking_key, (section_id, _)) in self.image_requests.iter() {
             if section_id.starts_with(&format!("{}::", source_id)) {
-                self.image_loader.emit(ImageLoaderInput::CancelLoad {
-                    id: tracking_key.clone(),
-                });
+                let _ = self
+                    .image_loader
+                    .sender()
+                    .send(ImageLoaderInput::CancelLoad {
+                        id: tracking_key.clone(),
+                    });
                 requests_to_remove.push(tracking_key.clone());
             }
         }

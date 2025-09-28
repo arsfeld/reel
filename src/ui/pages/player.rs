@@ -92,6 +92,10 @@ pub struct PlayerPage {
     quality_menu_button: gtk::MenuButton,
     current_upscaling_mode: crate::player::UpscalingMode,
     is_mpv_backend: bool,
+    // Zoom control state
+    zoom_menu_button: gtk::MenuButton,
+    current_zoom_mode: crate::player::ZoomMode,
+    zoom_label: gtk::Label,
     // Control widgets for bounds detection
     controls_overlay: Option<gtk::Box>,
     // Timing configuration
@@ -317,6 +321,115 @@ impl PlayerPage {
         }
     }
 
+    fn populate_zoom_menu(&self, sender: AsyncComponentSender<Self>) {
+        let zoom_menu_button = self.zoom_menu_button.clone();
+        let current_mode = self.current_zoom_mode;
+
+        zoom_menu_button.set_sensitive(true);
+        zoom_menu_button.set_tooltip_text(Some("Video Zoom"));
+
+        // Create menu
+        let menu = gtk::gio::Menu::new();
+
+        // Add zoom modes
+        let modes = [
+            (crate::player::ZoomMode::Fit, "Fit", "Fit video to window"),
+            (
+                crate::player::ZoomMode::Fill,
+                "Fill",
+                "Fill window (may crop)",
+            ),
+            (
+                crate::player::ZoomMode::Zoom16_9,
+                "16:9",
+                "Force 16:9 aspect ratio",
+            ),
+            (
+                crate::player::ZoomMode::Zoom4_3,
+                "4:3",
+                "Force 4:3 aspect ratio",
+            ),
+            (
+                crate::player::ZoomMode::Zoom2_35,
+                "2.35:1",
+                "Cinematic aspect ratio",
+            ),
+        ];
+
+        for (mode, label, _description) in modes {
+            let item = gtk::gio::MenuItem::new(Some(label), None);
+            let action_name = format!(
+                "player.zoom-{}",
+                label.to_lowercase().replace(':', "-").replace('.', "-")
+            );
+            item.set_action_and_target_value(Some(&action_name), None);
+
+            // Add checkmark for current mode
+            if mode == current_mode {
+                item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
+            }
+
+            menu.append_item(&item);
+        }
+
+        // Add custom zoom levels
+        menu.append_item(&gtk::gio::MenuItem::new(Some("──────"), None));
+        let custom_zooms = [(1.1, "110%"), (1.2, "120%"), (1.3, "130%"), (1.5, "150%")];
+
+        for (level, label) in custom_zooms {
+            let item = gtk::gio::MenuItem::new(Some(label), None);
+            let action_name = format!("player.zoom-custom-{}", label.replace('%', ""));
+            item.set_action_and_target_value(Some(&action_name), None);
+
+            // Check if it matches custom zoom
+            if let crate::player::ZoomMode::Custom(current_level) = current_mode {
+                if (current_level - level).abs() < 0.01 {
+                    item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
+                }
+            }
+
+            menu.append_item(&item);
+        }
+
+        // Create popover
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+
+        // Create action group
+        let action_group = gtk::gio::SimpleActionGroup::new();
+
+        // Add actions for preset modes
+        for (mode, label, _) in modes {
+            let action_name = format!(
+                "zoom-{}",
+                label.to_lowercase().replace(':', "-").replace('.', "-")
+            );
+            let action = gtk::gio::SimpleAction::new(&action_name, None);
+            let sender_clone = sender.clone();
+            let mode_copy = mode;
+            action.connect_activate(move |_, _| {
+                sender_clone.input(PlayerInput::SetZoomMode(mode_copy));
+            });
+            action_group.add_action(&action);
+        }
+
+        // Add actions for custom zoom levels
+        for (level, label) in custom_zooms {
+            let action_name = format!("zoom-custom-{}", label.replace('%', ""));
+            let action = gtk::gio::SimpleAction::new(&action_name, None);
+            let sender_clone = sender.clone();
+            action.connect_activate(move |_, _| {
+                sender_clone.input(PlayerInput::SetZoomMode(crate::player::ZoomMode::Custom(
+                    level,
+                )));
+            });
+            action_group.add_action(&action);
+        }
+
+        // Insert the action group
+        zoom_menu_button.insert_action_group("player", Some(&action_group));
+        zoom_menu_button.set_popover(Some(&popover));
+    }
+
     fn populate_quality_menu(&self, sender: AsyncComponentSender<Self>) {
         let quality_menu_button = self.quality_menu_button.clone();
         let current_mode = self.current_upscaling_mode;
@@ -495,6 +608,12 @@ pub enum PlayerInput {
     CycleAudioTrack,
     // Control visibility (for keyboard toggle)
     ToggleControlsVisibility,
+    // Zoom controls
+    SetZoomMode(crate::player::ZoomMode),
+    CycleZoom,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
     // Relative seeking
     SeekRelative(i64), // Positive for forward, negative for backward
     // Upscaling mode
@@ -825,6 +944,13 @@ impl AsyncComponent for PlayerPage {
                             set_tooltip_text: Some("Video Quality"),
                         },
 
+                        // Zoom button
+                        model.zoom_menu_button.clone() {
+                            set_icon_name: "zoom-in-symbolic",
+                            add_css_class: "flat",
+                            set_tooltip_text: Some("Video Zoom"),
+                        },
+
                         // Fullscreen button
                         gtk::Button {
                             #[watch]
@@ -934,6 +1060,8 @@ impl AsyncComponent for PlayerPage {
         let audio_menu_button = gtk::MenuButton::new();
         let subtitle_menu_button = gtk::MenuButton::new();
         let quality_menu_button = gtk::MenuButton::new();
+        let zoom_menu_button = gtk::MenuButton::new();
+        let zoom_label = gtk::Label::new(Some("Fit"));
 
         // Load config once at initialization
         let config = Config::load().unwrap_or_default();
@@ -993,6 +1121,9 @@ impl AsyncComponent for PlayerPage {
             },
             is_mpv_backend: config.playback.player_backend == "mpv"
                 || config.playback.player_backend.is_empty(),
+            zoom_menu_button: zoom_menu_button.clone(),
+            current_zoom_mode: crate::player::ZoomMode::default(),
+            zoom_label: zoom_label.clone(),
             controls_overlay: None, // Will be set when controls are created
             inactivity_timeout_secs: Self::DEFAULT_INACTIVITY_TIMEOUT_SECS,
             mouse_move_threshold: Self::DEFAULT_MOUSE_MOVE_THRESHOLD,
@@ -1280,6 +1411,32 @@ impl AsyncComponent for PlayerPage {
                         sender.input(PlayerInput::ToggleControlsVisibility);
                         glib::Propagation::Stop
                     }
+                    // Zoom controls
+                    gtk::gdk::Key::z => {
+                        if shift_pressed {
+                            // Shift+Z: zoom out
+                            sender.input(PlayerInput::ZoomOut);
+                        } else {
+                            // z: cycle zoom modes
+                            sender.input(PlayerInput::CycleZoom);
+                        }
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::plus | gtk::gdk::Key::equal => {
+                        // +/=: zoom in
+                        sender.input(PlayerInput::ZoomIn);
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::minus | gtk::gdk::Key::underscore => {
+                        // -/_: zoom out
+                        sender.input(PlayerInput::ZoomOut);
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::_0 if ctrl_pressed => {
+                        // Ctrl+0: reset zoom
+                        sender.input(PlayerInput::ZoomReset);
+                        glib::Propagation::Stop
+                    }
                     _ => glib::Propagation::Proceed,
                 }
             });
@@ -1448,7 +1605,12 @@ impl AsyncComponent for PlayerPage {
                                         .ok();
                                 }
 
-                                // Get the actual state from the player after loading
+                                // Start playback automatically after loading
+                                if let Err(e) = player_handle.play().await {
+                                    warn!("Failed to auto-start playback: {}", e);
+                                }
+
+                                // Get the actual state from the player after loading and playing
                                 let actual_state =
                                     player_handle.get_state().await.unwrap_or(PlayerState::Idle);
                                 PlayerCommandOutput::StateChanged(actual_state)
@@ -1590,7 +1752,12 @@ impl AsyncComponent for PlayerPage {
                                         .ok();
                                 }
 
-                                // Get the actual state from the player after loading
+                                // Start playback automatically after loading
+                                if let Err(e) = player_handle.play().await {
+                                    warn!("Failed to auto-start playback: {}", e);
+                                }
+
+                                // Get the actual state from the player after loading and playing
                                 let actual_state =
                                     player_handle.get_state().await.unwrap_or(PlayerState::Idle);
                                 PlayerCommandOutput::StateChanged(actual_state)
@@ -1992,6 +2159,7 @@ impl AsyncComponent for PlayerPage {
                 self.populate_audio_menu(sender.clone());
                 self.populate_subtitle_menu(sender.clone());
                 self.populate_quality_menu(sender.clone());
+                self.populate_zoom_menu(sender.clone());
 
                 // Also get current track selections
                 if let Some(player) = &self.player {
@@ -2144,6 +2312,53 @@ impl AsyncComponent for PlayerPage {
                     // Update menu to reflect new selection
                     self.populate_quality_menu(sender.clone());
                 }
+            }
+            PlayerInput::SetZoomMode(mode) => {
+                if let Some(player) = &self.player {
+                    self.current_zoom_mode = mode;
+                    let player_handle = player.clone();
+                    sender.oneshot_command(async move {
+                        let _ = player_handle.set_zoom_mode(mode).await;
+                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    });
+                    // Update menu to reflect new selection
+                    self.populate_zoom_menu(sender.clone());
+                    // Update zoom label
+                    self.zoom_label.set_text(&mode.to_string());
+                }
+            }
+            PlayerInput::CycleZoom => {
+                // Cycle through common zoom modes
+                let next_mode = match self.current_zoom_mode {
+                    crate::player::ZoomMode::Fit => crate::player::ZoomMode::Fill,
+                    crate::player::ZoomMode::Fill => crate::player::ZoomMode::Zoom16_9,
+                    crate::player::ZoomMode::Zoom16_9 => crate::player::ZoomMode::Zoom4_3,
+                    crate::player::ZoomMode::Zoom4_3 => crate::player::ZoomMode::Zoom2_35,
+                    crate::player::ZoomMode::Zoom2_35 => crate::player::ZoomMode::Fit,
+                    crate::player::ZoomMode::Custom(_) => crate::player::ZoomMode::Fit,
+                };
+                sender.input(PlayerInput::SetZoomMode(next_mode));
+            }
+            PlayerInput::ZoomIn => {
+                let new_level = match self.current_zoom_mode {
+                    crate::player::ZoomMode::Custom(level) => (level + 0.1).min(3.0),
+                    _ => 1.1,
+                };
+                sender.input(PlayerInput::SetZoomMode(crate::player::ZoomMode::Custom(
+                    new_level,
+                )));
+            }
+            PlayerInput::ZoomOut => {
+                let new_level = match self.current_zoom_mode {
+                    crate::player::ZoomMode::Custom(level) => (level - 0.1).max(0.5),
+                    _ => 0.9,
+                };
+                sender.input(PlayerInput::SetZoomMode(crate::player::ZoomMode::Custom(
+                    new_level,
+                )));
+            }
+            PlayerInput::ZoomReset => {
+                sender.input(PlayerInput::SetZoomMode(crate::player::ZoomMode::Fit));
             }
             PlayerInput::UpdateQualityMenu => {
                 self.populate_quality_menu(sender.clone());
@@ -2331,5 +2546,43 @@ impl AsyncComponent for PlayerPage {
                 self.player_state = state;
             }
         }
+    }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        // Restore cursor visibility when player is destroyed
+        if let Some(surface) = self.window.surface() {
+            if let Some(cursor) = gtk::gdk::Cursor::from_name("default", None) {
+                surface.set_cursor(Some(&cursor));
+            }
+        }
+
+        // Clean up any active timers
+        if let Some(timer) = self.cursor_timer.take() {
+            timer.remove();
+        }
+
+        // Cancel any visible state timer
+        if let ControlState::Visible { timer_id } = &mut self.control_state {
+            if let Some(timer) = timer_id.take() {
+                timer.remove();
+            }
+        }
+
+        // Clean up window event debounce timer
+        if let Some(timer) = self.window_event_debounce.take() {
+            timer.remove();
+        }
+
+        // Clean up retry timer
+        if let Some(timer) = self.retry_timer.take() {
+            timer.remove();
+        }
+
+        // Clean up auto-play timeout
+        if let Some(timer) = self.auto_play_timeout.take() {
+            timer.remove();
+        }
+
+        tracing::debug!("PlayerPage shutdown: restored cursor and cleaned up timers");
     }
 }
