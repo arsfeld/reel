@@ -7,6 +7,7 @@ use tracing::{debug, error, info, warn};
 use super::config::FileCacheConfig;
 use super::downloader::{DownloadPriority, ProgressiveDownloader, ProgressiveDownloaderHandle};
 use super::metadata::MediaCacheKey;
+use super::proxy::CacheProxy;
 use super::storage::{CacheStats, CacheStorage};
 use crate::models::{MediaItemId, SourceId, StreamInfo};
 
@@ -87,6 +88,7 @@ pub struct FileCache {
     config: FileCacheConfig,
     storage: Arc<RwLock<CacheStorage>>,
     downloader_handle: ProgressiveDownloaderHandle,
+    proxy: Arc<CacheProxy>,
     command_receiver: mpsc::UnboundedReceiver<FileCacheCommand>,
 }
 
@@ -102,6 +104,15 @@ impl FileCache {
                 .await
                 .context("Failed to initialize cache storage")?,
         ));
+
+        // Create proxy server
+        let proxy = Arc::new(CacheProxy::new(storage.clone()));
+        proxy
+            .clone()
+            .start()
+            .await
+            .context("Failed to start cache proxy server")?;
+        info!("Cache proxy server started on port {}", proxy.port());
 
         // Create downloader
         let (download_cmd_tx, download_cmd_rx) = mpsc::unbounded_channel();
@@ -125,6 +136,7 @@ impl FileCache {
             config,
             storage,
             downloader_handle,
+            proxy,
             command_receiver: cmd_rx,
         };
 
@@ -217,88 +229,66 @@ impl FileCache {
         original_stream: StreamInfo,
     ) -> Result<CachedStreamInfo> {
         let quality = Self::determine_quality(&original_stream);
-        let cache_key = MediaCacheKey::new(source_id, media_id, quality);
+        let cache_key = MediaCacheKey::new(source_id.clone(), media_id.clone(), quality);
 
-        // Check if already cached
-        let mut storage = self.storage.write().await;
-        let cached_entry = storage.get_entry(&cache_key);
+        // ALWAYS create or get cache entry
+        let entry = {
+            let mut storage = self.storage.write().await;
 
-        match cached_entry {
-            Some(entry) if entry.metadata.is_complete => {
-                // Fully cached - return local file URL
-                debug!("✅ Found complete cache entry for: {:?}", cache_key);
-                Ok(CachedStreamInfo {
-                    original_stream,
-                    cached_url: Some(format!("file://{}", entry.file_path.display())),
-                    is_complete: true,
-                    progress: 1.0,
-                    eta_seconds: None,
-                })
+            // Get existing entry or create new one
+            if let Some(entry) = storage.get_entry(&cache_key) {
+                entry
+            } else {
+                // Create new cache entry
+                storage
+                    .create_entry(cache_key.clone(), original_stream.url.clone())
+                    .await
+                    .context("Failed to create cache entry")?
             }
-            Some(entry) => {
-                // Partially cached - continue download and return original URL for now
-                debug!(
-                    "⏳ Found partial cache entry for: {:?}, continuing download",
-                    cache_key
-                );
+        };
 
-                // Start/resume download with high priority (needed for playback)
-                drop(storage); // Release lock before async operation
-                let _ = self
-                    .downloader_handle
-                    .start_download(
-                        cache_key.clone(),
-                        original_stream.url.clone(),
-                        DownloadPriority::Urgent,
-                    )
-                    .await;
+        // Start/resume download with high priority
+        let _ = self
+            .downloader_handle
+            .start_download(
+                cache_key.clone(),
+                original_stream.url.clone(),
+                DownloadPriority::Urgent,
+            )
+            .await;
 
-                // Get download progress
-                let progress_info = self.downloader_handle.get_progress(cache_key).await?;
-                let (progress, eta_seconds) = if let Some(info) = progress_info {
-                    (info.progress_percent(), info.eta_seconds)
-                } else {
-                    (entry.metadata.progress(), None)
-                };
+        // Get download progress
+        let progress_info = self
+            .downloader_handle
+            .get_progress(cache_key.clone())
+            .await?;
+        let (progress, eta_seconds, is_complete) = if let Some(info) = progress_info {
+            (
+                info.progress_percent(),
+                info.eta_seconds,
+                info.state == super::downloader::DownloadState::Completed,
+            )
+        } else {
+            (entry.metadata.progress(), None, entry.metadata.is_complete)
+        };
 
-                Ok(CachedStreamInfo {
-                    original_stream,
-                    cached_url: None, // Use original URL while downloading
-                    is_complete: false,
-                    progress,
-                    eta_seconds,
-                })
-            }
-            None => {
-                // Not cached - start download with progressive priority
-                debug!(
-                    "🔄 No cache entry found for: {:?}, starting download",
-                    cache_key
-                );
+        // ALWAYS register with proxy and return proxy URL
+        let proxy_url = self.proxy.register_stream(cache_key).await;
 
-                drop(storage); // Release lock before async operation
-                let _ = self
-                    .downloader_handle
-                    .start_download(
-                        cache_key,
-                        original_stream.url.clone(),
-                        if self.config.progressive_download {
-                            DownloadPriority::High
-                        } else {
-                            DownloadPriority::Normal
-                        },
-                    )
-                    .await;
+        info!(
+            "🎬 Serving media through cache proxy: {} (complete: {}, progress: {:.1}%)",
+            proxy_url,
+            is_complete,
+            progress * 100.0
+        );
 
-                Ok(CachedStreamInfo {
-                    original_stream,
-                    cached_url: None,
-                    is_complete: false,
-                    progress: 0.0,
-                    eta_seconds: None,
-                })
-            }
-        }
+        Ok(CachedStreamInfo {
+            original_stream,
+            cached_url: Some(proxy_url), // ALWAYS use proxy URL
+            is_complete,
+            progress,
+            eta_seconds,
+        })
     }
 
     /// Pre-cache a media file for offline viewing

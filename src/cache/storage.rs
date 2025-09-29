@@ -228,11 +228,17 @@ impl CacheStorage {
     ) -> Result<CacheEntry> {
         let file_path = self.get_file_path(&key);
 
-        info!("Creating cache entry for key: {:?}, file_path: {:?}", key, file_path);
+        info!(
+            "Creating cache entry for key: {:?}, file_path: {:?}",
+            key, file_path
+        );
 
         // Check if entry already exists
         if self.global_metadata.entries.contains_key(&key) {
-            info!("Cache entry already exists for key: {:?}, reusing existing entry", key);
+            info!(
+                "Cache entry already exists for key: {:?}, reusing existing entry",
+                key
+            );
             return Ok(CacheEntry {
                 metadata: self.global_metadata.entries.get(&key).unwrap().clone(),
                 file_path,
@@ -248,7 +254,9 @@ impl CacheStorage {
                     error!("Failed to create parent directory {:?}: {}", parent, e);
                     e
                 })
-                .with_context(|| format!("Failed to create parent directory for {:?}", file_path))?;
+                .with_context(|| {
+                    format!("Failed to create parent directory for {:?}", file_path)
+                })?;
             debug!("Parent directory created successfully");
         }
 

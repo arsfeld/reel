@@ -243,7 +243,10 @@ impl CacheMetadata {
 pub struct GlobalCacheMetadata {
     /// Map of cache key to metadata
     /// Using String keys for serialization compatibility
-    #[serde(serialize_with = "serialize_entries", deserialize_with = "deserialize_entries")]
+    #[serde(
+        serialize_with = "serialize_entries",
+        deserialize_with = "deserialize_entries"
+    )]
     pub entries: HashMap<MediaCacheKey, CacheMetadata>,
 
     /// Total cache size in bytes
@@ -268,7 +271,12 @@ where
     let mut map = serializer.serialize_map(Some(entries.len()))?;
     for (k, v) in entries {
         // Convert MediaCacheKey to string for serialization
-        let key_str = format!("{}__{}__{}", k.source_id.as_str(), k.media_id.as_str(), k.quality);
+        let key_str = format!(
+            "{}__{}__{}",
+            k.source_id.as_str(),
+            k.media_id.as_str(),
+            k.quality
+        );
         map.serialize_entry(&key_str, v)?;
     }
     map.end()
@@ -289,7 +297,10 @@ where
         // Parse the string back to MediaCacheKey
         let parts: Vec<&str> = key_str.split("__").collect();
         if parts.len() != 3 {
-            return Err(D::Error::custom(format!("Invalid cache key format: {}", key_str)));
+            return Err(D::Error::custom(format!(
+                "Invalid cache key format: {}",
+                key_str
+            )));
         }
 
         let key = MediaCacheKey {

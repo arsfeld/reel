@@ -309,7 +309,10 @@ impl ProgressiveDownloader {
         config: FileCacheConfig,
         active_downloads: Arc<RwLock<std::collections::HashMap<MediaCacheKey, DownloadProgress>>>,
     ) -> Result<()> {
-        info!("Starting download_file for key: {:?}, URL: {}", cache_key, url);
+        info!(
+            "Starting download_file for key: {:?}, URL: {}",
+            cache_key, url
+        );
 
         // Create cache entry
         let entry = {
@@ -325,9 +328,12 @@ impl ProgressiveDownloader {
                 Ok(entry) => {
                     debug!("Cache entry created successfully for key: {:?}", cache_key);
                     entry
-                },
+                }
                 Err(e) => {
-                    error!("Failed to create cache entry for key: {:?}, error: {}", cache_key, e);
+                    error!(
+                        "Failed to create cache entry for key: {:?}, error: {}",
+                        cache_key, e
+                    );
                     return Err(e).context("Failed to create cache entry");
                 }
             }
@@ -362,7 +368,10 @@ impl ProgressiveDownloader {
                 return Err(anyhow::anyhow!("Failed to send HTTP request: {}", e));
             }
             Err(_) => {
-                error!("HTTP request timeout after {} seconds", config.download_timeout_secs);
+                error!(
+                    "HTTP request timeout after {} seconds",
+                    config.download_timeout_secs
+                );
                 return Err(anyhow::anyhow!("Request timeout"));
             }
         };
@@ -392,7 +401,10 @@ impl ProgressiveDownloader {
         }
 
         // Stream the response and write to cache
-        info!("Starting to stream response, chunk size: {} KB", config.chunk_size_kb);
+        info!(
+            "Starting to stream response, chunk size: {} KB",
+            config.chunk_size_kb
+        );
         let mut stream = response.bytes_stream();
         let mut offset = start_byte;
         let chunk_size = config.chunk_size_kb as usize * 1024;
@@ -427,14 +439,21 @@ impl ProgressiveDownloader {
 
             let chunk = chunk_result.context("Failed to read chunk from response")?;
             let chunk_len = chunk.len();
-            debug!("Received chunk #{} with {} bytes", chunks_received, chunk_len);
+            debug!(
+                "Received chunk #{} with {} bytes",
+                chunks_received, chunk_len
+            );
             buffer.extend_from_slice(&chunk);
 
             // Write buffer to cache when it reaches chunk size
             if buffer.len() >= chunk_size {
                 let data_to_write = buffer.clone();
                 buffer.clear();
-                info!("Writing {} bytes to cache at offset {}", data_to_write.len(), offset);
+                info!(
+                    "Writing {} bytes to cache at offset {}",
+                    data_to_write.len(),
+                    offset
+                );
 
                 {
                     let mut storage_guard = storage.write().await;
@@ -473,7 +492,11 @@ impl ProgressiveDownloader {
 
         // Write any remaining data in buffer
         if !buffer.is_empty() {
-            info!("Writing final {} bytes to cache at offset {}", buffer.len(), offset);
+            info!(
+                "Writing final {} bytes to cache at offset {}",
+                buffer.len(),
+                offset
+            );
             let mut storage_guard = storage.write().await;
             storage_guard
                 .write_to_entry(&cache_key, offset, &buffer)
@@ -482,7 +505,10 @@ impl ProgressiveDownloader {
             info!("Final chunk written successfully");
         }
 
-        info!("Download completed successfully for cache key: {:?}, total chunks: {}", cache_key, chunks_received);
+        info!(
+            "Download completed successfully for cache key: {:?}, total chunks: {}",
+            cache_key, chunks_received
+        );
         Ok(())
     }
 

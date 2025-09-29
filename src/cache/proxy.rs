@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use axum::{
+    Router,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -77,16 +77,16 @@ impl CacheProxy {
     /// Create the router for the proxy server
     fn create_router(self: &Arc<Self>) -> Router {
         Router::new()
-            .route("/cache/:source_id/:media_id/:quality", get(Self::serve_cached_file))
+            .route(
+                "/cache/:source_id/:media_id/:quality",
+                get(Self::serve_cached_file),
+            )
             .route("/stream/:stream_id", get(Self::serve_stream))
             .with_state(self.clone())
     }
 
     /// Register a stream and return its proxy URL
-    pub async fn register_stream(
-        &self,
-        cache_key: MediaCacheKey,
-    ) -> String {
+    pub async fn register_stream(&self, cache_key: MediaCacheKey) -> String {
         let stream_id = uuid::Uuid::new_v4().to_string();
 
         let mut streams = self.active_streams.write().await;
@@ -131,11 +131,7 @@ impl CacheProxy {
     }
 
     /// Serve a file from cache (supports range requests)
-    async fn serve_file(
-        &self,
-        cache_key: &MediaCacheKey,
-        headers: HeaderMap,
-    ) -> Response {
+    async fn serve_file(&self, cache_key: &MediaCacheKey, headers: HeaderMap) -> Response {
         // Get cache entry
         let entry = {
             let mut storage = self.storage.write().await;
@@ -219,15 +215,13 @@ impl CacheProxy {
                 // Serve full file
                 let mut buffer = Vec::new();
                 match file.read_to_end(&mut buffer).await {
-                    Ok(_) => {
-                        Response::builder()
-                            .status(StatusCode::OK)
-                            .header(header::CONTENT_TYPE, "video/mp4")
-                            .header(header::CONTENT_LENGTH, file_size.to_string())
-                            .header(header::ACCEPT_RANGES, "bytes")
-                            .body(buffer.into())
-                            .unwrap()
-                    }
+                    Ok(_) => Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "video/mp4")
+                        .header(header::CONTENT_LENGTH, file_size.to_string())
+                        .header(header::ACCEPT_RANGES, "bytes")
+                        .body(buffer.into())
+                        .unwrap(),
                     Err(e) => {
                         error!("Failed to read file: {}", e);
                         StatusCode::INTERNAL_SERVER_ERROR.into_response()
