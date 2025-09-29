@@ -309,38 +309,72 @@ impl ProgressiveDownloader {
         config: FileCacheConfig,
         active_downloads: Arc<RwLock<std::collections::HashMap<MediaCacheKey, DownloadProgress>>>,
     ) -> Result<()> {
+        info!("Starting download_file for key: {:?}, URL: {}", cache_key, url);
+
         // Create cache entry
         let entry = {
+            debug!("Acquiring storage write lock");
             let mut storage_guard = storage.write().await;
-            storage_guard
+            debug!("Storage write lock acquired, creating cache entry");
+
+            let result = storage_guard
                 .create_entry(cache_key.clone(), url.clone())
-                .await
-                .context("Failed to create cache entry")?
+                .await;
+
+            match result {
+                Ok(entry) => {
+                    debug!("Cache entry created successfully for key: {:?}", cache_key);
+                    entry
+                },
+                Err(e) => {
+                    error!("Failed to create cache entry for key: {:?}, error: {}", cache_key, e);
+                    return Err(e).context("Failed to create cache entry");
+                }
+            }
         };
+        debug!("Cache entry created, metadata: {:?}", entry.metadata);
 
         // Check if we can resume an existing download
         let start_byte = entry.metadata.downloaded_bytes;
+        info!("Starting download from byte: {}", start_byte);
 
         // Make HTTP request with range header if resuming
         let mut request = client.get(&url);
         if start_byte > 0 {
             request = request.header("Range", format!("bytes={}-", start_byte));
+            info!("Resuming download with Range header: bytes={}-", start_byte);
         }
 
-        let response = timeout(
+        info!("Sending HTTP request to: {}", url);
+        let response_result = timeout(
             Duration::from_secs(config.download_timeout_secs),
             request.send(),
         )
-        .await
-        .context("Request timeout")?
-        .context("Failed to send HTTP request")?;
+        .await;
+
+        let response = match response_result {
+            Ok(Ok(resp)) => {
+                info!("HTTP request successful, status: {}", resp.status());
+                resp
+            }
+            Ok(Err(e)) => {
+                error!("Failed to send HTTP request: {}", e);
+                return Err(anyhow::anyhow!("Failed to send HTTP request: {}", e));
+            }
+            Err(_) => {
+                error!("HTTP request timeout after {} seconds", config.download_timeout_secs);
+                return Err(anyhow::anyhow!("Request timeout"));
+            }
+        };
 
         if !response.status().is_success() && response.status().as_u16() != 206 {
+            error!("HTTP error response: {}", response.status());
             return Err(anyhow::anyhow!("HTTP error: {}", response.status()));
         }
 
         // Get content length
         let content_length = response.content_length();
+        info!("Content length from response: {:?}", content_length);
         let total_size = if start_byte > 0 {
             content_length.map(|len| len + start_byte)
         } else {
@@ -358,14 +392,18 @@ impl ProgressiveDownloader {
         }
 
         // Stream the response and write to cache
+        info!("Starting to stream response, chunk size: {} KB", config.chunk_size_kb);
         let mut stream = response.bytes_stream();
         let mut offset = start_byte;
         let chunk_size = config.chunk_size_kb as usize * 1024;
         let mut buffer = Vec::with_capacity(chunk_size);
         let mut last_progress_update = Instant::now();
         let mut bytes_since_last_update = 0u64;
+        let mut chunks_received = 0u64;
 
+        info!("Beginning download stream loop...");
         while let Some(chunk_result) = stream.next().await {
+            chunks_received += 1;
             // Check if download was cancelled or paused
             {
                 let downloads = active_downloads.read().await;
@@ -388,12 +426,15 @@ impl ProgressiveDownloader {
             }
 
             let chunk = chunk_result.context("Failed to read chunk from response")?;
+            let chunk_len = chunk.len();
+            debug!("Received chunk #{} with {} bytes", chunks_received, chunk_len);
             buffer.extend_from_slice(&chunk);
 
             // Write buffer to cache when it reaches chunk size
             if buffer.len() >= chunk_size {
                 let data_to_write = buffer.clone();
                 buffer.clear();
+                info!("Writing {} bytes to cache at offset {}", data_to_write.len(), offset);
 
                 {
                     let mut storage_guard = storage.write().await;
@@ -405,6 +446,7 @@ impl ProgressiveDownloader {
 
                 offset += data_to_write.len() as u64;
                 bytes_since_last_update += data_to_write.len() as u64;
+                info!("Successfully wrote chunk, new offset: {}", offset);
 
                 // Update progress periodically
                 let now = Instant::now();
@@ -431,13 +473,16 @@ impl ProgressiveDownloader {
 
         // Write any remaining data in buffer
         if !buffer.is_empty() {
+            info!("Writing final {} bytes to cache at offset {}", buffer.len(), offset);
             let mut storage_guard = storage.write().await;
             storage_guard
                 .write_to_entry(&cache_key, offset, &buffer)
                 .await
                 .context("Failed to write final chunk to cache")?;
+            info!("Final chunk written successfully");
         }
 
+        info!("Download completed successfully for cache key: {:?}, total chunks: {}", cache_key, chunks_received);
         Ok(())
     }
 

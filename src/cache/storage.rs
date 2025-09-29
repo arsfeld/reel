@@ -228,15 +228,54 @@ impl CacheStorage {
     ) -> Result<CacheEntry> {
         let file_path = self.get_file_path(&key);
 
-        // Create the file
-        File::create(&file_path)
-            .with_context(|| format!("Failed to create cache file {:?}", file_path))?;
+        info!("Creating cache entry for key: {:?}, file_path: {:?}", key, file_path);
 
-        let metadata = CacheMetadata::new(key.clone(), original_url);
+        // Check if entry already exists
+        if self.global_metadata.entries.contains_key(&key) {
+            info!("Cache entry already exists for key: {:?}, reusing existing entry", key);
+            return Ok(CacheEntry {
+                metadata: self.global_metadata.entries.get(&key).unwrap().clone(),
+                file_path,
+            });
+        }
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = file_path.parent() {
+            debug!("Creating parent directory: {:?}", parent);
+            tokio_fs::create_dir_all(parent)
+                .await
+                .map_err(|e| {
+                    error!("Failed to create parent directory {:?}: {}", parent, e);
+                    e
+                })
+                .with_context(|| format!("Failed to create parent directory for {:?}", file_path))?;
+            debug!("Parent directory created successfully");
+        }
+
+        // Create the file using tokio async I/O
+        debug!("Creating cache file: {:?}", file_path);
+        tokio_fs::File::create(&file_path)
+            .await
+            .map_err(|e| {
+                error!("Failed to create cache file {:?}: {}", file_path, e);
+                e
+            })
+            .with_context(|| format!("Failed to create cache file {:?}", file_path))?;
+        debug!("Cache file created successfully");
+
+        let metadata = CacheMetadata::new(key.clone(), original_url.clone());
+        debug!("Created metadata for key: {:?}, URL: {}", key, original_url);
+
         self.global_metadata.insert(metadata.clone());
+        debug!("Inserted metadata into global cache");
 
         // Save metadata
-        self.save_metadata().await?;
+        debug!("Saving metadata to disk");
+        self.save_metadata().await.map_err(|e| {
+            error!("Failed to save metadata: {}", e);
+            e
+        })?;
+        info!("Cache entry created successfully for key: {:?}", key);
 
         Ok(CacheEntry {
             metadata,

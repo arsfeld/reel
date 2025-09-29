@@ -2,10 +2,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use crate::models::{MediaItemId, SourceId};
-use crate::services::cache_keys::CacheKey;
 
 /// Media-specific cache key for file storage
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -244,6 +242,8 @@ impl CacheMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalCacheMetadata {
     /// Map of cache key to metadata
+    /// Using String keys for serialization compatibility
+    #[serde(serialize_with = "serialize_entries", deserialize_with = "deserialize_entries")]
     pub entries: HashMap<MediaCacheKey, CacheMetadata>,
 
     /// Total cache size in bytes
@@ -254,6 +254,53 @@ pub struct GlobalCacheMetadata {
 
     /// When the metadata was last updated
     pub last_updated: DateTime<Utc>,
+}
+
+// Custom serialization for HashMap with MediaCacheKey
+fn serialize_entries<S>(
+    entries: &HashMap<MediaCacheKey, CacheMetadata>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut map = serializer.serialize_map(Some(entries.len()))?;
+    for (k, v) in entries {
+        // Convert MediaCacheKey to string for serialization
+        let key_str = format!("{}__{}__{}", k.source_id.as_str(), k.media_id.as_str(), k.quality);
+        map.serialize_entry(&key_str, v)?;
+    }
+    map.end()
+}
+
+// Custom deserialization for HashMap with MediaCacheKey
+fn deserialize_entries<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<MediaCacheKey, CacheMetadata>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{Deserialize, Error};
+    let string_map: HashMap<String, CacheMetadata> = HashMap::deserialize(deserializer)?;
+    let mut result = HashMap::new();
+
+    for (key_str, value) in string_map {
+        // Parse the string back to MediaCacheKey
+        let parts: Vec<&str> = key_str.split("__").collect();
+        if parts.len() != 3 {
+            return Err(D::Error::custom(format!("Invalid cache key format: {}", key_str)));
+        }
+
+        let key = MediaCacheKey {
+            source_id: SourceId::from(parts[0]),
+            media_id: MediaItemId::from(parts[1]),
+            quality: parts[2].to_string(),
+        };
+        result.insert(key, value);
+    }
+
+    Ok(result)
 }
 
 impl Default for GlobalCacheMetadata {
