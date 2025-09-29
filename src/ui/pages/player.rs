@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::models::{MediaItemId, PlaylistContext};
 use crate::player::{PlayerController, PlayerHandle, PlayerState};
+use crate::services::commands::Command;
 use crate::ui::shared::broker::{BROKER, BrokerMessage, ConfigMessage};
 use adw::prelude::*;
 use gtk::glib::{self, SourceId};
@@ -1283,41 +1284,64 @@ impl AsyncComponent for PlayerPage {
             }
         }
 
-        // Setup seek bar handlers
+        // Setup seek bar handlers - handle clicks and drags directly for video seeking behavior
         {
-            // Track when user starts dragging
-            let sender_press = sender.clone();
-            let button_controller = gtk::GestureClick::new();
-            button_controller.set_button(gtk::gdk::BUTTON_PRIMARY);
-            button_controller.connect_pressed(move |_, _, _, _| {
-                sender_press.input(PlayerInput::StartSeeking);
-            });
-            model.seek_bar.add_controller(button_controller);
+            let sender_start = sender.clone();
+            let sender_end = sender.clone();
+            let seek_bar_for_click = model.seek_bar.clone();
 
-            // Track when user releases drag and perform seek
-            let sender_release = sender.clone();
-            let seek_bar_clone = model.seek_bar.clone();
-            let button_release_controller = gtk::GestureClick::new();
-            button_release_controller.set_button(gtk::gdk::BUTTON_PRIMARY);
-            button_release_controller.connect_released(move |_, _, _, _| {
-                let position = seek_bar_clone.value();
-                sender_release.input(PlayerInput::StopSeeking);
-                // Ensure position is non-negative before creating Duration
-                sender_release.input(PlayerInput::Seek(Duration::from_secs_f64(
-                    position.max(0.0),
+            // Handle direct clicks and drags for video seeking
+            let click_gesture = gtk::GestureClick::new();
+            click_gesture.set_button(gtk::gdk::BUTTON_PRIMARY);
+
+            // Start seeking on press
+            click_gesture.connect_pressed(move |_gesture, _n_press, x, _y| {
+                sender_start.input(PlayerInput::StartSeeking);
+
+                // Calculate position from click location
+                let widget_width = seek_bar_for_click.width() as f64;
+                let adjustment = seek_bar_for_click.adjustment();
+                let range = adjustment.upper() - adjustment.lower();
+                let value = adjustment.lower() + (x / widget_width) * range;
+
+                // Update the scale value and seek
+                seek_bar_for_click.set_value(value);
+                sender_start.input(PlayerInput::Seek(Duration::from_secs_f64(value.max(0.0))));
+            });
+
+            // End seeking on release
+            click_gesture.connect_released(move |_gesture, _n_press, _x, _y| {
+                sender_end.input(PlayerInput::StopSeeking);
+            });
+
+            model.seek_bar.add_controller(click_gesture);
+
+            // Handle dragging
+            let sender_drag = sender.clone();
+            let seek_bar_for_drag = model.seek_bar.clone();
+            let drag_gesture = gtk::GestureDrag::new();
+            drag_gesture.set_button(gtk::gdk::BUTTON_PRIMARY);
+
+            drag_gesture.connect_drag_update(move |_gesture, offset_x, _offset_y| {
+                // Calculate position from drag location
+                let widget_width = seek_bar_for_drag.width() as f64;
+                let adjustment = seek_bar_for_drag.adjustment();
+                let range = adjustment.upper() - adjustment.lower();
+
+                // Get current position and add offset
+                let current_value = seek_bar_for_drag.value();
+                let value_per_pixel = range / widget_width;
+                let new_value = (current_value + offset_x * value_per_pixel)
+                    .clamp(adjustment.lower(), adjustment.upper());
+
+                // Update the scale value and seek
+                seek_bar_for_drag.set_value(new_value);
+                sender_drag.input(PlayerInput::Seek(Duration::from_secs_f64(
+                    new_value.max(0.0),
                 )));
             });
-            model.seek_bar.add_controller(button_release_controller);
 
-            // Also handle value changes during drag for smooth preview
-            let sender_changed = sender.clone();
-            let seek_bar = model.seek_bar.clone();
-            seek_bar.connect_value_changed(move |scale| {
-                // Update time labels during drag for preview
-                // Clamp scale value to prevent negative Duration
-                let position = Duration::from_secs_f64(scale.value().max(0.0));
-                sender_changed.input(PlayerInput::UpdateSeekPreview(position));
-            });
+            model.seek_bar.add_controller(drag_gesture);
         }
 
         // Setup volume slider handler
@@ -1604,31 +1628,40 @@ impl AsyncComponent for PlayerPage {
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
-                        use crate::services::commands::Command;
-                        use crate::services::commands::media_commands::GetStreamUrlCommand;
+                        use crate::ui::shared::commands::{
+                            AppCommand, CommandResult, execute_command,
+                        };
 
-                        // Get the stream info from the backend using stateless command
-                        let stream_info = match (GetStreamUrlCommand {
-                            db: db_clone.as_ref().clone(),
-                            media_item_id: media_id,
-                        })
-                        .execute()
-                        .await
-                        {
-                            Ok(info) => info,
-                            Err(e) => {
-                                error!("Failed to get stream URL: {}", e);
+                        // Use the proper StartPlayback command which includes cache integration
+                        let command_result = execute_command(
+                            AppCommand::StartPlayback {
+                                media_id: media_id.to_string(),
+                            },
+                            &db_clone,
+                        )
+                        .await;
+
+                        let stream_url = match command_result {
+                            CommandResult::PlaybackStarted { url, .. } => url,
+                            CommandResult::Error(e) => {
+                                error!("Failed to start playback: {}", e);
                                 return PlayerCommandOutput::LoadError(format!(
                                     "Failed to load media: {}",
                                     e
                                 ));
                             }
+                            _ => {
+                                error!("Unexpected command result for StartPlayback");
+                                return PlayerCommandOutput::LoadError(
+                                    "Unexpected error starting playback".to_string(),
+                                );
+                            }
                         };
 
-                        info!("Got stream URL: {}", stream_info.url);
+                        info!("Got stream URL (potentially cached): {}", stream_url);
 
                         // Load the media into the player using channel-based API
-                        match player_handle.load_media(&stream_info.url).await {
+                        match player_handle.load_media(&stream_url).await {
                             Ok(_) => {
                                 info!("Media loaded successfully");
 
@@ -1751,31 +1784,40 @@ impl AsyncComponent for PlayerPage {
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
-                        use crate::services::commands::Command;
-                        use crate::services::commands::media_commands::GetStreamUrlCommand;
+                        use crate::ui::shared::commands::{
+                            AppCommand, CommandResult, execute_command,
+                        };
 
-                        // Get the stream info from the backend using stateless command
-                        let stream_info = match (GetStreamUrlCommand {
-                            db: db_clone.as_ref().clone(),
-                            media_item_id: media_id_clone,
-                        })
-                        .execute()
-                        .await
-                        {
-                            Ok(info) => info,
-                            Err(e) => {
-                                error!("Failed to get stream URL: {}", e);
+                        // Use the proper StartPlayback command which includes cache integration
+                        let command_result = execute_command(
+                            AppCommand::StartPlayback {
+                                media_id: media_id_clone.to_string(),
+                            },
+                            &db_clone,
+                        )
+                        .await;
+
+                        let stream_url = match command_result {
+                            CommandResult::PlaybackStarted { url, .. } => url,
+                            CommandResult::Error(e) => {
+                                error!("Failed to start playback: {}", e);
                                 return PlayerCommandOutput::LoadError(format!(
                                     "Failed to load media: {}",
                                     e
                                 ));
                             }
+                            _ => {
+                                error!("Unexpected command result for StartPlayback");
+                                return PlayerCommandOutput::LoadError(
+                                    "Unexpected error starting playback".to_string(),
+                                );
+                            }
                         };
 
-                        info!("Got stream URL: {}", stream_info.url);
+                        info!("Got stream URL (potentially cached): {}", stream_url);
 
                         // Load the media into the player using channel-based API
-                        match player_handle.load_media(&stream_info.url).await {
+                        match player_handle.load_media(&stream_url).await {
                             Ok(_) => {
                                 info!("Media loaded successfully with playlist context");
 

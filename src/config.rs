@@ -8,6 +8,9 @@ use tracing::{debug, info};
 pub struct Config {
     #[serde(default)]
     pub playback: PlaybackConfig,
+
+    #[serde(default)]
+    pub cache: crate::cache::FileCacheConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

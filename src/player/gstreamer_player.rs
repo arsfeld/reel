@@ -1248,8 +1248,8 @@ impl GStreamerPlayer {
 
             // Perform the seek operation
             // Use FLUSH to clear buffers and get immediate response
-            // Use ACCURATE for precise seeking (can use KEY_UNIT for faster but less accurate)
-            let seek_flags = gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE;
+            // Use SNAP_BEFORE for HTTP streams - safer for matroska over HTTP
+            let seek_flags = gst::SeekFlags::FLUSH | gst::SeekFlags::SNAP_BEFORE;
             let seek_position = gst::ClockTime::from_nseconds(position_ns as u64);
 
             debug!(
@@ -2294,7 +2294,7 @@ impl GStreamerPlayer {
             if let Some(pos) = position {
                 let new_pos = pos + gst::ClockTime::from_mseconds(40); // ~1 frame at 25fps
                 playbin
-                    .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, new_pos)
+                    .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::SNAP_BEFORE, new_pos)
                     .map_err(|e| anyhow::anyhow!("Failed to step forward: {:?}", e))?;
             }
         }

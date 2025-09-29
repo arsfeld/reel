@@ -2,6 +2,7 @@ use anyhow::Result;
 
 mod app;
 mod backends;
+mod cache;
 mod config;
 mod constants;
 mod core;

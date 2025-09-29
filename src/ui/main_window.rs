@@ -591,6 +591,47 @@ impl AsyncComponent for MainWindow {
                 });
         }
 
+        // Connect to visible-page changes to restore cursor when leaving player
+        {
+            use std::cell::RefCell;
+            use std::rc::Rc;
+
+            let root_clone = root.clone();
+            let previous_page_title = Rc::new(RefCell::new(String::new()));
+
+            model.navigation_view.connect_notify_local(
+                Some("visible-page"),
+                move |nav_view, _param| {
+                    let prev_title = previous_page_title.borrow().clone();
+                    let current_title = if let Some(visible_page) = nav_view.visible_page() {
+                        visible_page.title().to_string()
+                    } else {
+                        "None".to_string()
+                    };
+
+                    // Check if we're transitioning away from the Player page
+                    if prev_title == "Player" {
+                        // Restore cursor on next event loop tick to ensure it happens after mouse leave events
+                        let root_for_restore = root_clone.clone();
+                        gtk::glib::idle_add_local_once(move || {
+                            if let Some(surface) = root_for_restore.surface() {
+                                if let Some(cursor) = gtk::gdk::Cursor::from_name("default", None) {
+                                    surface.set_cursor(Some(&cursor));
+                                } else {
+                                    tracing::warn!("Failed to create default cursor");
+                                }
+                            } else {
+                                tracing::warn!("No surface available for cursor restoration");
+                            }
+                        });
+                    }
+
+                    // Update the previous page title for next transition
+                    *previous_page_title.borrow_mut() = current_title;
+                },
+            );
+        }
+
         // Trigger initial sync of all sources after a short delay to let UI initialize
         sender.input(MainWindowInput::Navigate("init_sync".to_string()));
 
