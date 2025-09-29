@@ -24,6 +24,7 @@ impl<'a> Command<User> for AuthenticateCommand<'a> {
 
 /// Save authentication credentials
 pub struct SaveCredentialsCommand {
+    pub db: DatabaseConnection,
     pub source_id: SourceId,
     pub credentials: Credentials,
 }
@@ -31,31 +32,33 @@ pub struct SaveCredentialsCommand {
 #[async_trait]
 impl Command<()> for SaveCredentialsCommand {
     async fn execute(&self) -> Result<()> {
-        AuthService::save_credentials(&self.source_id, &self.credentials).await
+        AuthService::save_credentials(&self.db, &self.source_id, &self.credentials).await
     }
 }
 
 /// Load authentication credentials
 pub struct LoadCredentialsCommand {
+    pub db: DatabaseConnection,
     pub source_id: SourceId,
 }
 
 #[async_trait]
 impl Command<Option<Credentials>> for LoadCredentialsCommand {
     async fn execute(&self) -> Result<Option<Credentials>> {
-        AuthService::load_credentials(&self.source_id).await
+        AuthService::load_credentials(&self.db, &self.source_id).await
     }
 }
 
 /// Remove authentication credentials
 pub struct RemoveCredentialsCommand {
+    pub db: DatabaseConnection,
     pub source_id: SourceId,
 }
 
 #[async_trait]
 impl Command<()> for RemoveCredentialsCommand {
     async fn execute(&self) -> Result<()> {
-        AuthService::remove_credentials(&self.source_id).await
+        AuthService::remove_credentials(&self.db, &self.source_id).await
     }
 }
 

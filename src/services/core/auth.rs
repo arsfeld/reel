@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
-use keyring::Entry;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::backends::traits::MediaBackend;
 use crate::db::connection::DatabaseConnection;
-use crate::db::entities::SourceModel;
-use crate::db::repository::{Repository, SourceRepositoryImpl};
+use crate::db::entities::{AuthTokenModel, SourceModel};
+use crate::db::repository::{
+    AuthTokenRepository, AuthTokenRepositoryImpl, Repository, SourceRepositoryImpl,
+};
 use crate::models::Credentials;
 use crate::models::auth_provider::{ConnectionInfo, Source, SourceType};
 use crate::models::{SourceId, User};
@@ -14,6 +15,83 @@ use crate::models::{SourceId, User};
 pub struct AuthService;
 
 impl AuthService {
+    /// Migrate credentials from keyring to database if they exist
+    pub async fn migrate_credentials_from_keyring(
+        db: &DatabaseConnection,
+        source_id: &SourceId,
+    ) -> Result<bool> {
+        // Try multiple keyring naming patterns for backward compatibility
+        let service_patterns = vec![
+            format!("reel.{}", source_id),       // New pattern
+            format!("gnome-reel.{}", source_id), // GNOME keyring pattern
+        ];
+
+        for service_name in &service_patterns {
+            // Check if keyring is available and has credentials (token)
+            if let Ok(entry) = keyring::Entry::new(service_name, "token") {
+                if let Ok(token) = entry.get_password() {
+                    info!(
+                        "Found keyring token for source: {} (service: {}), migrating to database",
+                        source_id, service_name
+                    );
+
+                    // Save to database
+                    let credentials = Credentials::Token {
+                        token: token.clone(),
+                    };
+                    if let Err(e) = Self::save_credentials(db, source_id, &credentials).await {
+                        warn!(
+                            "Failed to migrate token to database for source {}: {}",
+                            source_id, e
+                        );
+                        return Ok(false);
+                    }
+
+                    // Remove from keyring after successful migration
+                    let _ = entry.delete_credential();
+                    info!(
+                        "Successfully migrated token for source: {} from keyring to database",
+                        source_id
+                    );
+                    return Ok(true);
+                }
+            }
+
+            // Check for API key
+            if let Ok(entry) = keyring::Entry::new(service_name, "api_key") {
+                if let Ok(key) = entry.get_password() {
+                    info!(
+                        "Found keyring API key for source: {} (service: {}), migrating to database",
+                        source_id, service_name
+                    );
+
+                    // Save to database
+                    let credentials = Credentials::ApiKey { key: key.clone() };
+                    if let Err(e) = Self::save_credentials(db, source_id, &credentials).await {
+                        warn!(
+                            "Failed to migrate API key to database for source {}: {}",
+                            source_id, e
+                        );
+                        return Ok(false);
+                    }
+
+                    // Remove from keyring after successful migration
+                    let _ = entry.delete_credential();
+                    info!(
+                        "Successfully migrated API key for source: {} from keyring to database",
+                        source_id
+                    );
+                    return Ok(true);
+                }
+            }
+        }
+
+        debug!(
+            "No keyring credentials found for source: {} in any pattern",
+            source_id
+        );
+        Ok(false)
+    }
     /// Authenticate with a backend
     pub async fn authenticate(
         backend: &dyn MediaBackend,
@@ -25,65 +103,127 @@ impl AuthService {
             .context("Failed to authenticate with backend")
     }
 
-    /// Save authentication credentials directly to keyring
-    pub async fn save_credentials(source_id: &SourceId, credentials: &Credentials) -> Result<()> {
-        let service_name = format!("reel.{}", source_id);
+    /// Save authentication credentials to database
+    pub async fn save_credentials(
+        db: &DatabaseConnection,
+        source_id: &SourceId,
+        credentials: &Credentials,
+    ) -> Result<()> {
+        let repo = AuthTokenRepositoryImpl::new(db.clone());
 
-        match credentials {
+        let (token_type, token_value) = match credentials {
             Credentials::UsernamePassword {
                 username, password, ..
             } => {
-                let entry = Entry::new(&service_name, username)?;
-                entry.set_password(password).with_context(|| {
-                    format!("Failed to save password for source: {}", source_id)
-                })?;
-                debug!("Saved credentials for source: {}", source_id);
+                // For username/password, we'll store the password with the username as the type
+                // This is a temporary solution - ideally we'd store both separately
+                (format!("password_{}", username), password.clone())
             }
-            Credentials::Token { token, .. } => {
-                let entry = Entry::new(&service_name, "token")?;
-                entry
-                    .set_password(token)
-                    .with_context(|| format!("Failed to save token for source: {}", source_id))?;
-                debug!("Saved token for source: {}", source_id);
-            }
-            Credentials::ApiKey { key, .. } => {
-                let entry = Entry::new(&service_name, "api_key")?;
-                entry
-                    .set_password(key)
-                    .with_context(|| format!("Failed to save API key for source: {}", source_id))?;
-                debug!("Saved API key for source: {}", source_id);
-            }
-        }
+            Credentials::Token { token, .. } => ("token".to_string(), token.clone()),
+            Credentials::ApiKey { key, .. } => ("api_key".to_string(), key.clone()),
+        };
 
+        let auth_token = AuthTokenModel {
+            id: 0, // Will be set by database
+            source_id: source_id.to_string(),
+            token_type,
+            token: token_value,
+            created_at: chrono::Utc::now().naive_utc(),
+            updated_at: chrono::Utc::now().naive_utc(),
+            expires_at: None, // TODO: Handle token expiration if needed
+        };
+
+        repo.upsert(auth_token)
+            .await
+            .with_context(|| format!("Failed to save credentials for source: {}", source_id))?;
+
+        debug!("Saved credentials for source: {} to database", source_id);
         Ok(())
     }
 
-    /// Load authentication credentials directly from keyring
-    pub async fn load_credentials(source_id: &SourceId) -> Result<Option<Credentials>> {
-        let service_name = format!("reel.{}", source_id);
+    /// Load authentication credentials from database
+    pub async fn load_credentials(
+        db: &DatabaseConnection,
+        source_id: &SourceId,
+    ) -> Result<Option<Credentials>> {
+        let repo = AuthTokenRepositoryImpl::new(db.clone());
 
-        // Try to load as token first
-        if let Ok(entry) = Entry::new(&service_name, "token")
-            && let Ok(token) = entry.get_password()
+        // Try to find token credentials
+        if let Some(auth_token) = repo
+            .find_by_source_and_type(&source_id.to_string(), "token")
+            .await?
         {
-            debug!("Found token credentials for source: {}", source_id);
-            return Ok(Some(Credentials::Token { token }));
+            debug!(
+                "Found token credentials for source: {} in database",
+                source_id
+            );
+            return Ok(Some(Credentials::Token {
+                token: auth_token.token,
+            }));
         }
 
-        debug!("No credentials found for source: {}", source_id);
+        // Try to find API key credentials
+        if let Some(auth_token) = repo
+            .find_by_source_and_type(&source_id.to_string(), "api_key")
+            .await?
+        {
+            debug!(
+                "Found API key credentials for source: {} in database",
+                source_id
+            );
+            return Ok(Some(Credentials::ApiKey {
+                key: auth_token.token,
+            }));
+        }
+
+        // For username/password, we'd need to know the username
+        // This is a limitation of the current design - we'll need to improve this
+
+        // No credentials in database, attempt migration from keyring
+        debug!(
+            "No credentials found for source: {} in database, attempting keyring migration",
+            source_id
+        );
+        if Self::migrate_credentials_from_keyring(db, source_id).await? {
+            // Migration successful, try loading again from database
+            let repo = AuthTokenRepositoryImpl::new(db.clone());
+
+            // Try to find token credentials again
+            if let Some(auth_token) = repo
+                .find_by_source_and_type(&source_id.to_string(), "token")
+                .await?
+            {
+                return Ok(Some(Credentials::Token {
+                    token: auth_token.token,
+                }));
+            }
+
+            // Try to find API key credentials again
+            if let Some(auth_token) = repo
+                .find_by_source_and_type(&source_id.to_string(), "api_key")
+                .await?
+            {
+                return Ok(Some(Credentials::ApiKey {
+                    key: auth_token.token,
+                }));
+            }
+        }
+
+        debug!(
+            "No credentials found for source: {} in database or keyring",
+            source_id
+        );
         Ok(None)
     }
 
-    /// Remove authentication credentials directly from keyring
-    pub async fn remove_credentials(source_id: &SourceId) -> Result<()> {
-        let service_name = format!("reel.{}", source_id);
-
-        // Try to remove token
-        if let Ok(entry) = Entry::new(&service_name, "token") {
-            let _ = entry.delete_credential(); // Ignore errors - credential might not exist
-        }
-
-        debug!("Removed credentials for source: {}", source_id);
+    /// Remove authentication credentials from database
+    pub async fn remove_credentials(db: &DatabaseConnection, source_id: &SourceId) -> Result<()> {
+        let repo = AuthTokenRepositoryImpl::new(db.clone());
+        let deleted_count = repo.delete_by_source(&source_id.to_string()).await?;
+        debug!(
+            "Removed {} credential(s) for source: {} from database",
+            deleted_count, source_id
+        );
         Ok(())
     }
 
@@ -160,7 +300,7 @@ impl AuthService {
         repo.insert(entity).await?;
 
         // Save credentials
-        Self::save_credentials(&source_id, &credentials).await?;
+        Self::save_credentials(db, &source_id, &credentials).await?;
 
         info!("Created new source: {}", source_id);
         Ok(source)
@@ -169,7 +309,7 @@ impl AuthService {
     /// Remove a source and its credentials
     pub async fn remove_source(db: &DatabaseConnection, source_id: &SourceId) -> Result<()> {
         // Remove credentials
-        Self::remove_credentials(source_id).await?;
+        Self::remove_credentials(db, source_id).await?;
 
         // Remove from database
         let repo = SourceRepositoryImpl::new(db.clone());
@@ -200,7 +340,7 @@ impl AuthService {
         source_id: &SourceId,
     ) -> Result<()> {
         // Load existing credentials
-        let credentials = Self::load_credentials(source_id)
+        let credentials = Self::load_credentials(db, source_id)
             .await?
             .context("No credentials found for source")?;
 

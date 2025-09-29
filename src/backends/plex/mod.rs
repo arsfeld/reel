@@ -20,7 +20,6 @@ use crate::models::{
     AuthProvider, BackendId, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season,
     Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
 };
-use crate::services::core::auth::AuthService;
 
 #[allow(dead_code)] // Used via dynamic dispatch in BackendService
 pub struct PlexBackend {
@@ -592,16 +591,9 @@ impl MediaBackend for PlexBackend {
                     if !token.is_empty() {
                         token.clone()
                     } else {
-                        // Try to get token from keyring via AuthService
-                        match AuthService::load_credentials(&SourceId::new(auth_provider.id()))
-                            .await
-                        {
-                            Ok(Some(Credentials::Token { token, .. })) => token,
-                            _ => {
-                                tracing::warn!("No token found in AuthProvider or keyring");
-                                return Ok(None);
-                            }
-                        }
+                        // Token should be provided in AuthProvider
+                        tracing::warn!("No token found in AuthProvider");
+                        return Ok(None);
                     }
                 }
                 _ => {

@@ -20,7 +20,6 @@ use crate::models::{
     AuthProvider, BackendId, Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId,
     Movie, Season, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
 };
-use crate::services::core::auth::AuthService;
 
 #[allow(dead_code)] // Used via dynamic dispatch in BackendService
 pub struct JellyfinBackend {
@@ -268,71 +267,9 @@ impl MediaBackend for JellyfinBackend {
                     if !access_token.is_empty() {
                         (server_url.clone(), access_token.clone(), user_id.clone())
                     } else {
-                        // Try to get credentials from keyring via AuthService
-                        match AuthService::load_credentials(&SourceId::new(auth_provider.id()))
-                            .await
-                        {
-                            Ok(Some(Credentials::Token { token, .. })) => {
-                                tracing::info!(
-                                    "Successfully retrieved token from keyring for {}, token format check: {}",
-                                    auth_provider.id(),
-                                    if token.contains('|') {
-                                        "contains pipe separator"
-                                    } else {
-                                        "no pipe separator"
-                                    }
-                                );
-                                // Parse token to extract user_id if it's in format token|user_id
-                                let parts: Vec<&str> = token.split('|').collect();
-                                let (actual_token, actual_user_id) = if parts.len() == 2 {
-                                    tracing::info!("Extracted user_id from token: {}", parts[1]);
-                                    (parts[0].to_string(), parts[1].to_string())
-                                } else {
-                                    tracing::warn!(
-                                        "Token doesn't contain user_id, falling back to AuthProvider user_id: '{}'",
-                                        user_id
-                                    );
-                                    (token.clone(), user_id.clone())
-                                };
-                                (server_url.clone(), actual_token, actual_user_id)
-                            }
-                            Ok(Some(Credentials::UsernamePassword { ref password, .. })) => {
-                                tracing::info!("Got password from keyring, re-authenticating...");
-                                // Re-authenticate with username/password
-                                match JellyfinApi::authenticate(server_url, username, password)
-                                    .await
-                                {
-                                    Ok(auth_response) => {
-                                        // Save the new token
-                                        tracing::info!(
-                                            "Re-authentication successful, saving new token"
-                                        );
-                                        let token_creds = Credentials::Token {
-                                            token: auth_response.access_token.clone(),
-                                        };
-                                        AuthService::save_credentials(
-                                            &SourceId::new(auth_provider.id()),
-                                            &token_creds,
-                                        )
-                                        .await
-                                        .ok();
-                                        (
-                                            server_url.clone(),
-                                            auth_response.access_token,
-                                            auth_response.user.id,
-                                        )
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to re-authenticate with Jellyfin: {}", e);
-                                        return Ok(None);
-                                    }
-                                }
-                            }
-                            _ => {
-                                tracing::warn!("No credentials found in keyring");
-                                return Ok(None);
-                            }
-                        }
+                        // Token should be provided in AuthProvider
+                        tracing::error!("No access token found in AuthProvider");
+                        return Err(anyhow::anyhow!("No credentials available"));
                     }
                 }
                 _ => {

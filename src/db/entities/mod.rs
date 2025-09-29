@@ -1,3 +1,4 @@
+pub mod auth_tokens;
 pub mod home_section_items;
 pub mod home_sections;
 pub mod libraries;
@@ -8,6 +9,9 @@ pub mod sources;
 pub mod sync_status;
 
 // Re-export entities for convenience
+pub use auth_tokens::{
+    ActiveModel as AuthTokenActiveModel, Entity as AuthToken, Model as AuthTokenModel,
+};
 pub use home_section_items::{
     ActiveModel as HomeSectionItemActiveModel, Entity as HomeSectionItem,
     Model as HomeSectionItemModel,

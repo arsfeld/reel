@@ -48,7 +48,7 @@ impl BackendService {
     ) -> Result<Box<dyn MediaBackend>> {
         // Load credentials from secure storage
         let source_id = SourceId::new(source_entity.id.clone());
-        let credentials = AuthService::load_credentials(&source_id)
+        let credentials = AuthService::load_credentials(db, &source_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("No credentials found for source"))?;
 
