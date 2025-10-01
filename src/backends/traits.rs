@@ -63,14 +63,6 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     // get_backend_id removed - never used
 }
 
-#[derive(Debug, Clone)]
-pub struct OfflineStatus {
-    pub total_size_mb: usize,
-    pub used_size_mb: usize,
-    pub items_count: usize,
-    pub backends: std::collections::HashMap<String, BackendOfflineInfo>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,108 +264,10 @@ mod tests {
     }
 
     #[test]
-    fn test_backend_offline_info() {
-        let now = Utc::now();
-        let info = BackendOfflineInfo {
-            total_items: 500,
-            size_mb: 2048,
-            last_sync: Some(now),
-        };
-
-        assert_eq!(info.total_items, 500);
-        assert_eq!(info.size_mb, 2048);
-        assert_eq!(info.last_sync, Some(now));
-    }
-
-    #[test]
-    fn test_offline_status() {
-        let mut backends = HashMap::new();
-        backends.insert(
-            "backend1".to_string(),
-            BackendOfflineInfo {
-                total_items: 100,
-                size_mb: 512,
-                last_sync: None,
-            },
-        );
-
-        let status = OfflineStatus {
-            total_size_mb: 1024,
-            used_size_mb: 512,
-            items_count: 100,
-            backends,
-        };
-
-        assert_eq!(status.total_size_mb, 1024);
-        assert_eq!(status.used_size_mb, 512);
-        assert_eq!(status.items_count, 100);
-        assert_eq!(status.backends.len(), 1);
-        assert!(status.backends.contains_key("backend1"));
-    }
-
-    #[test]
     fn test_backend_type_display() {
         assert_eq!(BackendType::Plex.to_string(), "Plex");
         assert_eq!(BackendType::Jellyfin.to_string(), "Jellyfin");
         assert_eq!(BackendType::Local.to_string(), "Local Files");
         assert_eq!(BackendType::Generic.to_string(), "Generic");
-    }
-
-    #[test]
-    fn test_connection_type_equality() {
-        assert_eq!(ConnectionType::Local, ConnectionType::Local);
-        assert_eq!(ConnectionType::Remote, ConnectionType::Remote);
-        assert_eq!(ConnectionType::Relay, ConnectionType::Relay);
-        assert_eq!(ConnectionType::Offline, ConnectionType::Offline);
-        assert_eq!(ConnectionType::Unknown, ConnectionType::Unknown);
-
-        assert_ne!(ConnectionType::Local, ConnectionType::Remote);
-        assert_ne!(ConnectionType::Offline, ConnectionType::Unknown);
-    }
-
-    #[test]
-    fn test_backend_info_creation() {
-        let info = BackendInfo {
-            name: "test_backend".to_string(),
-            display_name: "Test Backend".to_string(),
-            backend_type: BackendType::Plex,
-            server_name: Some("My Plex Server".to_string()),
-            server_version: Some("1.32.0".to_string()),
-            connection_type: ConnectionType::Local,
-            is_local: true,
-            is_relay: false,
-        };
-
-        assert_eq!(info.name, "test_backend");
-        assert_eq!(info.display_name, "Test Backend");
-        assert!(matches!(info.backend_type, BackendType::Plex));
-        assert_eq!(info.server_name, Some("My Plex Server".to_string()));
-        assert_eq!(info.server_version, Some("1.32.0".to_string()));
-        assert_eq!(info.connection_type, ConnectionType::Local);
-        assert!(info.is_local);
-        assert!(!info.is_relay);
-    }
-
-    #[test]
-    fn test_backend_info_minimal() {
-        let info = BackendInfo {
-            name: "generic".to_string(),
-            display_name: "Generic Backend".to_string(),
-            backend_type: BackendType::Generic,
-            server_name: None,
-            server_version: None,
-            connection_type: ConnectionType::Unknown,
-            is_local: false,
-            is_relay: false,
-        };
-
-        assert_eq!(info.name, "generic");
-        assert_eq!(info.display_name, "Generic Backend");
-        assert!(matches!(info.backend_type, BackendType::Generic));
-        assert!(info.server_name.is_none());
-        assert!(info.server_version.is_none());
-        assert_eq!(info.connection_type, ConnectionType::Unknown);
-        assert!(!info.is_local);
-        assert!(!info.is_relay);
     }
 }

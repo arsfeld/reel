@@ -682,7 +682,6 @@ impl GStreamerPlayer {
                     }
                 }
             }
-        }
 
             None
         });
