@@ -719,3 +719,4 @@ Full help available: `backlog --help`
 - When building / checking, always use the last line to get the proper number of errors
 - IMPORTANT: Don't add backward compatibility code, tackle the root cause
 - IMPORTANT: do not use fallbacks, they only introduce confusion and errors.
+- never mention claude in commits

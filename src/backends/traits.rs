@@ -68,7 +68,7 @@ mod tests {
     use super::*;
     use crate::db::entities::sync_status::SyncType;
     use crate::services::core::sync::SyncStatus;
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -85,6 +85,65 @@ mod tests {
         sync_type: SyncType,
         priority: SyncPriority,
         scheduled_at: DateTime<Utc>,
+    }
+
+    // Test-only types
+    #[derive(Debug)]
+    struct SearchResults {
+        movies: Vec<Movie>,
+        shows: Vec<Show>,
+        episodes: Vec<Episode>,
+    }
+
+    #[derive(Debug)]
+    struct WatchStatus {
+        watched: bool,
+        view_count: u32,
+        last_watched_at: Option<DateTime<Utc>>,
+        playback_position: Option<Duration>,
+    }
+
+    #[derive(Debug)]
+    struct SyncResult {
+        backend_id: BackendId,
+        success: bool,
+        items_synced: usize,
+        duration: Duration,
+        errors: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct BackendId(String);
+
+    impl BackendId {
+        fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    impl From<&str> for BackendId {
+        fn from(s: &str) -> Self {
+            BackendId(s.to_string())
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    enum BackendType {
+        Plex,
+        Jellyfin,
+        Local,
+        Generic,
+    }
+
+    impl std::fmt::Display for BackendType {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                BackendType::Plex => write!(f, "Plex"),
+                BackendType::Jellyfin => write!(f, "Jellyfin"),
+                BackendType::Local => write!(f, "Local Files"),
+                BackendType::Generic => write!(f, "Generic"),
+            }
+        }
     }
 
     #[test]
