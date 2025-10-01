@@ -1,7 +1,6 @@
 use anyhow::Result;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use relm4::gtk;
-use relm4::prelude::*;
 use relm4::{ComponentSender, Sender, Worker};
 use std::path::PathBuf;
 use std::sync::Arc;

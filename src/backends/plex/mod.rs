@@ -1223,50 +1223,7 @@ impl MediaBackend for PlexBackend {
     }
 }
 
-impl PlexBackend {
-    /// Perform a global search across all libraries
-    pub async fn search(
-        &self,
-        query: &str,
-        limit: Option<usize>,
-    ) -> Result<Vec<crate::models::MediaItem>> {
-        let api = self.get_api().await?;
-        api.search_global(query, limit).await
-    }
-
-    /// Search within a specific library
-    pub async fn search_library(
-        &self,
-        library_id: &str,
-        query: &str,
-        media_type: Option<&str>,
-        sort: Option<&str>,
-        limit: Option<usize>,
-    ) -> Result<Vec<crate::models::MediaItem>> {
-        let api = self.get_api().await?;
-        api.search_library(library_id, query, media_type, sort, limit)
-            .await
-    }
-
-    /// Search with filters
-    pub async fn search_with_filters(
-        &self,
-        library_id: &str,
-        query: Option<&str>,
-        genre: Option<&str>,
-        year: Option<u32>,
-        rating_min: Option<f32>,
-        unwatched: Option<bool>,
-        sort: Option<&str>,
-        limit: Option<usize>,
-    ) -> Result<Vec<crate::models::MediaItem>> {
-        let api = self.get_api().await?;
-        api.search_with_filters(
-            library_id, query, genre, year, rating_min, unwatched, sort, limit,
-        )
-        .await
-    }
-}
+impl PlexBackend {}
 
 impl fmt::Debug for PlexBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

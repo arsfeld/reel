@@ -6,8 +6,6 @@ mod library;
 mod markers;
 pub mod playqueue;
 mod progress;
-pub mod search;
-mod search_impl;
 mod streaming;
 mod types;
 
