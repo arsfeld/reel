@@ -3,6 +3,8 @@ pub mod downloader;
 pub mod file_cache;
 pub mod metadata;
 pub mod proxy;
+pub mod state_machine;
+pub mod stats;
 pub mod storage;
 
 pub use config::FileCacheConfig;

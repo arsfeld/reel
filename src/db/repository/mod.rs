@@ -1,4 +1,5 @@
 pub mod auth_token_repository;
+pub mod cache_repository;
 pub mod home_section_repository;
 pub mod library_repository;
 pub mod media_repository;
@@ -50,6 +51,8 @@ impl BaseRepository {
 
 // Re-export specific repositories
 pub use auth_token_repository::{AuthTokenRepository, AuthTokenRepositoryImpl};
+pub use cache_repository::{CacheRepository, CacheRepositoryImpl};
+pub use home_section_repository::{HomeSectionRepository, HomeSectionRepositoryImpl};
 pub use library_repository::{LibraryRepository, LibraryRepositoryImpl};
 pub use media_repository::{MediaRepository, MediaRepositoryImpl};
 pub use playback_repository::{PlaybackRepository, PlaybackRepositoryImpl};

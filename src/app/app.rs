@@ -27,16 +27,6 @@ impl ReelApp {
             initial_config.playback.player_backend
         );
 
-        // Initialize cache service after config is ready
-        tracing::info!("Initializing file cache service");
-        // Use the existing runtime from self to ensure spawned tasks persist
-        self.runtime.block_on(async {
-            if let Err(e) = crate::services::cache_service::initialize_cache_service().await {
-                tracing::warn!("Failed to initialize cache service: {}", e);
-                tracing::warn!("Application will continue without file caching");
-            }
-        });
-
         // Force dark theme - no user preference
         let style_manager = adw::StyleManager::default();
         style_manager.set_color_scheme(adw::ColorScheme::ForceDark);
@@ -63,6 +53,18 @@ impl ReelApp {
                 .expect("Failed to run database migrations");
 
             database.get_connection()
+        });
+
+        // Initialize cache service after database is ready
+        tracing::info!("Initializing file cache service");
+        let db_for_cache = db.clone();
+        self.runtime.block_on(async {
+            if let Err(e) =
+                crate::services::cache_service::initialize_cache_service(db_for_cache).await
+            {
+                tracing::warn!("Failed to initialize cache service: {}", e);
+                tracing::warn!("Application will continue without file caching");
+            }
         });
 
         // Create the Relm4 application and run it

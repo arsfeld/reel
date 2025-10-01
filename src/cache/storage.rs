@@ -468,6 +468,23 @@ impl CacheStorage {
             .unwrap_or(false)
     }
 
+    /// Set expected file size for a cache entry
+    pub fn set_expected_file_size(&mut self, key: &MediaCacheKey, size: u64) {
+        if let Some(metadata) = self.global_metadata.entries.get_mut(key) {
+            metadata.expected_total_size = size;
+            self.global_metadata.last_updated = chrono::Utc::now();
+        }
+    }
+
+    /// Mark a download as complete
+    pub fn mark_download_complete(&mut self, key: &MediaCacheKey, final_size: u64) {
+        if let Some(metadata) = self.global_metadata.entries.get_mut(key) {
+            metadata.is_complete = true;
+            metadata.file_size = final_size;
+            self.global_metadata.last_updated = chrono::Utc::now();
+        }
+    }
+
     /// Get available disk space for cache directory
     pub async fn get_available_space(&self) -> Result<u64> {
         let _metadata = tokio_fs::metadata(&self.cache_dir).await.with_context(|| {

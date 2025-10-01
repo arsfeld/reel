@@ -25,8 +25,8 @@ impl CacheService {
         }
     }
 
-    /// Initialize the cache service
-    pub async fn initialize(&self) -> Result<()> {
+    /// Initialize the cache service with database connection
+    pub async fn initialize(&self, db: Arc<sea_orm::DatabaseConnection>) -> Result<()> {
         let mut is_initialized = self.is_initialized.lock().await;
         if *is_initialized {
             warn!("Cache service already initialized");
@@ -42,8 +42,8 @@ impl CacheService {
         // Validate cache configuration
         cache_config.validate()?;
 
-        // Create and start the file cache
-        let (cache_handle, file_cache) = FileCache::new(cache_config).await?;
+        // Create and start the file cache with database connection
+        let (cache_handle, file_cache) = FileCache::new(cache_config, db).await?;
 
         // Store the handle
         {
@@ -66,23 +66,10 @@ impl CacheService {
 
     /// Get the cache handle (initializing if necessary)
     pub async fn get_handle(&self) -> Result<FileCacheHandle> {
-        // Check if already initialized
-        {
-            let handle_guard = self.cache_handle.lock().await;
-            if let Some(ref handle) = *handle_guard {
-                return Ok(handle.clone());
-            }
-        }
-
-        // Initialize if not already done
-        self.initialize().await?;
-
-        // Get the handle again
         let handle_guard = self.cache_handle.lock().await;
-        handle_guard
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Failed to get cache handle after initialization"))
+        handle_guard.as_ref().cloned().ok_or_else(|| {
+            anyhow::anyhow!("Cache service not initialized. Please call initialize() first.")
+        })
     }
 
     /// Check if the cache service is initialized
@@ -144,9 +131,9 @@ pub fn cache_service() -> &'static CacheService {
     &CACHE_SERVICE
 }
 
-/// Initialize the cache service at application startup
-pub async fn initialize_cache_service() -> Result<()> {
-    cache_service().initialize().await
+/// Initialize the cache service at application startup with database connection
+pub async fn initialize_cache_service(db: Arc<sea_orm::DatabaseConnection>) -> Result<()> {
+    cache_service().initialize(db).await
 }
 
 #[cfg(test)]

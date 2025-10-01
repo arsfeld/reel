@@ -1,4 +1,10 @@
 pub mod auth_tokens;
+pub mod cache_chunks;
+pub mod cache_download_queue;
+pub mod cache_entries;
+pub mod cache_headers;
+pub mod cache_quality_variants;
+pub mod cache_statistics;
 pub mod home_section_items;
 pub mod home_sections;
 pub mod libraries;
@@ -12,7 +18,34 @@ pub mod sync_status;
 pub use auth_tokens::{
     ActiveModel as AuthTokenActiveModel, Entity as AuthToken, Model as AuthTokenModel,
 };
-pub use home_sections::Model as HomeSectionModel;
+pub use cache_chunks::{
+    ActiveModel as CacheChunkActiveModel, Entity as CacheChunk, Model as CacheChunkModel,
+};
+pub use cache_download_queue::{
+    ActiveModel as CacheDownloadQueueActiveModel, Entity as CacheDownloadQueue,
+    Model as CacheDownloadQueueModel,
+};
+pub use cache_entries::{
+    ActiveModel as CacheEntryActiveModel, Entity as CacheEntry, Model as CacheEntryModel,
+};
+pub use cache_headers::{
+    ActiveModel as CacheHeaderActiveModel, Entity as CacheHeader, Model as CacheHeaderModel,
+};
+pub use cache_quality_variants::{
+    ActiveModel as CacheQualityVariantActiveModel, Entity as CacheQualityVariant,
+    Model as CacheQualityVariantModel,
+};
+pub use cache_statistics::{
+    ActiveModel as CacheStatisticsActiveModel, Entity as CacheStatistics,
+    Model as CacheStatisticsModel,
+};
+pub use home_section_items::{
+    ActiveModel as HomeSectionItemActiveModel, Entity as HomeSectionItem,
+    Model as HomeSectionItemModel,
+};
+pub use home_sections::{
+    ActiveModel as HomeSectionActiveModel, Entity as HomeSection, Model as HomeSectionModel,
+};
 pub use libraries::{ActiveModel as LibraryActiveModel, Entity as Library, Model as LibraryModel};
 pub use media_items::{
     ActiveModel as MediaItemActiveModel, Entity as MediaItem, Model as MediaItemModel,

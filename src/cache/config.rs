@@ -36,6 +36,12 @@ pub struct FileCacheConfig {
 
     /// Maximum number of files to keep in cache
     pub max_files_count: u32,
+
+    /// Enable periodic stats reporting
+    pub enable_stats: bool,
+
+    /// Stats reporting interval in seconds
+    pub stats_interval_secs: u64,
 }
 
 impl Default for FileCacheConfig {
@@ -52,6 +58,8 @@ impl Default for FileCacheConfig {
             max_concurrent_downloads: 3,
             download_timeout_secs: 300, // 5 minutes
             max_files_count: 1000,
+            enable_stats: true,
+            stats_interval_secs: 30, // 30 seconds default
         }
     }
 }

@@ -52,12 +52,14 @@ async fn start_playback(db: &DatabaseConnection, media_id: &str) -> Result<Strin
         .await
         .context("Failed to get cached stream")?;
 
+    let playback_url = cached_stream.playback_url();
     tracing::info!(
-        "Using cached stream for media: {} (cached: {}, complete: {})",
+        "Using cached stream for media: {} (cached: {}, complete: {}, playback_url: {})",
         media_id,
         cached_stream.cached_url.is_some(),
-        cached_stream.is_complete
+        cached_stream.is_complete,
+        playback_url
     );
 
-    Ok(cached_stream.playback_url().to_string())
+    Ok(playback_url.to_string())
 }
