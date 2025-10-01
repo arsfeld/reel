@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2025-10-01 00:09'
-updated_date: '2025-10-01 01:01'
+updated_date: '2025-10-01 01:31'
 labels:
   - cleanup
   - technical-debt
@@ -64,4 +64,11 @@ Session 2: Removed unused variables, traits, types, and enum variants
 - Removed unused get_credentials method from Jellyfin backend
 - Removed unused enum variants (Id in migrations, Jellyfin in auth_dialog, Reconnecting and Quit in main_window)
 - Reduced warnings from 298 to 278 (20 warnings removed)
+
+Session 3: Removed unused search modules and fixed minor warnings
+- Deleted src/backends/plex/api/search.rs (PlexSearch struct + 500+ lines)
+- Deleted src/backends/plex/api/search_impl.rs (search method implementations)
+- Removed unused import from config_manager.rs
+- Fixed unused callback parameter in player factory
+- Reduced warnings from 278 to 271 (7 warnings removed)
 <!-- SECTION:NOTES:END -->
