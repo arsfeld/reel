@@ -1,18 +1,4 @@
-use serde::{Deserialize, Deserializer};
-use serde_json::Value;
-
-// Helper function to deserialize fields that can be either string or number
-fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Value::deserialize(deserializer)?;
-    match value {
-        Value::String(s) => Ok(s),
-        Value::Number(n) => Ok(n.to_string()),
-        _ => Err(serde::de::Error::custom("expected string or number")),
-    }
-}
+use serde::Deserialize;
 
 // Plex Identity response for getting server machine ID
 #[allow(dead_code)]

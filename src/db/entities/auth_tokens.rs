@@ -37,7 +37,3 @@ impl Related<super::sources::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
-
-pub type AuthToken = Entity;
-pub type AuthTokenModel = Model;
-pub type AuthTokenActiveModel = ActiveModel;

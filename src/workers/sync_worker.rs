@@ -2,8 +2,7 @@ use crate::db::DatabaseConnection;
 use crate::models::{LibraryId, SourceId};
 use crate::services::core::backend::BackendService;
 use crate::services::core::sync::SyncService;
-use relm4::prelude::*;
-use relm4::{ComponentSender, Worker, WorkerHandle};
+use relm4::{ComponentSender, Worker};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -90,7 +89,6 @@ impl SyncWorker {
     ) {
         info!("perform_sync called for source: {:?}", source_id);
         let start_time = Instant::now();
-        let mut sections_synced = 0;
 
         // Send sync started
         sender
@@ -158,7 +156,7 @@ impl SyncWorker {
 
                 // After successful library/media sync, fetch and save home sections
                 info!("Fetching home sections for source: {:?}", source_id);
-                sections_synced = Self::sync_home_sections(&db, &source_id, &sender).await;
+                let sections_synced = Self::sync_home_sections(&db, &source_id, &sender).await;
 
                 // Send the sync completed output with sections count
                 sender
@@ -554,11 +552,6 @@ impl Worker for SyncWorker {
             }
         }
     }
-}
-
-// Helper function to create a sync worker instance
-pub fn create_sync_worker(db: Arc<DatabaseConnection>) -> WorkerHandle<SyncWorker> {
-    SyncWorker::builder().detach_worker(db)
 }
 
 #[cfg(test)]

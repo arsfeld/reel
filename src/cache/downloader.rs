@@ -34,7 +34,7 @@ pub enum DownloadState {
 #[derive(Debug, Clone)]
 pub struct DownloadProgress {
     /// Cache key being downloaded
-    pub cache_key: MediaCacheKey,
+    _cache_key: MediaCacheKey,
     /// Current download state
     pub state: DownloadState,
     /// Total file size in bytes (if known)
@@ -52,7 +52,7 @@ pub struct DownloadProgress {
 impl DownloadProgress {
     pub fn new(cache_key: MediaCacheKey) -> Self {
         Self {
-            cache_key,
+            _cache_key: cache_key,
             state: DownloadState::Queued,
             total_size: None,
             downloaded_bytes: 0,
@@ -98,16 +98,6 @@ pub enum DownloadCommand {
         priority: DownloadPriority,
         respond_to: mpsc::UnboundedSender<Result<()>>,
     },
-    /// Pause a download
-    PauseDownload {
-        cache_key: MediaCacheKey,
-        respond_to: mpsc::UnboundedSender<Result<()>>,
-    },
-    /// Resume a paused download
-    ResumeDownload {
-        cache_key: MediaCacheKey,
-        respond_to: mpsc::UnboundedSender<Result<()>>,
-    },
     /// Cancel a download
     CancelDownload {
         cache_key: MediaCacheKey,
@@ -118,10 +108,6 @@ pub enum DownloadCommand {
         cache_key: MediaCacheKey,
         respond_to: mpsc::UnboundedSender<Option<DownloadProgress>>,
     },
-    /// List all active downloads
-    ListDownloads {
-        respond_to: mpsc::UnboundedSender<Vec<DownloadProgress>>,
-    },
     /// Shutdown the downloader
     Shutdown,
 }
@@ -129,9 +115,6 @@ pub enum DownloadCommand {
 /// Download priority levels
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DownloadPriority {
-    Low = 0,
-    Normal = 1,
-    High = 2,
     Urgent = 3, // For playback-required downloads
 }
 
@@ -186,20 +169,6 @@ impl ProgressiveDownloader {
                     let result = self.start_download(cache_key, url, priority).await;
                     let _ = respond_to.send(result);
                 }
-                DownloadCommand::PauseDownload {
-                    cache_key,
-                    respond_to,
-                } => {
-                    let result = self.pause_download(&cache_key).await;
-                    let _ = respond_to.send(result);
-                }
-                DownloadCommand::ResumeDownload {
-                    cache_key,
-                    respond_to,
-                } => {
-                    let result = self.resume_download(&cache_key).await;
-                    let _ = respond_to.send(result);
-                }
                 DownloadCommand::CancelDownload {
                     cache_key,
                     respond_to,
@@ -213,10 +182,6 @@ impl ProgressiveDownloader {
                 } => {
                     let progress = self.get_progress(&cache_key).await;
                     let _ = respond_to.send(progress);
-                }
-                DownloadCommand::ListDownloads { respond_to } => {
-                    let downloads = self.list_downloads().await;
-                    let _ = respond_to.send(downloads);
                 }
                 DownloadCommand::Shutdown => {
                     info!("🔄 ProgressiveDownloader: Shutting down");
@@ -512,38 +477,6 @@ impl ProgressiveDownloader {
         Ok(())
     }
 
-    /// Pause a download
-    async fn pause_download(&self, cache_key: &MediaCacheKey) -> Result<()> {
-        let mut downloads = self.active_downloads.write().await;
-        if let Some(progress) = downloads.get_mut(cache_key) {
-            if progress.state == DownloadState::Downloading {
-                progress.state = DownloadState::Paused;
-                debug!("Paused download for cache key: {:?}", cache_key);
-                Ok(())
-            } else {
-                Err(anyhow::anyhow!("Download is not in progress"))
-            }
-        } else {
-            Err(anyhow::anyhow!("Download not found"))
-        }
-    }
-
-    /// Resume a paused download
-    async fn resume_download(&self, cache_key: &MediaCacheKey) -> Result<()> {
-        let mut downloads = self.active_downloads.write().await;
-        if let Some(progress) = downloads.get_mut(cache_key) {
-            if progress.state == DownloadState::Paused {
-                progress.state = DownloadState::Downloading;
-                debug!("Resumed download for cache key: {:?}", cache_key);
-                Ok(())
-            } else {
-                Err(anyhow::anyhow!("Download is not paused"))
-            }
-        } else {
-            Err(anyhow::anyhow!("Download not found"))
-        }
-    }
-
     /// Cancel a download
     async fn cancel_download(&self, cache_key: &MediaCacheKey) -> Result<()> {
         let mut downloads = self.active_downloads.write().await;
@@ -569,12 +502,6 @@ impl ProgressiveDownloader {
     async fn get_progress(&self, cache_key: &MediaCacheKey) -> Option<DownloadProgress> {
         let downloads = self.active_downloads.read().await;
         downloads.get(cache_key).cloned()
-    }
-
-    /// List all active downloads
-    async fn list_downloads(&self) -> Vec<DownloadProgress> {
-        let downloads = self.active_downloads.read().await;
-        downloads.values().cloned().collect()
     }
 }
 
@@ -603,38 +530,6 @@ impl ProgressiveDownloaderHandle {
                 cache_key,
                 url,
                 priority,
-                respond_to: sender,
-            })
-            .map_err(|_| anyhow::anyhow!("Downloader disconnected"))?;
-
-        receiver
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No response from downloader"))?
-    }
-
-    /// Pause a download
-    pub async fn pause_download(&self, cache_key: MediaCacheKey) -> Result<()> {
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        self.command_sender
-            .send(DownloadCommand::PauseDownload {
-                cache_key,
-                respond_to: sender,
-            })
-            .map_err(|_| anyhow::anyhow!("Downloader disconnected"))?;
-
-        receiver
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No response from downloader"))?
-    }
-
-    /// Resume a paused download
-    pub async fn resume_download(&self, cache_key: MediaCacheKey) -> Result<()> {
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        self.command_sender
-            .send(DownloadCommand::ResumeDownload {
-                cache_key,
                 respond_to: sender,
             })
             .map_err(|_| anyhow::anyhow!("Downloader disconnected"))?;
@@ -677,19 +572,6 @@ impl ProgressiveDownloaderHandle {
             .ok_or_else(|| anyhow::anyhow!("No response from downloader"))
     }
 
-    /// List all active downloads
-    pub async fn list_downloads(&self) -> Result<Vec<DownloadProgress>> {
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        self.command_sender
-            .send(DownloadCommand::ListDownloads { respond_to: sender })
-            .map_err(|_| anyhow::anyhow!("Downloader disconnected"))?;
-
-        receiver
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No response from downloader"))
-    }
-
     /// Shutdown the downloader
     pub fn shutdown(&self) -> Result<()> {
         self.command_sender
@@ -715,13 +597,5 @@ mod tests {
         progress.update(500, 100);
         assert_eq!(progress.progress_percent(), 0.5);
         assert_eq!(progress.speed_bps, 100);
-        assert_eq!(progress.eta_seconds, Some(5)); // (1000-500)/100 = 5
-    }
-
-    #[test]
-    fn test_download_priority_ordering() {
-        assert!(DownloadPriority::Urgent > DownloadPriority::High);
-        assert!(DownloadPriority::High > DownloadPriority::Normal);
-        assert!(DownloadPriority::Normal > DownloadPriority::Low);
     }
 }

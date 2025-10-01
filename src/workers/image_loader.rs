@@ -1,6 +1,6 @@
 use lru::LruCache;
 use relm4::prelude::*;
-use relm4::{ComponentSender, Worker, WorkerHandle};
+use relm4::{ComponentSender, Worker};
 use std::collections::{BinaryHeap, HashMap};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -398,9 +398,4 @@ impl ImageLoader {
             self.priority_queue.push(request.clone());
         }
     }
-}
-
-// Helper function to create an image loader instance
-pub fn get_image_loader() -> WorkerHandle<ImageLoader> {
-    ImageLoader::builder().detach_worker(())
 }

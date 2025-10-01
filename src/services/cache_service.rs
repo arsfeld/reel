@@ -149,11 +149,6 @@ pub async fn initialize_cache_service() -> Result<()> {
     cache_service().initialize().await
 }
 
-/// Shutdown the cache service
-pub async fn shutdown_cache_service() -> Result<()> {
-    cache_service().shutdown().await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

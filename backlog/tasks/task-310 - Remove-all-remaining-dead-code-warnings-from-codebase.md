@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2025-10-01 00:09'
-updated_date: '2025-10-01 12:57'
+updated_date: '2025-10-01 13:59'
 labels:
   - cleanup
   - technical-debt
@@ -172,4 +172,18 @@ Session 11: Fixed compilation errors from Session 4
 - Build now passes successfully
 - Current: 134 warnings (down from 147)
 - Progress: 147 → 134 (13 warnings removed, 374 total removed)
+
+Session 12: Planning systematic removal of 134 remaining warnings
+
+Analysis:
+- 8 completely unused structs identified
+- 2 unreachable patterns in player.rs (CommandResult only has 2 variants)
+- 8 completely unused enums
+- Remaining: unused fields, methods, variants
+
+Next actions:
+1. Remove unreachable patterns in player.rs (line 1648, 1804)
+2. Remove 8 unused structs
+3. Remove 8 unused enums
+4. Continue with unused fields and methods
 <!-- SECTION:NOTES:END -->

@@ -2374,40 +2374,39 @@ impl GStreamerPlayer {
         // Apply zoom transformation to video widget
         if let Some(widget) = self.video_widget.lock().unwrap().as_ref() {
             // For GStreamer, we'll use CSS transforms on the widget
-            let style_context = widget.style_context();
 
             // Remove previous zoom class
-            style_context.remove_class("zoom-fit");
-            style_context.remove_class("zoom-fill");
-            style_context.remove_class("zoom-16-9");
-            style_context.remove_class("zoom-4-3");
-            style_context.remove_class("zoom-2-35");
-            style_context.remove_class("zoom-custom");
+            widget.remove_css_class("zoom-fit");
+            widget.remove_css_class("zoom-fill");
+            widget.remove_css_class("zoom-16-9");
+            widget.remove_css_class("zoom-4-3");
+            widget.remove_css_class("zoom-2-35");
+            widget.remove_css_class("zoom-custom");
 
             match mode {
                 ZoomMode::Fit => {
-                    style_context.add_class("zoom-fit");
+                    widget.add_css_class("zoom-fit");
                     widget.set_size_request(-1, -1);
                 }
                 ZoomMode::Fill => {
-                    style_context.add_class("zoom-fill");
+                    widget.add_css_class("zoom-fill");
                     widget.set_size_request(-1, -1);
                 }
                 ZoomMode::Zoom16_9 => {
-                    style_context.add_class("zoom-16-9");
+                    widget.add_css_class("zoom-16-9");
                     // Force aspect ratio through widget sizing hints
                     widget.set_size_request(-1, -1);
                 }
                 ZoomMode::Zoom4_3 => {
-                    style_context.add_class("zoom-4-3");
+                    widget.add_css_class("zoom-4-3");
                     widget.set_size_request(-1, -1);
                 }
                 ZoomMode::Zoom2_35 => {
-                    style_context.add_class("zoom-2-35");
+                    widget.add_css_class("zoom-2-35");
                     widget.set_size_request(-1, -1);
                 }
                 ZoomMode::Custom(level) => {
-                    style_context.add_class("zoom-custom");
+                    widget.add_css_class("zoom-custom");
                     // Apply custom scale transform through inline CSS
                     let css = format!("transform: scale({});", level);
                     widget.set_property("css-name", &css);
