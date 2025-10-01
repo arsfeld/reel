@@ -1,11 +1,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 use crate::models::{
-    BackendId, Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId, Movie, Season,
-    Show, ShowId, StreamInfo, User,
+    Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId, Movie, Season, Show,
+    ShowId, StreamInfo, User,
 };
 
 #[async_trait]
@@ -59,17 +58,9 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     // get_backend_info removed - never used
 
     // Sync support methods
-    async fn get_backend_id(&self) -> BackendId;
 
     // get_last_sync_time and supports_offline removed - never used
-}
-
-#[derive(Debug, Clone)]
-pub struct WatchStatus {
-    pub watched: bool,
-    pub view_count: u32,
-    pub last_watched_at: Option<DateTime<Utc>>,
-    pub playback_position: Option<Duration>,
+    // get_backend_id removed - never used
 }
 
 #[cfg(test)]

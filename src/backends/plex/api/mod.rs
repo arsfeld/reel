@@ -3,7 +3,6 @@
 mod client;
 mod home;
 mod library;
-mod markers;
 pub mod playqueue;
 mod progress;
 mod streaming;

@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2025-10-01 00:09'
-updated_date: '2025-10-01 01:43'
+updated_date: '2025-10-01 01:52'
 labels:
   - cleanup
   - technical-debt
@@ -93,4 +93,15 @@ Session 4: Removed broker modules and unused auth commands
 - Ran cargo fix --allow-dirty to auto-remove some warnings
 - Current: 238 total warnings (114 dead code + 124 deprecation/other)
 - Progress: 264 → 238 (26 warnings removed this session, 290 total removed)
+
+Session 5: Fixed Plex API types and removed unused methods
+- Removed/prefixed unused fields in Plex API types (PlexMetadataResponse, PlexMetadataContainer, PlexMetadataWithMarkers, PlexMarker, PlexLibraryDirectory, PlexMoviesContainer, PlexMovieMetadata, PlexShowsContainer, PlexShowMetadata, PlexSeasonMetadata, PlexMediaMetadata, PlexMedia, PlexPart, PlexGenericMetadata, PlexOnDeckResponse, PlexOnDeckContainer, PlexHub)
+- Removed PlayQueueState.play_queue_version field and all references
+- Removed ServerInfo.is_local and is_relay fields
+- Deleted unused markers.rs file and removed module declaration
+- Removed unused methods: headers_with_extras, fetch_episode_markers, mark_unwatched
+- Removed unused MediaBackend::get_backend_id trait method and all implementations
+- Removed unused WatchStatus struct and Jellyfin get_watch_status method
+- Ran cargo fix --allow-dirty
+- Reduced warnings from 238 to 217 (21 warnings removed, 311 total removed)
 <!-- SECTION:NOTES:END -->

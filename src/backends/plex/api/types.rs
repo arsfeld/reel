@@ -34,30 +34,31 @@ pub struct PlexIdentityContainer {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PlexMetadataResponse {
-    pub media_container: PlexMetadataContainer,
+    #[serde(rename = "MediaContainer")]
+    _media_container: PlexMetadataContainer,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexMetadataContainer {
     #[serde(rename = "Metadata", default)]
-    pub metadata: Vec<PlexMetadataWithMarkers>,
+    _metadata: Vec<PlexMetadataWithMarkers>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexMetadataWithMarkers {
     #[serde(rename = "Marker", default)]
-    pub marker: Option<Vec<PlexMarker>>,
+    _marker: Option<Vec<PlexMarker>>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexMarker {
     #[serde(rename = "type")]
-    pub type_: String,
-    pub start_time_offset: i64,
-    pub end_time_offset: i64,
+    _type: String,
+    _start_time_offset: i64,
+    _end_time_offset: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,7 +81,7 @@ pub struct PlexLibraryDirectory {
     pub title: String,
     #[serde(rename = "type")]
     pub library_type: String,
-    pub uuid: String,
+    _uuid: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,14 +95,11 @@ pub struct PlexMoviesResponse {
 pub struct PlexMoviesContainer {
     #[serde(rename = "Metadata", default)]
     pub metadata: Vec<PlexMovieMetadata>,
-    #[serde(default)]
-    pub size: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexMovieMetadata {
-    pub key: String,
     pub rating_key: String,
     pub title: String,
     #[serde(default)]
@@ -128,12 +126,6 @@ pub struct PlexMovieMetadata {
     pub updated_at: Option<i64>,
     #[serde(rename = "Genre", default)]
     pub genres: Vec<PlexTag>,
-    #[serde(rename = "Director", default)]
-    pub directors: Vec<PlexTag>,
-    #[serde(rename = "Writer", default)]
-    pub writers: Vec<PlexTag>,
-    #[serde(rename = "Role", default)]
-    pub actors: Vec<PlexTag>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -153,14 +145,11 @@ pub struct PlexShowsResponse {
 pub struct PlexShowsContainer {
     #[serde(rename = "Metadata", default)]
     pub metadata: Vec<PlexShowMetadata>,
-    #[serde(default)]
-    pub size: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexShowMetadata {
-    pub key: String,
     pub rating_key: String,
     pub title: String,
     #[serde(default)]
@@ -202,7 +191,7 @@ pub struct PlexSeasonsContainer {
 #[serde(rename_all = "camelCase")]
 pub struct PlexSeasonMetadata {
     pub rating_key: String,
-    pub title: String,
+    _title: String,
     pub index: i32,
     #[serde(default)]
     pub thumb: Option<String>,
@@ -259,19 +248,13 @@ pub struct PlexMediaContainer {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PlexMediaMetadata {
-    #[serde(rename = "ratingKey")]
-    pub rating_key: String,
     #[serde(default)]
     pub media: Vec<PlexMedia>,
-    #[serde(default)]
-    pub duration: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexMedia {
-    #[serde(deserialize_with = "deserialize_string_or_number")]
-    pub id: String,
     #[serde(default)]
     pub bitrate: Option<u64>,
     #[serde(default)]
@@ -289,11 +272,7 @@ pub struct PlexMedia {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexPart {
-    #[serde(deserialize_with = "deserialize_string_or_number")]
-    pub id: String,
     pub key: String,
-    #[serde(default)]
-    pub size: Option<i64>,
     #[serde(default)]
     pub container: Option<String>,
 }
@@ -332,8 +311,6 @@ pub struct PlexGenericMetadata {
     #[serde(default)]
     pub viewed_leaf_count: Option<i32>,
     #[serde(default)]
-    pub parent_title: Option<String>,
-    #[serde(default)]
     pub parent_index: Option<i32>,
     #[serde(default)]
     pub index: Option<i32>,
@@ -345,25 +322,20 @@ pub struct PlexGenericMetadata {
     pub grandparent_thumb: Option<String>,
     #[serde(rename = "Genre", default)]
     pub genre: Option<Vec<PlexTag>>,
-    #[serde(rename = "Director", default)]
-    pub directors: Vec<PlexTag>,
-    #[serde(rename = "Writer", default)]
-    pub writers: Vec<PlexTag>,
-    #[serde(rename = "Role", default)]
-    pub actors: Vec<PlexTag>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PlexOnDeckResponse {
-    pub media_container: PlexOnDeckContainer,
+    #[serde(rename = "MediaContainer")]
+    _media_container: PlexOnDeckContainer,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexOnDeckContainer {
     #[serde(rename = "Metadata", default)]
-    pub metadata: Vec<PlexGenericMetadata>,
+    _metadata: Vec<PlexGenericMetadata>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -392,16 +364,8 @@ pub struct PlexHubsContainer {
 pub struct PlexHub {
     pub key: String,
     pub title: String,
-    #[serde(rename = "type")]
-    pub hub_type: Option<String>,
     #[serde(rename = "hubIdentifier")]
     pub hub_identifier: Option<String>,
-    #[serde(default)]
-    pub context: Option<String>,
-    #[serde(default)]
-    pub style: Option<String>,
-    #[serde(default)]
-    pub size: Option<i32>,
     #[serde(rename = "Metadata", default)]
     pub metadata: Vec<PlexGenericMetadata>,
 }

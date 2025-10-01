@@ -1070,31 +1070,6 @@ impl JellyfinApi {
         Ok(item)
     }
 
-    pub async fn get_watch_status(
-        &self,
-        media_id: &str,
-    ) -> Result<crate::backends::traits::WatchStatus> {
-        let item = self.get_item(media_id).await?;
-
-        let watch_status = crate::backends::traits::WatchStatus {
-            watched: item.user_data.as_ref().is_some_and(|ud| ud.played),
-            view_count: item.user_data.as_ref().map_or(0, |ud| ud.play_count),
-            last_watched_at: item
-                .user_data
-                .as_ref()
-                .and_then(|ud| ud.last_played_date.as_ref())
-                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&Utc)),
-            playback_position: item
-                .user_data
-                .as_ref()
-                .and_then(|ud| ud.playback_position_ticks)
-                .map(|ticks| Duration::from_secs(ticks / 10_000_000)),
-        };
-
-        Ok(watch_status)
-    }
-
     pub async fn get_media_segments(&self, item_id: &str) -> Result<Vec<MediaSegment>> {
         let url = format!("{}/Items/{}/MediaSegments", self.base_url, item_id);
 

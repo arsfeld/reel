@@ -8,8 +8,8 @@ use tokio::sync::RwLock;
 
 use super::traits::MediaBackend;
 use crate::models::{
-    BackendId, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season, Show, ShowId,
-    StreamInfo, User,
+    Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season, Show, ShowId, StreamInfo,
+    User,
 };
 // Stateful services removed during Relm4 migration
 // use crate::services::{AuthManager, DataService};
@@ -114,10 +114,5 @@ impl MediaBackend for LocalBackend {
     }
 
     // Removed unused methods: mark_watched, mark_unwatched, get_watch_status, search
-
-    async fn get_backend_id(&self) -> BackendId {
-        BackendId::new(&self.backend_id)
-    }
-
-    // Removed unused methods: get_last_sync_time, supports_offline
+    // Removed unused methods: get_last_sync_time, supports_offline, get_backend_id
 }
