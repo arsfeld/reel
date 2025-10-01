@@ -216,12 +216,6 @@ impl JellyfinBackend {
         Ok(())
     }
 
-    pub async fn get_credentials(&self) -> Option<(String, String)> {
-        let api_key = self.api_key.read().await.clone()?;
-        let user_id = self.user_id.read().await.clone()?;
-        Some((api_key, user_id))
-    }
-
     /// Extract the actual Jellyfin item ID from a composite media ID
     /// Format: "backend_id:library_id:type:item_id" or variations
     fn extract_jellyfin_item_id(&self, media_id: &MediaItemId) -> String {

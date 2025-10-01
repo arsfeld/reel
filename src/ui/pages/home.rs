@@ -388,7 +388,7 @@ impl AsyncComponent for HomePage {
                 relm4::spawn(async move {
                     // Get the source entity
                     use crate::db::repository::source_repository::SourceRepositoryImpl;
-                    let source_repo = SourceRepositoryImpl::new(db.clone());
+                    let _source_repo = SourceRepositoryImpl::new(db.clone());
 
                     // Note: Retry should trigger sync worker to refresh this source
                     // UI should only display what's in the cache

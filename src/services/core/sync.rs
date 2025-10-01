@@ -391,7 +391,7 @@ impl SyncService {
         source_id: &SourceId,
         library_id: &crate::models::LibraryId,
         show_id: &crate::models::ShowId,
-        show_title: &str,
+        _show_title: &str,
         cumulative_items_synced: &mut usize,
         estimated_total: usize,
     ) -> Result<usize> {

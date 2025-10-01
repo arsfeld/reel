@@ -231,7 +231,7 @@ impl ProgressiveDownloader {
         &mut self,
         cache_key: MediaCacheKey,
         url: String,
-        priority: DownloadPriority,
+        _priority: DownloadPriority,
     ) -> Result<()> {
         debug!("Starting download for cache key: {:?}", cache_key);
 

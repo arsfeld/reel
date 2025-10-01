@@ -152,7 +152,7 @@ impl AsyncComponent for PreferencesDialog {
             }
             PreferencesDialogInput::ReloadConfig => {
                 // Reload config from ConfigService
-                let config = relm4::spawn_local(async move { CONFIG_SERVICE.get_config().await });
+                let _config = relm4::spawn_local(async move { CONFIG_SERVICE.get_config().await });
 
                 // This will be handled asynchronously - for now just log
                 tracing::info!("Reloading config from service");

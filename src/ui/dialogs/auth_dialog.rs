@@ -15,7 +15,6 @@ use crate::services::commands::auth_commands::CreateSourceCommand;
 #[derive(Debug, Clone)]
 pub enum BackendType {
     Plex,
-    Jellyfin,
 }
 
 #[derive(Debug, Clone)]
@@ -985,7 +984,6 @@ impl AsyncComponent for AuthDialog {
                 self.backend_type = backend_type;
                 match self.backend_type {
                     BackendType::Plex => self.view_stack.set_visible_child_name("plex"),
-                    BackendType::Jellyfin => self.view_stack.set_visible_child_name("jellyfin"),
                 }
             }
 

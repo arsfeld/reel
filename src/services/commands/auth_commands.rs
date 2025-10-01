@@ -152,7 +152,6 @@ impl Command<Vec<Source>> for LoadSourcesCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backends::traits::BackendType;
     use crate::db::entities::sources;
     use crate::models::{Episode, Library, LibraryType, Movie, Show};
     use chrono::Utc;

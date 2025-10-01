@@ -168,8 +168,6 @@ impl MigrationTrait for Migration {
 #[derive(Iden)]
 enum MediaItems {
     Table,
-
-    Id,
     ParentId,
     SeasonNumber,
     EpisodeNumber,

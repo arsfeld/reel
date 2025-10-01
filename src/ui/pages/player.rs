@@ -1464,6 +1464,11 @@ impl AsyncComponent for PlayerPage {
                         sender.input(PlayerInput::VolumeDown);
                         glib::Propagation::Stop
                     }
+                    gtk::gdk::Key::_0 if ctrl_pressed => {
+                        // Ctrl+0: reset zoom
+                        sender.input(PlayerInput::ZoomReset);
+                        glib::Propagation::Stop
+                    }
                     gtk::gdk::Key::_0 => {
                         // 0: volume up by 10%
                         sender.input(PlayerInput::VolumeUp);
@@ -1537,11 +1542,6 @@ impl AsyncComponent for PlayerPage {
                     gtk::gdk::Key::minus | gtk::gdk::Key::underscore => {
                         // -/_: zoom out
                         sender.input(PlayerInput::ZoomOut);
-                        glib::Propagation::Stop
-                    }
-                    gtk::gdk::Key::_0 if ctrl_pressed => {
-                        // Ctrl+0: reset zoom
-                        sender.input(PlayerInput::ZoomReset);
                         glib::Propagation::Stop
                     }
                     _ => glib::Propagation::Proceed,

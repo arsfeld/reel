@@ -4,10 +4,6 @@ use anyhow::Result;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-pub trait PlatformApp {
-    fn run(runtime: Arc<Runtime>) -> Result<()>;
-}
-
 pub struct AppPlatform;
 
 impl AppPlatform {

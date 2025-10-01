@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2025-10-01 00:09'
-updated_date: '2025-10-01 00:42'
+updated_date: '2025-10-01 01:01'
 labels:
   - cleanup
   - technical-debt
@@ -54,4 +54,14 @@ Session 1: Removed unused imports and cleaned up module exports
 - Fixed compilation errors by restoring required imports
 - Applied cargo fix suggestions
 - Reduced warnings from 332 to 299 (33 warnings removed)
+
+Session 2: Removed unused variables, traits, types, and enum variants
+- Fixed unused variables by prefixing with underscore or removing
+- Fixed unreachable pattern in player keyboard shortcuts
+- Removed unused PlatformApp trait from app/mod.rs
+- Removed unused Frontend trait from core/frontend.rs
+- Removed unused BackendType and test imports
+- Removed unused get_credentials method from Jellyfin backend
+- Removed unused enum variants (Id in migrations, Jellyfin in auth_dialog, Reconnecting and Quit in main_window)
+- Reduced warnings from 298 to 278 (20 warnings removed)
 <!-- SECTION:NOTES:END -->

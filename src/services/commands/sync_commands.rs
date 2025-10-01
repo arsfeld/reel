@@ -41,7 +41,6 @@ impl<'a> Command<usize> for SyncLibraryCommand<'a> {
 #[allow(dead_code)]
 mod tests {
     use super::*;
-    use crate::backends::traits::BackendType;
     use crate::models::StreamInfo;
     use crate::models::{
         BackendId, Credentials, Episode, HomeSection, Library, LibraryId, LibraryType, MediaItemId,

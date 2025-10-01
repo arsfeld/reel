@@ -1652,7 +1652,7 @@ impl GStreamerPlayer {
                     trace!("Found language tag: {}", lang.get());
                 }
             }
-            MessageView::StreamStart(stream_start_msg) => {
+            MessageView::StreamStart(_stream_start_msg) => {
                 debug!("Stream started - collection should follow soon");
 
                 // StreamStart message doesn't provide direct stream access
@@ -1847,9 +1847,9 @@ impl GStreamerPlayer {
     }
 
     fn process_selected_streams_sync(
-        collection: &gst::StreamCollection,
-        current_audio: &Arc<Mutex<Option<String>>>,
-        current_subtitle: &Arc<Mutex<Option<String>>>,
+        _collection: &gst::StreamCollection,
+        _current_audio: &Arc<Mutex<Option<String>>>,
+        _current_subtitle: &Arc<Mutex<Option<String>>>,
     ) {
         info!("Processing selected streams...");
         // Placeholder for now - proper implementation would track which streams are actually selected

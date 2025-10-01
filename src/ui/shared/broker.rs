@@ -193,12 +193,12 @@ impl MessageBroker {
 
     pub async fn broadcast(&self, message: BrokerMessage) {
         let subs = self.subscribers.read().await;
-        let subscriber_count = subs.len();
-        let mut send_count = 0;
+        let _subscriber_count = subs.len();
+        let mut _send_count = 0;
         for senders in subs.values() {
             for sender in senders {
                 if sender.send(message.clone()).is_ok() {
-                    send_count += 1;
+                    _send_count += 1;
                 }
             }
         }

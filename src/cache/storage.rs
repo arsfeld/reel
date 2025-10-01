@@ -470,7 +470,7 @@ impl CacheStorage {
 
     /// Get available disk space for cache directory
     pub async fn get_available_space(&self) -> Result<u64> {
-        let metadata = tokio_fs::metadata(&self.cache_dir).await.with_context(|| {
+        let _metadata = tokio_fs::metadata(&self.cache_dir).await.with_context(|| {
             format!(
                 "Failed to get metadata for cache directory {:?}",
                 self.cache_dir

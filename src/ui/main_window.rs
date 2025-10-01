@@ -95,12 +95,11 @@ pub enum MainWindowInput {
 pub enum ConnectionStatus {
     Connected(String), // URL
     Disconnected,
-    Reconnecting,
 }
 
 #[derive(Debug)]
 pub enum MainWindowOutput {
-    Quit,
+    // No output messages currently defined
 }
 
 #[relm4::component(pub async)]
@@ -419,7 +418,7 @@ impl AsyncComponent for MainWindow {
         );
 
         // Initialize the SyncWorker
-        let sync_sender = sender.clone();
+        let _sync_sender = sender.clone();
         let sync_worker = SyncWorker::builder()
             .detach_worker(Arc::new(db.clone()))
             .forward(sender.input_sender(), move |output| match output {
@@ -1521,10 +1520,6 @@ impl AsyncComponent for MainWindow {
                             source_id
                         )));
                         (false, format!("Source {} disconnected", source_id))
-                    }
-                    ConnectionStatus::Reconnecting => {
-                        tracing::info!("Source {} is reconnecting", source_id);
-                        (false, format!("Reconnecting to source {}", source_id))
                     }
                 };
 
