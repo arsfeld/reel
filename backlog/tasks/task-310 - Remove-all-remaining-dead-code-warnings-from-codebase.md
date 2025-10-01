@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2025-10-01 00:09'
-updated_date: '2025-10-01 02:08'
+updated_date: '2025-10-01 12:57'
 labels:
   - cleanup
   - technical-debt
@@ -134,4 +134,42 @@ Categories of dead code:
 - Image loader: Unused SearchWorker and helpers
 
 This will require multiple focused sessions to complete. Each category should be tackled carefully to avoid breaking working code.
+
+Session 8: Major dead code cleanup (193→0 warnings target)
+- Removed unused ProgressiveDownloader methods: pause_download, resume_download, list_downloads
+- Removed unused DownloadCommand enum variants: PauseDownload, ResumeDownload, ListDownloads
+- Removed unused DownloadPriority variants: Low, Normal, High (kept only Urgent)
+- Prefixed unused DownloadProgress fields with underscore
+- Fixed sections_synced unused assignment warning in sync_worker.rs
+- Fixed GTK4 deprecation warnings: replaced style_context()/add_class()/remove_class() with add_css_class()/remove_css_class()
+- Fixed GTK4 allocation deprecations: replaced allocation()/allocated_height() with height()
+- Status: Still work in progress, need to continue systematic removal of remaining dead code
+
+Session 9: Removed unused command structs, functions, and type aliases
+- Removed 10 unused command structs from media_commands.rs
+- Removed SyncStats struct and get_sync_stats method
+- Removed 4 type aliases (AuthToken, AuthTokenModel, AuthTokenActiveModel, MediaItemActiveModel)
+- Removed 7 unused functions (create_sync_worker, get_image_loader, get_search_worker, shutdown_cache_service, deserialize_string_or_number, create_friendly_name module)
+- Ran cargo fix for automatic fixes
+- Progress: 173 → 150 warnings (23 warnings removed, 358 total removed)
+
+Current status: 150 warnings remaining (down from 173)
+Next session should focus on: unused enum variants in UI messages, unused methods in cache/repository layers
+
+Session 10: Systematic removal of dead code (150→147 warnings)
+- Removed 2 unused imports (relm4::prelude from sync_worker, search_worker)
+- Removed 5 unused PlayerCommand enum variants and match arms:
+  - GetPlaybackSpeed, IsMuted, GetZoomMode (getter methods never called)
+  - UpdateConfig, Shutdown (lifecycle methods never called)
+- Removed corresponding PlayerHandle wrapper methods
+- Progress: 150 → 147 warnings (3 warnings removed, 361 total removed)
+- Remaining: 147 warnings (15+ enum variants, 30+ fields, 60+ methods)
+
+Session 11: Fixed compilation errors from Session 4
+- Added missing BrokerMessage, DataMessage, SourceMessage imports to sync.rs
+- Session 4 removed src/services/brokers/ but the actual BrokerMessage lives in src/ui/shared/broker.rs
+- The types were never removed, just the imports were missing
+- Build now passes successfully
+- Current: 134 warnings (down from 147)
+- Progress: 147 → 134 (13 warnings removed, 374 total removed)
 <!-- SECTION:NOTES:END -->
