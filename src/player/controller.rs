@@ -764,9 +764,9 @@ impl PlayerHandle {
         self.sender
             .send(PlayerCommand::GetZoomMode { respond_to })
             .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
-        Ok(response
+        response
             .await
-            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?)
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))
     }
 
     /// Update player configuration (may recreate player if backend changes)

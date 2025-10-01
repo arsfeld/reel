@@ -1543,7 +1543,7 @@ impl GStreamerPlayer {
                                     || name.contains("video")
                                     || name.contains("text"))
                             {
-                                let value = pb.property_value(&name);
+                                let value = pb.property_value(name);
                                 info!("  {}: {:?}", name, value);
                             }
                         }
@@ -1984,22 +1984,22 @@ impl GStreamerPlayer {
         }
 
         // If no streams found yet, provide default
-        if tracks.is_empty() {
-            if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-                let timeout = if cfg!(target_os = "macos") {
-                    gst::ClockTime::from_mseconds(100)
-                } else {
-                    gst::ClockTime::ZERO
-                };
-                let (_, current, _) = playbin.state(timeout);
+        if tracks.is_empty()
+            && let Some(playbin) = self.playbin.lock().unwrap().as_ref()
+        {
+            let timeout = if cfg!(target_os = "macos") {
+                gst::ClockTime::from_mseconds(100)
+            } else {
+                gst::ClockTime::ZERO
+            };
+            let (_, current, _) = playbin.state(timeout);
 
-                if current < gst::State::Paused {
-                    debug!("Playbin not in PAUSED/PLAYING state yet, no audio tracks available");
-                } else {
-                    // Provide a default track if playbin is ready but no collection received yet
-                    debug!("No stream collection available, providing default audio track");
-                    tracks.push((0, "Audio Track 1".to_string()));
-                }
+            if current < gst::State::Paused {
+                debug!("Playbin not in PAUSED/PLAYING state yet, no audio tracks available");
+            } else {
+                // Provide a default track if playbin is ready but no collection received yet
+                debug!("No stream collection available, providing default audio track");
+                tracks.push((0, "Audio Track 1".to_string()));
             }
         }
 
@@ -2056,11 +2056,11 @@ impl GStreamerPlayer {
                 debug!("Adding audio: {}", new_stream.stream_id);
 
                 // Keep the current subtitle stream if one is selected
-                if let Some(ref current_sub) = *self.current_subtitle_stream.lock().unwrap() {
-                    if subtitle_streams.iter().any(|s| s.stream_id == *current_sub) {
-                        selected_streams.push(current_sub.clone());
-                        debug!("Keeping subtitle: {}", current_sub);
-                    }
+                if let Some(ref current_sub) = *self.current_subtitle_stream.lock().unwrap()
+                    && subtitle_streams.iter().any(|s| s.stream_id == *current_sub)
+                {
+                    selected_streams.push(current_sub.clone());
+                    debug!("Keeping subtitle: {}", current_sub);
                 }
 
                 // Also need to include video stream (playbin3 requires all streams)
@@ -2068,16 +2068,16 @@ impl GStreamerPlayer {
                 if let Some(ref collection) = *self.stream_collection.lock().unwrap() {
                     for i in 0..collection.len() {
                         let idx = i as u32;
-                        if let Some(stream) = collection.stream(idx) {
-                            if stream.stream_type().contains(gst::StreamType::VIDEO) {
-                                let stream_id = stream
-                                    .stream_id()
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_else(|| "video-stream".to_string());
-                                selected_streams.push(stream_id.clone());
-                                debug!("Adding video: {}", stream_id);
-                                break; // Usually only one video stream
-                            }
+                        if let Some(stream) = collection.stream(idx)
+                            && stream.stream_type().contains(gst::StreamType::VIDEO)
+                        {
+                            let stream_id = stream
+                                .stream_id()
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| "video-stream".to_string());
+                            selected_streams.push(stream_id.clone());
+                            debug!("Adding video: {}", stream_id);
+                            break; // Usually only one video stream
                         }
                     }
                 }
@@ -2177,16 +2177,16 @@ impl GStreamerPlayer {
             if let Some(ref collection) = *self.stream_collection.lock().unwrap() {
                 for i in 0..collection.len() {
                     let idx = i as u32;
-                    if let Some(stream) = collection.stream(idx) {
-                        if stream.stream_type().contains(gst::StreamType::VIDEO) {
-                            let stream_id = stream
-                                .stream_id()
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| "video-stream".to_string());
-                            selected_streams.push(stream_id.clone());
-                            debug!("Adding video: {}", stream_id);
-                            break;
-                        }
+                    if let Some(stream) = collection.stream(idx)
+                        && stream.stream_type().contains(gst::StreamType::VIDEO)
+                    {
+                        let stream_id = stream
+                            .stream_id()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "video-stream".to_string());
+                        selected_streams.push(stream_id.clone());
+                        debug!("Adding video: {}", stream_id);
+                        break;
                     }
                 }
             }

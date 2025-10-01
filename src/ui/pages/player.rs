@@ -123,12 +123,11 @@ impl PlayerPage {
             return;
         }
         // Only try to cancel timer if not called from the timer itself
-        if !from_timer {
-            if let ControlState::Visible { timer_id } = &mut self.control_state {
-                if let Some(timer) = timer_id.take() {
-                    timer.remove();
-                }
-            }
+        if !from_timer
+            && let ControlState::Visible { timer_id } = &mut self.control_state
+            && let Some(timer) = timer_id.take()
+        {
+            timer.remove();
         }
 
         self.control_state = ControlState::Hidden;
@@ -146,10 +145,10 @@ impl PlayerPage {
     /// Transition to the Visible state
     fn transition_to_visible(&mut self, sender: AsyncComponentSender<Self>) {
         // Cancel any existing timer first
-        if let ControlState::Visible { timer_id } = &mut self.control_state {
-            if let Some(timer) = timer_id.take() {
-                timer.remove();
-            }
+        if let ControlState::Visible { timer_id } = &mut self.control_state
+            && let Some(timer) = timer_id.take()
+        {
+            timer.remove();
         }
 
         // Show cursor
@@ -175,10 +174,10 @@ impl PlayerPage {
     /// Transition to the Hovering state
     fn transition_to_hovering(&mut self, _sender: AsyncComponentSender<Self>) {
         // Cancel any existing timer
-        if let ControlState::Visible { timer_id } = &mut self.control_state {
-            if let Some(timer) = timer_id.take() {
-                timer.remove();
-            }
+        if let ControlState::Visible { timer_id } = &mut self.control_state
+            && let Some(timer) = timer_id.take()
+        {
+            timer.remove();
         }
 
         self.control_state = ControlState::Hovering;
@@ -406,7 +405,7 @@ impl PlayerPage {
             let item = gtk::gio::MenuItem::new(Some(label), None);
             let action_name = format!(
                 "player.zoom-{}",
-                label.to_lowercase().replace(':', "-").replace('.', "-")
+                label.to_lowercase().replace([':', '.'], "-")
             );
             item.set_action_and_target_value(Some(&action_name), None);
 
@@ -428,10 +427,10 @@ impl PlayerPage {
             item.set_action_and_target_value(Some(&action_name), None);
 
             // Check if it matches custom zoom
-            if let crate::player::ZoomMode::Custom(current_level) = current_mode {
-                if (current_level - level).abs() < 0.01 {
-                    item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
-                }
+            if let crate::player::ZoomMode::Custom(current_level) = current_mode
+                && (current_level - level).abs() < 0.01
+            {
+                item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
             }
 
             menu.append_item(&item);
@@ -462,10 +461,7 @@ impl PlayerPage {
 
         // Add actions for preset modes
         for (mode, label, _) in modes {
-            let action_name = format!(
-                "zoom-{}",
-                label.to_lowercase().replace(':', "-").replace('.', "-")
-            );
+            let action_name = format!("zoom-{}", label.to_lowercase().replace([':', '.'], "-"));
             let action = gtk::gio::SimpleAction::new(&action_name, None);
             let sender_clone = sender.clone();
             let mode_copy = mode;
@@ -2490,10 +2486,10 @@ impl AsyncComponent for PlayerPage {
                 }
 
                 // Cancel any state timer
-                if let ControlState::Visible { timer_id } = &mut self.control_state {
-                    if let Some(timer) = timer_id.take() {
-                        timer.remove();
-                    }
+                if let ControlState::Visible { timer_id } = &mut self.control_state
+                    && let Some(timer) = timer_id.take()
+                {
+                    timer.remove();
                 }
 
                 // Show cursor before navigating
@@ -2767,10 +2763,10 @@ impl AsyncComponent for PlayerPage {
         });
 
         // Restore cursor visibility when player is destroyed
-        if let Some(surface) = self.window.surface() {
-            if let Some(cursor) = gtk::gdk::Cursor::from_name("default", None) {
-                surface.set_cursor(Some(&cursor));
-            }
+        if let Some(surface) = self.window.surface()
+            && let Some(cursor) = gtk::gdk::Cursor::from_name("default", None)
+        {
+            surface.set_cursor(Some(&cursor));
         }
 
         // Clean up any active timers
@@ -2779,10 +2775,10 @@ impl AsyncComponent for PlayerPage {
         }
 
         // Cancel any visible state timer
-        if let ControlState::Visible { timer_id } = &mut self.control_state {
-            if let Some(timer) = timer_id.take() {
-                timer.remove();
-            }
+        if let ControlState::Visible { timer_id } = &mut self.control_state
+            && let Some(timer) = timer_id.take()
+        {
+            timer.remove();
         }
 
         // Clean up window event debounce timer

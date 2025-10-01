@@ -217,7 +217,7 @@ async fn start_playback(db: &DatabaseConnection, media_id: &str) -> Result<Strin
     // Get source_id from the media item
     let media_repo = MediaRepositoryImpl::new(db.clone());
     let media_entity = media_repo
-        .find_by_id(&media_item_id.to_string())
+        .find_by_id(media_item_id.as_ref())
         .await?
         .ok_or_else(|| anyhow::anyhow!("Media item not found: {}", media_item_id))?;
     let source_id = SourceId::new(media_entity.source_id);

@@ -64,10 +64,10 @@ impl DownloadProgress {
 
     /// Calculate download progress as percentage (0.0 to 1.0)
     pub fn progress_percent(&self) -> f64 {
-        if let Some(total) = self.total_size {
-            if total > 0 {
-                return self.downloaded_bytes as f64 / total as f64;
-            }
+        if let Some(total) = self.total_size
+            && total > 0
+        {
+            return self.downloaded_bytes as f64 / total as f64;
         }
         0.0
     }

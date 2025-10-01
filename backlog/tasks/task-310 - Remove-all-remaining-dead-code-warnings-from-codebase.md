@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2025-10-01 00:09'
-updated_date: '2025-10-01 01:52'
+updated_date: '2025-10-01 02:08'
 labels:
   - cleanup
   - technical-debt
@@ -104,4 +104,34 @@ Session 5: Fixed Plex API types and removed unused methods
 - Removed unused WatchStatus struct and Jellyfin get_watch_status method
 - Ran cargo fix --allow-dirty
 - Reduced warnings from 238 to 217 (21 warnings removed, 311 total removed)
+
+Session 6: Removed unused command structs and mapper code
+- Deleted src/services/commands/sync_commands.rs (SyncSourceCommand, SyncLibraryCommand + 268 lines)
+- Removed CommandResult and CommandExecutor from services/commands/mod.rs (unused infra + tests)
+- Removed unused mapper traits: deleted src/mapper/traits.rs (Mapper, TryMapper, FieldTransform traits + helper functions)
+- Removed unused transformers: DateTimeTransformer, JsonTransformer, DurationTransformer::from_millis
+- Ran cargo fix multiple times to auto-remove simple warnings
+- Reduced warnings from 217 to 198 (19 warnings removed, 330 total removed)
+
+Session 7: Removed unused enum variants
+- Removed HomeSectionsLoaded from HomePageInput and its handler
+- Removed LoadMovie from MovieDetailsInput and its handler
+- Removed NavigateBack from MovieDetailsOutput and ShowDetailsOutput
+- Removed ConnectionMonitorInput::Stop variant and its handler
+- Reduced warnings from 198 to 193 (5 warnings removed, 335 total removed)
+- Status: 193 warnings remaining
+
+Analysis of remaining 193 warnings:
+- Dead code warnings: ~110 (fields, methods, functions, types)
+- Deprecation warnings: ~80 (GTK4 style_context, allocated_height)
+- Other: ~3 (unused assignments)
+
+Categories of dead code:
+- Cache system: Many unused fields/methods (downloader, file_cache, storage, metadata)
+- Database entities: Unused type aliases, helper methods, conversion functions  
+- Repository layer: Many unused query methods
+- Backend APIs: Unused API methods (Plex PlayQueue, Jellyfin search/watch)
+- Image loader: Unused SearchWorker and helpers
+
+This will require multiple focused sessions to complete. Each category should be tackled carefully to avoid breaking working code.
 <!-- SECTION:NOTES:END -->

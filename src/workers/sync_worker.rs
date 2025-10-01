@@ -354,28 +354,28 @@ impl SyncWorker {
                                 );
 
                                 // For episodes, let's also check if the show exists
-                                if let crate::models::MediaItem::Episode(episode) = &item {
-                                    if let Some(show_id) = &episode.show_id {
-                                        match media_repo.find_by_id(show_id).await {
-                                            Ok(Some(_)) => {
-                                                tracing::info!(
-                                                    "  -> Parent show {} exists in database",
-                                                    show_id
-                                                );
-                                            }
-                                            Ok(None) => {
-                                                tracing::warn!(
-                                                    "  -> Parent show {} also missing from database!",
-                                                    show_id
-                                                );
-                                            }
-                                            Err(e) => {
-                                                tracing::error!(
-                                                    "  -> Error checking parent show {}: {}",
-                                                    show_id,
-                                                    e
-                                                );
-                                            }
+                                if let crate::models::MediaItem::Episode(episode) = &item
+                                    && let Some(show_id) = &episode.show_id
+                                {
+                                    match media_repo.find_by_id(show_id).await {
+                                        Ok(Some(_)) => {
+                                            tracing::info!(
+                                                "  -> Parent show {} exists in database",
+                                                show_id
+                                            );
+                                        }
+                                        Ok(None) => {
+                                            tracing::warn!(
+                                                "  -> Parent show {} also missing from database!",
+                                                show_id
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "  -> Error checking parent show {}: {}",
+                                                show_id,
+                                                e
+                                            );
                                         }
                                     }
                                 }

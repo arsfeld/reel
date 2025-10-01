@@ -5,7 +5,6 @@
 
 pub mod macros;
 pub mod media_item_mapper;
-pub mod traits;
 
 #[cfg(test)]
 mod tests;

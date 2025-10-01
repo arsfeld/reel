@@ -23,7 +23,6 @@ pub struct MovieDetailsPage {
 
 #[derive(Debug)]
 pub enum MovieDetailsInput {
-    LoadMovie(MediaItemId),
     PlayMovie,
     ToggleWatched,
 }
@@ -31,7 +30,6 @@ pub enum MovieDetailsInput {
 #[derive(Debug)]
 pub enum MovieDetailsOutput {
     PlayMedia(MediaItemId),
-    NavigateBack,
 }
 
 #[derive(Debug)]
@@ -369,14 +367,6 @@ impl AsyncComponent for MovieDetailsPage {
         _root: &Self::Root,
     ) {
         match msg {
-            MovieDetailsInput::LoadMovie(item_id) => {
-                self.item_id = item_id;
-                self.movie = None;
-                self.loading = true;
-                self.poster_texture = None;
-                self.backdrop_texture = None;
-                sender.oneshot_command(async { MovieDetailsCommand::LoadDetails });
-            }
             MovieDetailsInput::PlayMovie => {
                 // For now, movies play without PlayQueue context
                 // TODO: Consider creating PlayQueue for movies to enable features like

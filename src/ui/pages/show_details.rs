@@ -66,7 +66,6 @@ pub enum ShowDetailsOutput {
         media_id: MediaItemId,
         context: PlaylistContext,
     },
-    NavigateBack,
 }
 
 #[derive(Debug)]

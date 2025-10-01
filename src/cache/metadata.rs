@@ -166,10 +166,11 @@ impl CacheMetadata {
         self.merge_ranges();
 
         // Check if download is complete
-        if let Some(&max_end) = self.downloaded_ranges.values().max() {
-            if self.file_size > 0 && max_end >= self.file_size - 1 {
-                self.is_complete = true;
-            }
+        if let Some(&max_end) = self.downloaded_ranges.values().max()
+            && self.file_size > 0
+            && max_end >= self.file_size - 1
+        {
+            self.is_complete = true;
         }
     }
 

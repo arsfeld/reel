@@ -190,21 +190,17 @@ impl CacheProxy {
                 // Read the requested range
                 let mut buffer = vec![0u8; length as usize];
                 match file.read_exact(&mut buffer).await {
-                    Ok(_) => {
-                        let response = Response::builder()
-                            .status(StatusCode::PARTIAL_CONTENT)
-                            .header(header::CONTENT_TYPE, "video/mp4")
-                            .header(header::CONTENT_LENGTH, length.to_string())
-                            .header(header::ACCEPT_RANGES, "bytes")
-                            .header(
-                                header::CONTENT_RANGE,
-                                format!("bytes {}-{}/{}", start, end, file_size),
-                            )
-                            .body(buffer.into())
-                            .unwrap();
-
-                        response
-                    }
+                    Ok(_) => Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(header::CONTENT_TYPE, "video/mp4")
+                        .header(header::CONTENT_LENGTH, length.to_string())
+                        .header(header::ACCEPT_RANGES, "bytes")
+                        .header(
+                            header::CONTENT_RANGE,
+                            format!("bytes {}-{}/{}", start, end, file_size),
+                        )
+                        .body(buffer.into())
+                        .unwrap(),
                     Err(e) => {
                         error!("Failed to read file: {}", e);
                         StatusCode::INTERNAL_SERVER_ERROR.into_response()

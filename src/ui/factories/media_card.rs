@@ -282,12 +282,11 @@ impl MediaCard {
             "episode" => {
                 // For episodes, check if we have a custom episode subtitle in metadata
                 // (set when we're displaying the show poster instead of episode thumbnail)
-                if let Some(metadata) = &self.item.metadata {
-                    if let Some(episode_subtitle) =
+                if let Some(metadata) = &self.item.metadata
+                    && let Some(episode_subtitle) =
                         metadata.get("episode_subtitle").and_then(|v| v.as_str())
-                    {
-                        return episode_subtitle.to_string();
-                    }
+                {
+                    return episode_subtitle.to_string();
                 }
 
                 // Otherwise format like normal

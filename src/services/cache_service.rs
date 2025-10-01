@@ -8,7 +8,7 @@ use crate::cache::{FileCache, FileCacheHandle};
 use crate::services::config_service::config_service;
 
 /// Global cache service instance
-static CACHE_SERVICE: Lazy<CacheService> = Lazy::new(|| CacheService::new());
+static CACHE_SERVICE: Lazy<CacheService> = Lazy::new(CacheService::new);
 
 /// Cache service that manages the file cache
 #[derive(Debug)]

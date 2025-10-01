@@ -50,8 +50,6 @@ impl std::fmt::Debug for HomePage {
 pub enum HomePageInput {
     /// Load home page data
     LoadData,
-    /// Home sections loaded from backends
-    HomeSectionsLoaded(Vec<HomeSectionWithModels>),
     /// Source-specific sections loaded
     SourceSectionsLoaded {
         source_id: SourceId,
@@ -243,60 +241,53 @@ impl AsyncComponent for HomePage {
                             // Load cached sections for this source
                             if let Ok(persisted_sections) =
                                 section_repo.find_by_source_with_items(&source.id).await
+                                && !persisted_sections.is_empty()
                             {
-                                if !persisted_sections.is_empty() {
-                                    // Convert to HomeSectionWithModels
-                                    let mut sections = Vec::new();
-                                    for (section_model, items) in persisted_sections {
-                                        if !items.is_empty() {
-                                            let section_type =
-                                                match section_model.section_type.as_str() {
-                                                    "continue_watching" => {
-                                                        HomeSectionType::ContinueWatching
-                                                    }
-                                                    "on_deck" => HomeSectionType::OnDeck,
-                                                    "suggested" => HomeSectionType::Suggested,
-                                                    "top_rated" => HomeSectionType::TopRated,
-                                                    "trending" => HomeSectionType::Trending,
-                                                    "recently_played" => {
-                                                        HomeSectionType::RecentlyPlayed
-                                                    }
-                                                    "recent_playlists" => {
-                                                        HomeSectionType::RecentPlaylists
-                                                    }
-                                                    s if s.starts_with("recently_added_") => {
-                                                        let media_type = s
-                                                            .strip_prefix("recently_added_")
-                                                            .unwrap_or("unknown");
-                                                        HomeSectionType::RecentlyAdded(
-                                                            media_type.to_string(),
-                                                        )
-                                                    }
-                                                    custom => {
-                                                        HomeSectionType::Custom(custom.to_string())
-                                                    }
-                                                };
+                                // Convert to HomeSectionWithModels
+                                let mut sections = Vec::new();
+                                for (section_model, items) in persisted_sections {
+                                    if !items.is_empty() {
+                                        let section_type = match section_model.section_type.as_str()
+                                        {
+                                            "continue_watching" => {
+                                                HomeSectionType::ContinueWatching
+                                            }
+                                            "on_deck" => HomeSectionType::OnDeck,
+                                            "suggested" => HomeSectionType::Suggested,
+                                            "top_rated" => HomeSectionType::TopRated,
+                                            "trending" => HomeSectionType::Trending,
+                                            "recently_played" => HomeSectionType::RecentlyPlayed,
+                                            "recent_playlists" => HomeSectionType::RecentPlaylists,
+                                            s if s.starts_with("recently_added_") => {
+                                                let media_type = s
+                                                    .strip_prefix("recently_added_")
+                                                    .unwrap_or("unknown");
+                                                HomeSectionType::RecentlyAdded(
+                                                    media_type.to_string(),
+                                                )
+                                            }
+                                            custom => HomeSectionType::Custom(custom.to_string()),
+                                        };
 
-                                            sections.push(HomeSectionWithModels {
-                                                id: section_model.hub_identifier.clone(),
-                                                title: section_model.title.clone(),
-                                                section_type,
-                                                items,
-                                            });
-                                        }
-                                    }
-
-                                    if !sections.is_empty() {
-                                        info!(
-                                            "Displaying {} cached sections for source {}",
-                                            sections.len(),
-                                            source_id
-                                        );
-                                        sender_clone.input(HomePageInput::SourceSectionsLoaded {
-                                            source_id: source_id.clone(),
-                                            sections: Ok(sections),
+                                        sections.push(HomeSectionWithModels {
+                                            id: section_model.hub_identifier.clone(),
+                                            title: section_model.title.clone(),
+                                            section_type,
+                                            items,
                                         });
                                     }
+                                }
+
+                                if !sections.is_empty() {
+                                    info!(
+                                        "Displaying {} cached sections for source {}",
+                                        sections.len(),
+                                        source_id
+                                    );
+                                    sender_clone.input(HomePageInput::SourceSectionsLoaded {
+                                        source_id: source_id.clone(),
+                                        sections: Ok(sections),
+                                    });
                                 }
                             }
                         }
@@ -406,19 +397,6 @@ impl AsyncComponent for HomePage {
                         ),
                     });
                 });
-            }
-
-            HomePageInput::HomeSectionsLoaded(sections) => {
-                // Legacy handler for backward compatibility
-                info!(
-                    "Processing {} home sections for display (legacy)",
-                    sections.len()
-                );
-                self.sections = sections;
-                self.is_loading = false;
-
-                // This is now handled in display_source_sections method
-                // Legacy code path should not be reached in normal operation
             }
 
             HomePageInput::MediaItemSelected(item_id) => {

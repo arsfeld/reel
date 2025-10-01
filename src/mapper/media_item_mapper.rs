@@ -2,60 +2,15 @@
 
 use crate::db::entities::media_items::Model as MediaItemModel;
 use crate::models::MediaItem;
-use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 /// Custom field transformers for MediaItem
 pub struct DurationTransformer;
 
 impl DurationTransformer {
-    /// Convert milliseconds to Duration
-    pub fn from_millis(ms: Option<i64>) -> Duration {
-        ms.map(|ms| Duration::from_millis(ms as u64))
-            .unwrap_or_default()
-    }
-
     /// Convert Duration to milliseconds
     pub fn to_millis(duration: Duration) -> i64 {
         duration.as_millis() as i64
-    }
-}
-
-pub struct DateTimeTransformer;
-
-impl DateTimeTransformer {
-    /// Parse datetime from RFC3339 string
-    pub fn from_rfc3339(s: Option<&str>) -> Option<DateTime<Utc>> {
-        s.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc))
-    }
-
-    /// Convert NaiveDateTime to DateTime<Utc>
-    pub fn from_naive(dt: Option<chrono::NaiveDateTime>) -> Option<DateTime<Utc>> {
-        dt.map(|dt| dt.and_utc())
-    }
-}
-
-pub struct JsonTransformer;
-
-impl JsonTransformer {
-    /// Extract and deserialize a field from JSON metadata
-    pub fn extract<T: serde::de::DeserializeOwned>(
-        metadata: &Option<serde_json::Value>,
-        field: &str,
-    ) -> Option<T> {
-        metadata
-            .as_ref()
-            .and_then(|json| json.get(field))
-            .and_then(|v| serde_json::from_value::<T>(v.clone()).ok())
-    }
-
-    /// Extract genres from database JSON
-    pub fn extract_genres(genres: &Option<serde_json::Value>) -> Vec<String> {
-        genres
-            .as_ref()
-            .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
-            .unwrap_or_default()
     }
 }
 

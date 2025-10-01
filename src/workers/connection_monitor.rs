@@ -20,7 +20,6 @@ pub enum ConnectionMonitorInput {
     CheckSource(SourceId),
     CheckAllSources,
     UpdateCheckTimes(HashMap<SourceId, Instant>),
-    Stop,
 }
 
 #[derive(Debug, Clone)]
@@ -203,10 +202,6 @@ impl Worker for ConnectionMonitor {
                     "Updated check times for {} sources",
                     self.next_check_times.len()
                 );
-            }
-
-            ConnectionMonitorInput::Stop => {
-                info!("Stopping connection monitor");
             }
         }
     }

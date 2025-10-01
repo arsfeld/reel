@@ -1151,9 +1151,6 @@ impl AsyncComponent for MainWindow {
                             tracing::info!("Playing media: {}", id);
                             MainWindowInput::NavigateToPlayer(id)
                         }
-                        crate::ui::pages::movie_details::MovieDetailsOutput::NavigateBack => {
-                            MainWindowInput::Navigate("back".to_string())
-                        }
                     });
 
                 // Create navigation page with the new controller's widget
@@ -1184,9 +1181,6 @@ impl AsyncComponent for MainWindow {
                         crate::ui::pages::show_details::ShowDetailsOutput::PlayMediaWithContext { media_id, context } => {
                             tracing::info!("Playing episode with context: {}", media_id);
                             MainWindowInput::NavigateToPlayerWithContext { media_id, context }
-                        }
-                        crate::ui::pages::show_details::ShowDetailsOutput::NavigateBack => {
-                            MainWindowInput::Navigate("back".to_string())
                         }
                     });
 

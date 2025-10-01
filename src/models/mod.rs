@@ -5,7 +5,7 @@ pub mod playlist_context;
 
 pub use auth_provider::{AuthProvider, ConnectionInfo, Source, SourceType};
 pub use connection::{ServerConnection, ServerConnections};
-pub use identifiers::{BackendId, LibraryId, MediaItemId, ShowId, SourceId};
+pub use identifiers::{LibraryId, MediaItemId, ShowId, SourceId};
 pub use playlist_context::{EpisodeInfo, PlayQueueInfo, PlaylistContext, QueueItem};
 
 use chrono::{DateTime, Utc};
