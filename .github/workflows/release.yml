@@ -166,7 +166,7 @@ jobs:
           - arch: x86_64
             runner: ubuntu-latest
           - arch: aarch64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04-arm64
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
@@ -175,12 +175,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Set up QEMU for cross-compilation
-        if: matrix.arch == 'aarch64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - name: Set up Docker buildx cache
         uses: actions/cache@v4
