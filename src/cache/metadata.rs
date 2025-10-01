@@ -451,6 +451,7 @@ mod tests {
             "http://test.com".to_string(),
         );
 
+        metadata.expected_total_size = 1000;
         metadata.file_size = 1000;
         assert!(!metadata.is_complete);
 

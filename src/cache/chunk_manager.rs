@@ -44,9 +44,11 @@ impl ChunkRequest {
 impl Ord for ChunkRequest {
     fn cmp(&self, other: &Self) -> Ordering {
         // Higher priority first (lower number = higher priority)
+        // Reverse comparison so lower priority numbers (CRITICAL=0) compare as greater
         // Then FIFO (earlier requests first)
-        self.priority
-            .cmp(&other.priority)
+        other
+            .priority
+            .cmp(&self.priority)
             .then_with(|| self.requested_at.cmp(&other.requested_at))
     }
 }
@@ -73,6 +75,9 @@ pub struct ChunkManager {
 struct ChunkManagerCallback {
     active_downloads: Arc<Mutex<HashMap<(i32, u64), JoinHandle<Result<()>>>>>,
     chunk_waiters: Arc<RwLock<HashMap<(i32, u64), Arc<Notify>>>>,
+    priority_queue: Arc<Mutex<BinaryHeap<ChunkRequest>>>,
+    downloader: Arc<ChunkDownloader>,
+    max_concurrent_downloads: usize,
 }
 
 impl ChunkManagerCallback {
@@ -82,6 +87,48 @@ impl ChunkManagerCallback {
 
         if let Some(notify) = waiters.get(&key) {
             notify.notify_waiters();
+        }
+    }
+
+    /// Dispatch the next download from the priority queue if under concurrent limit
+    /// Returns Ok(Some((entry_id, chunk_index))) if a download was dispatched, Ok(None) if not
+    async fn dispatch_next_download(&self) -> Result<Option<(i32, u64)>> {
+        let mut active = self.active_downloads.lock().await;
+
+        // Check concurrent limit
+        if active.len() >= self.max_concurrent_downloads {
+            return Ok(None);
+        }
+
+        // Get highest priority request
+        let request = {
+            let mut queue = self.priority_queue.lock().await;
+            queue.pop()
+        };
+
+        if let Some(req) = request {
+            debug!(
+                "Dispatching chunk {} for entry {} from callback",
+                req.chunk_index, req.entry_id
+            );
+
+            // Spawn download task
+            let entry_id = req.entry_id;
+            let chunk_index = req.chunk_index;
+            let downloader = self.downloader.clone();
+
+            // Release the lock before awaiting
+            drop(active);
+
+            let handle = downloader.download_chunk(entry_id, chunk_index).await?;
+
+            // Re-acquire lock to store handle
+            let mut active = self.active_downloads.lock().await;
+            active.insert((entry_id, chunk_index), handle);
+
+            Ok(Some((entry_id, chunk_index)))
+        } else {
+            Ok(None)
         }
     }
 
@@ -115,6 +162,34 @@ impl ChunkManagerCallback {
                         );
                     }
                 }
+            }
+        }
+
+        // Dispatch next download from queue
+        // If a download was dispatched, recursively call this handler to process it when it completes
+        match self.dispatch_next_download().await {
+            Ok(Some((dispatched_entry_id, dispatched_chunk_index))) => {
+                // Spawn a completion handler for the newly dispatched download
+                let callback = Arc::new(ChunkManagerCallback {
+                    active_downloads: self.active_downloads.clone(),
+                    chunk_waiters: self.chunk_waiters.clone(),
+                    priority_queue: self.priority_queue.clone(),
+                    downloader: self.downloader.clone(),
+                    max_concurrent_downloads: self.max_concurrent_downloads,
+                });
+
+                // Spawn locally without requiring Send
+                let _ = tokio::task::spawn_local(async move {
+                    callback
+                        .handle_chunk_completion(dispatched_entry_id, dispatched_chunk_index)
+                        .await;
+                });
+            }
+            Ok(None) => {
+                // No more chunks to download
+            }
+            Err(e) => {
+                warn!("Failed to dispatch next download: {}", e);
             }
         }
     }
@@ -328,6 +403,9 @@ impl ChunkManager {
         Arc::new(ChunkManagerCallback {
             active_downloads: self.active_downloads.clone(),
             chunk_waiters: self.chunk_waiters.clone(),
+            priority_queue: self.priority_queue.clone(),
+            downloader: self.downloader.clone(),
+            max_concurrent_downloads: self.max_concurrent_downloads,
         })
     }
 
@@ -761,7 +839,7 @@ mod tests {
 
         // Last chunk should be limited by file size
         let small_file = TEST_CHUNK_SIZE + 1000;
-        assert_eq!(manager.chunk_end_byte(1, small_file), 1000);
+        assert_eq!(manager.chunk_end_byte(1, small_file), small_file - 1);
     }
 
     #[test]
@@ -926,16 +1004,19 @@ mod tests {
         let repo = Arc::new(MockCacheRepository::new());
         let manager = create_test_manager(repo.clone());
 
-        // Request chunks with different priorities
+        // Request more chunks than the concurrent download limit (3)
+        // so some remain in the queue
         manager.request_chunk(1, 0, Priority::LOW).await.unwrap();
         manager
             .request_chunk(1, 1, Priority::CRITICAL)
             .await
             .unwrap();
         manager.request_chunk(1, 2, Priority::HIGH).await.unwrap();
+        manager.request_chunk(1, 3, Priority::MEDIUM).await.unwrap();
+        manager.request_chunk(1, 4, Priority::LOW).await.unwrap();
 
-        // Check queue size
-        assert_eq!(manager.queue_size().await, 3);
+        // Check queue size - should have 2 in queue (3 are being downloaded concurrently)
+        assert_eq!(manager.queue_size().await, 2);
     }
 
     #[tokio::test]
@@ -961,14 +1042,15 @@ mod tests {
 
         let file_size = TEST_CHUNK_SIZE * 10;
 
-        // Request chunks for range spanning chunks 0-2
+        // Request chunks for range spanning chunks 0-4 (5 chunks total)
+        // Max concurrent is 3, so 2 should remain in queue
         manager
-            .request_chunks_for_range(1, 0, TEST_CHUNK_SIZE * 3 - 1, file_size, Priority::HIGH)
+            .request_chunks_for_range(1, 0, TEST_CHUNK_SIZE * 5 - 1, file_size, Priority::HIGH)
             .await
             .unwrap();
 
-        // Should have 3 chunks in queue
-        assert_eq!(manager.queue_size().await, 3);
+        // Should have 2 chunks in queue (3 are being downloaded concurrently)
+        assert_eq!(manager.queue_size().await, 2);
     }
 
     #[tokio::test]
@@ -976,17 +1058,21 @@ mod tests {
         let repo = Arc::new(MockCacheRepository::new());
         let manager = create_test_manager(repo.clone());
 
-        // Request chunks 0, 1, 2
+        // Request chunks 0-5 (6 chunks total)
+        // Max concurrent is 3, so 3 should remain in queue
         manager.request_chunk(1, 0, Priority::HIGH).await.unwrap();
         manager.request_chunk(1, 1, Priority::HIGH).await.unwrap();
         manager.request_chunk(1, 2, Priority::HIGH).await.unwrap();
+        manager.request_chunk(1, 3, Priority::HIGH).await.unwrap();
+        manager.request_chunk(1, 4, Priority::HIGH).await.unwrap();
+        manager.request_chunk(1, 5, Priority::HIGH).await.unwrap();
 
         assert_eq!(manager.queue_size().await, 3);
 
-        // Cancel chunks 0 and 2
-        manager.cancel_requests(1, &[0, 2]).await.unwrap();
+        // Cancel chunks 3 and 5 (which are in the queue, not being downloaded)
+        manager.cancel_requests(1, &[3, 5]).await.unwrap();
 
-        // Should have 1 chunk left in queue
+        // Should have 1 chunk left in queue (chunk 4)
         assert_eq!(manager.queue_size().await, 1);
     }
 
