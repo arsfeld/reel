@@ -170,9 +170,12 @@ impl CacheMetadata {
         self.merge_ranges();
 
         // Check if download is complete
+        // Must check against expected_total_size, not file_size
+        // file_size is the current size on disk which grows as we download
+        // expected_total_size is the final size from Content-Length header
         if let Some(&max_end) = self.downloaded_ranges.values().max()
-            && self.file_size > 0
-            && max_end >= self.file_size - 1
+            && self.expected_total_size > 0
+            && max_end >= self.expected_total_size - 1
         {
             self.is_complete = true;
         }

@@ -61,12 +61,6 @@ impl GStreamerPlayer {
             }
         }
 
-        // On macOS, prioritize curlhttpsrc over souphttpsrc for HTTPS support
-        #[cfg(target_os = "macos")]
-        {
-            Self::configure_macos_http_source_priority();
-        }
-
         // Check for required elements
         Self::check_gstreamer_plugins();
 
@@ -83,22 +77,6 @@ impl GStreamerPlayer {
             current_subtitle_stream: Arc::new(Mutex::new(None)),
             pipeline_ready: Arc::new(Mutex::new(false)),
         })
-    }
-
-    #[cfg(target_os = "macos")]
-    fn configure_macos_http_source_priority() {
-        // Get the GStreamer registry
-        let registry = gst::Registry::get();
-
-        // Prioritize curlhttpsrc over souphttpsrc for better TLS support on macOS
-        if let Some(curl_feature) =
-            registry.find_feature("curlhttpsrc", gst::ElementFactory::static_type())
-        {
-            curl_feature.set_rank(gst::Rank::PRIMARY + 100);
-            info!("Set curlhttpsrc to higher rank for macOS HTTPS support");
-        } else {
-            warn!("curlhttpsrc not found - HTTPS streaming may have issues on macOS");
-        }
     }
 
     fn check_gstreamer_plugins() {
@@ -1233,14 +1211,8 @@ impl GStreamerPlayer {
         let position_ns = position.as_nanos() as i64;
 
         if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            // For HTTP sources, try pausing before seeking
+            // Remember if we were playing to resume after seek
             let was_playing = matches!(*self.state.read().await, PlayerState::Playing);
-            if was_playing {
-                debug!("GStreamerPlayer::seek() - Pausing before seek for HTTP source");
-                playbin.set_state(gst::State::Paused).ok();
-                // Wait for pause to complete
-                playbin.state(gst::ClockTime::from_mseconds(500));
-            }
 
             // Get current pipeline state
             let (state_result, current_state, pending_state) =
@@ -1250,33 +1222,6 @@ impl GStreamerPlayer {
                 "GStreamerPlayer::seek() - Current state: {:?}, Pending: {:?}, Result: {:?}",
                 current_state, pending_state, state_result
             );
-
-            // For HTTP sources, we need to ensure the pipeline is fully ready
-            // Check if seeking is supported in different formats
-            let mut time_query = gst::query::Seeking::new(gst::Format::Time);
-            let mut bytes_query = gst::query::Seeking::new(gst::Format::Bytes);
-
-            let time_seekable = if playbin.query(&mut time_query) {
-                let (seekable, start, end) = time_query.result();
-                debug!(
-                    "Time seeking: seekable={}, range={:?}-{:?}",
-                    seekable, start, end
-                );
-                seekable
-            } else {
-                false
-            };
-
-            let bytes_seekable = if playbin.query(&mut bytes_query) {
-                let (seekable, start, end) = bytes_query.result();
-                debug!(
-                    "Bytes seeking: seekable={}, range={:?}-{:?}",
-                    seekable, start, end
-                );
-                seekable
-            } else {
-                false
-            };
 
             // Ensure pipeline is at least in PAUSED state for seeking to work
             if current_state < gst::State::Paused {
@@ -1299,15 +1244,15 @@ impl GStreamerPlayer {
                             Ok(_) => {
                                 debug!("Reached {:?} state", new_state);
                                 if new_state < gst::State::Paused {
-                                    warn!(
-                                        "GStreamerPlayer::seek() - Failed to reach PAUSED state for seeking"
-                                    );
-                                    // Continue anyway, seeking might still work
+                                    return Err(anyhow::anyhow!(
+                                        "Failed to reach PAUSED state for seeking"
+                                    ));
                                 }
                             }
                             Err(_) => {
-                                warn!("GStreamerPlayer::seek() - Timeout waiting for PAUSED state");
-                                // Continue anyway, seeking might still work
+                                return Err(anyhow::anyhow!(
+                                    "Timeout waiting for PAUSED state before seeking"
+                                ));
                             }
                         }
                     }
@@ -1315,125 +1260,68 @@ impl GStreamerPlayer {
                         debug!("Live source, no preroll needed");
                     }
                     Err(_) => {
-                        error!("GStreamerPlayer::seek() - Failed to set PAUSED state for seeking");
-                        // Continue anyway, seeking might still work
+                        return Err(anyhow::anyhow!("Failed to set PAUSED state for seeking"));
                     }
                 }
             }
 
-            // Perform the seek operation
-            // For HTTP sources, use more conservative flags
-            // Avoid SNAP_BEFORE which can cause issues with HTTP sources
-            let seek_flags = if time_seekable {
-                // If time seeking is supported, use standard flags
-                gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT
-            } else {
-                // More conservative approach for HTTP sources
-                gst::SeekFlags::FLUSH
-            };
+            // Check if media is seekable
+            let mut query = gst::query::Seeking::new(gst::Format::Time);
+            if playbin.query(&mut query) {
+                let (seekable, start, end) = query.result();
+                debug!(
+                    "GStreamerPlayer::seek() - Media seekable: {}, range: {:?} - {:?}",
+                    seekable, start, end
+                );
 
+                if !seekable {
+                    return Err(anyhow::anyhow!("Media is not seekable"));
+                }
+            } else {
+                warn!("GStreamerPlayer::seek() - Unable to query seeking capability");
+            }
+
+            // Use FLUSH | KEY_UNIT flags for network streams
+            let seek_flags = gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT;
             let seek_position = gst::ClockTime::from_nseconds(position_ns as u64);
 
             debug!(
-                "GStreamerPlayer::seek() - Attempting seek to {} with flags {:?} (time_seekable: {}, bytes_seekable: {})",
+                "GStreamerPlayer::seek() - Seeking to {} with flags {:?}",
                 seek_position.display(),
-                seek_flags,
-                time_seekable,
-                bytes_seekable
+                seek_flags
             );
 
-            // For HTTP sources, use the full seek API directly with proper parameters
-            let seek_result = playbin.seek(
-                1.0, // rate (normal speed)
-                seek_flags,
-                gst::SeekType::Set,   // start type
-                seek_position,        // start position
-                gst::SeekType::None,  // stop type (no stop)
-                gst::ClockTime::NONE, // stop position (none)
-            );
-
-            debug!(
-                "GStreamerPlayer::seek() - Full seek API result: {:?}",
-                seek_result
-            );
+            // Use seek_simple - it's simpler and should work for most cases
+            let seek_result = playbin.seek_simple(seek_flags, seek_position);
 
             if seek_result.is_err() {
-                // Try seek_simple as fallback
-                warn!("GStreamerPlayer::seek() - Full seek API failed, trying seek_simple");
-                let simple_result = playbin.seek_simple(seek_flags, seek_position);
-                debug!(
-                    "GStreamerPlayer::seek() - seek_simple result: {:?}",
-                    simple_result
-                );
+                error!("GStreamerPlayer::seek() - Seek failed");
 
-                if simple_result.is_err() {
-                    error!("GStreamerPlayer::seek() - Both seek methods failed");
-
-                    // Check if media is seekable
-                    let mut query = gst::query::Seeking::new(gst::Format::Time);
-                    if playbin.query(&mut query) {
-                        let (seekable, start, end) = query.result();
-                        error!(
-                            "GStreamerPlayer::seek() - Media seekable: {}, range: {:?} - {:?}",
-                            seekable, start, end
-                        );
-
-                        if !seekable {
-                            return Err(anyhow::anyhow!("Media is not seekable"));
+                // Check for errors on the bus
+                if let Some(bus) = playbin.bus() {
+                    while let Some(msg) = bus.pop() {
+                        use gst::MessageView;
+                        if let MessageView::Error(err) = msg.view() {
+                            error!(
+                                "GStreamerPlayer::seek() - Bus error: {} ({:?})",
+                                err.error(),
+                                err.debug()
+                            );
+                            return Err(anyhow::anyhow!("Seek failed: {}", err.error()));
                         }
                     }
-
-                    // Try a different approach - create and send seek event directly
-                    warn!(
-                        "GStreamerPlayer::seek() - Trying direct event approach for HTTP sources"
-                    );
-
-                    // Create a seek event with minimal flags
-                    let seek_event = gst::event::Seek::new(
-                        1.0,                      // rate
-                        gst::SeekFlags::KEY_UNIT, // only KEY_UNIT flag
-                        gst::SeekType::Set,       // seek type
-                        seek_position,            // position
-                        gst::SeekType::None,      // stop type
-                        gst::ClockTime::NONE,     // stop position
-                    );
-
-                    // Send event directly to the element
-                    let event_result = playbin.send_event(seek_event);
-                    debug!(
-                        "GStreamerPlayer::seek() - Direct event result: {}",
-                        event_result
-                    );
-
-                    if event_result {
-                        info!("GStreamerPlayer::seek() - Direct seek event succeeded!");
-                        // Give the pipeline a moment to process the seek
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    } else {
-                        // Check for errors on the bus
-                        if let Some(bus) = playbin.bus() {
-                            while let Some(msg) = bus.pop() {
-                                use gst::MessageView;
-                                if let MessageView::Error(err) = msg.view() {
-                                    error!(
-                                        "GStreamerPlayer::seek() - Bus error: {} ({:?})",
-                                        err.error(),
-                                        err.debug()
-                                    );
-                                }
-                            }
-                        }
-
-                        return Err(anyhow::anyhow!("Failed to seek to position {:?}", position));
-                    }
-                } else {
-                    debug!("Seek succeeded using seek_simple");
                 }
-            } else {
-                debug!("Seek succeeded using full API");
+
+                return Err(anyhow::anyhow!("Failed to seek to position {:?}", position));
             }
 
-            // Resume playing if we paused for the seek
+            debug!("GStreamerPlayer::seek() - Seek initiated successfully");
+
+            // Wait for the seek to complete (ASYNC_DONE message)
+            // Give it a moment to process
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+            // Resume playing if we were playing before the seek
             if was_playing {
                 debug!("GStreamerPlayer::seek() - Resuming playback after seek");
                 match playbin.set_state(gst::State::Playing) {

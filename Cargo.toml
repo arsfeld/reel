@@ -44,12 +44,14 @@ libmpv2-sys = { version = "4.0", optional = true }
 
 # Async runtime
 tokio = { version = "1.47", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = { version = "0.7", features = ["rt", "io"] }
 async-trait = "0.1"
+async-stream = "0.3"
 futures = "0.3"
 
 # HTTP and networking
-axum = "0.7"
+axum = "0.8"
+bytes = "1.10"
 reqwest = { version = "0.12", features = ["json", "stream", "cookies", "native-tls"] }
 url = "2.5"
 percent-encoding = "2.3"
@@ -85,19 +87,20 @@ webp = "0.3"
 base64 = "0.22"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 sha2 = "0.10"
-md5 = "0.7"
+md5 = "0.8"
 lru = "0.16"
 lazy_static = "1.5"
-tantivy = "0.22"
-notify = "7.0"
+tantivy = "0.25"
+notify = "8.2"
 
 # Localization
 gettext-rs = { version = "0.7", features = ["gettext-system"] }
 
 [dev-dependencies]
 mockito = "1.7"
-tempfile = "3.22"
+tempfile = "3.23"
 criterion = "0.7"
+tower = "0.5"
 
 [build-dependencies]
 glib-build-tools = { version = "0.21" }

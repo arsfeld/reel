@@ -2,13 +2,15 @@ use anyhow::{Context, Result};
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
+use super::chunk_manager::{ChunkManager, Priority};
+use super::chunk_store::ChunkStore;
 use super::config::FileCacheConfig;
-use super::downloader::{DownloadPriority, ProgressiveDownloader, ProgressiveDownloaderHandle};
 use super::metadata::MediaCacheKey;
 use super::proxy::CacheProxy;
-use super::state_machine::CacheStateMachine;
+use super::state_computer::StateComputer;
+use super::state_types::DownloadState;
 use super::storage::{CacheStats, CacheStorage};
 use crate::db::repository::cache_repository::{CacheRepository, CacheRepositoryImpl};
 use crate::models::{MediaItemId, SourceId, StreamInfo};
@@ -28,7 +30,7 @@ pub enum FileCacheCommand {
         source_id: SourceId,
         media_id: MediaItemId,
         stream_info: StreamInfo,
-        priority: DownloadPriority,
+        priority: Priority,
         respond_to: mpsc::UnboundedSender<Result<()>>,
     },
     /// Check if media is cached and available
@@ -89,8 +91,8 @@ impl CachedStreamInfo {
 pub struct FileCache {
     config: FileCacheConfig,
     storage: Arc<RwLock<CacheStorage>>,
-    state_machine: Arc<CacheStateMachine>,
-    downloader_handle: ProgressiveDownloaderHandle,
+    state_computer: Arc<StateComputer>,
+    chunk_manager: Arc<ChunkManager>,
     proxy: Arc<CacheProxy>,
     command_receiver: mpsc::UnboundedReceiver<FileCacheCommand>,
 }
@@ -104,15 +106,9 @@ impl FileCache {
         // Validate configuration
         config.validate().context("Invalid cache configuration")?;
 
-        // Create repository and state machine
+        // Create repository and state computer
         let repository: Arc<dyn CacheRepository> = Arc::new(CacheRepositoryImpl::new(db.clone()));
-        let state_machine = Arc::new(CacheStateMachine::new(repository.clone()));
-
-        // Initialize state machine from database
-        state_machine
-            .initialize()
-            .await
-            .context("Failed to initialize cache state machine")?;
+        let state_computer = Arc::new(StateComputer::new(repository.clone()));
 
         // Create storage
         let storage = Arc::new(RwLock::new(
@@ -121,10 +117,35 @@ impl FileCache {
                 .context("Failed to initialize cache storage")?,
         ));
 
-        // Create proxy server with stats configuration and state machine
+        // Create ChunkManager and ChunkStore for new chunk-based caching
+        // Chunk size from config (default: 10MB as specified in CACHE_DESIGN.md)
+        // Benefits: 4GB file = 400 chunks vs 2,048 with 2MB, reduces DB overhead by ~5x
+        let chunk_size_bytes = config.chunk_size_bytes();
+        let cache_dir = config
+            .cache_directory()
+            .context("Failed to get cache directory")?;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(config.download_timeout_secs))
+            .build()
+            .context("Failed to create HTTP client")?;
+
+        let chunk_manager = Arc::new(ChunkManager::with_client(
+            repository.clone(),
+            chunk_size_bytes,
+            client,
+            cache_dir.clone(),
+            config.max_concurrent_downloads as usize,
+        ));
+
+        let chunk_store = Arc::new(ChunkStore::new(cache_dir));
+
+        // Create proxy server with stats configuration and state computer
         let proxy = Arc::new(CacheProxy::with_config(
             storage.clone(),
-            state_machine.clone(),
+            state_computer.clone(),
+            repository.clone(),
+            chunk_manager.clone(),
+            chunk_store.clone(),
             config.enable_stats,
             config.stats_interval_secs,
         ));
@@ -135,24 +156,6 @@ impl FileCache {
             .context("Failed to start cache proxy server")?;
         info!("Cache proxy server started on port {}", proxy.port());
 
-        // Create downloader
-        let (download_cmd_tx, download_cmd_rx) = mpsc::unbounded_channel();
-        let downloader_handle = ProgressiveDownloaderHandle::new(download_cmd_tx);
-
-        let downloader = ProgressiveDownloader::new(
-            config.clone(),
-            storage.clone(),
-            state_machine.clone(),
-            download_cmd_rx,
-        );
-
-        // Spawn downloader task with error handling
-        tokio::spawn(async move {
-            info!("🔄 Starting progressive downloader task");
-            downloader.run().await;
-            error!("🔄 Progressive downloader task has exited unexpectedly!");
-        });
-
         // Create command channel
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 
@@ -160,8 +163,8 @@ impl FileCache {
         let file_cache = Self {
             config,
             storage,
-            state_machine,
-            downloader_handle,
+            state_computer,
+            chunk_manager,
             proxy,
             command_receiver: cmd_rx,
         };
@@ -240,7 +243,7 @@ impl FileCache {
                 }
                 FileCacheCommand::Shutdown => {
                     info!("🗄️ FileCache: Shutting down");
-                    let _ = self.downloader_handle.shutdown();
+                    // Chunk downloads will naturally stop when the application exits
                     break;
                 }
             }
@@ -263,8 +266,47 @@ impl FileCache {
 
             // Get existing entry or create new one
             if let Some(entry) = storage.get_entry(&cache_key) {
-                entry
+                debug!(
+                    "Found existing cache entry for {:?}: is_complete={}, expected_total_size={}, downloaded_bytes={}",
+                    cache_key,
+                    entry.metadata.is_complete,
+                    entry.metadata.expected_total_size,
+                    entry.metadata.downloaded_bytes
+                );
+
+                // Check if this is an invalid cache entry that needs cleanup
+                // Invalid = incomplete file without expected_total_size
+                if !entry.metadata.is_complete && entry.metadata.expected_total_size == 0 {
+                    warn!(
+                        "Found invalid cache entry (incomplete with no total size) for {:?}, removing and recreating",
+                        cache_key
+                    );
+
+                    // Remove the invalid entry
+                    if let Err(e) = storage.remove_entry(&cache_key).await {
+                        warn!("Failed to remove invalid cache entry: {}", e);
+                    }
+
+                    // Note: No need to remove from state computer - state is derived from database
+
+                    // Create fresh entry
+                    debug!(
+                        "Creating fresh cache entry after cleanup for {:?}",
+                        cache_key
+                    );
+                    storage
+                        .create_entry(cache_key.clone(), original_stream.url.clone())
+                        .await
+                        .context("Failed to create cache entry")?
+                } else {
+                    debug!("Using existing valid cache entry for {:?}", cache_key);
+                    entry
+                }
             } else {
+                debug!(
+                    "No existing cache entry found, creating new one for {:?}",
+                    cache_key
+                );
                 // Create new cache entry
                 storage
                     .create_entry(cache_key.clone(), original_stream.url.clone())
@@ -273,39 +315,26 @@ impl FileCache {
             }
         };
 
-        // Start/resume download with high priority
-        let _ = self
-            .downloader_handle
-            .start_download(
-                cache_key.clone(),
-                original_stream.url.clone(),
-                DownloadPriority::Urgent,
-            )
-            .await;
+        // Ensure database entry exists with expected_total_size (Option 2: Eager initialization)
+        // This fixes the issue where GStreamer gets HTTP 500 because expected_total_size is missing
+        self.ensure_database_entry(&cache_key, &original_stream.url, &entry.file_path)
+            .await
+            .context("Failed to ensure database entry")?;
 
-        // Get download progress from state machine
-        let state_info = self.state_machine.get_state(&cache_key).await;
+        // Note: We don't explicitly start downloads here anymore.
+        // The chunk-based system will download chunks on-demand when the proxy serves data.
+
+        // Get download progress from state computer
+        let state_info = self.state_computer.get_state(&cache_key).await;
         let (progress, eta_seconds, is_complete) = if let Some(info) = &state_info {
             (
                 info.progress_percent() / 100.0, // Convert from percentage to 0-1 range
                 None,                            // TODO: Could calculate ETA from download speed
-                info.state == super::state_machine::DownloadState::Complete,
+                info.state == DownloadState::Complete,
             )
         } else {
             // Fall back to storage metadata if no state info
-            let progress_info = self
-                .downloader_handle
-                .get_progress(cache_key.clone())
-                .await?;
-            if let Some(info) = progress_info {
-                (
-                    info.progress_percent(),
-                    info.eta_seconds,
-                    false, // Not complete if still downloading
-                )
-            } else {
-                (entry.metadata.progress(), None, entry.metadata.is_complete)
-            }
+            (entry.metadata.progress(), None, entry.metadata.is_complete)
         };
 
         // ALWAYS register with proxy and return proxy URL
@@ -333,7 +362,7 @@ impl FileCache {
         source_id: SourceId,
         media_id: MediaItemId,
         stream_info: StreamInfo,
-        priority: DownloadPriority,
+        _priority: Priority,
     ) -> Result<()> {
         let quality = Self::determine_quality(&stream_info);
         let cache_key = MediaCacheKey::new(source_id, media_id, quality);
@@ -351,11 +380,15 @@ impl FileCache {
             return Ok(());
         }
 
-        // Start download
-        self.downloader_handle
-            .start_download(cache_key, stream_info.url, priority)
+        // Note: Pre-caching is now handled by chunk_manager background fill
+        // We just need to ensure the cache entry exists
+        let mut storage = self.storage.write().await;
+        storage
+            .create_entry(cache_key.clone(), stream_info.url.clone())
             .await
-            .context("Failed to start pre-cache download")
+            .context("Failed to create cache entry for pre-cache")?;
+
+        Ok(())
     }
 
     /// Check if media is cached and complete
@@ -376,11 +409,7 @@ impl FileCache {
         let cache_key =
             MediaCacheKey::new(source_id.clone(), media_id.clone(), quality.to_string());
 
-        // Cancel any active download
-        let _ = self
-            .downloader_handle
-            .cancel_download(cache_key.clone())
-            .await;
+        // Note: Chunk downloads will be cancelled when cache entry is removed from database
 
         // Remove from storage
         let mut storage = self.storage.write().await;
@@ -406,13 +435,8 @@ impl FileCache {
             storage.list_entries()
         };
 
-        // Cancel all downloads and remove all entries
+        // Remove all entries (downloads will be cancelled automatically)
         for entry in entries {
-            let _ = self
-                .downloader_handle
-                .cancel_download(entry.key.clone())
-                .await;
-
             let mut storage = self.storage.write().await;
             let _ = storage.remove_entry(&entry.key).await;
         }
@@ -428,6 +452,166 @@ impl FileCache {
             .cleanup_cache()
             .await
             .context("Failed to cleanup cache")
+    }
+
+    /// Ensure database entry exists with expected_total_size via HEAD request
+    /// This is critical for the chunk-based cache to work with the proxy
+    async fn ensure_database_entry(
+        &self,
+        cache_key: &MediaCacheKey,
+        original_url: &str,
+        file_path: &std::path::Path,
+    ) -> Result<()> {
+        // Get repository from chunk_manager
+        let repository = self.chunk_manager.repository();
+
+        // Check if database entry already exists with valid expected_total_size
+        if let Some(entry) = repository
+            .find_cache_entry(
+                &cache_key.source_id.to_string(),
+                &cache_key.media_id.to_string(),
+                &cache_key.quality,
+            )
+            .await?
+        {
+            if entry.expected_total_size.is_some() && entry.expected_total_size.unwrap() > 0 {
+                debug!(
+                    "Database entry already exists with expected_total_size={:?}",
+                    entry.expected_total_size
+                );
+                return Ok(());
+            }
+            // Entry exists but missing expected_total_size - will update below
+            debug!("Database entry exists but missing expected_total_size, updating...");
+        }
+
+        // Make HEAD request to get Content-Length
+        info!(
+            "Making HEAD request to get Content-Length for {:?}",
+            original_url
+        );
+        let client = self.chunk_manager.client();
+        let response = client
+            .head(original_url)
+            .send()
+            .await
+            .with_context(|| format!("Failed to make HEAD request to {}", original_url))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "HEAD request failed with status: {}",
+                response.status()
+            ));
+        }
+
+        let content_length = response
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<i64>().ok())
+            .ok_or_else(|| anyhow::anyhow!("Content-Length header missing or invalid"))?;
+
+        info!(
+            "Got Content-Length: {} bytes for {:?}",
+            content_length, cache_key
+        );
+
+        // Check if entry exists - update or insert
+        if let Some(mut entry) = repository
+            .find_cache_entry(
+                &cache_key.source_id.to_string(),
+                &cache_key.media_id.to_string(),
+                &cache_key.quality,
+            )
+            .await?
+        {
+            // Update existing entry
+            entry.expected_total_size = Some(content_length);
+            repository.update_cache_entry(entry).await?;
+            info!("Updated database entry with expected_total_size");
+        } else {
+            // Create new database entry
+            use crate::db::entities::CacheEntryModel;
+            use chrono::Utc;
+
+            let entry = CacheEntryModel {
+                id: 0, // Will be auto-generated
+                source_id: cache_key.source_id.to_string(),
+                media_id: cache_key.media_id.to_string(),
+                quality: cache_key.quality.clone(),
+                original_url: original_url.to_string(),
+                file_path: file_path.to_string_lossy().to_string(),
+                file_size: 0,
+                expected_total_size: Some(content_length),
+                downloaded_bytes: 0,
+                is_complete: false,
+                priority: 0,
+                created_at: Utc::now().naive_utc(),
+                last_accessed: Utc::now().naive_utc(),
+                last_modified: Utc::now().naive_utc(),
+                access_count: 0,
+                mime_type: None, // Could extract from Content-Type header
+                video_codec: None,
+                audio_codec: None,
+                container: None,
+                resolution_width: None,
+                resolution_height: None,
+                bitrate: None,
+                duration_secs: None,
+                etag: None,
+                expires_at: None,
+            };
+
+            repository.insert_cache_entry(entry).await?;
+            info!("Inserted database entry with expected_total_size");
+        }
+
+        // CRITICAL FIX: Verify the database update is visible before returning
+        // This prevents race condition where proxy queries before commit is visible
+        info!("Verifying database entry is visible after update...");
+        let verification_entry = match repository
+            .find_cache_entry(
+                &cache_key.source_id.to_string(),
+                &cache_key.media_id.to_string(),
+                &cache_key.quality,
+            )
+            .await
+        {
+            Ok(Some(entry)) => entry,
+            Ok(None) => {
+                error!("VERIFICATION FAILED: Cache entry disappeared after update");
+                return Err(anyhow::anyhow!("Cache entry disappeared after update"));
+            }
+            Err(e) => {
+                error!("VERIFICATION FAILED: Database query error: {}", e);
+                return Err(e.into());
+            }
+        };
+
+        match verification_entry.expected_total_size {
+            Some(size) if size > 0 => {
+                info!(
+                    "✅ VERIFICATION SUCCESS: Database entry has expected_total_size={} and is visible",
+                    size
+                );
+                Ok(())
+            }
+            Some(size) => {
+                error!(
+                    "❌ VERIFICATION FAILED: expected_total_size is zero: {}",
+                    size
+                );
+                Err(anyhow::anyhow!(
+                    "Database update not visible: expected_total_size is zero"
+                ))
+            }
+            None => {
+                error!("❌ VERIFICATION FAILED: expected_total_size is None");
+                Err(anyhow::anyhow!(
+                    "Database update not visible: expected_total_size is missing"
+                ))
+            }
+        }
     }
 
     /// Determine quality string from stream info
@@ -493,7 +677,7 @@ impl FileCacheHandle {
         source_id: SourceId,
         media_id: MediaItemId,
         stream_info: StreamInfo,
-        priority: DownloadPriority,
+        priority: Priority,
     ) -> Result<()> {
         let (sender, mut receiver) = mpsc::unbounded_channel();
         self.command_sender

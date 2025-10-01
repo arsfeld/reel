@@ -614,7 +614,7 @@ mod tests {
         for i in 0..5 {
             let key = MediaCacheKey::new(
                 SourceId::from("test-source"),
-                MediaItemId::from(&format!("test-media-{}", i)),
+                MediaItemId::from(format!("test-media-{}", i)),
                 "1080p",
             );
 

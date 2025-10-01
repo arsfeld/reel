@@ -77,7 +77,7 @@ pub mod common {
 
 /// Mock backend factory for testing
 pub mod mock_backend {
-    use crate::backends::traits::{MediaBackend, SearchResults};
+    use crate::backends::traits::MediaBackend;
     use crate::models::*;
     use anyhow::Result;
     use async_trait::async_trait;
@@ -236,10 +236,6 @@ pub mod mock_backend {
             }
 
             Ok(vec![])
-        }
-
-        async fn get_backend_id(&self) -> BackendId {
-            BackendId::from("mock_backend")
         }
     }
 }

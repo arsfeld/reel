@@ -42,6 +42,15 @@ pub struct FileCacheConfig {
 
     /// Stats reporting interval in seconds
     pub stats_interval_secs: u64,
+
+    // ===== Chunk-based cache configuration =====
+    /// Number of chunks to download ahead of playback position
+    /// Used for smooth playback without buffering (default: 20 chunks = 200MB with 10MB chunks)
+    pub lookahead_chunks: usize,
+
+    /// Enable background sequential fill to complete partial downloads
+    /// When enabled, chunks are downloaded in background with LOW priority
+    pub enable_background_fill: bool,
 }
 
 impl Default for FileCacheConfig {
@@ -50,8 +59,8 @@ impl Default for FileCacheConfig {
             max_size_mb: 5000,    // 5GB default
             max_size_percent: 10, // 10% of available disk space
             progressive_download: true,
-            chunk_size_kb: 1024,     // 1MB chunks
-            initial_buffer_kb: 5120, // 5MB initial buffer
+            chunk_size_kb: 10240, // 10MB chunks (reduced overhead for large files)
+            initial_buffer_kb: 20480, // 20MB initial buffer
             aggressive_caching: false,
             cache_directory: None, // Will be set to platform-specific default
             enable_compression: false, // Disabled by default to avoid re-encoding overhead
@@ -60,6 +69,8 @@ impl Default for FileCacheConfig {
             max_files_count: 1000,
             enable_stats: true,
             stats_interval_secs: 30, // 30 seconds default
+            lookahead_chunks: 20,    // 20 chunks = 200MB with 10MB chunks
+            enable_background_fill: true,
         }
     }
 }
@@ -132,5 +143,10 @@ impl FileCacheConfig {
         let percent_bytes = (available_space_bytes * self.max_size_percent as u64) / 100;
 
         std::cmp::min(max_size_bytes, percent_bytes)
+    }
+
+    /// Get chunk size in bytes (config stores in KB for clarity)
+    pub fn chunk_size_bytes(&self) -> u64 {
+        self.chunk_size_kb as u64 * 1024
     }
 }
