@@ -4,7 +4,6 @@ pub mod factory;
 pub mod gstreamer_player;
 #[cfg(feature = "mpv")]
 pub mod mpv_player;
-pub mod shaders;
 pub mod types;
 
 pub use controller::{PlayerController, PlayerHandle};

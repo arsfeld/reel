@@ -1236,50 +1236,7 @@ impl MpvPlayer {
         Ok(())
     }
 
-    pub async fn apply_custom_shaders(&self, shader_names: &[&str]) -> Result<()> {
-        use crate::player::shaders;
-
-        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
-            // Clear existing shaders
-            mpv.set_property("glsl-shaders", "").unwrap_or(());
-
-            if shader_names.is_empty() {
-                info!("Cleared all custom shaders");
-                return Ok(());
-            }
-
-            // Apply the custom shader chain
-            match shaders::prepare_shader_chain(shader_names) {
-                Ok(shader_paths) if !shader_paths.is_empty() => {
-                    mpv.set_property("glsl-shaders", shader_paths.as_str())
-                        .map_err(|e| anyhow::anyhow!("Failed to apply custom shaders: {:?}", e))?;
-                    info!("Applied custom shaders: {:?}", shader_names);
-
-                    // Update mode to Custom
-                    let mut current_mode = self.inner.upscaling_mode.lock().unwrap();
-                    *current_mode = UpscalingMode::Custom;
-                }
-                Ok(_) => {
-                    warn!("No shaders were prepared from the provided list");
-                    return Err(anyhow::anyhow!("No valid shaders found"));
-                }
-                Err(e) => {
-                    error!("Failed to prepare custom shaders: {:?}", e);
-                    return Err(e);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn get_available_shaders() -> Vec<&'static str> {
-        use crate::player::shaders::EMBEDDED_SHADERS;
-        EMBEDDED_SHADERS.iter().map(|s| s.name).collect()
-    }
-
     fn apply_upscaling_settings(&self, mpv: &Mpv, mode: UpscalingMode) -> Result<()> {
-        use crate::player::shaders;
-
         // Clear any existing shaders first
         mpv.set_property("glsl-shaders", "").unwrap_or(());
 
@@ -1294,86 +1251,42 @@ impl MpvPlayer {
                 debug!("Upscaling disabled - using bilinear");
             }
             UpscalingMode::HighQuality => {
-                // Use embedded FSRCNNX shader for high quality upscaling
-                match shaders::prepare_shader_chain(&["FSRCNNX_x2_8-0-4-1.glsl"]) {
-                    Ok(shader_paths) if !shader_paths.is_empty() => {
-                        mpv.set_property("glsl-shaders", shader_paths.as_str())
-                            .unwrap_or(());
-                        debug!("High quality upscaling enabled with embedded FSRCNNX shader");
-                    }
-                    _ => {
-                        // Fallback to built-in high quality scalers
-                        mpv.set_property("scale", "ewa_lanczossharp").unwrap_or(());
-                        mpv.set_property("cscale", "ewa_lanczossharp").unwrap_or(());
-                        mpv.set_property("dscale", "mitchell").unwrap_or(());
-                        mpv.set_property("sigmoid-upscaling", true).unwrap_or(());
-                        mpv.set_property("deband", true).unwrap_or(());
-                        mpv.set_property("deband-iterations", 2).unwrap_or(());
-                        mpv.set_property("deband-threshold", 48).unwrap_or(());
-                        mpv.set_property("deband-range", 16).unwrap_or(());
-                        mpv.set_property("deband-grain", 24).unwrap_or(());
-                        warn!("High quality shader preparation failed, using built-in scalers");
-                    }
-                }
+                // Use built-in high quality scalers
+                mpv.set_property("scale", "ewa_lanczossharp").unwrap_or(());
+                mpv.set_property("cscale", "ewa_lanczossharp").unwrap_or(());
+                mpv.set_property("dscale", "mitchell").unwrap_or(());
+                mpv.set_property("sigmoid-upscaling", true).unwrap_or(());
+                mpv.set_property("deband", true).unwrap_or(());
+                mpv.set_property("deband-iterations", 2).unwrap_or(());
+                mpv.set_property("deband-threshold", 48).unwrap_or(());
+                mpv.set_property("deband-range", 16).unwrap_or(());
+                mpv.set_property("deband-grain", 24).unwrap_or(());
+                debug!("High quality upscaling enabled with built-in scalers");
             }
             UpscalingMode::FSR => {
-                // Use embedded AMD FSR shader
-                match shaders::prepare_shader_chain(&["FSR.glsl"]) {
-                    Ok(shader_paths) if !shader_paths.is_empty() => {
-                        mpv.set_property("glsl-shaders", shader_paths.as_str())
-                            .unwrap_or(());
-                        debug!("FSR upscaling enabled with embedded shader");
-                    }
-                    _ => {
-                        // Fallback to spline36
-                        mpv.set_property("scale", "spline36").unwrap_or(());
-                        mpv.set_property("cscale", "spline36").unwrap_or(());
-                        mpv.set_property("dscale", "mitchell").unwrap_or(());
-                        mpv.set_property("sigmoid-upscaling", true).unwrap_or(());
-                        mpv.set_property("deband", true).unwrap_or(());
-                        warn!("FSR shader preparation failed, using fallback scalers");
-                    }
-                }
+                // Use spline36 fallback
+                mpv.set_property("scale", "spline36").unwrap_or(());
+                mpv.set_property("cscale", "spline36").unwrap_or(());
+                mpv.set_property("dscale", "mitchell").unwrap_or(());
+                mpv.set_property("sigmoid-upscaling", true).unwrap_or(());
+                mpv.set_property("deband", true).unwrap_or(());
+                debug!("FSR upscaling using fallback scalers");
             }
             UpscalingMode::Anime => {
-                // Use embedded Anime4K shaders - combine Clamp Highlights and Upscale
-                match shaders::prepare_shader_chain(&[
-                    "Anime4K_Clamp_Highlights.glsl",
-                    "Anime4K_Upscale_CNN_x2_M.glsl",
-                ]) {
-                    Ok(shader_paths) if !shader_paths.is_empty() => {
-                        mpv.set_property("glsl-shaders", shader_paths.as_str())
-                            .unwrap_or(());
-                        debug!("Anime upscaling enabled with embedded Anime4K shaders");
-                    }
-                    _ => {
-                        // Try single shader fallback
-                        match shaders::prepare_shader_chain(&["Anime4K_Upscale_CNN_x2_M.glsl"]) {
-                            Ok(shader_paths) if !shader_paths.is_empty() => {
-                                mpv.set_property("glsl-shaders", shader_paths.as_str())
-                                    .unwrap_or(());
-                                debug!("Anime upscaling enabled with upscale shader only");
-                            }
-                            _ => {
-                                // Final fallback to optimized built-in settings for anime
-                                mpv.set_property("scale", "ewa_lanczossharp").unwrap_or(());
-                                mpv.set_property("cscale", "ewa_lanczossoft").unwrap_or(());
-                                mpv.set_property("dscale", "mitchell").unwrap_or(());
-                                mpv.set_property("sigmoid-upscaling", false).unwrap_or(());
-                                mpv.set_property("deband", true).unwrap_or(());
-                                mpv.set_property("deband-iterations", 4).unwrap_or(());
-                                mpv.set_property("deband-threshold", 64).unwrap_or(());
-                                mpv.set_property("deband-range", 16).unwrap_or(());
-                                mpv.set_property("deband-grain", 48).unwrap_or(());
-                                warn!("Anime shader preparation failed, using fallback scalers");
-                            }
-                        }
-                    }
-                }
+                // Use optimized built-in settings for anime
+                mpv.set_property("scale", "ewa_lanczossharp").unwrap_or(());
+                mpv.set_property("cscale", "ewa_lanczossoft").unwrap_or(());
+                mpv.set_property("dscale", "mitchell").unwrap_or(());
+                mpv.set_property("sigmoid-upscaling", false).unwrap_or(());
+                mpv.set_property("deband", true).unwrap_or(());
+                mpv.set_property("deband-iterations", 4).unwrap_or(());
+                mpv.set_property("deband-threshold", 64).unwrap_or(());
+                mpv.set_property("deband-range", 16).unwrap_or(());
+                mpv.set_property("deband-grain", 48).unwrap_or(());
+                debug!("Anime upscaling using fallback scalers");
             }
             UpscalingMode::Custom => {
                 // Custom mode - for future extension
-                // Could load user-specified shaders or configurations
                 debug!("Custom upscaling mode selected - no implementation yet");
             }
         }

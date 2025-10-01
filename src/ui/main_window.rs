@@ -95,12 +95,11 @@ pub enum MainWindowInput {
 pub enum ConnectionStatus {
     Connected(String), // URL
     Disconnected,
-    Reconnecting,
 }
 
 #[derive(Debug)]
 pub enum MainWindowOutput {
-    Quit,
+    // No output messages currently defined
 }
 
 #[relm4::component(pub async)]
@@ -419,7 +418,7 @@ impl AsyncComponent for MainWindow {
         );
 
         // Initialize the SyncWorker
-        let sync_sender = sender.clone();
+        let _sync_sender = sender.clone();
         let sync_worker = SyncWorker::builder()
             .detach_worker(Arc::new(db.clone()))
             .forward(sender.input_sender(), move |output| match output {
@@ -589,6 +588,47 @@ impl AsyncComponent for MainWindow {
                         .send(MainWindowInput::Navigate("update_header".to_string()))
                         .unwrap();
                 });
+        }
+
+        // Connect to visible-page changes to restore cursor when leaving player
+        {
+            use std::cell::RefCell;
+            use std::rc::Rc;
+
+            let root_clone = root.clone();
+            let previous_page_title = Rc::new(RefCell::new(String::new()));
+
+            model.navigation_view.connect_notify_local(
+                Some("visible-page"),
+                move |nav_view, _param| {
+                    let prev_title = previous_page_title.borrow().clone();
+                    let current_title = if let Some(visible_page) = nav_view.visible_page() {
+                        visible_page.title().to_string()
+                    } else {
+                        "None".to_string()
+                    };
+
+                    // Check if we're transitioning away from the Player page
+                    if prev_title == "Player" {
+                        // Restore cursor on next event loop tick to ensure it happens after mouse leave events
+                        let root_for_restore = root_clone.clone();
+                        gtk::glib::idle_add_local_once(move || {
+                            if let Some(surface) = root_for_restore.surface() {
+                                if let Some(cursor) = gtk::gdk::Cursor::from_name("default", None) {
+                                    surface.set_cursor(Some(&cursor));
+                                } else {
+                                    tracing::warn!("Failed to create default cursor");
+                                }
+                            } else {
+                                tracing::warn!("No surface available for cursor restoration");
+                            }
+                        });
+                    }
+
+                    // Update the previous page title for next transition
+                    *previous_page_title.borrow_mut() = current_title;
+                },
+            );
         }
 
         // Trigger initial sync of all sources after a short delay to let UI initialize
@@ -1111,9 +1151,6 @@ impl AsyncComponent for MainWindow {
                             tracing::info!("Playing media: {}", id);
                             MainWindowInput::NavigateToPlayer(id)
                         }
-                        crate::ui::pages::movie_details::MovieDetailsOutput::NavigateBack => {
-                            MainWindowInput::Navigate("back".to_string())
-                        }
                     });
 
                 // Create navigation page with the new controller's widget
@@ -1144,9 +1181,6 @@ impl AsyncComponent for MainWindow {
                         crate::ui::pages::show_details::ShowDetailsOutput::PlayMediaWithContext { media_id, context } => {
                             tracing::info!("Playing episode with context: {}", media_id);
                             MainWindowInput::NavigateToPlayerWithContext { media_id, context }
-                        }
-                        crate::ui::pages::show_details::ShowDetailsOutput::NavigateBack => {
-                            MainWindowInput::Navigate("back".to_string())
                         }
                     });
 
@@ -1480,10 +1514,6 @@ impl AsyncComponent for MainWindow {
                             source_id
                         )));
                         (false, format!("Source {} disconnected", source_id))
-                    }
-                    ConnectionStatus::Reconnecting => {
-                        tracing::info!("Source {} is reconnecting", source_id);
-                        (false, format!("Reconnecting to source {}", source_id))
                     }
                 };
 

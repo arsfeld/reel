@@ -28,61 +28,61 @@ impl AuthService {
 
         for service_name in &service_patterns {
             // Check if keyring is available and has credentials (token)
-            if let Ok(entry) = keyring::Entry::new(service_name, "token") {
-                if let Ok(token) = entry.get_password() {
-                    info!(
-                        "Found keyring token for source: {} (service: {}), migrating to database",
-                        source_id, service_name
-                    );
+            if let Ok(entry) = keyring::Entry::new(service_name, "token")
+                && let Ok(token) = entry.get_password()
+            {
+                info!(
+                    "Found keyring token for source: {} (service: {}), migrating to database",
+                    source_id, service_name
+                );
 
-                    // Save to database
-                    let credentials = Credentials::Token {
-                        token: token.clone(),
-                    };
-                    if let Err(e) = Self::save_credentials(db, source_id, &credentials).await {
-                        warn!(
-                            "Failed to migrate token to database for source {}: {}",
-                            source_id, e
-                        );
-                        return Ok(false);
-                    }
-
-                    // Remove from keyring after successful migration
-                    let _ = entry.delete_credential();
-                    info!(
-                        "Successfully migrated token for source: {} from keyring to database",
-                        source_id
+                // Save to database
+                let credentials = Credentials::Token {
+                    token: token.clone(),
+                };
+                if let Err(e) = Self::save_credentials(db, source_id, &credentials).await {
+                    warn!(
+                        "Failed to migrate token to database for source {}: {}",
+                        source_id, e
                     );
-                    return Ok(true);
+                    return Ok(false);
                 }
+
+                // Remove from keyring after successful migration
+                let _ = entry.delete_credential();
+                info!(
+                    "Successfully migrated token for source: {} from keyring to database",
+                    source_id
+                );
+                return Ok(true);
             }
 
             // Check for API key
-            if let Ok(entry) = keyring::Entry::new(service_name, "api_key") {
-                if let Ok(key) = entry.get_password() {
-                    info!(
-                        "Found keyring API key for source: {} (service: {}), migrating to database",
-                        source_id, service_name
-                    );
+            if let Ok(entry) = keyring::Entry::new(service_name, "api_key")
+                && let Ok(key) = entry.get_password()
+            {
+                info!(
+                    "Found keyring API key for source: {} (service: {}), migrating to database",
+                    source_id, service_name
+                );
 
-                    // Save to database
-                    let credentials = Credentials::ApiKey { key: key.clone() };
-                    if let Err(e) = Self::save_credentials(db, source_id, &credentials).await {
-                        warn!(
-                            "Failed to migrate API key to database for source {}: {}",
-                            source_id, e
-                        );
-                        return Ok(false);
-                    }
-
-                    // Remove from keyring after successful migration
-                    let _ = entry.delete_credential();
-                    info!(
-                        "Successfully migrated API key for source: {} from keyring to database",
-                        source_id
+                // Save to database
+                let credentials = Credentials::ApiKey { key: key.clone() };
+                if let Err(e) = Self::save_credentials(db, source_id, &credentials).await {
+                    warn!(
+                        "Failed to migrate API key to database for source {}: {}",
+                        source_id, e
                     );
-                    return Ok(true);
+                    return Ok(false);
                 }
+
+                // Remove from keyring after successful migration
+                let _ = entry.delete_credential();
+                info!(
+                    "Successfully migrated API key for source: {} from keyring to database",
+                    source_id
+                );
+                return Ok(true);
             }
         }
 
@@ -150,7 +150,7 @@ impl AuthService {
 
         // Try to find token credentials
         if let Some(auth_token) = repo
-            .find_by_source_and_type(&source_id.to_string(), "token")
+            .find_by_source_and_type(source_id.as_ref(), "token")
             .await?
         {
             debug!(
@@ -164,7 +164,7 @@ impl AuthService {
 
         // Try to find API key credentials
         if let Some(auth_token) = repo
-            .find_by_source_and_type(&source_id.to_string(), "api_key")
+            .find_by_source_and_type(source_id.as_ref(), "api_key")
             .await?
         {
             debug!(
@@ -190,7 +190,7 @@ impl AuthService {
 
             // Try to find token credentials again
             if let Some(auth_token) = repo
-                .find_by_source_and_type(&source_id.to_string(), "token")
+                .find_by_source_and_type(source_id.as_ref(), "token")
                 .await?
             {
                 return Ok(Some(Credentials::Token {
@@ -200,7 +200,7 @@ impl AuthService {
 
             // Try to find API key credentials again
             if let Some(auth_token) = repo
-                .find_by_source_and_type(&source_id.to_string(), "api_key")
+                .find_by_source_and_type(source_id.as_ref(), "api_key")
                 .await?
             {
                 return Ok(Some(Credentials::ApiKey {
@@ -219,7 +219,7 @@ impl AuthService {
     /// Remove authentication credentials from database
     pub async fn remove_credentials(db: &DatabaseConnection, source_id: &SourceId) -> Result<()> {
         let repo = AuthTokenRepositoryImpl::new(db.clone());
-        let deleted_count = repo.delete_by_source(&source_id.to_string()).await?;
+        let deleted_count = repo.delete_by_source(source_id.as_ref()).await?;
         debug!(
             "Removed {} credential(s) for source: {} from database",
             deleted_count, source_id

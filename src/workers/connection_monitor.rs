@@ -20,7 +20,6 @@ pub enum ConnectionMonitorInput {
     CheckSource(SourceId),
     CheckAllSources,
     UpdateCheckTimes(HashMap<SourceId, Instant>),
-    Stop,
 }
 
 #[derive(Debug, Clone)]
@@ -108,7 +107,6 @@ impl Worker for ConnectionMonitor {
                                     .unwrap_or(true);
 
                                 if !should_check {
-                                    debug!("Skipping {} - not due for check yet", source_id);
                                     continue;
                                 }
 
@@ -134,11 +132,6 @@ impl Worker for ConnectionMonitor {
                                                     source_id: source_id.clone(),
                                                     new_url: new_url.clone(),
                                                 },
-                                            );
-                                        } else {
-                                            debug!(
-                                                "Connection unchanged for {}: {}",
-                                                source_id, new_url
                                             );
                                         }
                                     }
@@ -199,14 +192,6 @@ impl Worker for ConnectionMonitor {
 
             ConnectionMonitorInput::UpdateCheckTimes(times) => {
                 self.next_check_times = times;
-                debug!(
-                    "Updated check times for {} sources",
-                    self.next_check_times.len()
-                );
-            }
-
-            ConnectionMonitorInput::Stop => {
-                info!("Stopping connection monitor");
             }
         }
     }

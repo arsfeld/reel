@@ -15,14 +15,11 @@ use crate::services::commands::auth_commands::CreateSourceCommand;
 #[derive(Debug, Clone)]
 pub enum BackendType {
     Plex,
-    Jellyfin,
 }
 
 #[derive(Debug, Clone)]
 pub enum AuthDialogInput {
     Show,
-    Hide,
-    SelectBackend(BackendType),
     // Plex inputs
     StartPlexAuth,
     PlexPinReceived(PlexPin),
@@ -41,8 +38,6 @@ pub enum AuthDialogInput {
     UpdateJellyfinUrl(String),
     UpdateJellyfinUsername(String),
     UpdateJellyfinPassword(String),
-    ConfirmJellyfinUrl,
-    ChangeJellyfinUrl,
     ConnectJellyfin,
     JellyfinAuthError(String),
     RetryJellyfin,
@@ -52,7 +47,6 @@ pub enum AuthDialogInput {
     JellyfinQuickConnectAuthenticated(String), // token
     JellyfinQuickConnectFailed(String),
     CancelJellyfinQuickConnect,
-    RetryJellyfinQuickConnect,
     CheckJellyfinQuickConnectStatus,
     // Manual Plex inputs
     ConnectManualPlex,
@@ -973,22 +967,6 @@ impl AsyncComponent for AuthDialog {
                 }
             }
 
-            AuthDialogInput::Hide => {
-                info!("Hiding auth dialog");
-                self.is_visible = false;
-                self.dialog.close();
-                sender.output(AuthDialogOutput::Cancelled).unwrap();
-            }
-
-            AuthDialogInput::SelectBackend(backend_type) => {
-                info!("Selected backend: {:?}", backend_type);
-                self.backend_type = backend_type;
-                match self.backend_type {
-                    BackendType::Plex => self.view_stack.set_visible_child_name("plex"),
-                    BackendType::Jellyfin => self.view_stack.set_visible_child_name("jellyfin"),
-                }
-            }
-
             AuthDialogInput::StartPlexAuth => {
                 info!("Starting Plex OAuth flow");
                 self.plex_auth_in_progress = true;
@@ -1356,14 +1334,6 @@ impl AsyncComponent for AuthDialog {
                 self.jellyfin_password = password;
             }
 
-            AuthDialogInput::ConfirmJellyfinUrl => {
-                // No longer used in simplified interface
-            }
-
-            AuthDialogInput::ChangeJellyfinUrl => {
-                // No longer used in simplified interface
-            }
-
             AuthDialogInput::ConnectJellyfin => {
                 info!("Connecting to Jellyfin");
                 // Model fields are already updated via UpdateJellyfin* messages
@@ -1686,12 +1656,6 @@ impl AsyncComponent for AuthDialog {
                 self.jellyfin_quick_connect_in_progress = false;
                 self.jellyfin_quick_connect_code = None;
                 self.jellyfin_quick_connect_secret = None;
-            }
-
-            AuthDialogInput::RetryJellyfinQuickConnect => {
-                info!("Retrying Jellyfin Quick Connect");
-                self.jellyfin_auth_error = None;
-                sender.input(AuthDialogInput::StartJellyfinQuickConnect);
             }
 
             AuthDialogInput::ConnectManualPlex => {

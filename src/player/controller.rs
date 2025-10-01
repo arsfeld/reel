@@ -92,8 +92,6 @@ pub enum PlayerCommand {
         speed: f64,
         respond_to: oneshot::Sender<Result<()>>,
     },
-    /// Get playback speed
-    GetPlaybackSpeed { respond_to: oneshot::Sender<f64> },
     /// Frame step forward
     FrameStepForward {
         respond_to: oneshot::Sender<Result<()>>,
@@ -106,8 +104,6 @@ pub enum PlayerCommand {
     ToggleMute {
         respond_to: oneshot::Sender<Result<()>>,
     },
-    /// Check if muted
-    IsMuted { respond_to: oneshot::Sender<bool> },
     /// Cycle subtitle track
     CycleSubtitleTrack {
         respond_to: oneshot::Sender<Result<()>>,
@@ -121,17 +117,6 @@ pub enum PlayerCommand {
         mode: ZoomMode,
         respond_to: oneshot::Sender<Result<()>>,
     },
-    /// Get current zoom mode
-    GetZoomMode {
-        respond_to: oneshot::Sender<ZoomMode>,
-    },
-    /// Update player configuration (may recreate player)
-    UpdateConfig {
-        config: Config,
-        respond_to: oneshot::Sender<Result<bool>>, // Returns true if player was recreated
-    },
-    /// Shutdown the player controller
-    Shutdown,
 }
 
 /// Controller that owns the Player and processes commands
@@ -326,10 +311,6 @@ impl PlayerController {
                     let result = self.player.set_playback_speed(speed).await;
                     let _ = respond_to.send(result);
                 }
-                PlayerCommand::GetPlaybackSpeed { respond_to } => {
-                    let speed = self.player.get_playback_speed().await;
-                    let _ = respond_to.send(speed);
-                }
                 PlayerCommand::FrameStepForward { respond_to } => {
                     debug!("🎮 PlayerController: Frame stepping forward");
                     let result = self.player.frame_step_forward().await;
@@ -345,10 +326,6 @@ impl PlayerController {
                     let result = self.player.toggle_mute().await;
                     let _ = respond_to.send(result);
                 }
-                PlayerCommand::IsMuted { respond_to } => {
-                    let is_muted = self.player.is_muted().await;
-                    let _ = respond_to.send(is_muted);
-                }
                 PlayerCommand::CycleSubtitleTrack { respond_to } => {
                     debug!("🎮 PlayerController: Cycling subtitle track");
                     let result = self.player.cycle_subtitle_track().await;
@@ -363,58 +340,6 @@ impl PlayerController {
                     debug!("🎮 PlayerController: Setting zoom mode to {:?}", mode);
                     let result = self.player.set_zoom_mode(mode).await;
                     let _ = respond_to.send(result);
-                }
-                PlayerCommand::GetZoomMode { respond_to } => {
-                    debug!("🎮 PlayerController: Getting zoom mode");
-                    let mode = self.player.get_zoom_mode().await;
-                    let _ = respond_to.send(mode);
-                }
-                PlayerCommand::UpdateConfig { config, respond_to } => {
-                    info!("🎮 PlayerController: Updating configuration");
-
-                    // Check if we need to recreate the player (backend changed)
-                    let current_backend = match &self.player {
-                        #[cfg(feature = "mpv")]
-                        Player::Mpv(_) => "mpv",
-                        #[cfg(feature = "gstreamer")]
-                        Player::GStreamer(_) => "gstreamer",
-                    };
-
-                    let needs_recreation = current_backend != config.playback.player_backend;
-
-                    if needs_recreation {
-                        info!(
-                            "🎮 PlayerController: Backend changed from {} to {}, recreating player",
-                            current_backend, config.playback.player_backend
-                        );
-
-                        // Try to create new player with new config
-                        match Player::new(&config) {
-                            Ok(new_player) => {
-                                // Stop current player
-                                let _ = self.player.stop().await;
-
-                                // Replace with new player
-                                self.player = new_player;
-
-                                // Re-setup error callback
-                                self.setup_error_callback();
-
-                                let _ = respond_to.send(Ok(true));
-                            }
-                            Err(e) => {
-                                let _ = respond_to.send(Err(e));
-                            }
-                        }
-                    } else {
-                        // Just update config without recreation
-                        // For now, we don't have config updates that don't require recreation
-                        let _ = respond_to.send(Ok(false));
-                    }
-                }
-                PlayerCommand::Shutdown => {
-                    info!("🎮 PlayerController: Shutting down");
-                    break;
                 }
             }
         }
@@ -670,17 +595,6 @@ impl PlayerHandle {
             .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
     }
 
-    /// Get playback speed
-    pub async fn get_playback_speed(&self) -> Result<f64> {
-        let (respond_to, response) = oneshot::channel();
-        self.sender
-            .send(PlayerCommand::GetPlaybackSpeed { respond_to })
-            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
-        response
-            .await
-            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))
-    }
-
     /// Frame step forward
     pub async fn frame_step_forward(&self) -> Result<()> {
         let (respond_to, response) = oneshot::channel();
@@ -714,17 +628,6 @@ impl PlayerHandle {
             .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
     }
 
-    /// Check if muted
-    pub async fn is_muted(&self) -> Result<bool> {
-        let (respond_to, response) = oneshot::channel();
-        self.sender
-            .send(PlayerCommand::IsMuted { respond_to })
-            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
-        response
-            .await
-            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))
-    }
-
     /// Cycle subtitle track
     pub async fn cycle_subtitle_track(&self) -> Result<()> {
         let (respond_to, response) = oneshot::channel();
@@ -756,34 +659,5 @@ impl PlayerHandle {
         response
             .await
             .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
-    }
-
-    /// Get current zoom mode
-    pub async fn get_zoom_mode(&self) -> Result<ZoomMode> {
-        let (respond_to, response) = oneshot::channel();
-        self.sender
-            .send(PlayerCommand::GetZoomMode { respond_to })
-            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
-        Ok(response
-            .await
-            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?)
-    }
-
-    /// Update player configuration (may recreate player if backend changes)
-    pub async fn update_config(&self, config: Config) -> Result<bool> {
-        let (respond_to, response) = oneshot::channel();
-        self.sender
-            .send(PlayerCommand::UpdateConfig { config, respond_to })
-            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
-        response
-            .await
-            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
-    }
-
-    /// Shutdown the player controller
-    pub fn shutdown(&self) -> Result<()> {
-        self.sender
-            .send(PlayerCommand::Shutdown)
-            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))
     }
 }

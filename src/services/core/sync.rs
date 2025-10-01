@@ -1,7 +1,7 @@
-use crate::ui::shared::broker::BROKER;
+use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage, SourceMessage};
 use anyhow::{Context, Result};
 use chrono::NaiveDateTime;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::backends::traits::MediaBackend;
 use crate::db::connection::DatabaseConnection;
@@ -43,7 +43,16 @@ impl SyncService {
                     .push(format!("Failed to get libraries: {}", e));
                 Self::update_sync_status(db, source_id, SyncStatus::Failed, None).await?;
                 BROKER
-                    .notify_sync_error(source_id.to_string(), e.to_string())
+                    .broadcast(BrokerMessage::Source(SourceMessage::SyncError {
+                        source_id: source_id.to_string(),
+                        error: e.to_string(),
+                    }))
+                    .await;
+                BROKER
+                    .broadcast(BrokerMessage::Data(DataMessage::LoadError {
+                        source: source_id.to_string(),
+                        error: e.to_string(),
+                    }))
                     .await;
                 return Err(e.context("Failed to sync source"));
             }
@@ -67,7 +76,10 @@ impl SyncService {
 
         // Notify sync started with estimated total
         BROKER
-            .notify_sync_started(source_id.to_string(), Some(estimated_total_items))
+            .broadcast(BrokerMessage::Source(SourceMessage::SyncStarted {
+                source_id: source_id.to_string(),
+                total_items: Some(estimated_total_items),
+            }))
             .await;
 
         // Mark sync as in progress
@@ -80,11 +92,11 @@ impl SyncService {
 
             // Notify library sync started
             BROKER
-                .notify_library_sync_started(
-                    source_id.to_string(),
-                    library.id.clone(),
-                    library.title.clone(),
-                )
+                .broadcast(BrokerMessage::Source(SourceMessage::LibrarySyncStarted {
+                    source_id: source_id.to_string(),
+                    library_id: library.id.clone(),
+                    library_name: library.title.clone(),
+                }))
                 .await;
 
             // Sync library content with cumulative progress tracking
@@ -101,12 +113,12 @@ impl SyncService {
                 Ok(items_count) => {
                     // Notify library sync completed
                     BROKER
-                        .notify_library_sync_completed(
-                            source_id.to_string(),
-                            library.id.clone(),
-                            library.title.clone(),
-                            items_count,
-                        )
+                        .broadcast(BrokerMessage::Source(SourceMessage::LibrarySyncCompleted {
+                            source_id: source_id.to_string(),
+                            library_id: library.id.clone(),
+                            library_name: library.title.clone(),
+                            items_synced: items_count,
+                        }))
                         .await;
 
                     result.items_synced += items_count;
@@ -146,7 +158,15 @@ impl SyncService {
 
         // Notify sync completed
         BROKER
-            .notify_sync_completed(source_id.to_string(), result.items_synced)
+            .broadcast(BrokerMessage::Source(SourceMessage::SyncCompleted {
+                source_id: source_id.to_string(),
+                items_synced: result.items_synced,
+            }))
+            .await;
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::LoadComplete {
+                source: source_id.to_string(),
+            }))
             .await;
 
         info!(
@@ -241,11 +261,18 @@ impl SyncService {
 
             // Notify cumulative progress for the entire source
             BROKER
-                .notify_sync_progress(
-                    source_id.to_string(),
-                    *cumulative_items_synced,
-                    estimated_total,
-                )
+                .broadcast(BrokerMessage::Source(SourceMessage::SyncProgress {
+                    source_id: source_id.to_string(),
+                    current: *cumulative_items_synced,
+                    total: estimated_total,
+                }))
+                .await;
+            BROKER
+                .broadcast(BrokerMessage::Data(DataMessage::SyncProgress {
+                    source_id: source_id.to_string(),
+                    current: *cumulative_items_synced,
+                    total: estimated_total,
+                }))
                 .await;
         }
 
@@ -391,7 +418,7 @@ impl SyncService {
         source_id: &SourceId,
         library_id: &crate::models::LibraryId,
         show_id: &crate::models::ShowId,
-        show_title: &str,
+        _show_title: &str,
         cumulative_items_synced: &mut usize,
         estimated_total: usize,
     ) -> Result<usize> {
@@ -446,11 +473,18 @@ impl SyncService {
 
                         // Notify cumulative progress with current item info
                         BROKER
-                            .notify_sync_progress(
-                                source_id.to_string(),
-                                *cumulative_items_synced,
-                                estimated_total,
-                            )
+                            .broadcast(BrokerMessage::Source(SourceMessage::SyncProgress {
+                                source_id: source_id.to_string(),
+                                current: *cumulative_items_synced,
+                                total: estimated_total,
+                            }))
+                            .await;
+                        BROKER
+                            .broadcast(BrokerMessage::Data(DataMessage::SyncProgress {
+                                source_id: source_id.to_string(),
+                                current: *cumulative_items_synced,
+                                total: estimated_total,
+                            }))
                             .await;
                     }
                 }

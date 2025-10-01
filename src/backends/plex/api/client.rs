@@ -110,13 +110,6 @@ impl PlexApi {
         create_standard_headers(Some(&self.auth_token))
     }
 
-    /// Build standard headers with optional additional headers merged in
-    pub(super) fn headers_with_extras(&self, extras: HeaderMap) -> HeaderMap {
-        let mut headers = self.standard_headers();
-        headers.extend(extras);
-        headers
-    }
-
     /// Build full image URL from Plex path
     pub(super) fn build_image_url(&self, path: &str) -> String {
         if path.starts_with("http") {

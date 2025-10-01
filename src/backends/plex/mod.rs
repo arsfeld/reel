@@ -17,8 +17,8 @@ use tracing::{debug, warn};
 
 use super::traits::MediaBackend;
 use crate::models::{
-    AuthProvider, BackendId, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season,
-    Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
+    AuthProvider, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season, Show,
+    ShowId, Source, SourceId, SourceType, StreamInfo, User,
 };
 
 #[allow(dead_code)] // Used via dynamic dispatch in BackendService
@@ -46,14 +46,11 @@ pub struct PlexBackend {
 struct PlayQueueState {
     play_queue_id: Option<i64>,
     play_queue_item_id: Option<i64>,
-    play_queue_version: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ServerInfo {
     pub name: String,
-    pub is_local: bool,
-    pub is_relay: bool,
 }
 
 impl PlexBackend {
@@ -532,7 +529,6 @@ impl PlexBackend {
         if let Some(container) = Some(&play_queue.media_container) {
             let mut state = self.play_queue_state.lock().await;
             state.play_queue_id = container.play_queue_id;
-            state.play_queue_version = container.play_queue_version;
 
             // Find the current item ID (usually the first one)
             if let Some(first_item) = container.metadata.first() {
@@ -540,8 +536,8 @@ impl PlexBackend {
             }
 
             debug!(
-                "Created PlayQueue - ID: {:?}, Version: {:?}, Item: {:?}",
-                state.play_queue_id, state.play_queue_version, state.play_queue_item_id
+                "Created PlayQueue - ID: {:?}, Item: {:?}",
+                state.play_queue_id, state.play_queue_item_id
             );
         }
 
@@ -553,7 +549,6 @@ impl PlexBackend {
         let mut state = self.play_queue_state.lock().await;
         state.play_queue_id = None;
         state.play_queue_item_id = None;
-        state.play_queue_version = None;
         debug!("Cleared PlayQueue state");
     }
 
@@ -835,11 +830,6 @@ impl MediaBackend for PlexBackend {
                 if let Some(ref source) = self.source {
                     *self.server_info.write().await = Some(ServerInfo {
                         name: source.name.clone(),
-                        is_local: url.contains("192.168.")
-                            || url.contains("10.")
-                            || url.contains("172.")
-                            || url.contains("localhost"),
-                        is_relay: url.contains("plex.direct"),
                     });
                 }
 
@@ -935,8 +925,6 @@ impl MediaBackend for PlexBackend {
                                 // Store server info
                                 *self.server_info.write().await = Some(ServerInfo {
                                     name: server.name.clone(),
-                                    is_local: best_conn.local,
-                                    is_relay: best_conn.relay,
                                 });
 
                                 // Cache all connections for this server for fast failover
@@ -1217,56 +1205,9 @@ impl MediaBackend for PlexBackend {
         let api = self.get_api().await?;
         api.get_home_sections().await
     }
-
-    async fn get_backend_id(&self) -> BackendId {
-        BackendId::new(&self.backend_id)
-    }
 }
 
-impl PlexBackend {
-    /// Perform a global search across all libraries
-    pub async fn search(
-        &self,
-        query: &str,
-        limit: Option<usize>,
-    ) -> Result<Vec<crate::models::MediaItem>> {
-        let api = self.get_api().await?;
-        api.search_global(query, limit).await
-    }
-
-    /// Search within a specific library
-    pub async fn search_library(
-        &self,
-        library_id: &str,
-        query: &str,
-        media_type: Option<&str>,
-        sort: Option<&str>,
-        limit: Option<usize>,
-    ) -> Result<Vec<crate::models::MediaItem>> {
-        let api = self.get_api().await?;
-        api.search_library(library_id, query, media_type, sort, limit)
-            .await
-    }
-
-    /// Search with filters
-    pub async fn search_with_filters(
-        &self,
-        library_id: &str,
-        query: Option<&str>,
-        genre: Option<&str>,
-        year: Option<u32>,
-        rating_min: Option<f32>,
-        unwatched: Option<bool>,
-        sort: Option<&str>,
-        limit: Option<usize>,
-    ) -> Result<Vec<crate::models::MediaItem>> {
-        let api = self.get_api().await?;
-        api.search_with_filters(
-            library_id, query, genre, year, rating_min, unwatched, sort, limit,
-        )
-        .await
-    }
-}
+impl PlexBackend {}
 
 impl fmt::Debug for PlexBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

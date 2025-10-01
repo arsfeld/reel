@@ -1,7 +1,7 @@
 use anyhow::Result;
 use gtk4;
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 #[cfg(feature = "gstreamer")]
 use super::GStreamerPlayer;
@@ -203,13 +203,13 @@ impl Player {
         }
     }
 
-    pub fn set_error_callback<F>(&self, callback: F)
+    pub fn set_error_callback<F>(&self, _callback: F)
     where
         F: Fn(String) + Send + 'static,
     {
         match self {
             #[cfg(feature = "mpv")]
-            Player::Mpv(mpv) => mpv.set_error_callback(callback),
+            Player::Mpv(mpv) => mpv.set_error_callback(_callback),
             #[cfg(feature = "gstreamer")]
             Player::GStreamer(_) => {
                 // GStreamer doesn't have this callback mechanism yet

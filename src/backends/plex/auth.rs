@@ -307,7 +307,7 @@ impl PlexAuth {
             user_id,
             user_id.len()
         );
-        if let Some(_) = pin {
+        if pin.is_some() {
             info!("PIN provided: yes");
         } else {
             info!("PIN provided: no");

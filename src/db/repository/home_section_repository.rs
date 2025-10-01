@@ -1,7 +1,6 @@
 use super::{BaseRepository, Repository};
 use crate::db::entities::{
-    HomeSectionItemModel, HomeSectionModel, MediaItemModel, home_section_items, home_sections,
-    media_items,
+    HomeSectionModel, MediaItemModel, home_section_items, home_sections, media_items,
 };
 use anyhow::Result;
 use async_trait::async_trait;

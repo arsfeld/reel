@@ -17,8 +17,8 @@ use tracing::{error, info};
 
 use super::traits::MediaBackend;
 use crate::models::{
-    AuthProvider, BackendId, Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId,
-    Movie, Season, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
+    AuthProvider, Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId, Movie,
+    Season, Show, ShowId, Source, SourceType, StreamInfo, User,
 };
 
 #[allow(dead_code)] // Used via dynamic dispatch in BackendService
@@ -216,12 +216,6 @@ impl JellyfinBackend {
         Ok(())
     }
 
-    pub async fn get_credentials(&self) -> Option<(String, String)> {
-        let api_key = self.api_key.read().await.clone()?;
-        let user_id = self.user_id.read().await.clone()?;
-        Some((api_key, user_id))
-    }
-
     /// Extract the actual Jellyfin item ID from a composite media ID
     /// Format: "backend_id:library_id:type:item_id" or variations
     fn extract_jellyfin_item_id(&self, media_id: &MediaItemId) -> String {
@@ -254,7 +248,6 @@ impl MediaBackend for JellyfinBackend {
                     server_url,
                     access_token,
                     user_id,
-                    username,
                     ..
                 } => {
                     tracing::info!(
@@ -496,10 +489,6 @@ impl MediaBackend for JellyfinBackend {
         }
 
         Ok(())
-    }
-
-    async fn get_backend_id(&self) -> BackendId {
-        BackendId::new(&self.backend_id)
     }
 
     async fn get_home_sections(&self) -> Result<Vec<HomeSection>> {

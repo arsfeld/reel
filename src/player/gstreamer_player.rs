@@ -42,6 +42,7 @@ pub struct GStreamerPlayer {
     subtitle_streams: Arc<Mutex<Vec<StreamInfo>>>,
     current_audio_stream: Arc<Mutex<Option<String>>>,
     current_subtitle_stream: Arc<Mutex<Option<String>>>,
+    pipeline_ready: Arc<Mutex<bool>>,
 }
 
 impl GStreamerPlayer {
@@ -80,6 +81,7 @@ impl GStreamerPlayer {
             subtitle_streams: Arc::new(Mutex::new(Vec::new())),
             current_audio_stream: Arc::new(Mutex::new(None)),
             current_subtitle_stream: Arc::new(Mutex::new(None)),
+            pipeline_ready: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -567,6 +569,9 @@ impl GStreamerPlayer {
         info!("Loading media: {}", url);
         debug!("GStreamerPlayer::load_media() - Full URL: {}", url);
 
+        // Reset pipeline ready flag for new media
+        *self.pipeline_ready.lock().unwrap() = false;
+
         // Update state
         {
             let mut state = self.state.write().await;
@@ -658,6 +663,30 @@ impl GStreamerPlayer {
 
         debug!("Using playbin3");
 
+        // Connect to source-setup signal to configure HTTP source for better seeking
+        playbin.connect("source-setup", false, |values| {
+            let source = values[1]
+                .get::<gst::Element>()
+                .expect("Failed to get source");
+
+            // Only configure if it's an HTTP source
+            if let Some(factory) = source.factory() {
+                let name = factory.name();
+                if name == "souphttpsrc" || name == "curlhttpsrc" {
+                    info!("Configuring HTTP source: {}", name);
+
+                    // Disable compression for better range request support
+                    if source.has_property("compress") {
+                        source.set_property("compress", false);
+                        debug!("Disabled compression on HTTP source");
+                    }
+                }
+            }
+        }
+
+            None
+        });
+
         // Use our stored video sink if available
         if let Some(sink) = self.video_sink.lock().unwrap().as_ref() {
             debug!("GStreamerPlayer::load_media() - Setting video sink on playbin");
@@ -724,6 +753,7 @@ impl GStreamerPlayer {
         let subtitle_streams_clone = self.subtitle_streams.clone();
         let current_audio_clone = self.current_audio_stream.clone();
         let current_subtitle_clone = self.current_subtitle_stream.clone();
+        let pipeline_ready_clone = self.pipeline_ready.clone();
         let playbin_clone = self.playbin.clone();
 
         info!("Setting up bus sync handler for immediate message processing...");
@@ -783,6 +813,7 @@ impl GStreamerPlayer {
                 &subtitle_streams,
                 &current_audio,
                 &current_subtitle,
+                &pipeline_ready_clone,
                 &playbin,
             );
 
@@ -1191,9 +1222,21 @@ impl GStreamerPlayer {
     pub async fn seek(&self, position: Duration) -> Result<()> {
         debug!("Seeking to {:?}", position);
 
+        // Check if pipeline is ready for seeking (HTTP sources need ASYNC_DONE)
+        let is_ready = *self.pipeline_ready.lock().unwrap();
+        if !is_ready {
+            warn!(
+                "GStreamerPlayer::seek() - Pipeline not ready for seeking (waiting for ASYNC_DONE)"
+            );
+            return Err(anyhow::anyhow!("Pipeline not ready for seeking"));
+        }
+
         let position_ns = position.as_nanos() as i64;
 
         if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            // Remember if we were playing to resume after seek
+            let was_playing = matches!(*self.state.read().await, PlayerState::Playing);
+
             // Get current pipeline state
             let (state_result, current_state, pending_state) =
                 playbin.state(gst::ClockTime::from_mseconds(100));
@@ -1224,15 +1267,15 @@ impl GStreamerPlayer {
                             Ok(_) => {
                                 debug!("Reached {:?} state", new_state);
                                 if new_state < gst::State::Paused {
-                                    warn!(
-                                        "GStreamerPlayer::seek() - Failed to reach PAUSED state for seeking"
-                                    );
-                                    // Continue anyway, seeking might still work
+                                    return Err(anyhow::anyhow!(
+                                        "Failed to reach PAUSED state for seeking"
+                                    ));
                                 }
                             }
                             Err(_) => {
-                                warn!("GStreamerPlayer::seek() - Timeout waiting for PAUSED state");
-                                // Continue anyway, seeking might still work
+                                return Err(anyhow::anyhow!(
+                                    "Timeout waiting for PAUSED state before seeking"
+                                ));
                             }
                         }
                     }
@@ -1240,82 +1283,69 @@ impl GStreamerPlayer {
                         debug!("Live source, no preroll needed");
                     }
                     Err(_) => {
-                        error!("GStreamerPlayer::seek() - Failed to set PAUSED state for seeking");
-                        // Continue anyway, seeking might still work
+                        return Err(anyhow::anyhow!("Failed to set PAUSED state for seeking"));
                     }
                 }
             }
 
-            // Perform the seek operation
-            // Use FLUSH to clear buffers and get immediate response
-            // Use ACCURATE for precise seeking (can use KEY_UNIT for faster but less accurate)
-            let seek_flags = gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE;
+            // Check if media is seekable
+            let mut query = gst::query::Seeking::new(gst::Format::Time);
+            if playbin.query(&mut query) {
+                let (seekable, start, end) = query.result();
+                debug!(
+                    "GStreamerPlayer::seek() - Media seekable: {}, range: {:?} - {:?}",
+                    seekable, start, end
+                );
+
+                if !seekable {
+                    return Err(anyhow::anyhow!("Media is not seekable"));
+                }
+            } else {
+                warn!("GStreamerPlayer::seek() - Unable to query seeking capability");
+            }
+
+            // Use FLUSH | KEY_UNIT flags for network streams
+            let seek_flags = gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT;
             let seek_position = gst::ClockTime::from_nseconds(position_ns as u64);
 
             debug!(
-                "GStreamerPlayer::seek() - Attempting seek to {} with flags {:?}",
+                "GStreamerPlayer::seek() - Seeking to {} with flags {:?}",
                 seek_position.display(),
                 seek_flags
             );
 
-            // Try seek_simple first (simpler API)
+            // Use seek_simple - it's simpler and should work for most cases
             let seek_result = playbin.seek_simple(seek_flags, seek_position);
 
             if seek_result.is_err() {
-                // If seek_simple fails, try the full seek API with more control
-                warn!("GStreamerPlayer::seek() - seek_simple failed, trying full seek API");
+                error!("GStreamerPlayer::seek() - Seek failed");
 
-                let seek_result = playbin.seek(
-                    1.0, // rate (normal speed)
-                    seek_flags,
-                    gst::SeekType::Set,
-                    seek_position,
-                    gst::SeekType::None,
-                    gst::ClockTime::NONE,
-                );
-
-                if seek_result.is_err() {
-                    error!("GStreamerPlayer::seek() - Both seek methods failed");
-
-                    // Check if media is seekable
-                    let mut query = gst::query::Seeking::new(gst::Format::Time);
-                    if playbin.query(&mut query) {
-                        let (seekable, start, end) = query.result();
-                        error!(
-                            "GStreamerPlayer::seek() - Media seekable: {}, range: {:?} - {:?}",
-                            seekable, start, end
-                        );
-
-                        if !seekable {
-                            return Err(anyhow::anyhow!("Media is not seekable"));
+                // Check for errors on the bus
+                if let Some(bus) = playbin.bus() {
+                    while let Some(msg) = bus.pop() {
+                        use gst::MessageView;
+                        if let MessageView::Error(err) = msg.view() {
+                            error!(
+                                "GStreamerPlayer::seek() - Bus error: {} ({:?})",
+                                err.error(),
+                                err.debug()
+                            );
+                            return Err(anyhow::anyhow!("Seek failed: {}", err.error()));
                         }
                     }
-
-                    // Check for errors on the bus
-                    if let Some(bus) = playbin.bus() {
-                        while let Some(msg) = bus.pop() {
-                            use gst::MessageView;
-                            if let MessageView::Error(err) = msg.view() {
-                                error!(
-                                    "GStreamerPlayer::seek() - Bus error: {} ({:?})",
-                                    err.error(),
-                                    err.debug()
-                                );
-                            }
-                        }
-                    }
-
-                    return Err(anyhow::anyhow!("Failed to seek to position {:?}", position));
-                } else {
-                    debug!("Seek succeeded using full API");
                 }
-            } else {
-                debug!("Seek succeeded using seek_simple");
+
+                return Err(anyhow::anyhow!("Failed to seek to position {:?}", position));
             }
 
-            // If we were playing before, resume playback
-            let state_before = self.state.read().await.clone();
-            if matches!(state_before, PlayerState::Playing) {
+            debug!("GStreamerPlayer::seek() - Seek initiated successfully");
+
+            // Wait for the seek to complete (ASYNC_DONE message)
+            // Give it a moment to process
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+            // Resume playing if we were playing before the seek
+            if was_playing {
                 debug!("GStreamerPlayer::seek() - Resuming playback after seek");
                 match playbin.set_state(gst::State::Playing) {
                     Ok(_) => {
@@ -1424,6 +1454,7 @@ impl GStreamerPlayer {
         subtitle_streams: &Arc<Mutex<Vec<StreamInfo>>>,
         current_audio: &Arc<Mutex<Option<String>>>,
         current_subtitle: &Arc<Mutex<Option<String>>>,
+        pipeline_ready: &Arc<Mutex<bool>>,
         playbin: &Arc<Mutex<Option<gst::Element>>>,
     ) {
         use gst::MessageView;
@@ -1519,6 +1550,10 @@ impl GStreamerPlayer {
                     "GStreamerPlayer - AsyncDone: Pipeline ready, dimensions should be available"
                 );
 
+                // Mark pipeline as ready for seeking
+                *pipeline_ready.lock().unwrap() = true;
+                info!("GStreamerPlayer - Pipeline marked as ready for seeking");
+
                 // Check if we have received a stream collection yet
                 let has_collection = stream_collection
                     .lock()
@@ -1543,7 +1578,7 @@ impl GStreamerPlayer {
                                     || name.contains("video")
                                     || name.contains("text"))
                             {
-                                let value = pb.property_value(&name);
+                                let value = pb.property_value(name);
                                 info!("  {}: {:?}", name, value);
                             }
                         }
@@ -1652,7 +1687,7 @@ impl GStreamerPlayer {
                     trace!("Found language tag: {}", lang.get());
                 }
             }
-            MessageView::StreamStart(stream_start_msg) => {
+            MessageView::StreamStart(_stream_start_msg) => {
                 debug!("Stream started - collection should follow soon");
 
                 // StreamStart message doesn't provide direct stream access
@@ -1847,9 +1882,9 @@ impl GStreamerPlayer {
     }
 
     fn process_selected_streams_sync(
-        collection: &gst::StreamCollection,
-        current_audio: &Arc<Mutex<Option<String>>>,
-        current_subtitle: &Arc<Mutex<Option<String>>>,
+        _collection: &gst::StreamCollection,
+        _current_audio: &Arc<Mutex<Option<String>>>,
+        _current_subtitle: &Arc<Mutex<Option<String>>>,
     ) {
         info!("Processing selected streams...");
         // Placeholder for now - proper implementation would track which streams are actually selected
@@ -1984,22 +2019,22 @@ impl GStreamerPlayer {
         }
 
         // If no streams found yet, provide default
-        if tracks.is_empty() {
-            if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-                let timeout = if cfg!(target_os = "macos") {
-                    gst::ClockTime::from_mseconds(100)
-                } else {
-                    gst::ClockTime::ZERO
-                };
-                let (_, current, _) = playbin.state(timeout);
+        if tracks.is_empty()
+            && let Some(playbin) = self.playbin.lock().unwrap().as_ref()
+        {
+            let timeout = if cfg!(target_os = "macos") {
+                gst::ClockTime::from_mseconds(100)
+            } else {
+                gst::ClockTime::ZERO
+            };
+            let (_, current, _) = playbin.state(timeout);
 
-                if current < gst::State::Paused {
-                    debug!("Playbin not in PAUSED/PLAYING state yet, no audio tracks available");
-                } else {
-                    // Provide a default track if playbin is ready but no collection received yet
-                    debug!("No stream collection available, providing default audio track");
-                    tracks.push((0, "Audio Track 1".to_string()));
-                }
+            if current < gst::State::Paused {
+                debug!("Playbin not in PAUSED/PLAYING state yet, no audio tracks available");
+            } else {
+                // Provide a default track if playbin is ready but no collection received yet
+                debug!("No stream collection available, providing default audio track");
+                tracks.push((0, "Audio Track 1".to_string()));
             }
         }
 
@@ -2056,11 +2091,11 @@ impl GStreamerPlayer {
                 debug!("Adding audio: {}", new_stream.stream_id);
 
                 // Keep the current subtitle stream if one is selected
-                if let Some(ref current_sub) = *self.current_subtitle_stream.lock().unwrap() {
-                    if subtitle_streams.iter().any(|s| s.stream_id == *current_sub) {
-                        selected_streams.push(current_sub.clone());
-                        debug!("Keeping subtitle: {}", current_sub);
-                    }
+                if let Some(ref current_sub) = *self.current_subtitle_stream.lock().unwrap()
+                    && subtitle_streams.iter().any(|s| s.stream_id == *current_sub)
+                {
+                    selected_streams.push(current_sub.clone());
+                    debug!("Keeping subtitle: {}", current_sub);
                 }
 
                 // Also need to include video stream (playbin3 requires all streams)
@@ -2068,16 +2103,16 @@ impl GStreamerPlayer {
                 if let Some(ref collection) = *self.stream_collection.lock().unwrap() {
                     for i in 0..collection.len() {
                         let idx = i as u32;
-                        if let Some(stream) = collection.stream(idx) {
-                            if stream.stream_type().contains(gst::StreamType::VIDEO) {
-                                let stream_id = stream
-                                    .stream_id()
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_else(|| "video-stream".to_string());
-                                selected_streams.push(stream_id.clone());
-                                debug!("Adding video: {}", stream_id);
-                                break; // Usually only one video stream
-                            }
+                        if let Some(stream) = collection.stream(idx)
+                            && stream.stream_type().contains(gst::StreamType::VIDEO)
+                        {
+                            let stream_id = stream
+                                .stream_id()
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| "video-stream".to_string());
+                            selected_streams.push(stream_id.clone());
+                            debug!("Adding video: {}", stream_id);
+                            break; // Usually only one video stream
                         }
                     }
                 }
@@ -2177,16 +2212,16 @@ impl GStreamerPlayer {
             if let Some(ref collection) = *self.stream_collection.lock().unwrap() {
                 for i in 0..collection.len() {
                     let idx = i as u32;
-                    if let Some(stream) = collection.stream(idx) {
-                        if stream.stream_type().contains(gst::StreamType::VIDEO) {
-                            let stream_id = stream
-                                .stream_id()
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| "video-stream".to_string());
-                            selected_streams.push(stream_id.clone());
-                            debug!("Adding video: {}", stream_id);
-                            break;
-                        }
+                    if let Some(stream) = collection.stream(idx)
+                        && stream.stream_type().contains(gst::StreamType::VIDEO)
+                    {
+                        let stream_id = stream
+                            .stream_id()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "video-stream".to_string());
+                        selected_streams.push(stream_id.clone());
+                        debug!("Adding video: {}", stream_id);
+                        break;
                     }
                 }
             }
@@ -2294,7 +2329,7 @@ impl GStreamerPlayer {
             if let Some(pos) = position {
                 let new_pos = pos + gst::ClockTime::from_mseconds(40); // ~1 frame at 25fps
                 playbin
-                    .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, new_pos)
+                    .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::SNAP_BEFORE, new_pos)
                     .map_err(|e| anyhow::anyhow!("Failed to step forward: {:?}", e))?;
             }
         }
@@ -2374,40 +2409,39 @@ impl GStreamerPlayer {
         // Apply zoom transformation to video widget
         if let Some(widget) = self.video_widget.lock().unwrap().as_ref() {
             // For GStreamer, we'll use CSS transforms on the widget
-            let style_context = widget.style_context();
 
             // Remove previous zoom class
-            style_context.remove_class("zoom-fit");
-            style_context.remove_class("zoom-fill");
-            style_context.remove_class("zoom-16-9");
-            style_context.remove_class("zoom-4-3");
-            style_context.remove_class("zoom-2-35");
-            style_context.remove_class("zoom-custom");
+            widget.remove_css_class("zoom-fit");
+            widget.remove_css_class("zoom-fill");
+            widget.remove_css_class("zoom-16-9");
+            widget.remove_css_class("zoom-4-3");
+            widget.remove_css_class("zoom-2-35");
+            widget.remove_css_class("zoom-custom");
 
             match mode {
                 ZoomMode::Fit => {
-                    style_context.add_class("zoom-fit");
+                    widget.add_css_class("zoom-fit");
                     widget.set_size_request(-1, -1);
                 }
                 ZoomMode::Fill => {
-                    style_context.add_class("zoom-fill");
+                    widget.add_css_class("zoom-fill");
                     widget.set_size_request(-1, -1);
                 }
                 ZoomMode::Zoom16_9 => {
-                    style_context.add_class("zoom-16-9");
+                    widget.add_css_class("zoom-16-9");
                     // Force aspect ratio through widget sizing hints
                     widget.set_size_request(-1, -1);
                 }
                 ZoomMode::Zoom4_3 => {
-                    style_context.add_class("zoom-4-3");
+                    widget.add_css_class("zoom-4-3");
                     widget.set_size_request(-1, -1);
                 }
                 ZoomMode::Zoom2_35 => {
-                    style_context.add_class("zoom-2-35");
+                    widget.add_css_class("zoom-2-35");
                     widget.set_size_request(-1, -1);
                 }
                 ZoomMode::Custom(level) => {
-                    style_context.add_class("zoom-custom");
+                    widget.add_css_class("zoom-custom");
                     // Apply custom scale transform through inline CSS
                     let css = format!("transform: scale({});", level);
                     widget.set_property("css-name", &css);

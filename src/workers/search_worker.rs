@@ -1,6 +1,5 @@
 use crate::models::{MediaItem, MediaItemId};
-use relm4::prelude::*;
-use relm4::{ComponentSender, Worker, WorkerHandle};
+use relm4::{ComponentSender, Worker};
 use std::path::PathBuf;
 use tantivy::{
     Index, IndexReader, IndexWriter,
@@ -8,7 +7,7 @@ use tantivy::{
     directory::MmapDirectory,
     doc,
     query::QueryParser,
-    schema::{Field, STORED, Schema, TEXT},
+    schema::{Field, STORED, Schema, TEXT, Value},
 };
 use tracing::{error, info};
 
@@ -246,11 +245,11 @@ impl SearchWorker {
                 .doc(*doc_address)
                 .map_err(|e| format!("Failed to retrieve document: {}", e))?;
 
-            if let Some(id_value) = retrieved_doc.get_first(self.id_field)
-                && let tantivy::schema::OwnedValue::Str(id_str) = id_value
-            {
-                let id = id_str.parse::<MediaItemId>().unwrap();
-                results.push(id);
+            if let Some(id_value) = retrieved_doc.get_first(self.id_field) {
+                if let Some(id_str) = id_value.as_str() {
+                    let id = id_str.parse::<MediaItemId>().unwrap();
+                    results.push(id);
+                }
             }
         }
 
@@ -446,9 +445,4 @@ impl Worker for SearchWorker {
             },
         }
     }
-}
-
-// Helper function to create a search worker instance
-pub fn get_search_worker() -> WorkerHandle<SearchWorker> {
-    SearchWorker::builder().detach_worker(())
 }

@@ -55,6 +55,18 @@ impl ReelApp {
             database.get_connection()
         });
 
+        // Initialize cache service after database is ready
+        tracing::info!("Initializing file cache service");
+        let db_for_cache = db.clone();
+        self.runtime.block_on(async {
+            if let Err(e) =
+                crate::services::cache_service::initialize_cache_service(db_for_cache).await
+            {
+                tracing::warn!("Failed to initialize cache service: {}", e);
+                tracing::warn!("Application will continue without file caching");
+            }
+        });
+
         // Create the Relm4 application and run it
         let app = relm4::RelmApp::new("com.github.reel");
         let main_window_init = (db, self.runtime.clone());

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::db::{
     connection::DatabaseConnection,
@@ -349,7 +349,7 @@ impl MediaService {
 
         // Process items without holding a transaction lock
         // This prevents blocking other database operations during sync
-        for (_index, item) in items.iter().enumerate() {
+        for item in items.iter() {
             Self::save_media_item(db, item.clone(), library_id, source_id).await?;
         }
         Ok(())

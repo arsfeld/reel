@@ -1,11 +1,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 use crate::models::{
-    BackendId, Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId, Movie, Season,
-    Show, ShowId, StreamInfo, User,
+    Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId, Movie, Season, Show,
+    ShowId, StreamInfo, User,
 };
 
 #[async_trait]
@@ -59,80 +58,9 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     // get_backend_info removed - never used
 
     // Sync support methods
-    async fn get_backend_id(&self) -> BackendId;
 
     // get_last_sync_time and supports_offline removed - never used
-}
-
-#[derive(Debug, Clone)]
-pub struct SearchResults {
-    pub movies: Vec<Movie>,
-    pub shows: Vec<Show>,
-    pub episodes: Vec<Episode>,
-}
-
-#[derive(Debug, Clone)]
-pub struct WatchStatus {
-    pub watched: bool,
-    pub view_count: u32,
-    pub last_watched_at: Option<DateTime<Utc>>,
-    pub playback_position: Option<Duration>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SyncResult {
-    pub backend_id: BackendId,
-    pub success: bool,
-    pub items_synced: usize,
-    pub duration: Duration,
-    pub errors: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum BackendType {
-    Plex,
-    Jellyfin,
-    Local,
-    Generic,
-}
-
-impl std::fmt::Display for BackendType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BackendType::Plex => write!(f, "Plex"),
-            BackendType::Jellyfin => write!(f, "Jellyfin"),
-            BackendType::Local => write!(f, "Local Files"),
-            BackendType::Generic => write!(f, "Generic"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConnectionType {
-    Local,
-    Remote,
-    Relay,
-    Offline,
-    Unknown,
-}
-
-#[derive(Debug, Clone)]
-pub struct BackendOfflineInfo {
-    pub total_items: usize,
-    pub size_mb: usize,
-    pub last_sync: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct BackendInfo {
-    pub name: String,
-    pub display_name: String,
-    pub backend_type: BackendType,
-    pub server_name: Option<String>,
-    pub server_version: Option<String>,
-    pub connection_type: ConnectionType,
-    pub is_local: bool,
-    pub is_relay: bool,
+    // get_backend_id removed - never used
 }
 
 #[derive(Debug, Clone)]

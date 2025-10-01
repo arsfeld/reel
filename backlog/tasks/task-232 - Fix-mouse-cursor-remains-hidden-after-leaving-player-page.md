@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2025-09-23 19:47'
-updated_date: '2025-09-28 00:04'
+updated_date: '2025-09-29 02:31'
 labels:
   - player
   - ui
@@ -41,18 +41,18 @@ When navigating away from the video player page (e.g., using the back button or 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Fixed the mouse cursor visibility issue by implementing a shutdown method for the PlayerPage AsyncComponent.
+Fixed the mouse cursor visibility issue by implementing a centralized solution using the NavigationView's 'notify::visible-page' signal.
 
-The issue occurred because the player hides the cursor during playback but didn't restore it when the component was destroyed through non-NavigateBack paths (like sidebar navigation or StopPlayer command).
+The issue occurred because:
+1. During navigation, the player page remained alive but hidden (not destroyed)
+2. Mouse movement during navigation triggered MouseLeaveWindow events  
+3. This caused the player to hide the cursor again after our restoration attempts
 
-Solution:
-- Added a shutdown() method to PlayerPage that is automatically called when the component is destroyed
-- The shutdown method restores the default cursor and cleans up all active timers
-- This ensures cursor visibility is properly restored regardless of how the user leaves the player page
+The solution:
+- Monitors navigation changes through NavigationView's 'notify::visible-page' signal
+- Detects transitions away from the Player page
+- Restores cursor using idle_add_local_once() to ensure it happens after mouse events
+- Handles all navigation paths: back button, sidebar navigation, etc.
 
-The fix handles all navigation paths:
-1. Back button navigation (was already working)
-2. Sidebar navigation to other pages (now fixed)
-3. StopPlayer command (now fixed)
-4. Any other component destruction path (now fixed)
+This centralized approach avoids adding cursor restoration code to every navigation route and properly handles the event timing issues.
 <!-- SECTION:NOTES:END -->

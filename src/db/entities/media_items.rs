@@ -95,9 +95,6 @@ impl Related<Entity> for Entity {
 
 impl ActiveModelBehavior for ActiveModel {}
 
-// Type alias for convenience
-pub type MediaItemActiveModel = ActiveModel;
-
 // Media type enum for type safety
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MediaType {

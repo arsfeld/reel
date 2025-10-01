@@ -35,26 +35,12 @@ pub trait SyncRepository: Repository<SyncStatusModel> {
     /// Fail a sync
     async fn fail_sync(&self, sync_id: i32, error_message: &str) -> Result<()>;
 
-    /// Get sync statistics for a source
-    async fn get_sync_stats(&self, source_id: &str) -> Result<SyncStats>;
-
     /// Clean up old sync records
     async fn cleanup_old_records(&self, keep_count: usize) -> Result<u64>;
 }
 
 #[cfg(test)]
 mod sync_repository_tests;
-
-#[derive(Debug, Clone)]
-
-pub struct SyncStats {
-    pub total_syncs: u64,
-    pub successful_syncs: u64,
-    pub failed_syncs: u64,
-    pub total_items_synced: i64,
-    pub last_sync_time: Option<chrono::NaiveDateTime>,
-    pub average_sync_duration_secs: Option<f64>,
-}
 
 pub struct SyncRepositoryImpl {
     base: BaseRepository,
@@ -207,55 +193,6 @@ impl SyncRepository for SyncRepositoryImpl {
         }
 
         Ok(())
-    }
-
-    async fn get_sync_stats(&self, source_id: &str) -> Result<SyncStats> {
-        let syncs = self.find_by_source(source_id).await?;
-
-        let total_syncs = syncs.len() as u64;
-        let successful_syncs = syncs.iter().filter(|s| s.status == "completed").count() as u64;
-        let failed_syncs = syncs.iter().filter(|s| s.status == "failed").count() as u64;
-
-        let total_items_synced: i64 = syncs
-            .iter()
-            .filter(|s| s.status == "completed")
-            .map(|s| s.items_synced as i64)
-            .sum();
-
-        let last_sync_time = syncs
-            .iter()
-            .filter_map(|s| s.completed_at.or(s.started_at))
-            .max();
-
-        // Calculate average duration for completed syncs
-        let durations: Vec<f64> = syncs
-            .iter()
-            .filter(|s| {
-                s.status == "completed" && s.started_at.is_some() && s.completed_at.is_some()
-            })
-            .filter_map(|s| match (s.started_at, s.completed_at) {
-                (Some(start), Some(end)) => {
-                    let duration = end.signed_duration_since(start);
-                    Some(duration.num_seconds() as f64)
-                }
-                _ => None,
-            })
-            .collect();
-
-        let average_sync_duration_secs = if !durations.is_empty() {
-            Some(durations.iter().sum::<f64>() / durations.len() as f64)
-        } else {
-            None
-        };
-
-        Ok(SyncStats {
-            total_syncs,
-            successful_syncs,
-            failed_syncs,
-            total_items_synced,
-            last_sync_time,
-            average_sync_duration_secs,
-        })
     }
 
     async fn cleanup_old_records(&self, keep_count: usize) -> Result<u64> {

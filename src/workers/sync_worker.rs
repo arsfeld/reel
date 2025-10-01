@@ -2,8 +2,7 @@ use crate::db::DatabaseConnection;
 use crate::models::{LibraryId, SourceId};
 use crate::services::core::backend::BackendService;
 use crate::services::core::sync::SyncService;
-use relm4::prelude::*;
-use relm4::{ComponentSender, Worker, WorkerHandle};
+use relm4::{ComponentSender, Worker};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -90,7 +89,6 @@ impl SyncWorker {
     ) {
         info!("perform_sync called for source: {:?}", source_id);
         let start_time = Instant::now();
-        let mut sections_synced = 0;
 
         // Send sync started
         sender
@@ -102,7 +100,7 @@ impl SyncWorker {
 
         // Load source configuration to create backend
         use crate::db::repository::Repository;
-        use crate::db::repository::source_repository::{SourceRepository, SourceRepositoryImpl};
+        use crate::db::repository::source_repository::SourceRepositoryImpl;
 
         let source_repo = SourceRepositoryImpl::new(db.as_ref().clone());
         let source_entity = match source_repo.find_by_id(source_id.as_str()).await {
@@ -158,7 +156,7 @@ impl SyncWorker {
 
                 // After successful library/media sync, fetch and save home sections
                 info!("Fetching home sections for source: {:?}", source_id);
-                sections_synced = Self::sync_home_sections(&db, &source_id, &sender).await;
+                let sections_synced = Self::sync_home_sections(&db, &source_id, &sender).await;
 
                 // Send the sync completed output with sections count
                 sender
@@ -208,7 +206,7 @@ impl SyncWorker {
         use crate::db::repository::home_section_repository::{
             HomeSectionRepository, HomeSectionRepositoryImpl,
         };
-        use crate::db::repository::source_repository::{SourceRepository, SourceRepositoryImpl};
+        use crate::db::repository::source_repository::SourceRepositoryImpl;
 
         // Send progress notification for home sections sync
         sender
@@ -307,9 +305,7 @@ impl SyncWorker {
                 let mut existing_media_ids = Vec::new();
 
                 if !section.items.is_empty() {
-                    use crate::db::repository::media_repository::{
-                        MediaRepository, MediaRepositoryImpl,
-                    };
+                    use crate::db::repository::media_repository::MediaRepositoryImpl;
                     let media_repo = MediaRepositoryImpl::new(db.as_ref().clone());
 
                     for item in section.items {
@@ -356,28 +352,28 @@ impl SyncWorker {
                                 );
 
                                 // For episodes, let's also check if the show exists
-                                if let crate::models::MediaItem::Episode(episode) = &item {
-                                    if let Some(show_id) = &episode.show_id {
-                                        match media_repo.find_by_id(show_id).await {
-                                            Ok(Some(_)) => {
-                                                tracing::info!(
-                                                    "  -> Parent show {} exists in database",
-                                                    show_id
-                                                );
-                                            }
-                                            Ok(None) => {
-                                                tracing::warn!(
-                                                    "  -> Parent show {} also missing from database!",
-                                                    show_id
-                                                );
-                                            }
-                                            Err(e) => {
-                                                tracing::error!(
-                                                    "  -> Error checking parent show {}: {}",
-                                                    show_id,
-                                                    e
-                                                );
-                                            }
+                                if let crate::models::MediaItem::Episode(episode) = &item
+                                    && let Some(show_id) = &episode.show_id
+                                {
+                                    match media_repo.find_by_id(show_id).await {
+                                        Ok(Some(_)) => {
+                                            tracing::info!(
+                                                "  -> Parent show {} exists in database",
+                                                show_id
+                                            );
+                                        }
+                                        Ok(None) => {
+                                            tracing::warn!(
+                                                "  -> Parent show {} also missing from database!",
+                                                show_id
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "  -> Error checking parent show {}: {}",
+                                                show_id,
+                                                e
+                                            );
                                         }
                                     }
                                 }
@@ -556,11 +552,6 @@ impl Worker for SyncWorker {
             }
         }
     }
-}
-
-// Helper function to create a sync worker instance
-pub fn create_sync_worker(db: Arc<DatabaseConnection>) -> WorkerHandle<SyncWorker> {
-    SyncWorker::builder().detach_worker(db)
 }
 
 #[cfg(test)]

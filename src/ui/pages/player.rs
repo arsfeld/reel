@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::models::{MediaItemId, PlaylistContext};
 use crate::player::{PlayerController, PlayerHandle, PlayerState};
+use crate::services::commands::Command;
 use crate::ui::shared::broker::{BROKER, BrokerMessage, ConfigMessage};
 use adw::prelude::*;
 use gtk::glib::{self, SourceId};
@@ -122,12 +123,11 @@ impl PlayerPage {
             return;
         }
         // Only try to cancel timer if not called from the timer itself
-        if !from_timer {
-            if let ControlState::Visible { timer_id } = &mut self.control_state {
-                if let Some(timer) = timer_id.take() {
-                    timer.remove();
-                }
-            }
+        if !from_timer
+            && let ControlState::Visible { timer_id } = &mut self.control_state
+            && let Some(timer) = timer_id.take()
+        {
+            timer.remove();
         }
 
         self.control_state = ControlState::Hidden;
@@ -145,10 +145,10 @@ impl PlayerPage {
     /// Transition to the Visible state
     fn transition_to_visible(&mut self, sender: AsyncComponentSender<Self>) {
         // Cancel any existing timer first
-        if let ControlState::Visible { timer_id } = &mut self.control_state {
-            if let Some(timer) = timer_id.take() {
-                timer.remove();
-            }
+        if let ControlState::Visible { timer_id } = &mut self.control_state
+            && let Some(timer) = timer_id.take()
+        {
+            timer.remove();
         }
 
         // Show cursor
@@ -174,10 +174,10 @@ impl PlayerPage {
     /// Transition to the Hovering state
     fn transition_to_hovering(&mut self, _sender: AsyncComponentSender<Self>) {
         // Cancel any existing timer
-        if let ControlState::Visible { timer_id } = &mut self.control_state {
-            if let Some(timer) = timer_id.take() {
-                timer.remove();
-            }
+        if let ControlState::Visible { timer_id } = &mut self.control_state
+            && let Some(timer) = timer_id.take()
+        {
+            timer.remove();
         }
 
         self.control_state = ControlState::Hovering;
@@ -212,17 +212,16 @@ impl PlayerPage {
         // For now use the heuristic approach, but this should be replaced
         // with actual widget bounds checking when controls_overlay is properly set
         if let Some(controls) = &self.controls_overlay {
-            // Get the allocation of the controls overlay
-            let allocation = controls.allocation();
-            let controls_height = allocation.height() as f64;
-            let window_height = self.window.allocated_height() as f64;
+            // Get the height of the controls overlay
+            let controls_height = controls.height() as f64;
+            let window_height = self.window.height() as f64;
 
             // Check if y position is within control bounds
             // Controls are at the bottom of the window
             y >= (window_height - controls_height - 50.0) // Add some padding
         } else {
             // Fallback to heuristic: bottom 20% of window
-            let window_height = self.window.allocated_height() as f64;
+            let window_height = self.window.height() as f64;
             y >= window_height * 0.8
         }
     }
@@ -405,7 +404,7 @@ impl PlayerPage {
             let item = gtk::gio::MenuItem::new(Some(label), None);
             let action_name = format!(
                 "player.zoom-{}",
-                label.to_lowercase().replace(':', "-").replace('.', "-")
+                label.to_lowercase().replace([':', '.'], "-")
             );
             item.set_action_and_target_value(Some(&action_name), None);
 
@@ -427,10 +426,10 @@ impl PlayerPage {
             item.set_action_and_target_value(Some(&action_name), None);
 
             // Check if it matches custom zoom
-            if let crate::player::ZoomMode::Custom(current_level) = current_mode {
-                if (current_level - level).abs() < 0.01 {
-                    item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
-                }
+            if let crate::player::ZoomMode::Custom(current_level) = current_mode
+                && (current_level - level).abs() < 0.01
+            {
+                item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
             }
 
             menu.append_item(&item);
@@ -461,10 +460,7 @@ impl PlayerPage {
 
         // Add actions for preset modes
         for (mode, label, _) in modes {
-            let action_name = format!(
-                "zoom-{}",
-                label.to_lowercase().replace(':', "-").replace('.', "-")
-            );
+            let action_name = format!("zoom-{}", label.to_lowercase().replace([':', '.'], "-"));
             let action = gtk::gio::SimpleAction::new(&action_name, None);
             let sender_clone = sender.clone();
             let mode_copy = mode;
@@ -1283,41 +1279,64 @@ impl AsyncComponent for PlayerPage {
             }
         }
 
-        // Setup seek bar handlers
+        // Setup seek bar handlers - handle clicks and drags directly for video seeking behavior
         {
-            // Track when user starts dragging
-            let sender_press = sender.clone();
-            let button_controller = gtk::GestureClick::new();
-            button_controller.set_button(gtk::gdk::BUTTON_PRIMARY);
-            button_controller.connect_pressed(move |_, _, _, _| {
-                sender_press.input(PlayerInput::StartSeeking);
-            });
-            model.seek_bar.add_controller(button_controller);
+            let sender_start = sender.clone();
+            let sender_end = sender.clone();
+            let seek_bar_for_click = model.seek_bar.clone();
 
-            // Track when user releases drag and perform seek
-            let sender_release = sender.clone();
-            let seek_bar_clone = model.seek_bar.clone();
-            let button_release_controller = gtk::GestureClick::new();
-            button_release_controller.set_button(gtk::gdk::BUTTON_PRIMARY);
-            button_release_controller.connect_released(move |_, _, _, _| {
-                let position = seek_bar_clone.value();
-                sender_release.input(PlayerInput::StopSeeking);
-                // Ensure position is non-negative before creating Duration
-                sender_release.input(PlayerInput::Seek(Duration::from_secs_f64(
-                    position.max(0.0),
+            // Handle direct clicks and drags for video seeking
+            let click_gesture = gtk::GestureClick::new();
+            click_gesture.set_button(gtk::gdk::BUTTON_PRIMARY);
+
+            // Start seeking on press
+            click_gesture.connect_pressed(move |_gesture, _n_press, x, _y| {
+                sender_start.input(PlayerInput::StartSeeking);
+
+                // Calculate position from click location
+                let widget_width = seek_bar_for_click.width() as f64;
+                let adjustment = seek_bar_for_click.adjustment();
+                let range = adjustment.upper() - adjustment.lower();
+                let value = adjustment.lower() + (x / widget_width) * range;
+
+                // Update the scale value and seek
+                seek_bar_for_click.set_value(value);
+                sender_start.input(PlayerInput::Seek(Duration::from_secs_f64(value.max(0.0))));
+            });
+
+            // End seeking on release
+            click_gesture.connect_released(move |_gesture, _n_press, _x, _y| {
+                sender_end.input(PlayerInput::StopSeeking);
+            });
+
+            model.seek_bar.add_controller(click_gesture);
+
+            // Handle dragging
+            let sender_drag = sender.clone();
+            let seek_bar_for_drag = model.seek_bar.clone();
+            let drag_gesture = gtk::GestureDrag::new();
+            drag_gesture.set_button(gtk::gdk::BUTTON_PRIMARY);
+
+            drag_gesture.connect_drag_update(move |_gesture, offset_x, _offset_y| {
+                // Calculate position from drag location
+                let widget_width = seek_bar_for_drag.width() as f64;
+                let adjustment = seek_bar_for_drag.adjustment();
+                let range = adjustment.upper() - adjustment.lower();
+
+                // Get current position and add offset
+                let current_value = seek_bar_for_drag.value();
+                let value_per_pixel = range / widget_width;
+                let new_value = (current_value + offset_x * value_per_pixel)
+                    .clamp(adjustment.lower(), adjustment.upper());
+
+                // Update the scale value and seek
+                seek_bar_for_drag.set_value(new_value);
+                sender_drag.input(PlayerInput::Seek(Duration::from_secs_f64(
+                    new_value.max(0.0),
                 )));
             });
-            model.seek_bar.add_controller(button_release_controller);
 
-            // Also handle value changes during drag for smooth preview
-            let sender_changed = sender.clone();
-            let seek_bar = model.seek_bar.clone();
-            seek_bar.connect_value_changed(move |scale| {
-                // Update time labels during drag for preview
-                // Clamp scale value to prevent negative Duration
-                let position = Duration::from_secs_f64(scale.value().max(0.0));
-                sender_changed.input(PlayerInput::UpdateSeekPreview(position));
-            });
+            model.seek_bar.add_controller(drag_gesture);
         }
 
         // Setup volume slider handler
@@ -1440,6 +1459,11 @@ impl AsyncComponent for PlayerPage {
                         sender.input(PlayerInput::VolumeDown);
                         glib::Propagation::Stop
                     }
+                    gtk::gdk::Key::_0 if ctrl_pressed => {
+                        // Ctrl+0: reset zoom
+                        sender.input(PlayerInput::ZoomReset);
+                        glib::Propagation::Stop
+                    }
                     gtk::gdk::Key::_0 => {
                         // 0: volume up by 10%
                         sender.input(PlayerInput::VolumeUp);
@@ -1513,11 +1537,6 @@ impl AsyncComponent for PlayerPage {
                     gtk::gdk::Key::minus | gtk::gdk::Key::underscore => {
                         // -/_: zoom out
                         sender.input(PlayerInput::ZoomOut);
-                        glib::Propagation::Stop
-                    }
-                    gtk::gdk::Key::_0 if ctrl_pressed => {
-                        // Ctrl+0: reset zoom
-                        sender.input(PlayerInput::ZoomReset);
                         glib::Propagation::Stop
                     }
                     _ => glib::Propagation::Proceed,
@@ -1604,20 +1623,23 @@ impl AsyncComponent for PlayerPage {
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
-                        use crate::services::commands::Command;
-                        use crate::services::commands::media_commands::GetStreamUrlCommand;
+                        use crate::ui::shared::commands::{
+                            AppCommand, CommandResult, execute_command,
+                        };
 
-                        // Get the stream info from the backend using stateless command
-                        let stream_info = match (GetStreamUrlCommand {
-                            db: db_clone.as_ref().clone(),
-                            media_item_id: media_id,
-                        })
-                        .execute()
-                        .await
-                        {
-                            Ok(info) => info,
-                            Err(e) => {
-                                error!("Failed to get stream URL: {}", e);
+                        // Use the proper StartPlayback command which includes cache integration
+                        let command_result = execute_command(
+                            AppCommand::StartPlayback {
+                                media_id: media_id.to_string(),
+                            },
+                            &db_clone,
+                        )
+                        .await;
+
+                        let stream_url = match command_result {
+                            CommandResult::PlaybackStarted { url, .. } => url,
+                            CommandResult::Error(e) => {
+                                error!("Failed to start playback: {}", e);
                                 return PlayerCommandOutput::LoadError(format!(
                                     "Failed to load media: {}",
                                     e
@@ -1625,10 +1647,10 @@ impl AsyncComponent for PlayerPage {
                             }
                         };
 
-                        info!("Got stream URL: {}", stream_info.url);
+                        info!("Got stream URL (potentially cached): {}", stream_url);
 
                         // Load the media into the player using channel-based API
-                        match player_handle.load_media(&stream_info.url).await {
+                        match player_handle.load_media(&stream_url).await {
                             Ok(_) => {
                                 info!("Media loaded successfully");
 
@@ -1751,20 +1773,23 @@ impl AsyncComponent for PlayerPage {
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
-                        use crate::services::commands::Command;
-                        use crate::services::commands::media_commands::GetStreamUrlCommand;
+                        use crate::ui::shared::commands::{
+                            AppCommand, CommandResult, execute_command,
+                        };
 
-                        // Get the stream info from the backend using stateless command
-                        let stream_info = match (GetStreamUrlCommand {
-                            db: db_clone.as_ref().clone(),
-                            media_item_id: media_id_clone,
-                        })
-                        .execute()
-                        .await
-                        {
-                            Ok(info) => info,
-                            Err(e) => {
-                                error!("Failed to get stream URL: {}", e);
+                        // Use the proper StartPlayback command which includes cache integration
+                        let command_result = execute_command(
+                            AppCommand::StartPlayback {
+                                media_id: media_id_clone.to_string(),
+                            },
+                            &db_clone,
+                        )
+                        .await;
+
+                        let stream_url = match command_result {
+                            CommandResult::PlaybackStarted { url, .. } => url,
+                            CommandResult::Error(e) => {
+                                error!("Failed to start playback: {}", e);
                                 return PlayerCommandOutput::LoadError(format!(
                                     "Failed to load media: {}",
                                     e
@@ -1772,10 +1797,10 @@ impl AsyncComponent for PlayerPage {
                             }
                         };
 
-                        info!("Got stream URL: {}", stream_info.url);
+                        info!("Got stream URL (potentially cached): {}", stream_url);
 
                         // Load the media into the player using channel-based API
-                        match player_handle.load_media(&stream_info.url).await {
+                        match player_handle.load_media(&stream_url).await {
                             Ok(_) => {
                                 info!("Media loaded successfully with playlist context");
 
@@ -2448,10 +2473,10 @@ impl AsyncComponent for PlayerPage {
                 }
 
                 // Cancel any state timer
-                if let ControlState::Visible { timer_id } = &mut self.control_state {
-                    if let Some(timer) = timer_id.take() {
-                        timer.remove();
-                    }
+                if let ControlState::Visible { timer_id } = &mut self.control_state
+                    && let Some(timer) = timer_id.take()
+                {
+                    timer.remove();
                 }
 
                 // Show cursor before navigating
@@ -2725,10 +2750,10 @@ impl AsyncComponent for PlayerPage {
         });
 
         // Restore cursor visibility when player is destroyed
-        if let Some(surface) = self.window.surface() {
-            if let Some(cursor) = gtk::gdk::Cursor::from_name("default", None) {
-                surface.set_cursor(Some(&cursor));
-            }
+        if let Some(surface) = self.window.surface()
+            && let Some(cursor) = gtk::gdk::Cursor::from_name("default", None)
+        {
+            surface.set_cursor(Some(&cursor));
         }
 
         // Clean up any active timers
@@ -2737,10 +2762,10 @@ impl AsyncComponent for PlayerPage {
         }
 
         // Cancel any visible state timer
-        if let ControlState::Visible { timer_id } = &mut self.control_state {
-            if let Some(timer) = timer_id.take() {
-                timer.remove();
-            }
+        if let ControlState::Visible { timer_id } = &mut self.control_state
+            && let Some(timer) = timer_id.take()
+        {
+            timer.remove();
         }
 
         // Clean up window event debounce timer

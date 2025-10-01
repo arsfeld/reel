@@ -10,7 +10,7 @@ Reel is a native, cross-platform media player application written in Rust that b
 - **Multiple backend support**: Simultaneous connections to Plex, Jellyfin, and local media libraries
 - **Offline-first architecture**: Instant UI loading from SQLite cache with background synchronization
 - **Reactive UI system**: Relm4 components with AsyncComponents, Factory patterns, and Worker components
-- **Dual playback engines**: MPV (default, recommended) and GStreamer for maximum compatibility
+- **Dual playback engines**: MPV (Linux) and GStreamer (macOS) for cross-platform support
 - **Modern Rust architecture**: Type-safe database layer with SeaORM, async/await with Tokio, repository pattern
 
 The project uses a fully Relm4-based UI implementation that leverages AsyncComponents, Tracker patterns, Factory patterns for collections, Worker components for background tasks, and Command patterns for structured async operations.
@@ -101,10 +101,10 @@ cargo test -- --nocapture
   - `migrations/` - Database schema migrations
   - `connection.rs` - Database connection management
 - `src/player/` - Media playback
-  - `mpv_player.rs` - MPV backend (default, no subtitle issues)
-  - `gstreamer_player.rs` - GStreamer backend (has subtitle color artifacts)
+  - `mpv_player.rs` - MPV backend (Linux only - has OpenGL issues on macOS)
+  - `gstreamer_player.rs` - GStreamer backend (required on macOS)
   - `controller.rs` - Player controller and state management
-  - `factory.rs` - Player backend selection
+  - `factory.rs` - Player backend selection (forces GStreamer on macOS)
 - `src/models/` - Data models and auth providers
   - `identifiers.rs` - Type-safe ID wrappers
   - `auth_provider.rs` - Authentication provider types
@@ -229,25 +229,6 @@ build-appimage
 # Build all packages
 build-all-packages
 ```
-
-## Known Issues & TODOs
-
-### Critical Issues
-- Homepage sections randomly replace each other with multiple backends
-- Horizontal scrolling on homepage doesn't load images
-- GStreamer subtitle color artifacts (use MPV player instead)
-- Main Window has hybrid status system creating race conditions between reactive and direct UI updates
-- ConnectionMonitor worker not properly integrated into application
-
-### Architecture Gaps
-- Repository layer has zero event integration (bypasses event system)
-- Transaction support exists but not integrated into sync flow
-- Some UI pages still need full Relm4 component integration
-
-### Backend Implementation Status
-- **Plex**: 90% complete (missing proper cast/crew extraction)
-- **Jellyfin**: 90% complete (cast/crew implemented but depends on server metadata)
-- **Local Files**: 10% complete (mostly TODO stubs, basic structure only)
 
 <!-- BACKLOG.MD GUIDELINES START -->
 # Instructions for the usage of Backlog.md CLI Tool
