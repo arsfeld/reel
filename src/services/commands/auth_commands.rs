@@ -5,62 +5,9 @@ use crate::backends::traits::MediaBackend;
 use crate::db::connection::DatabaseConnection;
 use crate::db::repository::{Repository, SourceRepositoryImpl};
 use crate::models::auth_provider::Source;
-use crate::models::{Credentials, SourceId, User};
+use crate::models::{Credentials, SourceId};
 use crate::services::commands::Command;
 use crate::services::core::auth::AuthService;
-
-/// Authenticate with a backend
-pub struct AuthenticateCommand<'a> {
-    pub backend: &'a dyn MediaBackend,
-    pub credentials: Credentials,
-}
-
-#[async_trait]
-impl<'a> Command<User> for AuthenticateCommand<'a> {
-    async fn execute(&self) -> Result<User> {
-        AuthService::authenticate(self.backend, self.credentials.clone()).await
-    }
-}
-
-/// Save authentication credentials
-pub struct SaveCredentialsCommand {
-    pub db: DatabaseConnection,
-    pub source_id: SourceId,
-    pub credentials: Credentials,
-}
-
-#[async_trait]
-impl Command<()> for SaveCredentialsCommand {
-    async fn execute(&self) -> Result<()> {
-        AuthService::save_credentials(&self.db, &self.source_id, &self.credentials).await
-    }
-}
-
-/// Load authentication credentials
-pub struct LoadCredentialsCommand {
-    pub db: DatabaseConnection,
-    pub source_id: SourceId,
-}
-
-#[async_trait]
-impl Command<Option<Credentials>> for LoadCredentialsCommand {
-    async fn execute(&self) -> Result<Option<Credentials>> {
-        AuthService::load_credentials(&self.db, &self.source_id).await
-    }
-}
-
-/// Remove authentication credentials
-pub struct RemoveCredentialsCommand {
-    pub db: DatabaseConnection,
-    pub source_id: SourceId,
-}
-
-#[async_trait]
-impl Command<()> for RemoveCredentialsCommand {
-    async fn execute(&self) -> Result<()> {
-        AuthService::remove_credentials(&self.db, &self.source_id).await
-    }
-}
 
 /// Create and authenticate a new source
 pub struct CreateSourceCommand<'a> {
@@ -101,33 +48,6 @@ pub struct RemoveSourceCommand {
 impl Command<()> for RemoveSourceCommand {
     async fn execute(&self) -> Result<()> {
         AuthService::remove_source(&self.db, &self.source_id).await
-    }
-}
-
-/// Test connection to a backend
-pub struct TestConnectionCommand<'a> {
-    pub backend: &'a dyn MediaBackend,
-    pub credentials: Credentials,
-}
-
-#[async_trait]
-impl<'a> Command<bool> for TestConnectionCommand<'a> {
-    async fn execute(&self) -> Result<bool> {
-        AuthService::test_connection(self.backend, self.credentials.clone()).await
-    }
-}
-
-/// Re-authenticate an existing source
-pub struct ReauthSourceCommand<'a> {
-    pub db: DatabaseConnection,
-    pub backend: &'a dyn MediaBackend,
-    pub source_id: SourceId,
-}
-
-#[async_trait]
-impl<'a> Command<()> for ReauthSourceCommand<'a> {
-    async fn execute(&self) -> Result<()> {
-        AuthService::reauth_source(&self.db, self.backend, &self.source_id).await
     }
 }
 

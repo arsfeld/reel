@@ -14,4 +14,3 @@ pub use backend::BackendService;
 pub use connection::ConnectionService;
 pub use media::MediaService;
 pub use playlist::PlaylistService;
-pub use sync::{SyncProgress, SyncStatus};
