@@ -61,8 +61,11 @@ pub struct CacheMetadata {
     /// Original media URL
     pub original_url: String,
 
-    /// File size in bytes
+    /// File size in bytes (actual size on disk)
     pub file_size: u64,
+
+    /// Expected total file size (from server Content-Length)
+    pub expected_total_size: u64,
 
     /// Number of bytes actually downloaded
     pub downloaded_bytes: u64,
@@ -121,6 +124,7 @@ impl CacheMetadata {
             cache_key,
             original_url,
             file_size: 0,
+            expected_total_size: 0,
             downloaded_bytes: 0,
             is_complete: false,
             created_at: now,

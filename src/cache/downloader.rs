@@ -4,39 +4,20 @@ use reqwest::{Client, Response};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, mpsc};
-use tokio::time::timeout;
+use tokio::time::{interval, timeout};
 use tracing::{debug, error, info, warn};
 
 use super::config::FileCacheConfig;
 use super::metadata::MediaCacheKey;
+use super::state_machine::{CacheStateMachine, DownloadState};
+use super::stats::DownloaderStats;
 use super::storage::CacheStorage;
-
-/// Download state for a media file
-#[derive(Debug, Clone, PartialEq)]
-pub enum DownloadState {
-    /// Download is queued but not started
-    Queued,
-    /// Download is initializing (fetching headers, etc.)
-    Initializing,
-    /// Download is actively downloading
-    Downloading,
-    /// Download is paused
-    Paused,
-    /// Download completed successfully
-    Completed,
-    /// Download failed with error
-    Failed(String),
-    /// Download was cancelled
-    Cancelled,
-}
 
 /// Progress information for a download
 #[derive(Debug, Clone)]
 pub struct DownloadProgress {
     /// Cache key being downloaded
     pub cache_key: MediaCacheKey,
-    /// Current download state
-    pub state: DownloadState,
     /// Total file size in bytes (if known)
     pub total_size: Option<u64>,
     /// Bytes downloaded so far
@@ -53,7 +34,6 @@ impl DownloadProgress {
     pub fn new(cache_key: MediaCacheKey) -> Self {
         Self {
             cache_key,
-            state: DownloadState::Queued,
             total_size: None,
             downloaded_bytes: 0,
             speed_bps: 0,
@@ -141,8 +121,10 @@ pub struct ProgressiveDownloader {
     storage: Arc<RwLock<CacheStorage>>,
     http_client: Client,
     active_downloads: Arc<RwLock<std::collections::HashMap<MediaCacheKey, DownloadProgress>>>,
+    state_machine: Arc<CacheStateMachine>,
     command_receiver: mpsc::UnboundedReceiver<DownloadCommand>,
     download_semaphore: Arc<tokio::sync::Semaphore>,
+    stats: DownloaderStats,
 }
 
 impl ProgressiveDownloader {
@@ -150,6 +132,7 @@ impl ProgressiveDownloader {
     pub fn new(
         config: FileCacheConfig,
         storage: Arc<RwLock<CacheStorage>>,
+        state_machine: Arc<CacheStateMachine>,
         command_receiver: mpsc::UnboundedReceiver<DownloadCommand>,
     ) -> Self {
         let http_client = Client::builder()
@@ -166,14 +149,23 @@ impl ProgressiveDownloader {
             storage,
             http_client,
             active_downloads: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            state_machine,
             command_receiver,
             download_semaphore,
+            stats: DownloaderStats::new(),
         }
     }
 
     /// Run the downloader event loop
     pub async fn run(mut self) {
         info!("🔄 ProgressiveDownloader: Starting event loop");
+
+        // Start periodic stats reporting if enabled
+        let stats_handle = if self.config.enable_stats {
+            Some(self.start_stats_reporting())
+        } else {
+            None
+        };
 
         while let Some(command) = self.command_receiver.recv().await {
             match command {
@@ -220,10 +212,61 @@ impl ProgressiveDownloader {
                 }
                 DownloadCommand::Shutdown => {
                     info!("🔄 ProgressiveDownloader: Shutting down");
+                    if let Some(handle) = stats_handle {
+                        handle.abort();
+                    }
                     break;
                 }
             }
         }
+    }
+
+    /// Start periodic stats reporting
+    fn start_stats_reporting(&self) -> tokio::task::JoinHandle<()> {
+        let stats = self.stats.clone();
+        let active_downloads = self.active_downloads.clone();
+        let interval_secs = self.config.stats_interval_secs;
+        let state_machine = self.state_machine.clone();
+
+        tokio::spawn(async move {
+            let mut ticker = interval(Duration::from_secs(interval_secs));
+            ticker.tick().await; // Skip first immediate tick
+
+            loop {
+                ticker.tick().await;
+
+                // Get active download details
+                let downloads = active_downloads.read().await;
+                let mut active_details = Vec::new();
+                let mut active_count = 0u64;
+                let mut queued_count = 0u64;
+
+                for (key, progress) in downloads.iter() {
+                    // Get state from state machine
+                    if let Some(state_info) = state_machine.get_state(&key).await {
+                        match &state_info.state {
+                            DownloadState::Downloading | DownloadState::Initializing => {
+                                active_count += 1;
+                                let name =
+                                    format!("{}:{}", key.source_id.as_str(), key.media_id.as_str());
+                                let progress_pct = progress.progress_percent();
+                                active_details.push((name, progress.speed_bps, progress_pct));
+                            }
+                            DownloadState::NotStarted => {
+                                queued_count += 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                stats.set_active_downloads(active_count);
+                stats.set_queued_downloads(queued_count);
+
+                let report = stats.format_report(active_details);
+                info!("{}", report);
+            }
+        })
     }
 
     /// Start downloading a media file
@@ -235,30 +278,37 @@ impl ProgressiveDownloader {
     ) -> Result<()> {
         debug!("Starting download for cache key: {:?}", cache_key);
 
-        // Check if already downloading
-        {
-            let downloads = self.active_downloads.read().await;
-            if let Some(progress) = downloads.get(&cache_key) {
-                match progress.state {
-                    DownloadState::Downloading | DownloadState::Initializing => {
-                        return Err(anyhow::anyhow!("Download already in progress"));
-                    }
-                    DownloadState::Completed => {
-                        return Err(anyhow::anyhow!("Download already completed"));
-                    }
-                    _ => {} // Can restart failed, cancelled, or paused downloads
+        // Check if already downloading via state machine
+        if let Some(state_info) = self.state_machine.get_state(&cache_key).await {
+            match state_info.state {
+                DownloadState::Downloading | DownloadState::Initializing => {
+                    return Err(anyhow::anyhow!("Download already in progress"));
                 }
+                DownloadState::Complete => {
+                    return Err(anyhow::anyhow!("Download already completed"));
+                }
+                _ => {} // Can restart failed or paused downloads
             }
         }
 
         // Initialize progress tracking
-        let mut progress = DownloadProgress::new(cache_key.clone());
-        progress.state = DownloadState::Initializing;
-
+        let progress = DownloadProgress::new(cache_key.clone());
         {
             let mut downloads = self.active_downloads.write().await;
             downloads.insert(cache_key.clone(), progress);
         }
+
+        // Transition state to initializing
+        self.state_machine
+            .transition(
+                &cache_key,
+                DownloadState::Initializing,
+                Some("Starting download".to_string()),
+            )
+            .await?;
+
+        // Increment stats
+        self.stats.increment_started();
 
         // Spawn download task
         let storage = self.storage.clone();
@@ -266,6 +316,8 @@ impl ProgressiveDownloader {
         let config = self.config.clone();
         let active_downloads = self.active_downloads.clone();
         let semaphore = self.download_semaphore.clone();
+        let stats = self.stats.clone();
+        let state_machine = self.state_machine.clone();
 
         tokio::spawn(async move {
             let _permit = semaphore.acquire().await.expect("Semaphore closed");
@@ -277,22 +329,42 @@ impl ProgressiveDownloader {
                 client,
                 config,
                 active_downloads.clone(),
+                state_machine.clone(),
+                stats.clone(),
             )
             .await;
 
-            // Update final state
-            let mut downloads = active_downloads.write().await;
-            if let Some(progress) = downloads.get_mut(&cache_key) {
-                match result {
-                    Ok(_) => {
-                        progress.state = DownloadState::Completed;
-                        info!("✅ Download completed for cache key: {:?}", cache_key);
-                    }
-                    Err(e) => {
-                        progress.state = DownloadState::Failed(e.to_string());
+            // Update final state in state machine
+            match result {
+                Ok(_) => {
+                    state_machine
+                        .transition(
+                            &cache_key,
+                            DownloadState::Complete,
+                            Some("Download completed successfully".to_string()),
+                        )
+                        .await
+                        .ok();
+                    stats.increment_completed();
+                    info!("✅ Download completed for cache key: {:?}", cache_key);
+                }
+                Err(e) => {
+                    state_machine
+                        .transition(
+                            &cache_key,
+                            DownloadState::Failed(e.to_string()),
+                            Some("Download failed".to_string()),
+                        )
+                        .await
+                        .ok();
+
+                    let mut downloads = active_downloads.write().await;
+                    if let Some(progress) = downloads.get_mut(&cache_key) {
                         progress.error = Some(e.to_string());
-                        error!("❌ Download failed for cache key: {:?} - {}", cache_key, e);
                     }
+
+                    stats.increment_failed();
+                    error!("❌ Download failed for cache key: {:?} - {}", cache_key, e);
                 }
             }
         });
@@ -308,6 +380,8 @@ impl ProgressiveDownloader {
         client: Client,
         config: FileCacheConfig,
         active_downloads: Arc<RwLock<std::collections::HashMap<MediaCacheKey, DownloadProgress>>>,
+        state_machine: Arc<CacheStateMachine>,
+        stats: DownloaderStats,
     ) -> Result<()> {
         info!(
             "Starting download_file for key: {:?}, URL: {}",
@@ -390,15 +464,38 @@ impl ProgressiveDownloader {
             content_length
         };
 
+        // Update metadata with expected total file size
+        if let Some(expected_size) = total_size {
+            let mut storage_guard = storage.write().await;
+            storage_guard.set_expected_file_size(&cache_key, expected_size);
+            info!(
+                "Set expected file size in metadata: {} bytes",
+                expected_size
+            );
+        }
+
         // Update progress with total size
         {
             let mut downloads = active_downloads.write().await;
             if let Some(progress) = downloads.get_mut(&cache_key) {
                 progress.total_size = total_size;
-                progress.state = DownloadState::Downloading;
                 progress.downloaded_bytes = start_byte;
             }
         }
+
+        // Transition to downloading state
+        state_machine
+            .transition(
+                &cache_key,
+                DownloadState::Downloading,
+                Some("Starting data transfer".to_string()),
+            )
+            .await?;
+
+        // Update state machine progress
+        state_machine
+            .update_progress(&cache_key, start_byte, total_size)
+            .await?;
 
         // Stream the response and write to cache
         info!(
@@ -412,48 +509,40 @@ impl ProgressiveDownloader {
         let mut last_progress_update = Instant::now();
         let mut bytes_since_last_update = 0u64;
         let mut chunks_received = 0u64;
+        let mut first_chunk_written = false;
+        let download_start_time = Instant::now();
 
         info!("Beginning download stream loop...");
         while let Some(chunk_result) = stream.next().await {
             chunks_received += 1;
-            // Check if download was cancelled or paused
-            {
-                let downloads = active_downloads.read().await;
-                if let Some(progress) = downloads.get(&cache_key) {
-                    match progress.state {
-                        DownloadState::Cancelled => {
-                            return Err(anyhow::anyhow!("Download cancelled"));
-                        }
-                        DownloadState::Paused => {
-                            // Wait for resume signal
-                            while downloads.get(&cache_key).map(|p| &p.state)
-                                == Some(&DownloadState::Paused)
-                            {
-                                tokio::time::sleep(Duration::from_millis(100)).await;
+            // Check if download was cancelled or paused via state machine
+            if let Some(state_info) = state_machine.get_state(&cache_key).await {
+                match &state_info.state {
+                    DownloadState::Failed(msg) => {
+                        return Err(anyhow::anyhow!("Download failed: {}", msg));
+                    }
+                    DownloadState::Paused => {
+                        // Wait for resume signal
+                        loop {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            if let Some(info) = state_machine.get_state(&cache_key).await {
+                                if info.state != DownloadState::Paused {
+                                    break;
+                                }
                             }
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
             }
 
             let chunk = chunk_result.context("Failed to read chunk from response")?;
-            let chunk_len = chunk.len();
-            debug!(
-                "Received chunk #{} with {} bytes",
-                chunks_received, chunk_len
-            );
             buffer.extend_from_slice(&chunk);
 
             // Write buffer to cache when it reaches chunk size
             if buffer.len() >= chunk_size {
                 let data_to_write = buffer.clone();
                 buffer.clear();
-                info!(
-                    "Writing {} bytes to cache at offset {}",
-                    data_to_write.len(),
-                    offset
-                );
 
                 {
                     let mut storage_guard = storage.write().await;
@@ -463,9 +552,19 @@ impl ProgressiveDownloader {
                         .context("Failed to write to cache")?;
                 }
 
+                if !first_chunk_written {
+                    let time_to_first_chunk = download_start_time.elapsed();
+                    info!(
+                        "First chunk written for {:?}: {} bytes after {:?} (including HTTP request time)",
+                        cache_key,
+                        data_to_write.len(),
+                        time_to_first_chunk
+                    );
+                    first_chunk_written = true;
+                }
+
                 offset += data_to_write.len() as u64;
                 bytes_since_last_update += data_to_write.len() as u64;
-                info!("Successfully wrote chunk, new offset: {}", offset);
 
                 // Update progress periodically
                 let now = Instant::now();
@@ -482,6 +581,12 @@ impl ProgressiveDownloader {
                         if let Some(progress) = downloads.get_mut(&cache_key) {
                             progress.update(offset, speed);
                         }
+
+                        // Update state machine progress
+                        state_machine
+                            .update_progress(&cache_key, offset, total_size)
+                            .await
+                            .ok();
                     }
 
                     last_progress_update = now;
@@ -502,22 +607,57 @@ impl ProgressiveDownloader {
                 .write_to_entry(&cache_key, offset, &buffer)
                 .await
                 .context("Failed to write final chunk to cache")?;
-            info!("Final chunk written successfully");
+
+            if !first_chunk_written {
+                let time_to_first_chunk = download_start_time.elapsed();
+                info!(
+                    "First chunk (final buffer) written for {:?}: {} bytes after {:?}",
+                    cache_key,
+                    buffer.len(),
+                    time_to_first_chunk
+                );
+            }
+
+            offset += buffer.len() as u64;
+            info!(
+                "Final chunk written successfully, total downloaded: {} bytes",
+                offset
+            );
         }
 
+        // Mark the download as complete in metadata
+        {
+            let mut storage_guard = storage.write().await;
+            storage_guard.mark_download_complete(&cache_key, offset);
+        }
+
+        // Update final progress in state machine
+        state_machine
+            .update_progress(&cache_key, offset, Some(offset))
+            .await?;
+
+        // Update stats with total bytes downloaded
+        stats.add_bytes_downloaded(offset);
+
         info!(
-            "Download completed successfully for cache key: {:?}, total chunks: {}",
-            cache_key, chunks_received
+            "Download completed successfully for cache key: {:?}, total chunks: {}, total bytes: {}",
+            cache_key, chunks_received, offset
         );
         Ok(())
     }
 
     /// Pause a download
     async fn pause_download(&self, cache_key: &MediaCacheKey) -> Result<()> {
-        let mut downloads = self.active_downloads.write().await;
-        if let Some(progress) = downloads.get_mut(cache_key) {
-            if progress.state == DownloadState::Downloading {
-                progress.state = DownloadState::Paused;
+        // Check current state
+        if let Some(state_info) = self.state_machine.get_state(cache_key).await {
+            if state_info.state == DownloadState::Downloading {
+                self.state_machine
+                    .transition(
+                        cache_key,
+                        DownloadState::Paused,
+                        Some("User requested pause".to_string()),
+                    )
+                    .await?;
                 debug!("Paused download for cache key: {:?}", cache_key);
                 Ok(())
             } else {
@@ -530,10 +670,16 @@ impl ProgressiveDownloader {
 
     /// Resume a paused download
     async fn resume_download(&self, cache_key: &MediaCacheKey) -> Result<()> {
-        let mut downloads = self.active_downloads.write().await;
-        if let Some(progress) = downloads.get_mut(cache_key) {
-            if progress.state == DownloadState::Paused {
-                progress.state = DownloadState::Downloading;
+        // Check current state
+        if let Some(state_info) = self.state_machine.get_state(cache_key).await {
+            if state_info.state == DownloadState::Paused {
+                self.state_machine
+                    .transition(
+                        cache_key,
+                        DownloadState::Downloading,
+                        Some("User requested resume".to_string()),
+                    )
+                    .await?;
                 debug!("Resumed download for cache key: {:?}", cache_key);
                 Ok(())
             } else {
@@ -546,13 +692,24 @@ impl ProgressiveDownloader {
 
     /// Cancel a download
     async fn cancel_download(&self, cache_key: &MediaCacheKey) -> Result<()> {
-        let mut downloads = self.active_downloads.write().await;
-        if let Some(progress) = downloads.get_mut(cache_key) {
-            match progress.state {
+        // Check current state
+        if let Some(state_info) = self.state_machine.get_state(cache_key).await {
+            match state_info.state {
                 DownloadState::Downloading
                 | DownloadState::Paused
                 | DownloadState::Initializing => {
-                    progress.state = DownloadState::Cancelled;
+                    self.state_machine
+                        .transition(
+                            cache_key,
+                            DownloadState::Failed("Cancelled by user".to_string()),
+                            Some("User requested cancellation".to_string()),
+                        )
+                        .await?;
+
+                    // Remove from active downloads
+                    let mut downloads = self.active_downloads.write().await;
+                    downloads.remove(cache_key);
+
                     debug!("Cancelled download for cache key: {:?}", cache_key);
                     Ok(())
                 }

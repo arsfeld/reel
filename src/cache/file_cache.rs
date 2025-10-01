@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
@@ -8,7 +9,9 @@ use super::config::FileCacheConfig;
 use super::downloader::{DownloadPriority, ProgressiveDownloader, ProgressiveDownloaderHandle};
 use super::metadata::MediaCacheKey;
 use super::proxy::CacheProxy;
+use super::state_machine::CacheStateMachine;
 use super::storage::{CacheStats, CacheStorage};
+use crate::db::repository::cache_repository::{CacheRepository, CacheRepositoryImpl};
 use crate::models::{MediaItemId, SourceId, StreamInfo};
 
 /// Commands for the file cache
@@ -87,16 +90,30 @@ impl CachedStreamInfo {
 pub struct FileCache {
     config: FileCacheConfig,
     storage: Arc<RwLock<CacheStorage>>,
+    state_machine: Arc<CacheStateMachine>,
     downloader_handle: ProgressiveDownloaderHandle,
     proxy: Arc<CacheProxy>,
     command_receiver: mpsc::UnboundedReceiver<FileCacheCommand>,
 }
 
 impl FileCache {
-    /// Create a new file cache
-    pub async fn new(config: FileCacheConfig) -> Result<(FileCacheHandle, Self)> {
+    /// Create a new file cache with database connection
+    pub async fn new(
+        config: FileCacheConfig,
+        db: Arc<DatabaseConnection>,
+    ) -> Result<(FileCacheHandle, Self)> {
         // Validate configuration
         config.validate().context("Invalid cache configuration")?;
+
+        // Create repository and state machine
+        let repository: Arc<dyn CacheRepository> = Arc::new(CacheRepositoryImpl::new(db.clone()));
+        let state_machine = Arc::new(CacheStateMachine::new(repository.clone()));
+
+        // Initialize state machine from database
+        state_machine
+            .initialize()
+            .await
+            .context("Failed to initialize cache state machine")?;
 
         // Create storage
         let storage = Arc::new(RwLock::new(
@@ -105,8 +122,13 @@ impl FileCache {
                 .context("Failed to initialize cache storage")?,
         ));
 
-        // Create proxy server
-        let proxy = Arc::new(CacheProxy::new(storage.clone()));
+        // Create proxy server with stats configuration and state machine
+        let proxy = Arc::new(CacheProxy::with_config(
+            storage.clone(),
+            state_machine.clone(),
+            config.enable_stats,
+            config.stats_interval_secs,
+        ));
         proxy
             .clone()
             .start()
@@ -118,8 +140,12 @@ impl FileCache {
         let (download_cmd_tx, download_cmd_rx) = mpsc::unbounded_channel();
         let downloader_handle = ProgressiveDownloaderHandle::new(download_cmd_tx);
 
-        let downloader =
-            ProgressiveDownloader::new(config.clone(), storage.clone(), download_cmd_rx);
+        let downloader = ProgressiveDownloader::new(
+            config.clone(),
+            storage.clone(),
+            state_machine.clone(),
+            download_cmd_rx,
+        );
 
         // Spawn downloader task with error handling
         tokio::spawn(async move {
@@ -135,6 +161,7 @@ impl FileCache {
         let file_cache = Self {
             config,
             storage,
+            state_machine,
             downloader_handle,
             proxy,
             command_receiver: cmd_rx,
@@ -257,19 +284,29 @@ impl FileCache {
             )
             .await;
 
-        // Get download progress
-        let progress_info = self
-            .downloader_handle
-            .get_progress(cache_key.clone())
-            .await?;
-        let (progress, eta_seconds, is_complete) = if let Some(info) = progress_info {
+        // Get download progress from state machine
+        let state_info = self.state_machine.get_state(&cache_key).await;
+        let (progress, eta_seconds, is_complete) = if let Some(info) = &state_info {
             (
-                info.progress_percent(),
-                info.eta_seconds,
-                info.state == super::downloader::DownloadState::Completed,
+                info.progress_percent() / 100.0, // Convert from percentage to 0-1 range
+                None,                            // TODO: Could calculate ETA from download speed
+                info.state == super::state_machine::DownloadState::Complete,
             )
         } else {
-            (entry.metadata.progress(), None, entry.metadata.is_complete)
+            // Fall back to storage metadata if no state info
+            let progress_info = self
+                .downloader_handle
+                .get_progress(cache_key.clone())
+                .await?;
+            if let Some(info) = progress_info {
+                (
+                    info.progress_percent(),
+                    info.eta_seconds,
+                    false, // Not complete if still downloading
+                )
+            } else {
+                (entry.metadata.progress(), None, entry.metadata.is_complete)
+            }
         };
 
         // ALWAYS register with proxy and return proxy URL
