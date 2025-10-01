@@ -2,11 +2,9 @@ use adw::prelude::*;
 use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;
-use tracker::track;
 
 use crate::db::connection::DatabaseConnection;
 use crate::services::config_service::CONFIG_SERVICE;
-use crate::ui::shared::broker::{BROKER, BrokerMessage, ConfigMessage};
 
 #[tracker::track]
 #[derive(Debug)]

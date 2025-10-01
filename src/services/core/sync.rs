@@ -1,7 +1,7 @@
 use crate::ui::shared::broker::BROKER;
 use anyhow::{Context, Result};
 use chrono::NaiveDateTime;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::backends::traits::MediaBackend;
 use crate::db::connection::DatabaseConnection;

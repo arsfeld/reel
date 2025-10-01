@@ -12,13 +12,8 @@ pub mod sync_status;
 pub use auth_tokens::{
     ActiveModel as AuthTokenActiveModel, Entity as AuthToken, Model as AuthTokenModel,
 };
-pub use home_section_items::{
-    ActiveModel as HomeSectionItemActiveModel, Entity as HomeSectionItem,
-    Model as HomeSectionItemModel,
-};
-pub use home_sections::{
-    ActiveModel as HomeSectionActiveModel, Entity as HomeSection, Model as HomeSectionModel,
-};
+pub use home_section_items::Model as HomeSectionItemModel;
+pub use home_sections::Model as HomeSectionModel;
 pub use libraries::{ActiveModel as LibraryActiveModel, Entity as Library, Model as LibraryModel};
 pub use media_items::{
     ActiveModel as MediaItemActiveModel, Entity as MediaItem, Model as MediaItemModel,

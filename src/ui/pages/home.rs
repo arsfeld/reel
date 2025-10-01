@@ -234,9 +234,7 @@ impl AsyncComponent for HomePage {
                     let section_repo = HomeSectionRepositoryImpl::new(db.clone());
 
                     // Get all sources to load sections for
-                    use crate::db::repository::source_repository::{
-                        SourceRepository, SourceRepositoryImpl,
-                    };
+                    use crate::db::repository::source_repository::SourceRepositoryImpl;
                     let source_repo = SourceRepositoryImpl::new(db.clone());
                     if let Ok(sources) = source_repo.find_all().await {
                         for source in sources {
@@ -389,9 +387,7 @@ impl AsyncComponent for HomePage {
                 // Retry loading for this specific source
                 relm4::spawn(async move {
                     // Get the source entity
-                    use crate::db::repository::{
-                        Repository, source_repository::SourceRepositoryImpl,
-                    };
+                    use crate::db::repository::source_repository::SourceRepositoryImpl;
                     let source_repo = SourceRepositoryImpl::new(db.clone());
 
                     // Note: Retry should trigger sync worker to refresh this source
@@ -611,7 +607,7 @@ impl HomePage {
         // Batch fetch parent shows for episodes
         let mut parent_shows_map = std::collections::HashMap::new();
         if !episode_parent_ids.is_empty() {
-            use crate::db::repository::media_repository::{MediaRepository, MediaRepositoryImpl};
+            use crate::db::repository::media_repository::MediaRepositoryImpl;
             let media_repo = MediaRepositoryImpl::new(self.db.clone());
 
             // Deduplicate parent IDs

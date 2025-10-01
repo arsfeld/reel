@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use crate::cache::{FileCache, FileCacheConfig, FileCacheHandle};
+use crate::cache::{FileCache, FileCacheHandle};
 use crate::services::config_service::config_service;
 
 /// Global cache service instance

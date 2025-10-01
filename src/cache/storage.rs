@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
-use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tokio::fs as tokio_fs;

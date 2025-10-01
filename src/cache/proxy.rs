@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use axum::{
     Router,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
@@ -12,7 +12,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info};
 
 use super::metadata::MediaCacheKey;
 use super::storage::CacheStorage;
@@ -191,7 +191,7 @@ impl CacheProxy {
                 let mut buffer = vec![0u8; length as usize];
                 match file.read_exact(&mut buffer).await {
                     Ok(_) => {
-                        let mut response = Response::builder()
+                        let response = Response::builder()
                             .status(StatusCode::PARTIAL_CONTENT)
                             .header(header::CONTENT_TYPE, "video/mp4")
                             .header(header::CONTENT_LENGTH, length.to_string())

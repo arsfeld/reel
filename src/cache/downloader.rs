@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use futures::StreamExt;
-use reqwest::{Client, Response};
+use reqwest::Client;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, mpsc};
 use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use super::config::FileCacheConfig;
 use super::metadata::MediaCacheKey;

@@ -102,7 +102,7 @@ impl SyncWorker {
 
         // Load source configuration to create backend
         use crate::db::repository::Repository;
-        use crate::db::repository::source_repository::{SourceRepository, SourceRepositoryImpl};
+        use crate::db::repository::source_repository::SourceRepositoryImpl;
 
         let source_repo = SourceRepositoryImpl::new(db.as_ref().clone());
         let source_entity = match source_repo.find_by_id(source_id.as_str()).await {
@@ -208,7 +208,7 @@ impl SyncWorker {
         use crate::db::repository::home_section_repository::{
             HomeSectionRepository, HomeSectionRepositoryImpl,
         };
-        use crate::db::repository::source_repository::{SourceRepository, SourceRepositoryImpl};
+        use crate::db::repository::source_repository::SourceRepositoryImpl;
 
         // Send progress notification for home sections sync
         sender
@@ -307,9 +307,7 @@ impl SyncWorker {
                 let mut existing_media_ids = Vec::new();
 
                 if !section.items.is_empty() {
-                    use crate::db::repository::media_repository::{
-                        MediaRepository, MediaRepositoryImpl,
-                    };
+                    use crate::db::repository::media_repository::MediaRepositoryImpl;
                     let media_repo = MediaRepositoryImpl::new(db.as_ref().clone());
 
                     for item in section.items {

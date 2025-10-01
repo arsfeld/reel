@@ -18,7 +18,7 @@ use tracing::{error, info};
 use super::traits::MediaBackend;
 use crate::models::{
     AuthProvider, BackendId, Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId,
-    Movie, Season, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
+    Movie, Season, Show, ShowId, Source, SourceType, StreamInfo, User,
 };
 
 #[allow(dead_code)] // Used via dynamic dispatch in BackendService
@@ -254,7 +254,6 @@ impl MediaBackend for JellyfinBackend {
                     server_url,
                     access_token,
                     user_id,
-                    username,
                     ..
                 } => {
                     tracing::info!(

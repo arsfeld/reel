@@ -1,0 +1,57 @@
+---
+id: task-310
+title: Remove all remaining dead code warnings from codebase
+status: In Progress
+assignee:
+  - '@claude'
+created_date: '2025-10-01 00:09'
+updated_date: '2025-10-01 00:42'
+labels:
+  - cleanup
+  - technical-debt
+  - warnings
+dependencies: []
+priority: high
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+The codebase has 174 warnings for unused code that needs to be removed. These are NOT planned features - they are implementation leftovers from completed features. The build must pass with 0 warnings.
+<!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 All 174 dead code warnings are eliminated
+- [ ] #2 Build completes with 0 warnings (cargo build shows 'generated 0 warnings')
+- [ ] #3 No #[allow(dead_code)] attributes are added - code is actually removed
+- [ ] #4 All unused logging helper functions removed
+- [ ] #5 All unused service methods removed
+- [ ] #6 All unused player/shader code removed
+- [ ] #7 All unused UI message enum variants removed
+<!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Remove all unused imports (most common warnings)
+2. Remove unused variables and make immutable where possible
+3. Remove unused structs, enums, and types
+4. Remove unused methods and functions
+5. Remove unused fields from structs
+6. Address remaining warnings
+7. Verify 0 warnings in build
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Critical error: Lost agent progress due to git checkout . command. Agent had removed 49 warnings but work was not committed. Recovered only manual shader/cache_keys deletions. Current count: 333 warnings. Need to restart systematic removal.
+
+Session 1: Removed unused imports and cleaned up module exports
+- Removed unused imports from cache, db, services, and UI modules
+- Cleaned up unnecessary module re-exports
+- Fixed compilation errors by restoring required imports
+- Applied cargo fix suggestions
+- Reduced warnings from 332 to 299 (33 warnings removed)
+<!-- SECTION:NOTES:END -->

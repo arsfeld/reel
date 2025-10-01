@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use super::config::FileCacheConfig;
 use super::downloader::{DownloadPriority, ProgressiveDownloader, ProgressiveDownloaderHandle};

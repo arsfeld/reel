@@ -2,7 +2,7 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use crate::config::{Config, PlaybackConfig};
 use crate::ui::shared::broker::{BROKER, BrokerMessage, ConfigMessage};
