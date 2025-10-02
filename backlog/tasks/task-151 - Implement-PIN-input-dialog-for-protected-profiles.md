@@ -1,9 +1,10 @@
 ---
 id: task-151
 title: Implement PIN input dialog for protected profiles
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-17 15:36'
+updated_date: '2025-10-02 14:55'
 labels:
   - frontend
   - ui

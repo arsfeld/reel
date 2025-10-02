@@ -4,11 +4,13 @@ title: Update sidebar sync status to be source-based instead of library-based
 status: To Do
 assignee: []
 created_date: '2025-09-18 16:46'
+updated_date: '2025-10-02 14:56'
 labels:
   - ui
   - sidebar
   - sync
 dependencies: []
+priority: high
 ---
 
 ## Description

@@ -1,9 +1,10 @@
 ---
 id: task-033
 title: Add network monitoring and quality fallback to player error recovery
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-15 15:35'
+updated_date: '2025-10-02 14:52'
 labels:
   - player
   - relm4

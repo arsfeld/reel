@@ -1,11 +1,11 @@
 ---
 id: task-296
 title: Fix GStreamer seeking functionality
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-09-28 02:07'
-updated_date: '2025-09-28 02:26'
+updated_date: '2025-10-02 14:51'
 labels: []
 dependencies: []
 priority: high
@@ -28,6 +28,7 @@ GStreamer player backend currently doesn't allow seeking during playback. This i
 - [ ] #7 Verify seeking works with both keyboard shortcuts and UI controls
 - [ ] #8 Add unit tests for GStreamer seeking functionality
 <!-- AC:END -->
+
 
 ## Implementation Plan
 

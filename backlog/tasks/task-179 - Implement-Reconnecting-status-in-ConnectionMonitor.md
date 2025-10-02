@@ -4,10 +4,12 @@ title: Implement Reconnecting status in ConnectionMonitor
 status: To Do
 assignee: []
 created_date: '2025-09-18 15:18'
+updated_date: '2025-10-02 14:56'
 labels:
   - feature
   - workers
 dependencies: []
+priority: medium
 ---
 
 ## Description

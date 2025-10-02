@@ -1,11 +1,11 @@
 ---
 id: task-257
 title: Fix SDL3 library loading error in macOS bundle build
-status: To Do
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-09-26 17:30'
-updated_date: '2025-09-26 17:57'
+updated_date: '2025-10-02 14:57'
 labels:
   - macos
   - build

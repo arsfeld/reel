@@ -1,9 +1,10 @@
 ---
 id: task-102
 title: Fix Continue Watching section missing items
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-16 19:36'
+updated_date: '2025-10-02 14:54'
 labels:
   - bug
   - ui

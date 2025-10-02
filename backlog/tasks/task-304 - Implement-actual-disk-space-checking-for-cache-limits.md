@@ -4,8 +4,10 @@ title: Implement actual disk space checking for cache limits
 status: To Do
 assignee: []
 created_date: '2025-09-29 02:46'
+updated_date: '2025-10-02 14:58'
 labels: []
 dependencies: []
+priority: high
 ---
 
 ## Description

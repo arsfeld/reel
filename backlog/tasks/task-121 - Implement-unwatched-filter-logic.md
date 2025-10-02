@@ -4,11 +4,13 @@ title: Implement unwatched filter logic
 status: To Do
 assignee: []
 created_date: '2025-09-17 02:50'
+updated_date: '2025-10-02 14:54'
 labels:
   - filtering
   - backend
   - performance
 dependencies: []
+priority: medium
 ---
 
 ## Description

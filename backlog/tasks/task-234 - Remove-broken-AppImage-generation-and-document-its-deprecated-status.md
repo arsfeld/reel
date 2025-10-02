@@ -1,9 +1,10 @@
 ---
 id: task-234
 title: Remove broken AppImage generation and document its deprecated status
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-24 18:40'
+updated_date: '2025-10-02 14:57'
 labels:
   - build
   - documentation

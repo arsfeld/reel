@@ -1,9 +1,10 @@
 ---
 id: task-308
 title: Document file cache proxy implementation
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-29 11:51'
+updated_date: '2025-10-02 14:58'
 labels: []
 dependencies: []
 ---

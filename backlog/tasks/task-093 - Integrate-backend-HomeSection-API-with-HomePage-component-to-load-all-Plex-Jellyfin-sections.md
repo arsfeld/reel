@@ -3,11 +3,11 @@ id: task-093
 title: >-
   Integrate backend HomeSection API with HomePage component to load all
   Plex/Jellyfin sections
-status: To Do
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-09-16 19:29'
-updated_date: '2025-09-16 19:39'
+updated_date: '2025-10-02 14:53'
 labels:
   - home
   - plex

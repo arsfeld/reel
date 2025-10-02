@@ -1,9 +1,10 @@
 ---
 id: task-174
 title: Remove empty platforms/relm4 directory structure
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-18 14:12'
+updated_date: '2025-10-02 14:55'
 labels:
   - cleanup
   - architecture

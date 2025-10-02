@@ -1,11 +1,11 @@
 ---
 id: task-326.07
 title: Add comprehensive integration tests for chunk-based cache
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-10-01 15:41'
-updated_date: '2025-10-01 17:13'
+updated_date: '2025-10-02 14:51'
 labels:
   - cache
   - testing

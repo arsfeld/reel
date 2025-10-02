@@ -1,9 +1,10 @@
 ---
 id: task-139
 title: Fix sidebar showing 'No sources configured' when sources are connected
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-17 04:01'
+updated_date: '2025-10-02 14:55'
 labels: []
 dependencies: []
 ---

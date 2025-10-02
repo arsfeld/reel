@@ -1,9 +1,10 @@
 ---
 id: task-020
 title: Add MessageBroker broadcasting to media repository operations
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-15 02:35'
+updated_date: '2025-10-02 14:52'
 labels:
   - database
   - messaging

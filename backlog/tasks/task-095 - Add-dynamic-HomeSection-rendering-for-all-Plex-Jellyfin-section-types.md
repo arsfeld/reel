@@ -1,9 +1,10 @@
 ---
 id: task-095
 title: Add dynamic HomeSection rendering for all Plex/Jellyfin section types
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-16 19:29'
+updated_date: '2025-10-02 14:53'
 labels:
   - home
   - ui

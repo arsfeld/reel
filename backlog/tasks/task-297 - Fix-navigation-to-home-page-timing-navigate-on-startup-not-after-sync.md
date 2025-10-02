@@ -1,11 +1,11 @@
 ---
 id: task-297
 title: Fix navigation to home page timing - navigate on startup not after sync
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-09-28 02:10'
-updated_date: '2025-09-28 02:14'
+updated_date: '2025-10-02 14:51'
 labels: []
 dependencies: []
 priority: high
@@ -28,6 +28,7 @@ Currently the app navigates to the home page after sync completes, which creates
 - [ ] #7 Test that navigation works correctly with both cached and fresh data
 - [ ] #8 Verify sync updates home page content without forcing navigation
 <!-- AC:END -->
+
 
 ## Implementation Plan
 

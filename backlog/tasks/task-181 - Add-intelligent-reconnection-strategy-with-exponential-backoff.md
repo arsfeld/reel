@@ -4,10 +4,12 @@ title: Add intelligent reconnection strategy with exponential backoff
 status: To Do
 assignee: []
 created_date: '2025-09-18 15:18'
+updated_date: '2025-10-02 14:56'
 labels:
   - feature
   - reliability
 dependencies: []
+priority: medium
 ---
 
 ## Description
