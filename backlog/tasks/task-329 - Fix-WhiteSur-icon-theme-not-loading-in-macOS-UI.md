@@ -1,11 +1,11 @@
 ---
 id: task-329
 title: Fix WhiteSur icon theme not loading in macOS UI
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-10-02 02:53'
-updated_date: '2025-10-02 03:24'
+updated_date: '2025-10-02 03:31'
 labels:
   - ui
   - macos
@@ -117,4 +117,12 @@ Files modified:
 - src/main.rs (icon search paths already added)
 
 Next: Exit shell, re-enter with `nix develop`, test with `cargo run`
+
+**COMPLETED**: Committed in 78b8919
+
+To test the fix:
+1. Exit current nix shell
+2. Re-enter: nix develop
+3. Run: cargo run
+4. Verify icons display correctly in UI
 <!-- SECTION:NOTES:END -->
