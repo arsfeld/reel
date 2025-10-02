@@ -1,9 +1,10 @@
 ---
 id: task-021
 title: Add MessageBroker broadcasting to library repository operations
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-15 02:36'
+updated_date: '2025-10-02 14:52'
 labels:
   - database
   - messaging

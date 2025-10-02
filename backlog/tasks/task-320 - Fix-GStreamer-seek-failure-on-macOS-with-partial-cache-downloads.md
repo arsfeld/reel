@@ -1,11 +1,11 @@
 ---
 id: task-320
 title: Fix GStreamer seek failure on macOS with partial cache downloads
-status: To Do
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-10-01 15:19'
-updated_date: '2025-10-01 15:42'
+updated_date: '2025-10-02 14:59'
 labels:
   - player
   - gstreamer
@@ -83,6 +83,7 @@ When GStreamer (matroskademux) made a non-ranged GET request, the cache proxy wa
 5. **Fixed Axum 0.8 Compatibility**
    - Updated route parameter syntax from `:param` to `{param}` for Axum 0.8
    - Routes now use `/cache/{source_id}/{media_id}/{quality}` instead of `:` prefix
+
 
 ## Status: Reverted to To Do
 

@@ -1,9 +1,10 @@
 ---
 id: task-152
 title: Add optional profile name to source display
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-17 15:36'
+updated_date: '2025-10-02 14:55'
 labels:
   - backend
   - database

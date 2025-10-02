@@ -1,9 +1,10 @@
 ---
 id: task-072
 title: Implement global configuration service
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-16 17:30'
+updated_date: '2025-10-02 14:53'
 labels:
   - architecture
   - refactor

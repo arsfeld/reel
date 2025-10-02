@@ -1,9 +1,10 @@
 ---
 id: task-076
 title: Implement configuration profiles and migration
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-16 17:31'
+updated_date: '2025-10-02 14:53'
 labels:
   - config
   - features

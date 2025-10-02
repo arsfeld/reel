@@ -1,9 +1,10 @@
 ---
 id: task-123
 title: Restore unwatched indicator with glow effect
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-17 02:53'
+updated_date: '2025-10-02 14:54'
 labels:
   - ui
   - enhancement

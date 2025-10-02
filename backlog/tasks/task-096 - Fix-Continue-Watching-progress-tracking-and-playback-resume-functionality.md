@@ -1,9 +1,10 @@
 ---
 id: task-096
 title: Fix Continue Watching progress tracking and playback resume functionality
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-16 19:30'
+updated_date: '2025-10-02 14:53'
 labels:
   - home
   - playback

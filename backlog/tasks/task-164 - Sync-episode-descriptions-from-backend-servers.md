@@ -4,12 +4,13 @@ title: Sync episode descriptions from backend servers
 status: To Do
 assignee: []
 created_date: '2025-09-18 02:32'
+updated_date: '2025-10-02 14:55'
 labels:
   - sync
   - backend
   - metadata
 dependencies: []
-priority: medium
+priority: high
 ---
 
 ## Description

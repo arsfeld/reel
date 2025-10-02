@@ -1,10 +1,10 @@
 ---
 id: task-041
 title: Hide player controls when mouse leaves window
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-16 00:35'
-updated_date: '2025-09-18 02:51'
+updated_date: '2025-10-02 14:52'
 labels:
   - ui
   - player

@@ -1,9 +1,10 @@
 ---
 id: task-278
 title: Fix HiDPI video rendering on macOS - video renders in quarter of window
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-27 01:32'
+updated_date: '2025-10-02 14:57'
 labels:
   - player
   - macos

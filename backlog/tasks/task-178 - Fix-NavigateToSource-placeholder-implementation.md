@@ -1,9 +1,10 @@
 ---
 id: task-178
 title: Fix NavigateToSource placeholder implementation
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-18 15:17'
+updated_date: '2025-10-02 14:55'
 labels:
   - ui
   - bug

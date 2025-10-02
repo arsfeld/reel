@@ -1,9 +1,10 @@
 ---
 id: task-035
 title: Remove machine_id from Sources page UI
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-15 15:36'
+updated_date: '2025-10-02 14:52'
 labels:
   - ui
   - sources

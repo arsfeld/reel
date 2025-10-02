@@ -4,10 +4,12 @@ title: Use source names in connection status messages
 status: To Do
 assignee: []
 created_date: '2025-09-18 15:18'
+updated_date: '2025-10-02 14:56'
 labels:
   - ui
   - enhancement
 dependencies: []
+priority: medium
 ---
 
 ## Description

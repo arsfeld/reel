@@ -1,9 +1,10 @@
 ---
 id: task-098
 title: Investigate and optimize parallel image loading for posters
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-16 19:32'
+updated_date: '2025-10-02 14:53'
 labels: []
 dependencies: []
 priority: medium

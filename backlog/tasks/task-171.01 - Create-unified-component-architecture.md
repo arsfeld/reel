@@ -1,9 +1,10 @@
 ---
 id: task-171.01
 title: Create unified component architecture
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-18 14:12'
+updated_date: '2025-10-02 14:55'
 labels:
   - refactoring
   - architecture

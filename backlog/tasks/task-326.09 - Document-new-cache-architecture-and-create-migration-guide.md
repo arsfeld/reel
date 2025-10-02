@@ -1,9 +1,10 @@
 ---
 id: task-326.09
 title: Document new cache architecture and create migration guide
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-10-01 15:42'
+updated_date: '2025-10-02 14:59'
 labels:
   - cache
   - documentation

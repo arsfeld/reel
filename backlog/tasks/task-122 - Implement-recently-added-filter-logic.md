@@ -4,11 +4,13 @@ title: Implement recently added filter logic
 status: To Do
 assignee: []
 created_date: '2025-09-17 02:51'
+updated_date: '2025-10-02 14:54'
 labels:
   - filtering
   - backend
   - date
 dependencies: []
+priority: medium
 ---
 
 ## Description

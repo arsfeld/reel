@@ -1,9 +1,10 @@
 ---
 id: task-030
 title: Extract CSS from Relm4 app.rs to separate stylesheet file
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-15 15:13'
+updated_date: '2025-10-02 14:52'
 labels:
   - refactoring
   - relm4

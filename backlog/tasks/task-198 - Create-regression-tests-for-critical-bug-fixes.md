@@ -1,9 +1,10 @@
 ---
 id: task-198
 title: Create regression tests for critical bug fixes
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-21 02:33'
+updated_date: '2025-10-02 14:56'
 labels:
   - testing
   - regression

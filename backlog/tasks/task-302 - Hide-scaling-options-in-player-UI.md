@@ -4,11 +4,13 @@ title: Hide scaling options in player UI
 status: To Do
 assignee: []
 created_date: '2025-09-28 17:46'
+updated_date: '2025-10-02 14:58'
 labels:
   - ui
   - player
   - mpv
 dependencies: []
+priority: high
 ---
 
 ## Description
