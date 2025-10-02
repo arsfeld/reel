@@ -1,4 +1,5 @@
 use crate::player::ZoomMode;
+use crate::player::gstreamer::sink_factory;
 use anyhow::{Context, Result};
 use gdk4 as gdk;
 use gstreamer as gst;
@@ -161,11 +162,11 @@ impl GStreamerPlayer {
         let use_gl_sink = std::env::var("REEL_USE_GL_SINK").is_ok();
 
         // Try to create optimized video sink with glsinkbin wrapper
-        let video_sink = self.create_optimized_video_sink(force_fallback, use_gl_sink);
+        let video_sink = sink_factory::create_optimized_video_sink(force_fallback, use_gl_sink);
 
         // If we have a gtk4paintablesink, extract and set its paintable
         if let Some(ref sink) = video_sink
-            && let Some(gtk_sink) = self.extract_gtk4_sink(sink)
+            && let Some(gtk_sink) = sink_factory::extract_gtk4_sink(sink)
         {
             let paintable = gtk_sink.property::<gdk::Paintable>("paintable");
             picture.set_paintable(Some(&paintable));
@@ -180,313 +181,6 @@ impl GStreamerPlayer {
         *self.video_widget.lock().unwrap() = Some(widget.clone());
         debug!("Video widget creation complete");
         widget
-    }
-
-    fn create_optimized_video_sink(
-        &self,
-        force_fallback: bool,
-        use_gl_sink: bool,
-    ) -> Option<gst::Element> {
-        // On macOS, prefer native video sinks for better compatibility
-        #[cfg(target_os = "macos")]
-        {
-            if !force_fallback {
-                // Try macOS-specific sink configuration
-                if let Some(sink) = self.create_macos_video_sink() {
-                    info!("Using macOS-optimized video sink");
-                    return Some(sink);
-                }
-            }
-        }
-
-        if !force_fallback && !use_gl_sink {
-            // Try glsinkbin + gtk4paintablesink first (best performance)
-            if let Some(sink) = self.create_glsinkbin_gtk4_sink() {
-                info!("Using glsinkbin + gtk4paintablesink (optimal GL handling)");
-                return Some(sink);
-            }
-
-            // Fallback to direct gtk4paintablesink
-            if let Some(sink) = self.create_gtk4_sink_with_conversion() {
-                info!("Using gtk4paintablesink with conversion pipeline");
-                return Some(sink);
-            }
-        }
-
-        // Try glimagesink or autovideosink fallback
-        if use_gl_sink && let Some(sink) = self.create_gl_fallback_sink() {
-            info!("Using glimagesink fallback");
-            return Some(sink);
-        }
-
-        // Final fallback to autovideosink
-        if let Some(sink) = self.create_auto_fallback_sink() {
-            info!("Using autovideosink fallback");
-            return Some(sink);
-        }
-
-        error!("Failed to create any video sink!");
-        None
-    }
-
-    #[cfg(target_os = "macos")]
-    fn create_macos_video_sink(&self) -> Option<gst::Element> {
-        info!("Creating macOS-specific video sink");
-
-        // For GTK integration, we should prefer gtk4paintablesink even on macOS
-        // but with macOS-specific pipeline setup
-
-        // Try gtk4paintablesink with proper conversion for macOS
-        if let Ok(gtk_sink) = gst::ElementFactory::make("gtk4paintablesink")
-            .name("gtk4paintablesink")
-            .build()
-        {
-            // Create a bin with conversion elements optimized for macOS
-            let bin = gst::Bin::new();
-
-            // Use videoconvert for format conversion
-            let convert = gst::ElementFactory::make("videoconvert")
-                .name("video_converter")
-                .build()
-                .ok()?;
-
-            // Set properties for better macOS performance
-            convert.set_property("n-threads", 0u32); // Auto-detect optimal threads
-
-            // Add a videoscale element for macOS compatibility
-            let scale = gst::ElementFactory::make("videoscale")
-                .name("video_scaler")
-                .build()
-                .ok()?;
-
-            // Add elements to bin
-            bin.add(&convert).ok()?;
-            bin.add(&scale).ok()?;
-            bin.add(&gtk_sink).ok()?;
-
-            // Link elements
-            gst::Element::link_many([&convert, &scale, &gtk_sink]).ok()?;
-
-            // Create ghost pad
-            let sink_pad = convert.static_pad("sink")?;
-            let ghost_pad = gst::GhostPad::with_target(&sink_pad).ok()?;
-            ghost_pad.set_active(true).ok()?;
-            bin.add_pad(&ghost_pad).ok()?;
-
-            info!("Using gtk4paintablesink with videoconvert+videoscale for macOS");
-            return Some(bin.upcast());
-        }
-
-        // Fallback to glimagesink (won't integrate with GTK Picture widget)
-        if let Ok(glsink) = gst::ElementFactory::make("glimagesink")
-            .name("glimagesink")
-            .build()
-        {
-            // Set properties for better macOS compatibility
-            glsink.set_property("force-aspect-ratio", true);
-            info!("Using glimagesink fallback for macOS");
-            return Some(glsink);
-        }
-
-        // Last resort: osxvideosink (native but opens separate window)
-        if let Ok(osxsink) = gst::ElementFactory::make("osxvideosink")
-            .name("osxvideosink")
-            .build()
-        {
-            warn!("Using osxvideosink - video will appear in separate window");
-            return Some(osxsink);
-        }
-
-        None
-    }
-
-    fn create_glsinkbin_gtk4_sink(&self) -> Option<gst::Element> {
-        info!("Attempting to create glsinkbin + gtk4paintablesink pipeline");
-
-        // Try to create glsinkbin with gtk4paintablesink
-        let glsinkbin = gst::ElementFactory::make("glsinkbin")
-            .name("glsinkbin")
-            .build()
-            .ok()?;
-
-        let gtk_sink = gst::ElementFactory::make("gtk4paintablesink")
-            .name("gtk4paintablesink")
-            .build()
-            .ok()?;
-
-        // Ensure aspect ratio is preserved
-        if gtk_sink.has_property("force-aspect-ratio") {
-            gtk_sink.set_property("force-aspect-ratio", true);
-        }
-
-        // Set gtk4paintablesink as the sink for glsinkbin
-        glsinkbin.set_property("sink", &gtk_sink);
-
-        // Create conversion bin with optimized videoconvertscale
-        let bin = gst::Bin::new();
-
-        // Try to use videoconvertscale (combined element)
-        let convert = if let Ok(convert) = gst::ElementFactory::make("videoconvertscale")
-            .name("video_converter")
-            .build()
-        {
-            debug!("Using optimized videoconvertscale element");
-            convert
-        } else {
-            // Fallback to separate elements
-            debug!("videoconvertscale not available, using separate videoconvert");
-            gst::ElementFactory::make("videoconvert")
-                .name("video_converter")
-                .build()
-                .ok()?
-        };
-
-        // Auto-detect optimal thread count (0 = automatic)
-        convert.set_property("n-threads", 0u32);
-        debug!("Set video converter to auto-detect optimal thread count");
-
-        // Force RGBA for subtitle overlay compatibility
-        let capsfilter = gst::ElementFactory::make("capsfilter")
-            .name("capsfilter")
-            .build()
-            .ok()?;
-
-        let caps = gst::Caps::builder("video/x-raw")
-            .field("format", "RGBA")
-            .build();
-        capsfilter.set_property("caps", &caps);
-
-        // Build pipeline
-        bin.add(&convert).ok()?;
-        bin.add(&capsfilter).ok()?;
-        bin.add(&glsinkbin).ok()?;
-
-        gst::Element::link_many([&convert, &capsfilter, &glsinkbin]).ok()?;
-
-        // Add ghost pad
-        let sink_pad = convert.static_pad("sink")?;
-        let ghost_pad = gst::GhostPad::with_target(&sink_pad).ok()?;
-        bin.add_pad(&ghost_pad).ok()?;
-
-        Some(bin.upcast())
-    }
-
-    fn create_gtk4_sink_with_conversion(&self) -> Option<gst::Element> {
-        let gtk_sink = gst::ElementFactory::make("gtk4paintablesink")
-            .name("gtk4paintablesink")
-            .build()
-            .ok()?;
-
-        // Ensure aspect ratio is preserved
-        if gtk_sink.has_property("force-aspect-ratio") {
-            gtk_sink.set_property("force-aspect-ratio", true);
-        }
-
-        let bin = gst::Bin::new();
-
-        // Try videoconvertscale first, fallback to separate elements
-        let convert = if let Ok(convert) = gst::ElementFactory::make("videoconvertscale")
-            .name("video_converter")
-            .build()
-        {
-            debug!("Using optimized videoconvertscale element");
-            convert
-        } else {
-            debug!("videoconvertscale not available, using separate videoconvert");
-            gst::ElementFactory::make("videoconvert")
-                .name("video_converter")
-                .build()
-                .ok()?
-        };
-
-        // Auto-detect optimal thread count (0 = automatic)
-        convert.set_property("n-threads", 0u32);
-
-        // Force RGBA format
-        let capsfilter = gst::ElementFactory::make("capsfilter")
-            .name("capsfilter")
-            .build()
-            .ok()?;
-
-        let caps = gst::Caps::builder("video/x-raw")
-            .field("format", "RGBA")
-            .build();
-        capsfilter.set_property("caps", &caps);
-
-        // Build pipeline
-        bin.add(&convert).ok()?;
-        bin.add(&capsfilter).ok()?;
-        bin.add(&gtk_sink).ok()?;
-
-        gst::Element::link_many([&convert, &capsfilter, &gtk_sink]).ok()?;
-
-        // Create ghost pad
-        let sink_pad = convert.static_pad("sink")?;
-        let ghost_pad = gst::GhostPad::with_target(&sink_pad).ok()?;
-        bin.add_pad(&ghost_pad).ok()?;
-
-        Some(bin.upcast())
-    }
-
-    fn create_gl_fallback_sink(&self) -> Option<gst::Element> {
-        let gl_sink = gst::ElementFactory::make("glimagesink")
-            .name("glimagesink")
-            .build()
-            .ok()?;
-
-        self.create_sink_with_conversion(gl_sink)
-    }
-
-    fn create_auto_fallback_sink(&self) -> Option<gst::Element> {
-        let auto_sink = gst::ElementFactory::make("autovideosink")
-            .name("autovideosink")
-            .build()
-            .ok()?;
-
-        self.create_sink_with_conversion(auto_sink)
-    }
-
-    fn create_sink_with_conversion(&self, sink: gst::Element) -> Option<gst::Element> {
-        let bin = gst::Bin::new();
-
-        // Try videoconvertscale first
-        let convert = if let Ok(convert) = gst::ElementFactory::make("videoconvertscale")
-            .name("video_converter")
-            .build()
-        {
-            convert
-        } else {
-            gst::ElementFactory::make("videoconvert")
-                .name("video_converter")
-                .build()
-                .ok()?
-        };
-
-        // Auto-detect optimal thread count (0 = automatic)
-        convert.set_property("n-threads", 0u32);
-
-        // Force RGBA for subtitle compatibility
-        let capsfilter = gst::ElementFactory::make("capsfilter")
-            .name("capsfilter")
-            .build()
-            .ok()?;
-
-        let caps = gst::Caps::builder("video/x-raw")
-            .field("format", "RGBA")
-            .build();
-        capsfilter.set_property("caps", &caps);
-
-        bin.add(&convert).ok()?;
-        bin.add(&capsfilter).ok()?;
-        bin.add(&sink).ok()?;
-
-        gst::Element::link_many([&convert, &capsfilter, &sink]).ok()?;
-
-        let sink_pad = convert.static_pad("sink")?;
-        let ghost_pad = gst::GhostPad::with_target(&sink_pad).ok()?;
-        bin.add_pad(&ghost_pad).ok()?;
-
-        Some(bin.upcast())
     }
 
     fn print_gst_launch_pipeline(&self, playbin: &gst::Element, _url: &str) {
@@ -537,32 +231,6 @@ impl GStreamerPlayer {
         } else {
             error!("Playbin is not a Bin! Type: {:?}", playbin.type_());
         }
-    }
-
-    fn extract_gtk4_sink(&self, element: &gst::Element) -> Option<gst::Element> {
-        // Check if this is a bin
-        if let Some(bin) = element.dynamic_cast_ref::<gst::Bin>() {
-            // Iterate through bin elements to find gtk4paintablesink
-            let mut iter = bin.iterate_elements();
-            while let Ok(Some(elem)) = iter.next() {
-                if elem
-                    .factory()
-                    .is_some_and(|f| f.name() == "gtk4paintablesink")
-                {
-                    return Some(elem);
-                }
-                // Recursively check if this element is also a bin
-                if let Some(sink) = self.extract_gtk4_sink(&elem) {
-                    return Some(sink);
-                }
-            }
-        } else if element
-            .factory()
-            .is_some_and(|f| f.name() == "gtk4paintablesink")
-        {
-            return Some(element.clone());
-        }
-        None
     }
 
     pub async fn load_media(&self, url: &str, _video_sink: Option<&gst::Element>) -> Result<()> {
@@ -706,7 +374,7 @@ impl GStreamerPlayer {
                 // Create a fallback video sink on other platforms
                 debug!("No pre-configured sink, creating fallback");
 
-                if let Some(fallback_sink) = self.create_auto_fallback_sink() {
+                if let Some(fallback_sink) = sink_factory::create_auto_fallback_sink() {
                     playbin.set_property("video-sink", &fallback_sink);
                     debug!("Fallback video sink configured");
                 } else {
