@@ -11,9 +11,9 @@ categories = ["multimedia", "gui"]
 
 [features]
 # Default features depend on platform
-# On macOS: only gstreamer (no mpv)
-# On other platforms: both mpv and gstreamer
-default = ["gstreamer"]
+# On macOS: only gstreamer (mpv dependencies not available)
+# On Linux: both mpv and gstreamer
+default = ["mpv", "gstreamer"]
 
 # Media player backends
 mpv = ["dep:libmpv2", "dep:libmpv2-sys"]
@@ -33,14 +33,11 @@ relm4-components = { version = "0.10" }
 relm4-icons = { version = "0.10" }
 tracker = { version = "0.2" }
 
-# Media playback
+# Media playback - GStreamer (all platforms)
 gstreamer = { version = "0.24", optional = true }
 gstreamer-video = { version = "0.24", optional = true }
 gstreamer-player = { version = "0.24", optional = true }
 gstreamer-pbutils = { version = "0.24", optional = true }
-
-libmpv2 = { version = "5.0", optional = true }
-libmpv2-sys = { version = "4.0", optional = true }
 
 # Async runtime
 tokio = { version = "1.47", features = ["full"] }
@@ -95,6 +92,11 @@ notify = "8.2"
 
 # Localization
 gettext-rs = { version = "0.7", features = ["gettext-system"] }
+
+# Platform-specific media playback dependencies
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+libmpv2 = { version = "5.0", optional = true }
+libmpv2-sys = { version = "4.0", optional = true }
 
 [dev-dependencies]
 mockito = "1.7"
