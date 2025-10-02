@@ -1,6 +1,5 @@
 use anyhow::Result;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use relm4::gtk;
 use relm4::{ComponentSender, Sender, Worker};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -230,19 +229,20 @@ impl Worker for ConfigManager {
                 // Debounce rapid file changes
                 let mut manager = self.clone();
                 let sender = sender.clone();
-                gtk::glib::timeout_add_local_once(Duration::from_millis(100), move || {
-                    relm4::spawn_local(async move {
-                        if let Err(e) = manager.load_config().await {
-                            sender
-                                .output(ConfigManagerOutput::Error(e.to_string()))
-                                .unwrap();
-                        } else {
-                            let config = manager.config.read().await;
-                            sender
-                                .output(ConfigManagerOutput::ConfigLoaded(Arc::new(config.clone())))
-                                .unwrap();
-                        }
-                    });
+                relm4::spawn_local(async move {
+                    // Debounce with a short delay
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+
+                    if let Err(e) = manager.load_config().await {
+                        sender
+                            .output(ConfigManagerOutput::Error(e.to_string()))
+                            .unwrap();
+                    } else {
+                        let config = manager.config.read().await;
+                        sender
+                            .output(ConfigManagerOutput::ConfigLoaded(Arc::new(config.clone())))
+                            .unwrap();
+                    }
                 });
             }
             ConfigManagerInput::Shutdown => {
