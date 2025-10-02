@@ -1,6 +1,8 @@
 pub mod controller;
 pub mod factory;
 #[cfg(feature = "gstreamer")]
+pub mod gstreamer;
+#[cfg(feature = "gstreamer")]
 pub mod gstreamer_player;
 #[cfg(all(feature = "mpv", not(target_os = "macos")))]
 pub mod mpv_player;
