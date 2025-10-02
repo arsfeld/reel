@@ -10,9 +10,10 @@ keywords = ["media", "player", "plex", "jellyfin", "gnome"]
 categories = ["multimedia", "gui"]
 
 [features]
-# Default features depend on platform
-# On macOS: only gstreamer (mpv dependencies not available)
-# On Linux: both mpv and gstreamer
+# Default features are platform-specific:
+# - Linux: Both mpv and gstreamer backends
+# - macOS: Only gstreamer (mpv has OpenGL issues)
+# Note: Use --no-default-features --features gstreamer on macOS
 default = ["mpv", "gstreamer"]
 
 # Media player backends

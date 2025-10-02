@@ -51,7 +51,7 @@ impl PlexApi {
                 )
             };
 
-            tracing::info!("Stream URL constructed: {}", stream_url);
+            tracing::debug!("Stream URL constructed: {}", stream_url);
 
             // Generate quality options for transcoding
             let mut quality_options = Vec::new();

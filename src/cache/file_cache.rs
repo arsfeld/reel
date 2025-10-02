@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use super::chunk_manager::{ChunkManager, Priority};
 use super::chunk_store::ChunkStore;
@@ -174,13 +174,12 @@ impl FileCache {
 
     /// Run the file cache event loop
     pub async fn run(mut self) {
-        info!("🗄️ FileCache: Starting event loop");
-        info!("🗄️ FileCache: Entering command loop...");
+        debug!("FileCache event loop started");
         let mut command_count = 0;
 
         while let Some(command) = self.command_receiver.recv().await {
             command_count += 1;
-            debug!(
+            trace!(
                 "FileCache received command #{}: {:?}",
                 command_count,
                 std::mem::discriminant(&command)
@@ -303,7 +302,7 @@ impl FileCache {
                     entry
                 }
             } else {
-                debug!(
+                trace!(
                     "No existing cache entry found, creating new one for {:?}",
                     cache_key
                 );
@@ -340,9 +339,8 @@ impl FileCache {
         // ALWAYS register with proxy and return proxy URL
         let proxy_url = self.proxy.register_stream(cache_key).await;
 
-        info!(
-            "🎬 Serving media through cache proxy: {} (complete: {}, progress: {:.1}%)",
-            proxy_url,
+        trace!(
+            "Serving cached stream: complete={}, progress={:.1}%",
             is_complete,
             progress * 100.0
         );
@@ -486,7 +484,7 @@ impl FileCache {
         }
 
         // Make HEAD request to get Content-Length
-        info!(
+        debug!(
             "Making HEAD request to get Content-Length for {:?}",
             original_url
         );
@@ -511,7 +509,7 @@ impl FileCache {
             .and_then(|v| v.parse::<i64>().ok())
             .ok_or_else(|| anyhow::anyhow!("Content-Length header missing or invalid"))?;
 
-        info!(
+        debug!(
             "Got Content-Length: {} bytes for {:?}",
             content_length, cache_key
         );
@@ -528,7 +526,7 @@ impl FileCache {
             // Update existing entry
             entry.expected_total_size = Some(content_length);
             repository.update_cache_entry(entry).await?;
-            info!("Updated database entry with expected_total_size");
+            debug!("Updated database entry with expected_total_size");
         } else {
             // Create new database entry
             use crate::db::entities::CacheEntryModel;
@@ -563,12 +561,12 @@ impl FileCache {
             };
 
             repository.insert_cache_entry(entry).await?;
-            info!("Inserted database entry with expected_total_size");
+            debug!("Inserted database entry with expected_total_size");
         }
 
         // CRITICAL FIX: Verify the database update is visible before returning
         // This prevents race condition where proxy queries before commit is visible
-        info!("Verifying database entry is visible after update...");
+        trace!("Verifying database entry is visible after update...");
         let verification_entry = match repository
             .find_cache_entry(
                 &cache_key.source_id.to_string(),
@@ -590,7 +588,7 @@ impl FileCache {
 
         match verification_entry.expected_total_size {
             Some(size) if size > 0 => {
-                info!(
+                trace!(
                     "✅ VERIFICATION SUCCESS: Database entry has expected_total_size={} and is visible",
                     size
                 );
@@ -648,7 +646,7 @@ impl FileCacheHandle {
         media_id: MediaItemId,
         original_stream: StreamInfo,
     ) -> Result<CachedStreamInfo> {
-        debug!(
+        trace!(
             "FileCacheHandle::get_cached_stream called for media_id: {:?}",
             media_id
         );

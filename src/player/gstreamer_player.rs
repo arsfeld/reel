@@ -598,18 +598,18 @@ impl GStreamerPlayer {
         }
 
         // Create playbin3 element - NEVER fallback
-        debug!("Creating playbin3 element");
+        trace!("Creating playbin3 element");
         let playbin = gst::ElementFactory::make("playbin3")
             .name("player")
             .property("uri", url)
             .build()
             .context("Failed to create playbin3 element - GStreamer plugins may not be properly installed")?;
 
-        debug!("Successfully created playbin3");
+        trace!("Successfully created playbin3");
 
         // Verify we're using playbin3
         if let Some(factory) = playbin.factory() {
-            info!(
+            debug!(
                 "Using element: {} (factory: {})",
                 playbin.name(),
                 factory.name()

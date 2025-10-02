@@ -2,7 +2,7 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::cache::{FileCache, FileCacheHandle};
 use crate::services::config_service::config_service;
@@ -33,7 +33,7 @@ impl CacheService {
             return Ok(());
         }
 
-        info!("🗄️ Initializing file cache service");
+        debug!("Initializing file cache service");
 
         // Get cache configuration from config service
         let config = config_service().get_config().await;
@@ -53,14 +53,13 @@ impl CacheService {
 
         // Spawn the cache task with error logging
         tokio::spawn(async move {
-            info!("🗄️ Starting file cache task");
             file_cache.run().await;
-            error!("🗄️ File cache task has exited - this should not happen!");
+            error!("File cache task has exited unexpectedly");
         });
 
         *is_initialized = true;
 
-        info!("✅ File cache service initialized successfully");
+        debug!("File cache service initialized");
         Ok(())
     }
 
@@ -85,7 +84,7 @@ impl CacheService {
             return Ok(());
         }
 
-        info!("🗄️ Shutting down file cache service");
+        debug!("Shutting down file cache service");
 
         // Shutdown the cache
         {
@@ -103,7 +102,7 @@ impl CacheService {
 
         *is_initialized = false;
 
-        info!("✅ File cache service shut down successfully");
+        debug!("File cache service shut down");
         Ok(())
     }
 
