@@ -176,10 +176,10 @@ impl MpvPlayer {
         let handle = glib::timeout_add_local(Duration::from_millis(100), move || {
             if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
                 // Check if media failed to load by checking idle state
-                if let Some(Ok(idle)) = mpv.get_property::<bool>("idle-active") {
+                if let Ok(idle) = mpv.get_property::<bool>("idle-active") {
                     if idle {
                         // Check if we were trying to play something
-                        if let Some(Ok(path)) = mpv.get_property::<String>("path") {
+                        if let Ok(path) = mpv.get_property::<String>("path") {
                             if !path.is_empty() {
                                 // We have a path but are idle - this indicates an error
                                 if let Some(ref callback) = *inner.error_callback.lock().unwrap() {
@@ -198,10 +198,10 @@ impl MpvPlayer {
                 }
 
                 // Check for EOF which can indicate errors
-                if let Some(Ok(eof)) = mpv.get_property("eof-reached") {
+                if let Ok(eof) = mpv.get_property::<bool>("eof-reached") {
                     if eof {
                         // Check if we have a valid duration - if not, it's likely an error
-                        if let Some(Ok(duration)) = mpv.get_property("duration") {
+                        if let Ok(duration) = mpv.get_property::<f64>("duration") {
                             if duration <= 0.0 {
                                 if let Some(ref callback) = *inner.error_callback.lock().unwrap() {
                                     callback(
@@ -218,7 +218,7 @@ impl MpvPlayer {
                 }
 
                 // Check demuxer cache state for errors
-                if let Some(Ok(cache_state)) = mpv.get_property("demuxer-cache-state") {
+                if let Ok(cache_state) = mpv.get_property::<i64>("demuxer-cache-state") {
                     if cache_state < 0 {
                         // Negative values often indicate errors
                         if let Some(ref callback) = *inner.error_callback.lock().unwrap() {
@@ -539,9 +539,7 @@ impl MpvPlayer {
                 glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
                     if let Some(ref mpv) = *inner_clone.mpv.lock().unwrap() {
                         debug!("Actually loading media now: {}", url_clone);
-                        if let Some(Err(e)) = mpv.command("loadfile", &[&url_clone, "replace"])
-                            as Option<Result<(), _>>
-                        {
+                        if let Err(e) = mpv.command("loadfile", &[&url_clone, "replace"]) {
                             error!("Failed to load pending media: {:?}", e);
                         }
                     }
@@ -825,7 +823,7 @@ impl MpvPlayer {
                     // Check if we're seeking - if so, skip automatic render
                     let is_seeking = inner_timer.seek_pending.lock().unwrap().is_some();
                     if !is_seeking
-                        && let Some(Ok(paused)) = mpv.get_property::<bool>("pause")
+                        && let Ok(paused) = mpv.get_property::<bool>("pause")
                         && !paused
                     {
                         // Queue render - the render callback will check if it's safe
@@ -870,8 +868,7 @@ impl MpvPlayer {
 
         // Load the media file
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
-            (mpv.command("loadfile", &[url, "replace"]) as Option<Result<(), _>>)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute loadfile command"))?
+            mpv.command("loadfile", &[url, "replace"])
                 .map_err(|e| anyhow::anyhow!("Failed to load media: {:?}", e))?;
             debug!("Media load command sent");
 
@@ -889,7 +886,6 @@ impl MpvPlayer {
 
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             mpv.set_property("pause", false)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                 .map_err(|e| anyhow::anyhow!("Failed to set pause=false: {:?}", e))?;
 
             let mut state = self.inner.state.write().await;
@@ -910,7 +906,6 @@ impl MpvPlayer {
 
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             mpv.set_property("pause", true)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                 .map_err(|e| anyhow::anyhow!("Failed to set pause=true: {:?}", e))?;
 
             let mut state = self.inner.state.write().await;
@@ -924,31 +919,28 @@ impl MpvPlayer {
 
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             // IMMEDIATE: Mute volume for instant silence
-            if let Some(Err(e)) = mpv.command("set", &["volume", "0"]) as Option<Result<(), _>> {
+            if let Err(e) = mpv.command("set", &["volume", "0"]) {
                 warn!("Failed to mute volume during stop: {:?}", e);
             }
 
             // IMMEDIATE: Disable audio output completely
-            if let Some(Err(e)) = mpv.command("set", &["ao", "null"]) as Option<Result<(), _>> {
+            if let Err(e) = mpv.command("set", &["ao", "null"]) {
                 warn!("Failed to disable audio output: {:?}", e);
             }
 
             // THEN: Stop media playback
             debug!("MpvPlayer::stop() - Sending stop command to MPV");
-            (mpv.command("stop", &[]) as Option<Result<(), _>>)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute stop command"))?
+            mpv.command("stop", &[])
                 .map_err(|e| anyhow::anyhow!("Failed to stop: {:?}", e))?;
 
             // Also clear the playlist to ensure no media is loaded
             debug!("MpvPlayer::stop() - Clearing MPV playlist");
-            mpv.command::<()>("playlist-clear", &[])
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute playlist-clear command"))?
+            mpv.command("playlist-clear", &[])
                 .map_err(|e| anyhow::anyhow!("Failed to clear playlist: {:?}", e))?;
 
             // Set idle mode to prevent MPV from closing
             debug!("MpvPlayer::stop() - Setting MPV to idle mode");
-            mpv.command::<()>("set", &["idle", "yes"])
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute set command"))?
+            mpv.command("set", &["idle", "yes"])
                 .map_err(|e| anyhow::anyhow!("Failed to set idle mode: {:?}", e))?;
 
             let mut state = self.inner.state.write().await;
@@ -1000,9 +992,7 @@ impl MpvPlayer {
                 && let Some(ref mpv) = *inner.mpv.lock().unwrap()
             {
                 // Use keyframe seeking for speed
-                if let Some(Err(e)) =
-                    mpv.command("seek", &[&pos.to_string(), "absolute"]) as Option<Result<(), _>>
-                {
+                if let Err(e) = mpv.command("seek", &[&pos.to_string(), "absolute"]) {
                     error!("Failed to seek: {:?}", e);
                     // Clear last seek target on error
                     let mut last_target = last_seek_target.lock().unwrap();
@@ -1035,7 +1025,7 @@ impl MpvPlayer {
 
         // Otherwise return the actual position
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
-            && let Some(Ok(pos)) = mpv.get_property::<f64>("time-pos")
+            && let Ok(pos) = mpv.get_property::<f64>("time-pos")
         {
             // Clear the last seek target since we're at the actual position now
             let mut last_target = self.inner.last_seek_target.lock().unwrap();
@@ -1047,7 +1037,7 @@ impl MpvPlayer {
 
     pub async fn get_duration(&self) -> Option<Duration> {
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
-            && let Some(Ok(dur)) = mpv.get_property::<f64>("duration")
+            && let Ok(dur) = mpv.get_property::<f64>("duration")
         {
             // Duration should never be negative, but clamp just in case
             return Some(Duration::from_secs_f64(dur.max(0.0)));
@@ -1060,7 +1050,6 @@ impl MpvPlayer {
             // MPV expects volume in 0-100 range
             let mpv_volume = (volume * 100.0).clamp(0.0, 100.0);
             mpv.set_property("volume", mpv_volume)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                 .map_err(|e| anyhow::anyhow!("Failed to set volume: {:?}", e))?;
         }
         Ok(())
@@ -1068,7 +1057,7 @@ impl MpvPlayer {
 
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
-            && let (Some(Ok(width)), Some(Ok(height))) = (
+            && let (Ok(width), Ok(height)) = (
                 mpv.get_property::<i64>("width"),
                 mpv.get_property::<i64>("height"),
             )
@@ -1082,12 +1071,12 @@ impl MpvPlayer {
         // Query MPV for the actual state instead of relying on cached state
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             // Check if MPV is actually paused or playing
-            if let Some(Ok(paused)) = mpv.get_property::<bool>("pause") {
+            if let Ok(paused) = mpv.get_property::<bool>("pause") {
                 if paused {
                     return PlayerState::Paused;
                 } else {
                     // Check if we're actually playing something
-                    if let Some(Ok(idle)) = mpv.get_property::<bool>("idle-active") {
+                    if let Ok(idle) = mpv.get_property::<bool>("idle-active") {
                         if idle {
                             return PlayerState::Idle;
                         } else {
@@ -1107,24 +1096,20 @@ impl MpvPlayer {
         let mut tracks = Vec::new();
 
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
-            && let Some(Ok(count)) = mpv.get_property::<i64>("track-list/count")
+            && let Ok(count) = mpv.get_property::<i64>("track-list/count")
         {
             debug!("mpv: track-list/count={}", count);
             for i in 0..count {
                 let type_key = format!("track-list/{}/type", i);
                 match mpv.get_property::<String>(&type_key) {
-                    Some(Ok(track_type)) => {
+                    Ok(track_type) => {
                         debug!("mpv: track {} type={} (expect audio)", i, track_type);
                         if track_type != "audio" {
                             continue;
                         }
                     }
-                    Some(Err(e)) => {
+                    Err(e) => {
                         debug!("mpv: failed to get {}: {:?}", type_key, e);
-                        continue;
-                    }
-                    None => {
-                        debug!("mpv: property {} not available", type_key);
                         continue;
                     }
                 }
@@ -1132,12 +1117,12 @@ impl MpvPlayer {
                 let title_key = format!("track-list/{}/title", i);
                 let lang_key = format!("track-list/{}/lang", i);
 
-                if let Some(Ok(id)) = mpv.get_property(&id_key) {
+                if let Ok(id) = mpv.get_property::<i64>(&id_key) {
                     let mut title = format!("Audio Track {}", id);
 
-                    if let Some(Ok(track_title)) = mpv.get_property(&title_key) {
+                    if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
                         title = track_title;
-                    } else if let Some(Ok(lang)) = mpv.get_property(&lang_key) {
+                    } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
                         title = format!("Audio Track {} ({})", id, lang);
                     }
 
@@ -1157,24 +1142,20 @@ impl MpvPlayer {
         tracks.push((-1, "None".to_string()));
 
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
-            && let Some(Ok(count)) = mpv.get_property::<i64>("track-list/count")
+            && let Ok(count) = mpv.get_property::<i64>("track-list/count")
         {
             debug!("mpv: track-list/count={}", count);
             for i in 0..count {
                 let type_key = format!("track-list/{}/type", i);
                 match mpv.get_property::<String>(&type_key) {
-                    Some(Ok(track_type)) => {
+                    Ok(track_type) => {
                         debug!("mpv: track {} type={} (expect sub)", i, track_type);
                         if track_type != "sub" {
                             continue;
                         }
                     }
-                    Some(Err(e)) => {
+                    Err(e) => {
                         debug!("mpv: failed to get {}: {:?}", type_key, e);
-                        continue;
-                    }
-                    None => {
-                        debug!("mpv: property {} not available", type_key);
                         continue;
                     }
                 }
@@ -1182,12 +1163,12 @@ impl MpvPlayer {
                 let title_key = format!("track-list/{}/title", i);
                 let lang_key = format!("track-list/{}/lang", i);
 
-                if let Some(Ok(id)) = mpv.get_property(&id_key) {
+                if let Ok(id) = mpv.get_property::<i64>(&id_key) {
                     let mut title = format!("Subtitle {}", id);
 
-                    if let Some(Ok(track_title)) = mpv.get_property(&title_key) {
+                    if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
                         title = track_title;
-                    } else if let Some(Ok(lang)) = mpv.get_property(&lang_key) {
+                    } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
                         title = format!("Subtitle {} ({})", id, lang);
                     }
 
@@ -1203,7 +1184,6 @@ impl MpvPlayer {
     pub async fn set_audio_track(&self, track_index: i32) -> Result<()> {
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
             mpv.set_property("aid", track_index as i64)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                 .map_err(|e| anyhow::anyhow!("Failed to set audio track: {:?}", e))?;
             debug!("Set audio track to {}", track_index);
         }
@@ -1215,13 +1195,11 @@ impl MpvPlayer {
             if track_index < 0 {
                 // Disable subtitles
                 mpv.set_property("sid", "no")
-                    .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                     .map_err(|e| anyhow::anyhow!("Failed to disable subtitles: {:?}", e))?;
                 debug!("Disabled subtitles");
             } else {
                 // Enable subtitles and set track
                 mpv.set_property("sid", track_index as i64)
-                    .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                     .map_err(|e| anyhow::anyhow!("Failed to set subtitle track: {:?}", e))?;
                 debug!("Set subtitle track to {}", track_index);
             }
@@ -1231,7 +1209,7 @@ impl MpvPlayer {
 
     pub async fn get_current_audio_track(&self) -> i32 {
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
-            && let Some(Ok(aid)) = mpv.get_property::<i64>("aid")
+            && let Ok(aid) = mpv.get_property::<i64>("aid")
         {
             return aid as i32;
         }
@@ -1240,7 +1218,7 @@ impl MpvPlayer {
 
     pub async fn get_current_subtitle_track(&self) -> i32 {
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
-            && let Some(Ok(sid)) = mpv.get_property::<i64>("sid")
+            && let Ok(sid) = mpv.get_property::<i64>("sid")
         {
             return sid as i32;
         }
@@ -1321,7 +1299,6 @@ impl MpvPlayer {
         let inner = self.inner.clone();
         if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
             mpv.set_property("speed", speed)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                 .map_err(|e| anyhow::anyhow!("Failed to set playback speed: {:?}", e))?;
         }
         Ok(())
@@ -1330,9 +1307,7 @@ impl MpvPlayer {
     pub async fn get_playback_speed(&self) -> f64 {
         let inner = self.inner.clone();
         if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
-            mpv.get_property::<f64>("speed")
-                .and_then(|r| r.ok())
-                .unwrap_or(1.0)
+            mpv.get_property::<f64>("speed").unwrap_or(1.0)
         } else {
             1.0
         }
@@ -1341,8 +1316,7 @@ impl MpvPlayer {
     pub async fn frame_step_forward(&self) -> Result<()> {
         let inner = self.inner.clone();
         if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
-            (mpv.command("frame-step", &[]) as Option<Result<(), _>>)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute command"))?
+            mpv.command("frame-step", &[])
                 .map_err(|e| anyhow::anyhow!("Failed to step forward: {:?}", e))?;
         }
         Ok(())
@@ -1351,8 +1325,7 @@ impl MpvPlayer {
     pub async fn frame_step_backward(&self) -> Result<()> {
         let inner = self.inner.clone();
         if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
-            (mpv.command("frame-back-step", &[]) as Option<Result<(), _>>)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute command"))?
+            mpv.command("frame-back-step", &[])
                 .map_err(|e| anyhow::anyhow!("Failed to step backward: {:?}", e))?;
         }
         Ok(())
@@ -1361,12 +1334,8 @@ impl MpvPlayer {
     pub async fn toggle_mute(&self) -> Result<()> {
         let inner = self.inner.clone();
         if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
-            let muted = mpv
-                .get_property::<bool>("mute")
-                .and_then(|r| r.ok())
-                .unwrap_or(false);
+            let muted = mpv.get_property::<bool>("mute").unwrap_or(false);
             mpv.set_property("mute", !muted)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                 .map_err(|e| anyhow::anyhow!("Failed to toggle mute: {:?}", e))?;
         }
         Ok(())
@@ -1375,9 +1344,7 @@ impl MpvPlayer {
     pub async fn is_muted(&self) -> bool {
         let inner = self.inner.clone();
         if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
-            mpv.get_property::<bool>("mute")
-                .and_then(|r| r.ok())
-                .unwrap_or(false)
+            mpv.get_property::<bool>("mute").unwrap_or(false)
         } else {
             false
         }
@@ -1386,8 +1353,7 @@ impl MpvPlayer {
     pub async fn cycle_subtitle_track(&self) -> Result<()> {
         let inner = self.inner.clone();
         if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
-            (mpv.command("cycle", &["sub"]) as Option<Result<(), _>>)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute command"))?
+            mpv.command("cycle", &["sub"])
                 .map_err(|e| anyhow::anyhow!("Failed to cycle subtitle track: {:?}", e))?;
         }
         Ok(())
@@ -1396,8 +1362,7 @@ impl MpvPlayer {
     pub async fn cycle_audio_track(&self) -> Result<()> {
         let inner = self.inner.clone();
         if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
-            (mpv.command("cycle", &["audio"]) as Option<Result<(), _>>)
-                .ok_or_else(|| anyhow::anyhow!("Failed to execute command"))?
+            mpv.command("cycle", &["audio"])
                 .map_err(|e| anyhow::anyhow!("Failed to cycle audio track: {:?}", e))?;
         }
         Ok(())
@@ -1414,16 +1379,12 @@ impl MpvPlayer {
                 ZoomMode::Fit => {
                     // Reset to fit entire video
                     mpv.set_property("video-zoom", 0.0)
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                         .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
-                    mpv.set_property::<()>("video-pan-x", 0.0)
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+                    mpv.set_property("video-pan-x", 0.0)
                         .map_err(|e| anyhow::anyhow!("Failed to set video-pan-x: {:?}", e))?;
-                    mpv.set_property::<()>("video-pan-y", 0.0)
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+                    mpv.set_property("video-pan-y", 0.0)
                         .map_err(|e| anyhow::anyhow!("Failed to set video-pan-y: {:?}", e))?;
-                    mpv.set_property::<()>("video-aspect-override", "-1")
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+                    mpv.set_property("video-aspect-override", "-1")
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
                         })?;
@@ -1431,57 +1392,47 @@ impl MpvPlayer {
                 ZoomMode::Fill => {
                     // Calculate zoom to fill window (will be done dynamically based on aspect ratios)
                     // For now, just zoom in slightly to demonstrate
-                    mpv.set_property::<()>("video-zoom", 0.5)
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+                    mpv.set_property("video-zoom", 0.5)
                         .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
-                    mpv.set_property::<()>("video-aspect-override", "-1")
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+                    mpv.set_property("video-aspect-override", "-1")
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
                         })?;
                 }
                 ZoomMode::Zoom16_9 => {
                     // Force 16:9 aspect ratio
-                    mpv.set_property::<()>("video-aspect-override", "16:9")
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+                    mpv.set_property("video-aspect-override", "16:9")
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
                         })?;
                     mpv.set_property("video-zoom", 0.0)
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                         .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
                 }
                 ZoomMode::Zoom4_3 => {
                     // Force 4:3 aspect ratio
-                    mpv.set_property::<()>("video-aspect-override", "4:3")
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+                    mpv.set_property("video-aspect-override", "4:3")
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
                         })?;
                     mpv.set_property("video-zoom", 0.0)
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                         .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
                 }
                 ZoomMode::Zoom2_35 => {
                     // Force 2.35:1 (cinematic) aspect ratio
-                    mpv.set_property::<()>("video-aspect-override", "2.35:1")
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+                    mpv.set_property("video-aspect-override", "2.35:1")
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
                         })?;
                     mpv.set_property("video-zoom", 0.0)
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
                         .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
                 }
                 ZoomMode::Custom(level) => {
                     // Custom zoom level (in log2 scale for MPV)
                     // Convert percentage to log2 scale: 1.0 = 100% = 0 zoom, 2.0 = 200% = 1 zoom
                     let zoom_value = (level.max(0.1)).log2();
-                    mpv.set_property::<()>("video-zoom", zoom_value)
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+                    mpv.set_property("video-zoom", zoom_value)
                         .map_err(|e| anyhow::anyhow!("Failed to set video-zoom: {:?}", e))?;
-                    mpv.set_property::<()>("video-aspect-override", "-1")
-                        .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+                    mpv.set_property("video-aspect-override", "-1")
                         .map_err(|e| {
                             anyhow::anyhow!("Failed to set video-aspect-override: {:?}", e)
                         })?;
@@ -1511,8 +1462,7 @@ impl MpvPlayerInner {
             Mpv::new().map_err(|e| anyhow::anyhow!("Failed to create MPV instance: {:?}", e))?;
 
         // Enable terminal output so MPV can log messages
-        mpv.set_property::<()>("terminal", true)
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("terminal", true)
             .map_err(|e| anyhow::anyhow!("Failed to enable terminal: {:?}", e))?;
 
         // Set log level - this needs to be set before other properties
@@ -1524,19 +1474,18 @@ impl MpvPlayerInner {
         }
 
         // Always log MPV version as it's useful for debugging
-        if let Some(Ok(version)) = mpv.get_property("mpv-version") {
+        if let Ok(version) = mpv.get_property::<String>("mpv-version") {
             info!("MPV version: {}", version);
         }
         // Only log configuration in verbose mode
         if self.verbose_logging
-            && let Some(Ok(config)) = mpv.get_property("mpv-configuration")
+            && let Ok(config) = mpv.get_property::<String>("mpv-configuration")
         {
             debug!("MPV configuration: {}", config);
         }
 
         // Configure MPV for render API with performance optimizations
-        mpv.set_property::<()>("vo", "libmpv")
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("vo", "libmpv")
             .map_err(|e| anyhow::anyhow!("Failed to set vo=libmpv: {:?}", e))?;
 
         // Only enable GPU debug options if verbose logging is enabled
@@ -1546,75 +1495,55 @@ impl MpvPlayerInner {
         }
 
         // Performance optimizations - improved for seeking
-        mpv.set_property::<()>("video-sync", "audio")
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("video-sync", "audio")
             .map_err(|e| anyhow::anyhow!("Failed to set video-sync: {:?}", e))?;
-        mpv.set_property::<()>("interpolation", false)
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("interpolation", false)
             .map_err(|e| anyhow::anyhow!("Failed to set interpolation: {:?}", e))?;
         let _ = mpv.set_property("opengl-swapinterval", 1); // May not be available on all systems
 
         // Seek optimization settings - prioritize speed
-        mpv.set_property::<()>("hr-seek", "no") // Disable HR seeking for speed
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("hr-seek", "no") // Disable HR seeking for speed
             .map_err(|e| anyhow::anyhow!("Failed to set hr-seek: {:?}", e))?;
-        mpv.set_property::<()>("hr-seek-framedrop", true) // Allow frame drops for smoother seeking
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("hr-seek-framedrop", true) // Allow frame drops for smoother seeking
             .map_err(|e| anyhow::anyhow!("Failed to set hr-seek-framedrop: {:?}", e))?;
-        mpv.set_property::<()>("index", "default") // Use index for faster seeking
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("index", "default") // Use index for faster seeking
             .map_err(|e| anyhow::anyhow!("Failed to set index: {:?}", e))?;
         let _ = mpv.set_property("force-seekable", true); // Force seekable even for streams
 
         // Set basic options
-        mpv.set_property::<()>("keep-open", "yes")
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("keep-open", "yes")
             .map_err(|e| anyhow::anyhow!("Failed to set keep-open: {:?}", e))?;
-        mpv.set_property::<()>("hwdec", "auto-safe") // auto-safe is more stable than auto
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("hwdec", "auto-safe") // auto-safe is more stable than auto
             .map_err(|e| anyhow::anyhow!("Failed to set hwdec: {:?}", e))?;
-        mpv.set_property::<()>("input-default-bindings", false)
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("input-default-bindings", false)
             .map_err(|e| anyhow::anyhow!("Failed to set input-default-bindings: {:?}", e))?;
-        mpv.set_property::<()>("input-vo-keyboard", false)
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("input-vo-keyboard", false)
             .map_err(|e| anyhow::anyhow!("Failed to set input-vo-keyboard: {:?}", e))?;
-        mpv.set_property::<()>("osc", false)
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("osc", false)
             .map_err(|e| anyhow::anyhow!("Failed to set osc: {:?}", e))?;
-        mpv.set_property::<()>("ytdl", false)
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("ytdl", false)
             .map_err(|e| anyhow::anyhow!("Failed to set ytdl: {:?}", e))?;
-        mpv.set_property::<()>("load-scripts", false)
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("load-scripts", false)
             .map_err(|e| anyhow::anyhow!("Failed to set load-scripts: {:?}", e))?;
 
         // Audio/subtitle preferences
-        mpv.set_property::<()>("aid", "auto")
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("aid", "auto")
             .map_err(|e| anyhow::anyhow!("Failed to set aid: {:?}", e))?;
-        mpv.set_property::<()>("sid", "auto")
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("sid", "auto")
             .map_err(|e| anyhow::anyhow!("Failed to set sid: {:?}", e))?;
-        mpv.set_property::<()>("alang", "eng,en")
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("alang", "eng,en")
             .map_err(|e| anyhow::anyhow!("Failed to set alang: {:?}", e))?;
-        mpv.set_property::<()>("slang", "eng,en")
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("slang", "eng,en")
             .map_err(|e| anyhow::anyhow!("Failed to set slang: {:?}", e))?;
-        mpv.set_property::<()>("sub-auto", "fuzzy")
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("sub-auto", "fuzzy")
             .map_err(|e| anyhow::anyhow!("Failed to set sub-auto: {:?}", e))?;
-        mpv.set_property::<()>("audio-file-auto", "fuzzy")
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("audio-file-auto", "fuzzy")
             .map_err(|e| anyhow::anyhow!("Failed to set audio-file-auto: {:?}", e))?;
 
         // Basic cache settings for network streaming
-        mpv.set_property::<()>("cache", true)
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("cache", true)
             .map_err(|e| anyhow::anyhow!("Failed to set cache: {:?}", e))?;
-        mpv.set_property::<()>("cache-secs", 10) // Reduced from config value for stability
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("cache-secs", 10) // Reduced from config value for stability
             .map_err(|e| anyhow::anyhow!("Failed to set cache-secs: {:?}", e))?;
 
         // Don't set demuxer-max-bytes or demuxer-readahead-secs - let MPV use defaults
@@ -1623,8 +1552,7 @@ impl MpvPlayerInner {
         info!("MPV cache configured with basic settings for streaming");
 
         // Disable OSD
-        mpv.set_property::<()>("osd-level", 0i64)
-            .ok_or_else(|| anyhow::anyhow!("Failed to execute set_property"))?
+        mpv.set_property("osd-level", 0i64)
             .map_err(|e| anyhow::anyhow!("Failed to set osd-level: {:?}", e))?;
 
         info!("MPV instance configured");
