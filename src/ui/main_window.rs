@@ -697,6 +697,7 @@ impl AsyncComponent for MainWindow {
                     "init_sync" => {
                         // Check for existing sources and navigate to home if they exist
                         let db_clone = self.db.clone();
+                        let sync_worker = self.sync_worker.sender().clone();
 
                         // First, delay a bit to let UI initialize, then check for sources
                         gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(500), {
@@ -724,6 +725,27 @@ impl AsyncComponent for MainWindow {
                                                 sender.input(MainWindowInput::Navigate(
                                                     "home".to_string(),
                                                 ));
+
+                                                // Trigger sync for all sources via SyncWorker
+                                                for source in sources {
+                                                    let source_id = crate::models::SourceId::from(
+                                                        source.id.clone(),
+                                                    );
+                                                    tracing::info!(
+                                                        "Triggering startup sync for source: {}",
+                                                        source.name
+                                                    );
+
+                                                    sync_worker
+                                                        .send(SyncWorkerInput::StartSync {
+                                                            source_id,
+                                                            library_id: None,
+                                                            force: false,
+                                                        })
+                                                        .unwrap_or_else(|e| {
+                                                            tracing::error!("Failed to send sync command to worker: {:?}", e);
+                                                        });
+                                                }
                                             }
                                         }
                                         Err(e) => {
