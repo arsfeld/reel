@@ -11,6 +11,7 @@ use futures::stream::Stream;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::task::{Context as TaskContext, Poll};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -152,8 +153,11 @@ impl CacheProxy {
                 let streams = active_streams.read().await;
                 stats.set_active_streams(streams.len() as u64);
 
-                let report = stats.format_report();
-                info!("{}", report);
+                // Only log stats if proxy has been used
+                if stats.requests_served.load(Ordering::Relaxed) > 0 {
+                    let report = stats.format_report();
+                    info!("{}", report);
+                }
             }
         });
     }

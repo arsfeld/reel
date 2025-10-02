@@ -1,9 +1,10 @@
 use anyhow::Result;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use relm4::{ComponentSender, Sender, Worker};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
@@ -38,6 +39,8 @@ pub struct ConfigManager {
     config: Arc<RwLock<Config>>,
     config_path: PathBuf,
     file_watcher: Option<RecommendedWatcher>,
+    last_reload_time: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    config_content_hash: Arc<std::sync::Mutex<Option<u64>>>,
 }
 
 impl std::fmt::Debug for ConfigManager {
@@ -59,7 +62,18 @@ impl ConfigManager {
             config: Arc::new(RwLock::new(config)),
             config_path,
             file_watcher: None,
+            last_reload_time: Arc::new(std::sync::Mutex::new(None)),
+            config_content_hash: Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+
+    /// Compute hash of config file content
+    fn compute_file_hash(path: &PathBuf) -> Option<u64> {
+        std::fs::read_to_string(path).ok().map(|content| {
+            let mut hasher = DefaultHasher::new();
+            content.hash(&mut hasher);
+            hasher.finish()
+        })
     }
 
     async fn notify_config_change(&self, config: Arc<Config>) {
@@ -77,6 +91,12 @@ impl ConfigManager {
             Ok(new_config) => {
                 let arc_config = Arc::new(new_config);
                 *self.config.write().await = (*arc_config).clone();
+
+                // Update stored hash after successful load
+                if let Some(hash) = Self::compute_file_hash(&self.config_path) {
+                    *self.config_content_hash.lock().unwrap() = Some(hash);
+                }
+
                 self.notify_config_change(arc_config.clone()).await;
                 info!("Configuration loaded and broadcasted");
                 Ok(())
@@ -129,15 +149,22 @@ impl ConfigManager {
         info!("Setting up configuration file watcher");
 
         let config_path = self.config_path.clone();
+        let config_path_for_closure = config_path.clone();
 
         let mut watcher =
             notify::recommended_watcher(move |res: Result<notify::Event, _>| match res {
                 Ok(event) => {
                     use notify::EventKind;
 
+                    // Only process events for our specific config file
+                    let is_config_file = event.paths.iter().any(|p| p == &config_path_for_closure);
+                    if !is_config_file {
+                        return;
+                    }
+
                     match event.kind {
                         EventKind::Modify(_) | EventKind::Create(_) => {
-                            debug!("Config file changed, triggering reload");
+                            // Don't log here - let the handler decide if content actually changed
                             let _ = sender.send(ConfigManagerInput::ReloadConfig);
                         }
                         _ => {}
@@ -226,24 +253,61 @@ impl Worker for ConfigManager {
                 });
             }
             ConfigManagerInput::ReloadConfig => {
-                // Debounce rapid file changes
-                let mut manager = self.clone();
-                let sender = sender.clone();
-                relm4::spawn_local(async move {
-                    // Debounce with a short delay
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                // Debounce rapid file changes using timestamp comparison
+                const DEBOUNCE_MS: u128 = 100;
 
-                    if let Err(e) = manager.load_config().await {
-                        sender
-                            .output(ConfigManagerOutput::Error(e.to_string()))
-                            .unwrap();
+                let now = std::time::Instant::now();
+                let should_check_hash = {
+                    let mut last_time = self.last_reload_time.lock().unwrap();
+                    if let Some(last) = *last_time {
+                        if now.duration_since(last).as_millis() < DEBOUNCE_MS {
+                            false
+                        } else {
+                            *last_time = Some(now);
+                            true
+                        }
                     } else {
-                        let config = manager.config.read().await;
-                        sender
-                            .output(ConfigManagerOutput::ConfigLoaded(Arc::new(config.clone())))
-                            .unwrap();
+                        *last_time = Some(now);
+                        true
                     }
-                });
+                };
+
+                if should_check_hash {
+                    // Check if file content actually changed by comparing hashes
+                    let current_hash = Self::compute_file_hash(&self.config_path);
+                    let should_reload = {
+                        let mut stored_hash = self.config_content_hash.lock().unwrap();
+                        if current_hash != *stored_hash {
+                            // Update hash immediately to prevent duplicate reloads from burst events
+                            *stored_hash = current_hash;
+                            true
+                        } else {
+                            false
+                        }
+                    };
+
+                    if should_reload {
+                        debug!("Config file content changed, reloading");
+                        let mut manager = self.clone();
+                        let sender = sender.clone();
+                        relm4::spawn_local(async move {
+                            if let Err(e) = manager.load_config().await {
+                                sender
+                                    .output(ConfigManagerOutput::Error(e.to_string()))
+                                    .unwrap();
+                            } else {
+                                let config = manager.config.read().await;
+                                sender
+                                    .output(ConfigManagerOutput::ConfigLoaded(Arc::new(
+                                        config.clone(),
+                                    )))
+                                    .unwrap();
+                            }
+                        });
+                    } else {
+                        debug!("Config file event detected but content unchanged, skipping reload");
+                    }
+                }
             }
             ConfigManagerInput::Shutdown => {
                 info!("ConfigManager shutting down");
@@ -259,6 +323,8 @@ impl Clone for ConfigManager {
             config: self.config.clone(),
             config_path: self.config_path.clone(),
             file_watcher: None, // Don't clone the file watcher
+            last_reload_time: self.last_reload_time.clone(),
+            config_content_hash: self.config_content_hash.clone(),
         }
     }
 }

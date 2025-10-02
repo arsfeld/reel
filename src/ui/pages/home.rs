@@ -438,6 +438,22 @@ impl AsyncComponent for HomePage {
                         // Could potentially reload sections if display preferences changed
                         // sender.input(HomePageInput::LoadData);
                     }
+                    BrokerMessage::Source(source_msg) => match source_msg {
+                        crate::ui::shared::broker::SourceMessage::SyncCompleted {
+                            source_id,
+                            items_synced,
+                        } => {
+                            info!(
+                                "Sync completed for source {}: {} items synced, refreshing home page",
+                                source_id, items_synced
+                            );
+                            // Reload home page data to show new content
+                            sender.input(HomePageInput::LoadData);
+                        }
+                        _ => {
+                            // Ignore other source messages
+                        }
+                    },
                     _ => {
                         // Ignore other broker messages
                     }

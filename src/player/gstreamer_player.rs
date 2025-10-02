@@ -866,31 +866,6 @@ impl GStreamerPlayer {
         }
 
         debug!("GStreamerPlayer::load_media() - Playbin configured, ready for playback");
-
-        // Configure playbin for better network streaming
-        {
-            // Set connection-speed for better buffering decisions
-            if playbin.has_property("connection-speed") {
-                playbin.set_property("connection-speed", 10000u64); // 10 Mbps
-                debug!("Set playbin connection-speed for better buffering");
-            }
-
-            // Increase buffer size for network streams
-            if playbin.has_property("buffer-size") {
-                playbin.set_property("buffer-size", 10 * 1024 * 1024i32); // 10MB
-                debug!("Set playbin buffer-size to 10MB");
-            }
-
-            // Set buffer duration for smoother playback
-            if playbin.has_property("buffer-duration") {
-                playbin.set_property(
-                    "buffer-duration",
-                    gst::ClockTime::from_seconds(10).nseconds() as i64,
-                );
-                debug!("Set playbin buffer-duration to 10 seconds");
-            }
-        }
-
         debug!("Media loading complete");
         Ok(())
     }

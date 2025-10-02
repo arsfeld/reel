@@ -1,6 +1,11 @@
+use crate::db::entities::MediaItemModel;
 use crate::models::{MediaItem, MediaItemId};
+use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage};
 use relm4::{ComponentSender, Worker};
+use sea_orm::DatabaseConnection;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tantivy::{
     Index, IndexReader, IndexWriter,
     collector::TopDocs,
@@ -9,7 +14,7 @@ use tantivy::{
     query::QueryParser,
     schema::{Field, STORED, Schema, TEXT, Value},
 };
-use tracing::{error, info};
+use tracing::{error, info, trace};
 
 #[derive(Debug, Clone)]
 pub struct SearchDocument {
@@ -57,6 +62,8 @@ impl From<MediaItem> for SearchDocument {
 
 #[derive(Debug, Clone)]
 pub enum SearchWorkerInput {
+    BrokerMsg(BrokerMessage),
+    LoadInitialIndex { db: Arc<DatabaseConnection> },
     IndexDocuments(Vec<SearchDocument>),
     UpdateDocument(SearchDocument),
     RemoveDocument(MediaItemId),
@@ -154,9 +161,15 @@ impl SearchWorker {
             return Err("Search index not available".to_string());
         }
 
-        let count = documents.len();
-
+        // Deduplicate documents by ID, keeping the last occurrence (most recent data)
+        let mut unique_docs: HashMap<MediaItemId, SearchDocument> = HashMap::new();
         for doc in documents {
+            unique_docs.insert(doc.id.clone(), doc);
+        }
+
+        let count = unique_docs.len();
+
+        for doc in unique_docs.into_values() {
             self.add_document(doc)?;
         }
 
@@ -240,6 +253,8 @@ impl SearchWorker {
             .map_err(|e| format!("Failed to search: {}", e))?;
 
         let mut results = Vec::new();
+        let mut seen_ids = std::collections::HashSet::new();
+
         for (_score, doc_address) in &top_docs {
             let retrieved_doc: tantivy::TantivyDocument = searcher
                 .doc(*doc_address)
@@ -248,12 +263,19 @@ impl SearchWorker {
             if let Some(id_value) = retrieved_doc.get_first(self.id_field) {
                 if let Some(id_str) = id_value.as_str() {
                     let id = id_str.parse::<MediaItemId>().unwrap();
-                    results.push(id);
+
+                    // Deduplicate: only add if we haven't seen this ID before
+                    // This preserves the highest-scoring result since results are sorted by score
+                    if seen_ids.insert(id.clone()) {
+                        results.push(id);
+                    }
                 }
             }
         }
 
-        Ok((results, top_docs.len()))
+        // Return deduplicated results count, not original top_docs.len()
+        let total_unique = results.len();
+        Ok((results, total_unique))
     }
 
     fn clear_index(&mut self) -> Result<(), String> {
@@ -293,12 +315,41 @@ impl SearchWorker {
     }
 }
 
+impl std::fmt::Debug for SearchWorker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SearchWorker")
+            .field("index", &self.index.is_some())
+            .field("reader", &self.reader.is_some())
+            .field("writer", &self.writer.is_some())
+            .finish()
+    }
+}
+
 impl Worker for SearchWorker {
-    type Init = ();
+    type Init = Arc<DatabaseConnection>;
     type Input = SearchWorkerInput;
     type Output = SearchWorkerOutput;
 
-    fn init(_init: Self::Init, sender: ComponentSender<Self>) -> Self {
+    fn init(db: Self::Init, sender: ComponentSender<Self>) -> Self {
+        // Subscribe to broker for media updates
+        // Create a wrapper sender that maps BrokerMessage to SearchWorkerInput
+        let input_sender = sender.input_sender().clone();
+        relm4::spawn(async move {
+            // Create a channel to receive broker messages
+            let (broker_sender, broker_receiver) = relm4::channel::<BrokerMessage>();
+            BROKER
+                .subscribe("SearchWorker".to_string(), broker_sender)
+                .await;
+
+            // Forward broker messages as SearchWorkerInput
+            while let Some(msg) = broker_receiver.recv().await {
+                input_sender.send(SearchWorkerInput::BrokerMsg(msg)).ok();
+            }
+        });
+
+        // Load initial index from database
+        sender.input(SearchWorkerInput::LoadInitialIndex { db: db.clone() });
+
         match Self::new() {
             Ok(worker) => worker,
             Err(e) => {
@@ -339,6 +390,77 @@ impl Worker for SearchWorker {
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
+            SearchWorkerInput::BrokerMsg(broker_msg) => {
+                match broker_msg {
+                    BrokerMessage::Data(DataMessage::MediaUpdated { media_id }) => {
+                        trace!("Received MediaUpdated event for: {}", media_id);
+                        // Single item update - would need to fetch from DB to index
+                        // For now, we'll rely on batch updates during sync
+                    }
+                    BrokerMessage::Data(DataMessage::MediaBatchSaved { items }) => {
+                        info!("Received MediaBatchSaved event with {} items", items.len());
+                        // Convert MediaItemModel to MediaItem to SearchDocument
+                        let documents: Vec<SearchDocument> = items
+                            .into_iter()
+                            .filter_map(|model| {
+                                // Try to convert MediaItemModel to MediaItem
+                                match MediaItem::try_from(model) {
+                                    Ok(media_item) => Some(SearchDocument::from(media_item)),
+                                    Err(e) => {
+                                        error!("Failed to convert media item for indexing: {}", e);
+                                        None
+                                    }
+                                }
+                            })
+                            .collect();
+
+                        if !documents.is_empty() {
+                            match self.index_documents(documents) {
+                                Ok(count) => {
+                                    info!("Indexed {} documents from batch save", count);
+                                }
+                                Err(e) => {
+                                    error!("Failed to index batch: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    _ => {} // Ignore other broker messages
+                }
+            }
+            SearchWorkerInput::LoadInitialIndex { db } => {
+                info!("Loading initial search index from database");
+                use crate::db::repository::{Repository, media_repository::MediaRepositoryImpl};
+
+                let sender_clone = sender.clone();
+                relm4::spawn(async move {
+                    let repo = MediaRepositoryImpl::new(db);
+                    match repo.find_all().await {
+                        Ok(models) => {
+                            info!("Found {} media items for initial indexing", models.len());
+
+                            // Convert to SearchDocuments
+                            let documents: Vec<SearchDocument> = models
+                                .into_iter()
+                                .filter_map(|model| match MediaItem::try_from(model) {
+                                    Ok(media_item) => Some(SearchDocument::from(media_item)),
+                                    Err(e) => {
+                                        error!("Failed to convert media item: {}", e);
+                                        None
+                                    }
+                                })
+                                .collect();
+
+                            if !documents.is_empty() {
+                                sender_clone.input(SearchWorkerInput::IndexDocuments(documents));
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to load media items for initial index: {}", e);
+                        }
+                    }
+                });
+            }
             SearchWorkerInput::IndexDocuments(documents) => match self.index_documents(documents) {
                 Ok(count) => {
                     sender

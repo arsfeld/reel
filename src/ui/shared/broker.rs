@@ -60,6 +60,9 @@ pub enum DataMessage {
     MediaUpdated {
         media_id: String,
     },
+    MediaBatchSaved {
+        items: Vec<crate::db::entities::MediaItemModel>,
+    },
     LibraryUpdated {
         library_id: String,
     },

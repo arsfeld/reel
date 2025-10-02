@@ -1,5 +1,6 @@
 use super::{BaseRepository, Repository};
 use crate::db::entities::{MediaItem, MediaItemActiveModel, MediaItemModel, media_items};
+use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage};
 use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{
@@ -209,8 +210,12 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
 
         let result = active_model.insert(self.base.db.as_ref()).await?;
 
-        // TODO: Broadcast via MessageBroker when needed
-        // BROKER.notify_media_updated(result.id.clone()).await;
+        // Broadcast media updated event
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::MediaUpdated {
+                media_id: result.id.clone(),
+            }))
+            .await;
 
         Ok(result)
     }
@@ -242,8 +247,12 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
 
         let result = active_model.update(self.base.db.as_ref()).await?;
 
-        // TODO: Broadcast via MessageBroker when needed
-        // BROKER.notify_media_updated(result.id.clone()).await;
+        // Broadcast media updated event
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::MediaUpdated {
+                media_id: result.id.clone(),
+            }))
+            .await;
 
         Ok(result)
     }
@@ -383,16 +392,8 @@ impl MediaRepository for MediaRepositoryImpl {
             return Ok(());
         }
 
-        // Collect item IDs for event emission
-        let _item_ids: Vec<String> = items.iter().map(|item| item.id.clone()).collect();
-        let _library_id = items
-            .first()
-            .map(|item| item.library_id.clone())
-            .unwrap_or_default();
-        let _source_id = items
-            .first()
-            .map(|item| item.source_id.clone())
-            .unwrap_or_default();
+        // Clone items for event emission before consuming them
+        let items_for_event = items.clone();
 
         let active_models: Vec<MediaItemActiveModel> = items
             .into_iter()
@@ -423,8 +424,12 @@ impl MediaRepository for MediaRepositoryImpl {
             .exec(self.base.db.as_ref())
             .await?;
 
-        // TODO: Broadcast via MessageBroker when needed
-        // BROKER.notify_library_updated(library_id.to_string()).await;
+        // Broadcast batch saved event
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::MediaBatchSaved {
+                items: items_for_event,
+            }))
+            .await;
 
         Ok(())
     }
