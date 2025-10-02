@@ -3,7 +3,7 @@ use gtk4;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, info};
+use tracing::{debug, trace};
 
 use super::{Player, PlayerState};
 use crate::config::Config;
@@ -158,7 +158,7 @@ impl PlayerController {
 
     /// Run the controller event loop
     pub async fn run(mut self) {
-        info!("🎮 PlayerController: Starting event loop");
+        debug!("PlayerController event loop started");
 
         // Set up error callback
         self.setup_error_callback();
@@ -166,12 +166,12 @@ impl PlayerController {
         while let Some(command) = self.receiver.recv().await {
             match command {
                 PlayerCommand::CreateVideoWidget { respond_to } => {
-                    debug!("🎮 PlayerController: Creating video widget");
+                    trace!("Creating video widget");
                     let widget = self.player.create_video_widget();
                     let _ = respond_to.send(widget);
                 }
                 PlayerCommand::LoadMedia { url, respond_to } => {
-                    debug!("🎮 PlayerController: Loading media: {}", url);
+                    trace!("Loading media: {}", url);
                     let result = self.player.load_media(&url).await;
 
                     // If initial load succeeded, wait a moment and check if media actually loaded
@@ -208,17 +208,17 @@ impl PlayerController {
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::Play { respond_to } => {
-                    debug!("🎮 PlayerController: Starting playback");
+                    trace!("Starting playback");
                     let result = self.player.play().await;
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::Pause { respond_to } => {
-                    debug!("🎮 PlayerController: Pausing playback");
+                    trace!("Pausing playback");
                     let result = self.player.pause().await;
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::Stop { respond_to } => {
-                    debug!("🎮 PlayerController: Stopping playback");
+                    trace!("Stopping playback");
                     let result = self.player.stop().await;
                     let _ = respond_to.send(result);
                 }
@@ -226,7 +226,7 @@ impl PlayerController {
                     position,
                     respond_to,
                 } => {
-                    debug!("🎮 PlayerController: Seeking to {:?}", position);
+                    trace!("Seeking to {:?}", position);
                     let result = self.player.seek(position).await;
                     let _ = respond_to.send(result);
                 }
@@ -239,7 +239,7 @@ impl PlayerController {
                     let _ = respond_to.send(duration);
                 }
                 PlayerCommand::SetVolume { volume, respond_to } => {
-                    debug!("🎮 PlayerController: Setting volume to {}", volume);
+                    trace!("Setting volume to {}", volume);
                     let result = self.player.set_volume(volume).await;
                     let _ = respond_to.send(result);
                 }
@@ -263,10 +263,7 @@ impl PlayerController {
                     track_index,
                     respond_to,
                 } => {
-                    debug!(
-                        "🎮 PlayerController: Setting audio track to {}",
-                        track_index
-                    );
+                    trace!("Setting audio track to {}", track_index);
                     let result = self.player.set_audio_track(track_index).await;
                     let _ = respond_to.send(result);
                 }
@@ -274,10 +271,7 @@ impl PlayerController {
                     track_index,
                     respond_to,
                 } => {
-                    debug!(
-                        "🎮 PlayerController: Setting subtitle track to {}",
-                        track_index
-                    );
+                    trace!("Setting subtitle track to {}", track_index);
                     let result = self.player.set_subtitle_track(track_index).await;
                     let _ = respond_to.send(result);
                 }
@@ -290,9 +284,9 @@ impl PlayerController {
                     let _ = respond_to.send(track);
                 }
                 PlayerCommand::SetUpscalingMode { mode, respond_to } => {
-                    debug!("🎮 PlayerController: Setting upscaling mode to {:?}", mode);
+                    trace!("Setting upscaling mode to {:?}", mode);
                     let result = match &self.player {
-                        #[cfg(feature = "mpv")]
+                        #[cfg(all(feature = "mpv", not(target_os = "macos")))]
                         Player::Mpv(mpv) => mpv.set_upscaling_mode(mode).await,
                         #[cfg(feature = "gstreamer")]
                         Player::GStreamer(_) => {
@@ -307,44 +301,44 @@ impl PlayerController {
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::SetPlaybackSpeed { speed, respond_to } => {
-                    debug!("🎮 PlayerController: Setting playback speed to {}", speed);
+                    trace!("Setting playback speed to {}", speed);
                     let result = self.player.set_playback_speed(speed).await;
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::FrameStepForward { respond_to } => {
-                    debug!("🎮 PlayerController: Frame stepping forward");
+                    trace!("Frame stepping forward");
                     let result = self.player.frame_step_forward().await;
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::FrameStepBackward { respond_to } => {
-                    debug!("🎮 PlayerController: Frame stepping backward");
+                    trace!("Frame stepping backward");
                     let result = self.player.frame_step_backward().await;
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::ToggleMute { respond_to } => {
-                    debug!("🎮 PlayerController: Toggling mute");
+                    trace!("Toggling mute");
                     let result = self.player.toggle_mute().await;
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::CycleSubtitleTrack { respond_to } => {
-                    debug!("🎮 PlayerController: Cycling subtitle track");
+                    trace!("Cycling subtitle track");
                     let result = self.player.cycle_subtitle_track().await;
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::CycleAudioTrack { respond_to } => {
-                    debug!("🎮 PlayerController: Cycling audio track");
+                    trace!("Cycling audio track");
                     let result = self.player.cycle_audio_track().await;
                     let _ = respond_to.send(result);
                 }
                 PlayerCommand::SetZoomMode { mode, respond_to } => {
-                    debug!("🎮 PlayerController: Setting zoom mode to {:?}", mode);
+                    trace!("Setting zoom mode to {:?}", mode);
                     let result = self.player.set_zoom_mode(mode).await;
                     let _ = respond_to.send(result);
                 }
             }
         }
 
-        info!("🎮 PlayerController: Event loop terminated");
+        debug!("PlayerController event loop terminated");
     }
 }
 

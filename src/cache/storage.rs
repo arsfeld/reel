@@ -3,7 +3,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tokio::fs as tokio_fs;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use super::config::FileCacheConfig;
 use super::metadata::{CacheMetadata, GlobalCacheMetadata, MediaCacheKey};
@@ -227,7 +227,7 @@ impl CacheStorage {
     ) -> Result<CacheEntry> {
         let file_path = self.get_file_path(&key);
 
-        info!(
+        debug!(
             "Creating cache entry for key: {:?}, file_path: {:?}",
             key, file_path
         );
@@ -246,7 +246,7 @@ impl CacheStorage {
 
         // Create parent directory if it doesn't exist
         if let Some(parent) = file_path.parent() {
-            debug!("Creating parent directory: {:?}", parent);
+            trace!("Creating parent directory: {:?}", parent);
             tokio_fs::create_dir_all(parent)
                 .await
                 .map_err(|e| {
@@ -256,11 +256,11 @@ impl CacheStorage {
                 .with_context(|| {
                     format!("Failed to create parent directory for {:?}", file_path)
                 })?;
-            debug!("Parent directory created successfully");
+            trace!("Parent directory created successfully");
         }
 
         // Create the file using tokio async I/O
-        debug!("Creating cache file: {:?}", file_path);
+        trace!("Creating cache file: {:?}", file_path);
         tokio_fs::File::create(&file_path)
             .await
             .map_err(|e| {
@@ -268,21 +268,21 @@ impl CacheStorage {
                 e
             })
             .with_context(|| format!("Failed to create cache file {:?}", file_path))?;
-        debug!("Cache file created successfully");
+        trace!("Cache file created successfully");
 
         let metadata = CacheMetadata::new(key.clone(), original_url.clone());
-        debug!("Created metadata for key: {:?}, URL: {}", key, original_url);
+        trace!("Created metadata for key: {:?}, URL: {}", key, original_url);
 
         self.global_metadata.insert(metadata.clone());
-        debug!("Inserted metadata into global cache");
+        trace!("Inserted metadata into global cache");
 
         // Save metadata
-        debug!("Saving metadata to disk");
+        trace!("Saving metadata to disk");
         self.save_metadata().await.map_err(|e| {
             error!("Failed to save metadata: {}", e);
             e
         })?;
-        info!("Cache entry created successfully for key: {:?}", key);
+        debug!("Cache entry created successfully for key: {:?}", key);
 
         Ok(CacheEntry {
             metadata,

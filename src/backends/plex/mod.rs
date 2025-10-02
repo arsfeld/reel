@@ -762,7 +762,7 @@ impl MediaBackend for PlexBackend {
 
         if let Some(url) = existing_url {
             // We already have a URL from the source
-            tracing::info!("Using existing URL from source: {}", url);
+            tracing::debug!("Using existing URL from source: {}", url);
 
             // Check if we can skip testing via cache
             use crate::models::SourceId;
@@ -804,7 +804,7 @@ impl MediaBackend for PlexBackend {
                         cache.update_failure(sid).await;
                     }
                 } else {
-                    tracing::info!("URL {} is reachable, using it", url);
+                    tracing::debug!("URL {} is reachable, using it", url);
 
                     // Update cache with success
                     if let Some(ref sid) = source_id {
@@ -836,7 +836,7 @@ impl MediaBackend for PlexBackend {
                 // CRITICAL FIX: Populate cached_connections even when using existing URL
                 // This prevents get_working_connection() from having to rediscover servers
                 if self.cached_connections.read().await.is_empty() {
-                    tracing::info!("Populating connection cache for existing URL");
+                    tracing::debug!("Populating connection cache for existing URL");
 
                     // Try to discover all connections for this server
                     match PlexAuth::discover_servers(&token).await {
@@ -1108,7 +1108,7 @@ impl MediaBackend for PlexBackend {
         // Optimize: First ensure we have a working connection without full re-initialization
         let working_url = match self.get_working_connection().await {
             Ok(url) => {
-                tracing::info!("Got working connection quickly: {}", url);
+                tracing::debug!("Got working connection quickly: {}", url);
                 url
             }
             Err(e) => {
@@ -1146,10 +1146,10 @@ impl MediaBackend for PlexBackend {
             temp_api
         };
 
-        tracing::info!("Fetching stream URL from Plex API");
+        tracing::debug!("Fetching stream URL from Plex API");
         let result = api.get_stream_url(rating_key).await;
         match &result {
-            Ok(info) => tracing::info!("Successfully got stream URL: {}", info.url),
+            Ok(_) => tracing::debug!("Successfully got stream URL"),
             Err(e) => tracing::error!("Failed to get stream URL: {}", e),
         }
         result
