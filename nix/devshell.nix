@@ -4,8 +4,10 @@
   buildInputs,
   rustBuildInputs,
   whitesurTheme,
+  whitesurIconTheme,
   linuxOnlyPackages,
   darwinOnlyPackages,
+  gdkPixbufWithSvg ? null,
   ...
 }:
 let
@@ -386,6 +388,7 @@ let
 
     # Set environment variables for bundling
     export WHITESUR_GTK_THEME="${whitesurTheme}"
+    export WHITESUR_ICON_THEME="${whitesurIconTheme}"
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
       export SDL2="${pkgs.SDL2}"
     ''}
@@ -564,12 +567,7 @@ pkgs.mkShell {
     ];
 
   shellHook = ''
-    echo "Reel Development Environment"
-    echo "=================================="
-    echo ""
-    echo "Welcome to the development environment!"
-    echo "Run 'help' to see all available commands."
-    echo ""
+    echo "Hello!"
 
     # Initialize pre-commit hooks if not already done
     if [ ! -f .git/hooks/pre-commit ]; then
@@ -595,13 +593,18 @@ pkgs.mkShell {
     # Set up WhiteSur GTK theme and icon themes for macOS
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
       export GTK_THEME=WhiteSur-Dark
-      export XDG_DATA_DIRS="${whitesurTheme}/share:${pkgs.adwaita-icon-theme}/share:${pkgs.hicolor-icon-theme}/share:$XDG_DATA_DIRS"
+      export XDG_DATA_DIRS="${whitesurTheme}/share:${whitesurIconTheme}/share:${pkgs.adwaita-icon-theme}/share:${pkgs.hicolor-icon-theme}/share:$XDG_DATA_DIRS"
       # Set icon theme search path for GTK
       export GTK_PATH="${pkgs.gtk4}/lib/gtk-4.0:$GTK_PATH"
-      # Explicitly set the icon theme name
-      export GTK_ICON_THEME_NAME=Adwaita
+      # Explicitly set the icon theme name to WhiteSur-dark
+      export GTK_ICON_THEME_NAME=WhiteSur-dark
       export XDG_CURRENT_DESKTOP=GNOME
-      echo "WhiteSur GTK theme and Adwaita icon themes configured for macOS"
+      # CRITICAL: Set GDK pixbuf module file to include SVG loader from librsvg
+      # Without this, GTK4 cannot render SVG icons on macOS
+      export GDK_PIXBUF_MODULEDIR="${gdkPixbufWithSvg}/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+      export GDK_PIXBUF_MODULE_FILE="${gdkPixbufWithSvg}/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+      # Set DYLD_LIBRARY_PATH so the SVG loader can find librsvg dylib
+      export DYLD_LIBRARY_PATH="${pkgs.librsvg}/lib:${pkgs.gdk-pixbuf}/lib:${pkgs.glib}/lib:${pkgs.cairo}/lib:$DYLD_LIBRARY_PATH"
     ''}
 
     # Enable debug symbols for development
@@ -613,13 +616,16 @@ pkgs.mkShell {
     # SQLx offline mode for development
     export SQLX_OFFLINE=true
 
-    # Force libmpv-sys to use system MPV
-    export MPV_NO_PKG_CONFIG=0
-    export DEP_MPV_VERSION_MAJOR=2
-    export DEP_MPV_VERSION_MINOR=5
+    # Platform-specific build configuration
+    ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+      # Force libmpv-sys to use system MPV on Linux
+      export MPV_NO_PKG_CONFIG=0
+      export DEP_MPV_VERSION_MAJOR=2
+      export DEP_MPV_VERSION_MINOR=5
+    ''}
 
-    # Fix gettext-sys on macOS
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+      # Fix gettext-sys on macOS
       export GETTEXT_DIR="${pkgs.gettext}"
       export GETTEXT_LIB_DIR="${pkgs.gettext}/lib"
       export GETTEXT_INCLUDE_DIR="${pkgs.gettext}/include"
