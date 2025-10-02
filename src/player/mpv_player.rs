@@ -1540,16 +1540,7 @@ impl MpvPlayerInner {
         mpv.set_property("audio-file-auto", "fuzzy")
             .map_err(|e| anyhow::anyhow!("Failed to set audio-file-auto: {:?}", e))?;
 
-        // Basic cache settings for network streaming
-        mpv.set_property("cache", true)
-            .map_err(|e| anyhow::anyhow!("Failed to set cache: {:?}", e))?;
-        mpv.set_property("cache-secs", 10) // Reduced from config value for stability
-            .map_err(|e| anyhow::anyhow!("Failed to set cache-secs: {:?}", e))?;
-
-        // Don't set demuxer-max-bytes or demuxer-readahead-secs - let MPV use defaults
-        // These were conflicting and causing the packet queue error
-
-        info!("MPV cache configured with basic settings for streaming");
+        // Use MPV's default cache settings for optimal streaming performance
 
         // Disable OSD
         mpv.set_property("osd-level", 0i64)

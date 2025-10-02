@@ -14,4 +14,5 @@ mod search_worker_tests;
 // Re-export commonly used types
 pub use connection_monitor::{ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput};
 pub use image_loader::{ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize};
+pub use search_worker::{SearchWorker, SearchWorkerInput, SearchWorkerOutput};
 pub use sync_worker::{SyncWorker, SyncWorkerInput, SyncWorkerOutput};

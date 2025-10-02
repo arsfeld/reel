@@ -9,14 +9,15 @@ use super::dialogs::{
     PreferencesDialogOutput,
 };
 use super::pages::{
-    HomePage, LibraryPage, MovieDetailsPage, PlayerPage, ShowDetailsPage, SourcesPage,
+    HomePage, LibraryPage, MovieDetailsPage, PlayerPage, SearchPage, ShowDetailsPage, SourcesPage,
 };
+use super::shared::broker::{BROKER, BrokerMessage, SourceMessage};
 use super::sidebar::{Sidebar, SidebarInput, SidebarOutput};
 use crate::db::connection::DatabaseConnection;
 use crate::models::{LibraryId, MediaItemId, PlaylistContext, SourceId};
 use crate::workers::{
-    ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput, SyncWorker,
-    SyncWorkerInput, SyncWorkerOutput,
+    ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput, SearchWorker,
+    SearchWorkerInput, SearchWorkerOutput, SyncWorker, SyncWorkerInput, SyncWorkerOutput,
 };
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -29,6 +30,7 @@ pub struct MainWindow {
     home_page: AsyncController<HomePage>,
     connection_monitor: relm4::WorkerController<ConnectionMonitor>,
     sync_worker: relm4::WorkerController<SyncWorker>,
+    search_worker: relm4::WorkerController<SearchWorker>,
     config_manager: relm4::WorkerController<crate::workers::config_manager::ConfigManager>,
     library_page: Option<AsyncController<LibraryPage>>,
     movie_details_page: Option<AsyncController<MovieDetailsPage>>,
@@ -36,6 +38,8 @@ pub struct MainWindow {
     player_page: Option<AsyncController<PlayerPage>>,
     sources_page: Option<AsyncController<SourcesPage>>,
     sources_nav_page: Option<adw::NavigationPage>,
+    search_page: Option<AsyncController<SearchPage>>,
+    search_nav_page: Option<adw::NavigationPage>,
     preferences_dialog: Option<AsyncController<PreferencesDialog>>,
     auth_dialog: AsyncController<AuthDialog>,
     navigation_view: adw::NavigationView,
@@ -76,6 +80,13 @@ pub enum MainWindowInput {
         context: PlaylistContext,
     },
     NavigateToPreferences,
+    NavigateToSearch,
+    SearchQuery(String),
+    SearchResultsReceived {
+        query: String,
+        results: Vec<MediaItemId>,
+        total_hits: usize,
+    },
     ToggleSidebar,
     SyncSource(SourceId),
     RestoreWindowChrome,
@@ -205,10 +216,16 @@ impl AsyncComponent for MainWindow {
                                 set_spacing: 6,
                             },
 
-                            pack_end = &gtk::Button {
-                                set_icon_name: "system-search-symbolic",
-                                set_tooltip_text: Some("Search Media"),
-                                add_css_class: "flat",
+                            pack_end = &gtk::SearchEntry {
+                                set_placeholder_text: Some("Search media..."),
+                                set_width_request: 250,
+                                connect_activate[sender] => move |entry| {
+                                    let query = entry.text().to_string();
+                                    if !query.is_empty() {
+                                        sender.input(MainWindowInput::NavigateToSearch);
+                                        sender.input(MainWindowInput::SearchQuery(query));
+                                    }
+                                },
                             },
                         },
 
@@ -449,14 +466,23 @@ impl AsyncComponent for MainWindow {
                         sections_synced
                     );
 
+                    // Broadcast sync completion to all subscribed components
+                    let source_id_str = source_id.to_string();
+                    relm4::spawn(async move {
+                        BROKER
+                            .broadcast(BrokerMessage::Source(SourceMessage::SyncCompleted {
+                                source_id: source_id_str,
+                                items_synced,
+                            }))
+                            .await;
+                    });
+
                     // Note: We no longer navigate to home after sync completes.
                     // The home page will be updated through data change events
                     // without forcing navigation away from the user's current page.
 
-                    MainWindowInput::ShowToast(format!(
-                        "Sync completed: {} items, {} sections synced",
-                        items_synced, sections_synced
-                    ))
+                    // Trigger search index refresh after sync
+                    MainWindowInput::Navigate("refresh_search_index".to_string())
                 }
                 SyncWorkerOutput::SyncFailed {
                     source_id, error, ..
@@ -470,6 +496,45 @@ impl AsyncComponent for MainWindow {
                 }
             });
 
+        // Initialize the SearchWorker
+        let search_worker = SearchWorker::builder().detach_worker(db.clone()).forward(
+            sender.input_sender(),
+            |output| match output {
+                SearchWorkerOutput::SearchResults {
+                    query,
+                    results,
+                    total_hits,
+                } => {
+                    tracing::info!(
+                        "Search for '{}' returned {} results ({} total hits)",
+                        query,
+                        results.len(),
+                        total_hits
+                    );
+                    MainWindowInput::SearchResultsReceived {
+                        query,
+                        results,
+                        total_hits,
+                    }
+                }
+                SearchWorkerOutput::IndexingComplete { documents_indexed } => {
+                    tracing::info!("Search index completed: {} documents", documents_indexed);
+                    MainWindowInput::ShowToast(format!(
+                        "Indexed {} items for search",
+                        documents_indexed
+                    ))
+                }
+                SearchWorkerOutput::Error(error) => {
+                    tracing::error!("Search error: {}", error);
+                    MainWindowInput::ShowToast(format!("Search error: {}", error))
+                }
+                _ => {
+                    // Handle other search worker outputs
+                    MainWindowInput::ShowToast("Search operation completed".to_string())
+                }
+            },
+        );
+
         let mut model = Self {
             db,
             runtime,
@@ -478,6 +543,7 @@ impl AsyncComponent for MainWindow {
             auth_dialog,
             connection_monitor,
             sync_worker,
+            search_worker,
             config_manager,
             library_page: None,
             movie_details_page: None,
@@ -485,6 +551,8 @@ impl AsyncComponent for MainWindow {
             player_page: None,
             sources_page: None,
             sources_nav_page: None,
+            search_page: None,
+            search_nav_page: None,
             preferences_dialog: None,
             navigation_view: adw::NavigationView::new(),
             content_header: adw::HeaderBar::new(),
@@ -634,6 +702,9 @@ impl AsyncComponent for MainWindow {
         // Trigger initial sync of all sources after a short delay to let UI initialize
         sender.input(MainWindowInput::Navigate("init_sync".to_string()));
 
+        // Initialize search index with existing media items
+        sender.input(MainWindowInput::Navigate("init_search_index".to_string()));
+
         AsyncComponentParts { model, widgets }
     }
 
@@ -768,6 +839,22 @@ impl AsyncComponent for MainWindow {
                                     "refresh_sidebar".to_string(),
                                 ));
                             },
+                        );
+                    }
+                    "init_search_index" => {
+                        // Search index is now initialized automatically by SearchWorker
+                        // on startup via broker messages - no manual initialization needed
+                        tracing::info!("Search index loads automatically via SearchWorker");
+                    }
+                    "refresh_search_index" => {
+                        // Search index is now updated incrementally via broker messages
+                        // No manual refresh needed - just show the sync completed toast
+                        tracing::info!("Search index updates automatically via broker");
+                        self.toast_overlay.add_toast(
+                            adw::Toast::builder()
+                                .title("Sync completed")
+                                .timeout(3)
+                                .build(),
                         );
                     }
                     "update_header" => {
@@ -1030,6 +1117,114 @@ impl AsyncComponent for MainWindow {
                         .ok();
                     dialog.widget().present(Some(root));
                 }
+            }
+            MainWindowInput::NavigateToSearch => {
+                tracing::info!("Navigating to search page");
+
+                // Switch to content view
+                self.content_stack.set_visible_child_name("content");
+
+                // Check if Search page exists in the navigation stack
+                let stack = self.navigation_view.navigation_stack();
+                let mut search_page_index = None;
+
+                for i in 0..stack.n_items() {
+                    if let Some(page) = stack.item(i)
+                        && let Ok(nav_page) = page.downcast::<adw::NavigationPage>()
+                        && nav_page.title() == "Search"
+                    {
+                        search_page_index = Some(i);
+                        break;
+                    }
+                }
+
+                // If Search page exists in stack, pop to it instead of pushing new one
+                if let Some(index) = search_page_index {
+                    // Pop back to the Search page
+                    while self.navigation_view.navigation_stack().n_items() > index + 1 {
+                        self.navigation_view.pop();
+                    }
+
+                    // If Search page is not visible, make it visible
+                    if let Some(visible_page) = self.navigation_view.visible_page()
+                        && visible_page.title() != "Search"
+                    {
+                        // Navigate to the Search page that's already in the stack
+                        if let Some(page) = stack.item(index)
+                            && let Ok(_nav_page) = page.downcast::<adw::NavigationPage>()
+                        {
+                            // The page should now be visible after popping
+                        }
+                    }
+                } else {
+                    // Search page doesn't exist in stack, create and push it
+
+                    // Create search controller if it doesn't exist
+                    if self.search_page.is_none() {
+                        use crate::ui::pages::search::{SearchPage, SearchPageOutput};
+
+                        let search_controller = SearchPage::builder()
+                            .launch(self.db.clone())
+                            .forward(sender.input_sender(), |output| match output {
+                                SearchPageOutput::NavigateToMediaItem(id) => {
+                                    MainWindowInput::NavigateToMediaItem(id)
+                                }
+                            });
+
+                        // Create the navigation page once
+                        let page = adw::NavigationPage::builder()
+                            .title("Search")
+                            .child(search_controller.widget())
+                            .build();
+
+                        self.search_nav_page = Some(page);
+                        self.search_page = Some(search_controller);
+                    }
+
+                    // Push the existing navigation page
+                    if let Some(ref page) = self.search_nav_page {
+                        self.navigation_view.push(page);
+                    }
+                }
+            }
+            MainWindowInput::SearchQuery(query) => {
+                tracing::info!("Executing search query: {}", query);
+                // Send query to SearchWorker
+                self.search_worker
+                    .emit(SearchWorkerInput::Search { query, limit: 50 });
+            }
+            MainWindowInput::SearchResultsReceived {
+                query,
+                results,
+                total_hits,
+            } => {
+                tracing::info!(
+                    "Received search results: {} results for '{}'",
+                    results.len(),
+                    query
+                );
+
+                // Navigate to search page if not already there
+                if self.search_page.is_none() {
+                    sender.input(MainWindowInput::NavigateToSearch);
+                }
+
+                // Send results to search page
+                if let Some(ref search_page) = self.search_page {
+                    use crate::ui::pages::search::SearchPageInput;
+                    search_page
+                        .sender()
+                        .send(SearchPageInput::SetResults { query, results })
+                        .ok();
+                }
+
+                // Show toast with result count
+                self.toast_overlay.add_toast(
+                    adw::Toast::builder()
+                        .title(format!("Found {} results", total_hits))
+                        .timeout(2)
+                        .build(),
+                );
             }
             MainWindowInput::NavigateToSource(source_id) => {
                 tracing::info!("Navigating to source: {}", source_id);
