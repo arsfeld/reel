@@ -1015,11 +1015,12 @@ impl AsyncComponent for PlayerPage {
                             set_tooltip_text: Some("Subtitles"),
                         },
 
-                        // Quality/Resolution button
+                        // Quality/Resolution button (hidden - doesn't work with current MPV embed)
                         model.quality_menu_button.clone() {
                             set_icon_name: "preferences-system-symbolic",
                             add_css_class: "flat",
                             set_tooltip_text: Some("Video Quality"),
+                            set_visible: false,
                         },
 
                         // Zoom button
