@@ -4,6 +4,7 @@ title: Implement skip credits and skip intro functionality
 status: To Do
 assignee: []
 created_date: '2025-09-18 13:49'
+updated_date: '2025-10-03 18:09'
 labels:
   - player
   - ui
@@ -24,3 +25,7 @@ Add Netflix-style skip intro and skip credits buttons that appear at appropriate
 - [ ] #5 Skip functionality works with both MPV and GStreamer players
 - [ ] #6 User preferences for auto-skip are persisted
 <!-- AC:END -->
+
+## Implementation Notes
+
+This high-level task has been broken down into specific implementation tasks: task-381 (database schema), task-382 (marker fetching), task-383 (UI implementation), and task-384 (user preferences). Work on those tasks instead.

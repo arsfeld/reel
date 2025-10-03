@@ -1241,6 +1241,16 @@ impl MediaBackend for PlexBackend {
         api.get_shows(library_id.as_ref()).await
     }
 
+    async fn get_movie_metadata(&self, movie_id: &MediaItemId) -> Result<Movie> {
+        let api = self.get_api().await?;
+        api.get_movie_metadata(movie_id.as_ref()).await
+    }
+
+    async fn get_show_metadata(&self, show_id: &ShowId) -> Result<Show> {
+        let api = self.get_api().await?;
+        api.get_show_metadata(show_id.as_ref()).await
+    }
+
     async fn get_seasons(&self, show_id: &ShowId) -> Result<Vec<Season>> {
         let api = self.get_api().await?;
         api.get_seasons(show_id.as_ref()).await

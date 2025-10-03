@@ -101,6 +101,9 @@ pub trait MediaRepository: Repository<MediaItemModel> {
         after_season: i32,
         after_episode: i32,
     ) -> Result<Option<MediaItemModel>>;
+
+    /// Update show's watched_episode_count based on actual episode watch status
+    async fn update_show_watched_count(&self, show_id: &str) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -138,6 +141,10 @@ impl MediaRepositoryImpl {
             parent_id: Set(entity.parent_id),
             season_number: Set(entity.season_number),
             episode_number: Set(entity.episode_number),
+            intro_marker_start_ms: Set(entity.intro_marker_start_ms),
+            intro_marker_end_ms: Set(entity.intro_marker_end_ms),
+            credits_marker_start_ms: Set(entity.credits_marker_start_ms),
+            credits_marker_end_ms: Set(entity.credits_marker_end_ms),
         };
 
         let result = active_model.insert(self.base.db.as_ref()).await?;
@@ -206,6 +213,10 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
             parent_id: Set(entity.parent_id.clone()),
             season_number: Set(entity.season_number),
             episode_number: Set(entity.episode_number),
+            intro_marker_start_ms: Set(entity.intro_marker_start_ms),
+            intro_marker_end_ms: Set(entity.intro_marker_end_ms),
+            credits_marker_start_ms: Set(entity.credits_marker_start_ms),
+            credits_marker_end_ms: Set(entity.credits_marker_end_ms),
         };
 
         let result = active_model.insert(self.base.db.as_ref()).await?;
@@ -243,6 +254,10 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
             parent_id: Set(entity.parent_id.clone()),
             season_number: Set(entity.season_number),
             episode_number: Set(entity.episode_number),
+            intro_marker_start_ms: Set(entity.intro_marker_start_ms),
+            intro_marker_end_ms: Set(entity.intro_marker_end_ms),
+            credits_marker_start_ms: Set(entity.credits_marker_start_ms),
+            credits_marker_end_ms: Set(entity.credits_marker_end_ms),
         };
 
         let result = active_model.update(self.base.db.as_ref()).await?;
@@ -417,6 +432,10 @@ impl MediaRepository for MediaRepositoryImpl {
                 parent_id: Set(item.parent_id),
                 season_number: Set(item.season_number),
                 episode_number: Set(item.episode_number),
+                intro_marker_start_ms: Set(item.intro_marker_start_ms),
+                intro_marker_end_ms: Set(item.intro_marker_end_ms),
+                credits_marker_start_ms: Set(item.credits_marker_start_ms),
+                credits_marker_end_ms: Set(item.credits_marker_end_ms),
             })
             .collect();
 
@@ -615,6 +634,91 @@ impl MediaRepository for MediaRepositoryImpl {
 
         Ok(result)
     }
+
+    async fn update_show_watched_count(&self, show_id: &str) -> Result<()> {
+        use crate::db::entities::playback_progress;
+        use sea_orm::{JoinType, QuerySelect, RelationTrait};
+
+        // Get the show first to ensure it exists and is a show
+        let show = match self.find_by_id(show_id).await? {
+            Some(s) if s.media_type == "show" => s,
+            _ => {
+                tracing::debug!("Not updating watched count: {} is not a show", show_id);
+                return Ok(());
+            }
+        };
+
+        // Find all episodes for this show
+        let all_episodes = MediaItem::find()
+            .filter(media_items::Column::ParentId.eq(show_id))
+            .filter(media_items::Column::MediaType.eq("episode"))
+            .all(self.base.db.as_ref())
+            .await?;
+
+        let total_episode_count = all_episodes.len() as u32;
+
+        if total_episode_count == 0 {
+            tracing::debug!(
+                "Show {} has no episodes, skipping watched count update",
+                show_id
+            );
+            return Ok(());
+        }
+
+        // Count how many episodes are marked as watched in playback_progress
+        let mut watched_count = 0u32;
+        for episode in &all_episodes {
+            let progress = playback_progress::Entity::find()
+                .filter(playback_progress::Column::MediaId.eq(&episode.id))
+                .filter(playback_progress::Column::Watched.eq(true))
+                .one(self.base.db.as_ref())
+                .await?;
+
+            if progress.is_some() {
+                watched_count += 1;
+            }
+        }
+
+        // Get current metadata and update watched_episode_count
+        let mut metadata = show
+            .metadata
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        // Update the counts in metadata
+        if let Some(obj) = metadata.as_object_mut() {
+            obj.insert(
+                "watched_episode_count".to_string(),
+                serde_json::json!(watched_count),
+            );
+            obj.insert(
+                "total_episode_count".to_string(),
+                serde_json::json!(total_episode_count),
+            );
+        }
+
+        // Update the show in the database
+        let mut active_model: MediaItemActiveModel = show.into();
+        active_model.metadata = Set(Some(metadata));
+        active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+        active_model.update(self.base.db.as_ref()).await?;
+
+        tracing::debug!(
+            "Updated show {} watched count: {}/{}",
+            show_id,
+            watched_count,
+            total_episode_count
+        );
+
+        // Broadcast media updated event so UI refreshes
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::MediaUpdated {
+                media_id: show_id.to_string(),
+            }))
+            .await;
+
+        Ok(())
+    }
 }
 
 impl MediaRepositoryImpl {
@@ -803,6 +907,10 @@ mod tests {
                 "audio_codec": "aac",
                 "subtitles_available": ["en"]
             })),
+            intro_marker_start_ms: None,
+            intro_marker_end_ms: None,
+            credits_marker_start_ms: None,
+            credits_marker_end_ms: None,
         }
     }
 
@@ -834,6 +942,10 @@ mod tests {
                 "cast": [],
                 "crew": []
             })),
+            intro_marker_start_ms: None,
+            intro_marker_end_ms: None,
+            credits_marker_start_ms: None,
+            credits_marker_end_ms: None,
         }
     }
 
@@ -872,6 +984,10 @@ mod tests {
                 "audio_codec": "aac",
                 "subtitles_available": ["en"]
             })),
+            intro_marker_start_ms: None,
+            intro_marker_end_ms: None,
+            credits_marker_start_ms: None,
+            credits_marker_end_ms: None,
         }
     }
 

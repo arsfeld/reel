@@ -652,17 +652,46 @@ impl AsyncComponent for LibraryPage {
                         for idx in start_idx..end_idx {
                             let item = &self.total_items[idx];
 
-                            // Use the pre-fetched playback progress data
-                            let (watched, progress_percent) =
+                            // Calculate watched status differently for shows vs movies/episodes
+                            let (watched, progress_percent) = if item.media_type == "show" {
+                                // For TV shows, check metadata for watched_episode_count
+                                let watched_count =
+                                    item.metadata
+                                        .as_ref()
+                                        .and_then(|m| m.get("watched_episode_count"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0) as u32;
+                                let total_count =
+                                    item.metadata
+                                        .as_ref()
+                                        .and_then(|m| m.get("total_episode_count"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0) as u32;
+
+                                if total_count > 0 {
+                                    let watched = watched_count > 0 && watched_count == total_count;
+                                    let progress =
+                                        if watched_count < total_count && watched_count > 0 {
+                                            watched_count as f64 / total_count as f64
+                                        } else {
+                                            0.0
+                                        };
+                                    (watched, progress)
+                                } else {
+                                    (false, 0.0)
+                                }
+                            } else {
+                                // For movies and episodes, use playback_progress table
                                 if let Some(progress) = playback_progress_map.get(&item.id) {
                                     (progress.watched, progress.get_progress_percentage() as f64)
                                 } else {
-                                    (false, 0.0) // No progress record means unwatched
-                                };
+                                    (false, 0.0)
+                                }
+                            };
 
                             let index = factory_guard.push_back(MediaCardInit {
                                 item: item.clone(),
-                                show_progress: false,
+                                show_progress: progress_percent > 0.0,
                                 watched,
                                 progress_percent,
                                 show_media_type_icon: self

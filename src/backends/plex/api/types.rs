@@ -112,12 +112,50 @@ pub struct PlexMovieMetadata {
     pub updated_at: Option<i64>,
     #[serde(rename = "Genre", default)]
     pub genres: Vec<PlexTag>,
+    #[serde(rename = "Role", default)]
+    pub roles: Vec<PlexRole>,
+    #[serde(rename = "Director", default)]
+    pub directors: Vec<PlexDirector>,
+    #[serde(rename = "Writer", default)]
+    pub writers: Vec<PlexWriter>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexTag {
     pub tag: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlexRole {
+    #[serde(default)]
+    pub id: Option<i64>,
+    pub tag: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub thumb: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlexDirector {
+    #[serde(default)]
+    pub id: Option<i64>,
+    pub tag: String,
+    #[serde(default)]
+    pub thumb: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlexWriter {
+    #[serde(default)]
+    pub id: Option<i64>,
+    pub tag: String,
+    #[serde(default)]
+    pub thumb: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,6 +192,12 @@ pub struct PlexShowMetadata {
     pub updated_at: Option<i64>,
     #[serde(rename = "Genre", default)]
     pub genres: Vec<PlexTag>,
+    #[serde(rename = "Role", default)]
+    pub roles: Vec<PlexRole>,
+    #[serde(rename = "Director", default)]
+    pub directors: Vec<PlexDirector>,
+    #[serde(rename = "Writer", default)]
+    pub writers: Vec<PlexWriter>,
     #[serde(default)]
     pub leaf_count: Option<i32>,
     #[serde(default)]

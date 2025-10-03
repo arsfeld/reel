@@ -3,6 +3,7 @@ use crate::db::connection::DatabaseConnection;
 use crate::db::repository::{
     Repository,
     media_repository::MediaRepositoryImpl,
+    people_repository::PeopleRepository,
     source_repository::{SourceRepository, SourceRepositoryImpl},
 };
 use crate::models::{
@@ -297,6 +298,154 @@ impl BackendService {
         );
 
         Ok(all_sections)
+    }
+
+    /// Load full metadata (including full cast/crew) for a movie and update database
+    pub async fn load_full_movie_metadata(
+        db: &DatabaseConnection,
+        movie_id: &MediaItemId,
+    ) -> Result<()> {
+        use crate::db::entities::media_people::Model as MediaPeopleModel;
+        use crate::db::entities::people::Model as PeopleModel;
+        use crate::db::repository::PeopleRepositoryImpl;
+
+        // Load media item to find its source
+        let media_repo = MediaRepositoryImpl::new(db.clone());
+        let media_item = media_repo
+            .find_by_id(movie_id.as_str())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Movie not found"))?;
+
+        // Load source configuration
+        let source_repo = SourceRepositoryImpl::new(db.clone());
+        let source_entity = source_repo
+            .find_by_id(&media_item.source_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
+
+        // Create backend and get full metadata
+        let backend = Self::create_backend_for_source(db, &source_entity).await?;
+        let full_movie = backend.get_movie_metadata(movie_id).await?;
+
+        // Update database with full cast/crew
+        let people_repo = PeopleRepositoryImpl::new(db.clone());
+
+        let mut media_people = Vec::new();
+        let now = chrono::Utc::now().naive_utc();
+
+        // Upsert cast people and create relationships
+        for (idx, person) in full_movie.cast.iter().enumerate() {
+            let people_model = PeopleModel {
+                id: person.id.clone(),
+                name: person.name.clone(),
+                image_url: person.image_url.clone(),
+                created_at: now,
+                updated_at: now,
+            };
+            people_repo.upsert(people_model).await?;
+
+            media_people.push(MediaPeopleModel {
+                id: 0, // Will be auto-generated
+                media_item_id: movie_id.to_string(),
+                person_id: person.id.clone(),
+                person_type: "cast".to_string(),
+                role: person.role.clone(),
+                sort_order: Some(idx as i32),
+            });
+        }
+
+        // Upsert crew people and create relationships
+        for (idx, person) in full_movie.crew.iter().enumerate() {
+            let people_model = PeopleModel {
+                id: person.id.clone(),
+                name: person.name.clone(),
+                image_url: person.image_url.clone(),
+                created_at: now,
+                updated_at: now,
+            };
+            people_repo.upsert(people_model).await?;
+
+            media_people.push(MediaPeopleModel {
+                id: 0, // Will be auto-generated
+                media_item_id: movie_id.to_string(),
+                person_id: person.id.clone(),
+                person_type: "crew".to_string(),
+                role: person.role.clone(),
+                sort_order: Some(idx as i32),
+            });
+        }
+
+        // Save all media-people relationships (replaces existing)
+        people_repo
+            .save_media_people(movie_id.as_str(), media_people)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Load full metadata (including full cast/crew) for a show and update database
+    pub async fn load_full_show_metadata(
+        db: &DatabaseConnection,
+        show_id: &crate::models::ShowId,
+    ) -> Result<()> {
+        use crate::db::entities::media_people::Model as MediaPeopleModel;
+        use crate::db::entities::people::Model as PeopleModel;
+        use crate::db::repository::PeopleRepositoryImpl;
+
+        // Convert ShowId to string for database lookup
+        let show_id_str = show_id.to_string();
+
+        // Load media item to find its source
+        let media_repo = MediaRepositoryImpl::new(db.clone());
+        let media_item = media_repo
+            .find_by_id(&show_id_str)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Show not found"))?;
+
+        // Load source configuration
+        let source_repo = SourceRepositoryImpl::new(db.clone());
+        let source_entity = source_repo
+            .find_by_id(&media_item.source_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
+
+        // Create backend and get full metadata
+        let backend = Self::create_backend_for_source(db, &source_entity).await?;
+        let full_show = backend.get_show_metadata(show_id).await?;
+
+        // Update database with full cast
+        let people_repo = PeopleRepositoryImpl::new(db.clone());
+
+        let mut media_people = Vec::new();
+        let now = chrono::Utc::now().naive_utc();
+
+        // Upsert cast people and create relationships
+        for (idx, person) in full_show.cast.iter().enumerate() {
+            let people_model = PeopleModel {
+                id: person.id.clone(),
+                name: person.name.clone(),
+                image_url: person.image_url.clone(),
+                created_at: now,
+                updated_at: now,
+            };
+            people_repo.upsert(people_model).await?;
+
+            media_people.push(MediaPeopleModel {
+                id: 0, // Will be auto-generated
+                media_item_id: show_id_str.clone(),
+                person_id: person.id.clone(),
+                person_type: "cast".to_string(),
+                role: person.role.clone(),
+                sort_order: Some(idx as i32),
+            });
+        }
+
+        // Save all media-people relationships (replaces existing)
+        people_repo
+            .save_media_people(&show_id_str, media_people)
+            .await?;
+
+        Ok(())
     }
 
     /// Get home sections per source with individual error handling

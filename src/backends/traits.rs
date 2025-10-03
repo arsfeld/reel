@@ -26,6 +26,14 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
 
     async fn get_shows(&self, library_id: &LibraryId) -> Result<Vec<Show>>;
 
+    /// Get full metadata for a single movie (including complete cast/crew)
+    /// Used for lazy loading detailed information when user views movie details
+    async fn get_movie_metadata(&self, movie_id: &MediaItemId) -> Result<Movie>;
+
+    /// Get full metadata for a single show (including complete cast/crew)
+    /// Used for lazy loading detailed information when user views show details
+    async fn get_show_metadata(&self, show_id: &ShowId) -> Result<Show>;
+
     async fn get_seasons(&self, show_id: &ShowId) -> Result<Vec<Season>>;
 
     async fn get_episodes(&self, show_id: &ShowId, season: u32) -> Result<Vec<Episode>>;

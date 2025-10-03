@@ -1,11 +1,14 @@
-use crate::models::{MediaItem, MediaItemId, Movie, Person};
+use crate::models::{MediaItem, MediaItemId, Movie};
 use crate::services::commands::Command;
 use crate::services::commands::media_commands::GetItemDetailsCommand;
+use crate::ui::shared::image_helpers::load_image_from_url;
+use crate::ui::shared::person_card::create_person_card;
 use adw::prelude::*;
 use libadwaita as adw;
 use relm4::RelmWidgetExt;
 use relm4::gtk;
 use relm4::prelude::*;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::error;
 
@@ -17,8 +20,11 @@ pub struct MovieDetailsPage {
     loading: bool,
     genre_box: gtk::Box,
     cast_box: gtk::Box,
+    crew_box: gtk::Box,
     poster_texture: Option<gtk::gdk::Texture>,
     backdrop_texture: Option<gtk::gdk::Texture>,
+    person_textures: HashMap<String, gtk::gdk::Texture>,
+    full_metadata_loaded: bool,
 }
 
 #[derive(Debug)]
@@ -35,10 +41,28 @@ pub enum MovieDetailsOutput {
 #[derive(Debug)]
 pub enum MovieDetailsCommand {
     LoadDetails,
-    LoadPosterImage { url: String },
-    LoadBackdropImage { url: String },
-    PosterImageLoaded { texture: gtk::gdk::Texture },
-    BackdropImageLoaded { texture: gtk::gdk::Texture },
+    LoadPosterImage {
+        url: String,
+    },
+    LoadBackdropImage {
+        url: String,
+    },
+    LoadPersonImage {
+        person_id: String,
+        url: String,
+    },
+    PosterImageLoaded {
+        texture: gtk::gdk::Texture,
+    },
+    BackdropImageLoaded {
+        texture: gtk::gdk::Texture,
+    },
+    PersonImageLoaded {
+        person_id: String,
+        texture: gtk::gdk::Texture,
+    },
+    LoadFullMetadata,
+    FullMetadataLoaded,
 }
 
 #[relm4::component(pub, async)]
@@ -301,7 +325,7 @@ impl AsyncComponent for MovieDetailsPage {
 
                     // Removed redundant overview section since it's now in the hero
 
-                    // Cast & Crew
+                    // Cast
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
                         set_spacing: 12,
@@ -319,6 +343,27 @@ impl AsyncComponent for MovieDetailsPage {
                             set_min_content_height: 120,
 
                             set_child: Some(&model.cast_box),
+                        },
+                    },
+
+                    // Crew
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 12,
+                        #[watch]
+                        set_visible: model.movie.as_ref().map(|m| !m.crew.is_empty()).unwrap_or(false),
+
+                        gtk::Label {
+                            set_label: "Crew",
+                            set_halign: gtk::Align::Start,
+                            add_css_class: "title-4",
+                        },
+
+                        gtk::ScrolledWindow {
+                            set_vscrollbar_policy: gtk::PolicyType::Never,
+                            set_min_content_height: 120,
+
+                            set_child: Some(&model.crew_box),
                         },
                     },
                 },
@@ -341,6 +386,11 @@ impl AsyncComponent for MovieDetailsPage {
             .spacing(16)
             .css_classes(["stagger-animation"])
             .build();
+        let crew_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(16)
+            .css_classes(["stagger-animation"])
+            .build();
 
         let model = Self {
             movie: None,
@@ -349,8 +399,11 @@ impl AsyncComponent for MovieDetailsPage {
             loading: true,
             genre_box: genre_box.clone(),
             cast_box: cast_box.clone(),
+            crew_box: crew_box.clone(),
             poster_texture: None,
             backdrop_texture: None,
+            person_textures: HashMap::new(),
+            full_metadata_loaded: false,
         };
 
         let widgets = view_output!();
@@ -420,6 +473,18 @@ impl AsyncComponent for MovieDetailsPage {
                             self.movie = Some(movie.clone());
                             self.loading = false;
 
+                            // Check if we need to load full cast/crew (if cast count <= 3, likely only preview)
+                            // Only attempt once to avoid infinite loop if movie really has ≤3 cast members
+                            if movie.cast.len() <= 3 && !self.full_metadata_loaded {
+                                tracing::debug!(
+                                    "Movie has {} cast members, loading full metadata",
+                                    movie.cast.len()
+                                );
+                                sender.oneshot_command(async {
+                                    MovieDetailsCommand::LoadFullMetadata
+                                });
+                            }
+
                             // Load poster and backdrop images
                             if let Some(poster_url) = movie.poster_url.clone() {
                                 sender.oneshot_command(async move {
@@ -453,14 +518,63 @@ impl AsyncComponent for MovieDetailsPage {
                                 self.genre_box.append(&pill);
                             }
 
+                            // Load person images for cast and crew
+                            for person in movie.cast.iter().take(10) {
+                                if let Some(image_url) = &person.image_url {
+                                    let person_id = person.id.clone();
+                                    let url = image_url.clone();
+                                    sender.oneshot_command(async move {
+                                        MovieDetailsCommand::LoadPersonImage { person_id, url }
+                                    });
+                                }
+                            }
+
+                            // Filter crew to only directors and writers, take first 10
+                            let crew_filtered: Vec<_> = movie
+                                .crew
+                                .iter()
+                                .filter(|p| {
+                                    p.role
+                                        .as_ref()
+                                        .map(|r| {
+                                            r.eq_ignore_ascii_case("Director")
+                                                || r.eq_ignore_ascii_case("Writer")
+                                        })
+                                        .unwrap_or(false)
+                                })
+                                .take(10)
+                                .collect();
+
+                            for person in &crew_filtered {
+                                if let Some(image_url) = &person.image_url {
+                                    let person_id = person.id.clone();
+                                    let url = image_url.clone();
+                                    sender.oneshot_command(async move {
+                                        MovieDetailsCommand::LoadPersonImage { person_id, url }
+                                    });
+                                }
+                            }
+
                             // Update cast cards
                             while let Some(child) = self.cast_box.first_child() {
                                 self.cast_box.remove(&child);
                             }
 
                             for person in movie.cast.iter().take(10) {
-                                let card = create_person_card(person);
+                                let texture = self.person_textures.get(&person.id).cloned();
+                                let card = create_person_card(person, texture.as_ref());
                                 self.cast_box.append(&card);
+                            }
+
+                            // Update crew cards
+                            while let Some(child) = self.crew_box.first_child() {
+                                self.crew_box.remove(&child);
+                            }
+
+                            for person in crew_filtered {
+                                let texture = self.person_textures.get(&person.id).cloned();
+                                let card = create_person_card(person, texture.as_ref());
+                                self.crew_box.append(&card);
                             }
                         }
                     }
@@ -502,95 +616,198 @@ impl AsyncComponent for MovieDetailsPage {
                     }
                 });
             }
+            MovieDetailsCommand::LoadPersonImage { person_id, url } => {
+                // Spawn async task to download and create texture
+                let sender_clone = sender.clone();
+                relm4::spawn(async move {
+                    match load_image_from_url(&url, 120, 120).await {
+                        Ok(texture) => {
+                            sender_clone.oneshot_command(async move {
+                                MovieDetailsCommand::PersonImageLoaded { person_id, texture }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to load person image for {}: {}", person_id, e);
+                        }
+                    }
+                });
+            }
             MovieDetailsCommand::PosterImageLoaded { texture } => {
                 self.poster_texture = Some(texture);
             }
             MovieDetailsCommand::BackdropImageLoaded { texture } => {
                 self.backdrop_texture = Some(texture);
             }
+            MovieDetailsCommand::PersonImageLoaded { person_id, texture } => {
+                // Store the loaded texture
+                self.person_textures.insert(person_id.clone(), texture);
+
+                // Recreate cast and crew cards with the new texture
+                if let Some(movie) = &self.movie {
+                    // Update cast cards
+                    while let Some(child) = self.cast_box.first_child() {
+                        self.cast_box.remove(&child);
+                    }
+
+                    for person in movie.cast.iter().take(10) {
+                        let texture = self.person_textures.get(&person.id).cloned();
+                        let card = create_person_card(person, texture.as_ref());
+                        self.cast_box.append(&card);
+                    }
+
+                    // Update crew cards (filter for directors and writers)
+                    while let Some(child) = self.crew_box.first_child() {
+                        self.crew_box.remove(&child);
+                    }
+
+                    let crew_filtered: Vec<_> = movie
+                        .crew
+                        .iter()
+                        .filter(|p| {
+                            p.role
+                                .as_ref()
+                                .map(|r| {
+                                    r.eq_ignore_ascii_case("Director")
+                                        || r.eq_ignore_ascii_case("Writer")
+                                })
+                                .unwrap_or(false)
+                        })
+                        .take(10)
+                        .collect();
+
+                    for person in crew_filtered {
+                        let texture = self.person_textures.get(&person.id).cloned();
+                        let card = create_person_card(person, texture.as_ref());
+                        self.crew_box.append(&card);
+                    }
+                }
+            }
+            MovieDetailsCommand::LoadFullMetadata => {
+                use crate::services::commands::media_commands::LoadFullMovieMetadataCommand;
+
+                tracing::info!("Loading full metadata for movie {}", self.item_id);
+                let cmd = LoadFullMovieMetadataCommand {
+                    db: (*self.db).clone(),
+                    movie_id: self.item_id.clone(),
+                };
+
+                match Command::execute(&cmd).await {
+                    Ok(_) => {
+                        tracing::info!("Full metadata loaded, refreshing movie details");
+                        sender.oneshot_command(async { MovieDetailsCommand::FullMetadataLoaded });
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load full metadata: {}", e);
+                    }
+                }
+            }
+            MovieDetailsCommand::FullMetadataLoaded => {
+                // Mark that we've loaded full metadata to prevent infinite loop
+                self.full_metadata_loaded = true;
+
+                // Directly reload cast/crew from database without full page refresh
+                use crate::db::repository::{PeopleRepository, PeopleRepositoryImpl};
+
+                let db = (*self.db).clone();
+                let item_id = self.item_id.clone();
+
+                match (async move {
+                    let people_repo = PeopleRepositoryImpl::new(db);
+                    people_repo.find_by_media_item(item_id.as_ref()).await
+                })
+                .await
+                {
+                    Ok(people_with_relations) => {
+                        // Separate cast and crew based on person_type
+                        let mut cast = Vec::new();
+                        let mut crew = Vec::new();
+
+                        for (person, media_person) in people_with_relations {
+                            let person_obj = crate::models::Person {
+                                id: person.id.clone(),
+                                name: person.name.clone(),
+                                role: media_person.role.clone(),
+                                image_url: person.image_url.clone(),
+                            };
+
+                            match media_person.person_type.as_str() {
+                                "actor" | "cast" => cast.push(person_obj),
+                                "director" | "writer" | "producer" | "crew" => {
+                                    crew.push(person_obj)
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // Update the movie's cast/crew in place
+                        if let Some(movie) = &mut self.movie {
+                            movie.cast = cast.clone();
+                            movie.crew = crew.clone();
+                        }
+
+                        // Clear and rebuild cast box
+                        while let Some(child) = self.cast_box.first_child() {
+                            self.cast_box.remove(&child);
+                        }
+
+                        for person in cast.iter().take(10) {
+                            let texture = self.person_textures.get(&person.id).cloned();
+                            let card = create_person_card(person, texture.as_ref());
+                            self.cast_box.append(&card);
+
+                            // Load image if not already loaded
+                            if texture.is_none() {
+                                if let Some(image_url) = &person.image_url {
+                                    let person_id = person.id.clone();
+                                    let url = image_url.clone();
+                                    sender.oneshot_command(async move {
+                                        MovieDetailsCommand::LoadPersonImage { person_id, url }
+                                    });
+                                }
+                            }
+                        }
+
+                        // Clear and rebuild crew box (filter for directors and writers)
+                        while let Some(child) = self.crew_box.first_child() {
+                            self.crew_box.remove(&child);
+                        }
+
+                        let crew_filtered: Vec<_> = crew
+                            .iter()
+                            .filter(|p| {
+                                p.role
+                                    .as_ref()
+                                    .map(|r| {
+                                        r.eq_ignore_ascii_case("Director")
+                                            || r.eq_ignore_ascii_case("Writer")
+                                    })
+                                    .unwrap_or(false)
+                            })
+                            .take(10)
+                            .collect();
+
+                        for person in crew_filtered {
+                            let texture = self.person_textures.get(&person.id).cloned();
+                            let card = create_person_card(person, texture.as_ref());
+                            self.crew_box.append(&card);
+
+                            // Load image if not already loaded
+                            if texture.is_none() {
+                                if let Some(image_url) = &person.image_url {
+                                    let person_id = person.id.clone();
+                                    let url = image_url.clone();
+                                    sender.oneshot_command(async move {
+                                        MovieDetailsCommand::LoadPersonImage { person_id, url }
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to reload cast/crew after metadata load: {}", e);
+                    }
+                }
+            }
         }
     }
-}
-
-async fn load_image_from_url(
-    url: &str,
-    _width: i32,
-    _height: i32,
-) -> Result<gtk::gdk::Texture, String> {
-    // Download the image
-    let response = reqwest::get(url)
-        .await
-        .map_err(|e| format!("Failed to download image: {}", e))?;
-
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read bytes: {}", e))?;
-
-    // Create texture from bytes
-    let glib_bytes = gtk::glib::Bytes::from(&bytes[..]);
-    let texture = gtk::gdk::Texture::from_bytes(&glib_bytes)
-        .map_err(|e| format!("Failed to create texture: {}", e))?;
-
-    // If width and height are specified (not -1), we could resize here
-    // For now, just return the texture as is
-    Ok(texture)
-}
-
-fn create_person_card(person: &Person) -> gtk::Box {
-    let card = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(0)
-        .width_request(120)
-        .css_classes(["cast-card-modern", "interactive-element"])
-        .build();
-
-    // Person image or placeholder
-    let picture = gtk::Picture::builder()
-        .width_request(120)
-        .height_request(120)
-        .content_fit(gtk::ContentFit::Cover)
-        .build();
-
-    if let Some(image_url) = &person.image_url
-        && let Ok(pixbuf) = gtk::gdk_pixbuf::Pixbuf::from_file_at_size(image_url, 120, 120)
-    {
-        let texture = gtk::gdk::Texture::for_pixbuf(&pixbuf);
-        picture.set_paintable(Some(&texture));
-    }
-
-    // Info container with gradient background
-    let info_box = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(2)
-        .css_classes(["cast-info"])
-        .margin_start(8)
-        .margin_end(8)
-        .margin_top(8)
-        .margin_bottom(8)
-        .build();
-
-    let name = gtk::Label::builder()
-        .label(&person.name)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .css_classes(["caption-heading"])
-        .xalign(0.0)
-        .build();
-
-    let role = gtk::Label::builder()
-        .label(person.role.as_deref().unwrap_or(""))
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .css_classes(["dim-label", "caption"])
-        .xalign(0.0)
-        .build();
-
-    info_box.append(&name);
-    if person.role.is_some() {
-        info_box.append(&role);
-    }
-
-    card.append(&picture);
-    card.append(&info_box);
-
-    card
 }

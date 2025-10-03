@@ -76,6 +76,16 @@ impl MediaBackend for LocalBackend {
         todo!("Local show scanning not yet implemented")
     }
 
+    async fn get_movie_metadata(&self, _movie_id: &MediaItemId) -> Result<Movie> {
+        // TODO: Read metadata from local files
+        todo!("Local movie metadata not yet implemented")
+    }
+
+    async fn get_show_metadata(&self, _show_id: &ShowId) -> Result<Show> {
+        // TODO: Read metadata from local files
+        todo!("Local show metadata not yet implemented")
+    }
+
     async fn get_seasons(&self, _show_id: &ShowId) -> Result<Vec<Season>> {
         // TODO: Scan local directory for seasons
         todo!("Local season scanning not yet implemented")

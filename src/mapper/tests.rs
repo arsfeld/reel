@@ -188,6 +188,10 @@ mod tests {
             added_at: Some(chrono::Utc::now().naive_utc()),
             updated_at: chrono::Utc::now().naive_utc(),
             metadata: None,
+            intro_marker_start_ms: None,
+            intro_marker_end_ms: None,
+            credits_marker_start_ms: None,
+            credits_marker_end_ms: None,
         };
 
         // Add metadata for cast and crew
@@ -258,6 +262,10 @@ mod tests {
             added_at: Some(chrono::Utc::now().naive_utc()),
             updated_at: chrono::Utc::now().naive_utc(),
             metadata: None,
+            intro_marker_start_ms: None,
+            intro_marker_end_ms: None,
+            credits_marker_start_ms: None,
+            credits_marker_end_ms: None,
         };
 
         // Add metadata for seasons and episodes
@@ -317,6 +325,10 @@ mod tests {
             added_at: Some(chrono::Utc::now().naive_utc()),
             updated_at: chrono::Utc::now().naive_utc(),
             metadata: None,
+            intro_marker_start_ms: None,
+            intro_marker_end_ms: None,
+            credits_marker_start_ms: None,
+            credits_marker_end_ms: None,
         };
 
         // Use the existing TryFrom implementation from db/entities/media_items.rs
@@ -358,6 +370,10 @@ mod tests {
             added_at: Some(chrono::Utc::now().naive_utc()),
             updated_at: chrono::Utc::now().naive_utc(),
             metadata: None,
+            intro_marker_start_ms: None,
+            intro_marker_end_ms: None,
+            credits_marker_start_ms: None,
+            credits_marker_end_ms: None,
         };
 
         let result = MediaItem::try_from(model);
