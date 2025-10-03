@@ -530,6 +530,7 @@ impl AsyncComponent for SourcesPage {
                     }
                     BrokerMessage::Source(SourceMessage::SyncProgress {
                         source_id,
+                        library_id: _,
                         current,
                         total,
                     }) => {
