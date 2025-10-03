@@ -294,6 +294,7 @@ impl PlayQueueService {
             // Use the PlayQueue-aware timeline update
             api.update_play_queue_progress(
                 queue_info.play_queue_id,
+                queue_info.play_queue_version,
                 queue_info.play_queue_item_id,
                 media_id.as_ref(),
                 position,

@@ -2580,6 +2580,74 @@ impl AsyncComponent for PlayerPage {
                 if matches!(&state, PlayerState::Playing) {
                     root.grab_focus();
                 }
+
+                // Send immediate timeline update on play, pause, or stop state changes
+                if matches!(
+                    &state,
+                    PlayerState::Playing | PlayerState::Paused | PlayerState::Stopped
+                ) {
+                    if let (Some(media_id), Some(player)) = (&self.media_item_id, &self.player) {
+                        let player_handle = player.clone();
+                        let media_id_clone = media_id.clone();
+                        let state_clone = state.clone();
+                        let db_clone = (*self.db).clone();
+                        let context_clone = self.playlist_context.clone();
+
+                        glib::spawn_future_local(async move {
+                            // Get current position and duration
+                            if let Ok(Some(position)) = player_handle.get_position().await
+                                && let Ok(Some(duration)) = player_handle.get_duration().await
+                            {
+                                use crate::db::repository::source_repository::SourceRepositoryImpl;
+                                use crate::db::repository::{MediaRepositoryImpl, Repository};
+                                use crate::services::core::BackendService;
+                                use crate::services::core::playqueue::PlayQueueService;
+
+                                // Map player state to Plex state
+                                let plex_state = match state_clone {
+                                    PlayerState::Playing => "playing",
+                                    PlayerState::Paused => "paused",
+                                    PlayerState::Stopped => "stopped",
+                                    _ => return,
+                                };
+
+                                // If we have a PlayQueue context, sync with server
+                                if let Some(ref context) = context_clone
+                                    && let Some(_queue_info) = context.get_play_queue_info()
+                                {
+                                    let media_repo = MediaRepositoryImpl::new(db_clone.clone());
+                                    if let Ok(Some(media)) =
+                                        media_repo.find_by_id(media_id_clone.as_ref()).await
+                                    {
+                                        let source_repo =
+                                            SourceRepositoryImpl::new(db_clone.clone());
+                                        if let Ok(Some(source)) =
+                                            source_repo.find_by_id(&media.source_id).await
+                                        {
+                                            if let Ok(backend) =
+                                                BackendService::create_backend_for_source(
+                                                    &db_clone, &source,
+                                                )
+                                                .await
+                                            {
+                                                let _ =
+                                                    PlayQueueService::update_progress_with_queue(
+                                                        backend.as_any(),
+                                                        &context,
+                                                        &media_id_clone,
+                                                        position,
+                                                        duration,
+                                                        plex_state,
+                                                    )
+                                                    .await;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
             }
             PlayerCommandOutput::LoadError(error_msg) => {
                 // Send toast notification for immediate feedback
@@ -2664,6 +2732,7 @@ impl AsyncComponent for PlayerPage {
                                 let media_id_clone = media_id.clone();
                                 let position = pos;
                                 let duration = dur;
+                                let player_state_clone = self.player_state.clone();
 
                                 glib::spawn_future_local(async move {
                                     use crate::db::repository::source_repository::SourceRepositoryImpl;
@@ -2690,6 +2759,19 @@ impl AsyncComponent for PlayerPage {
                                                 .await
                                             {
                                                 // PlayQueueService will handle the sync
+                                                // Map player state to Plex state
+                                                let plex_state = if watched {
+                                                    "stopped"
+                                                } else {
+                                                    match player_state_clone {
+                                                        PlayerState::Playing => "playing",
+                                                        PlayerState::Paused => "paused",
+                                                        PlayerState::Stopped => "stopped",
+                                                        PlayerState::Loading => "buffering",
+                                                        _ => "playing",
+                                                    }
+                                                };
+
                                                 if let Err(e) =
                                                     PlayQueueService::update_progress_with_queue(
                                                         backend.as_any(),
@@ -2697,7 +2779,7 @@ impl AsyncComponent for PlayerPage {
                                                         &media_id_clone,
                                                         position,
                                                         duration,
-                                                        if watched { "stopped" } else { "playing" },
+                                                        plex_state,
                                                     )
                                                     .await
                                                 {

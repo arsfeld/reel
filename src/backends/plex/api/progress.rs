@@ -47,7 +47,7 @@ impl PlexApi {
 
         let response = self
             .client
-            .get(&timeline_url)
+            .post(&timeline_url)
             .headers(self.standard_headers())
             .query(&[
                 ("ratingKey", media_id),
@@ -56,7 +56,6 @@ impl PlexApi {
                 ("state", state),
                 ("time", &position_ms.to_string()),
                 ("duration", &duration_ms.to_string()),
-                ("playbackTime", &position_ms.to_string()),
             ])
             .send()
             .await?;
@@ -82,7 +81,7 @@ impl PlexApi {
 
         let response = self
             .client
-            .get(&url)
+            .put(&url)
             .headers(self.standard_headers())
             .query(&[
                 ("key", media_id),

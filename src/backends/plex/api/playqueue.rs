@@ -297,6 +297,7 @@ impl PlexApi {
     pub async fn update_play_queue_progress(
         &self,
         play_queue_id: i64,
+        play_queue_version: i32,
         play_queue_item_id: i64,
         media_id: &str,
         position: Duration,
@@ -322,18 +323,17 @@ impl PlexApi {
 
         let response = self
             .client
-            .get(&timeline_url)
+            .post(&timeline_url)
             .headers(self.standard_headers())
             .query(&[
                 ("ratingKey", media_id),
                 ("key", &format!("/library/metadata/{}", media_id)),
                 ("playQueueID", &play_queue_id.to_string()),
-                ("playQueueVersion", "1"), // We should track this
+                ("playQueueVersion", &play_queue_version.to_string()),
                 ("playQueueItemID", &play_queue_item_id.to_string()),
                 ("state", state),
                 ("time", &position_ms.to_string()),
                 ("duration", &duration_ms.to_string()),
-                ("playbackTime", &position_ms.to_string()),
                 ("identifier", "com.plexapp.plugins.library"),
             ])
             .send()

@@ -57,7 +57,7 @@ impl Default for PlaybackConfig {
             mpv_cache_secs: 30,
             auto_resume: true,
             resume_threshold_seconds: 10,
-            progress_update_interval_seconds: 5,
+            progress_update_interval_seconds: 10,
             mpv_upscaling_mode: "bilinear".to_string(),
         }
     }
