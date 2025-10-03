@@ -216,7 +216,29 @@ impl PlaybackRepository for PlaybackRepositoryImpl {
         if let Some(progress) = existing {
             // Update existing progress
             let mut active_model: PlaybackProgressActiveModel = progress.clone().into();
-            active_model.position_ms = Set(position_ms);
+
+            // Prevent accidental position resets during loading/errors
+            // Only reject position updates if:
+            // 1. New position is very small (< 5 seconds) AND
+            // 2. Existing position is significant (> 5 seconds) AND
+            // 3. Item is not being marked as watched (which legitimately resets to 0)
+            let threshold_ms = 5000; // 5 seconds
+            let is_suspicious_reset = position_ms < threshold_ms
+                && progress.position_ms > threshold_ms
+                && !(position_ms as f32 / duration_ms as f32 > 0.9);
+
+            if is_suspicious_reset {
+                tracing::warn!(
+                    "Suspicious position reset detected for media_id={}: attempted to set position to {}ms from {}ms (duration={}ms). Keeping existing position.",
+                    media_id,
+                    position_ms,
+                    progress.position_ms,
+                    duration_ms
+                );
+            } else {
+                active_model.position_ms = Set(position_ms);
+            }
+
             active_model.duration_ms = Set(duration_ms);
             active_model.last_watched_at = Set(Some(now));
             active_model.updated_at = Set(now);

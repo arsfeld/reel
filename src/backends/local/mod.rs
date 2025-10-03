@@ -115,4 +115,21 @@ impl MediaBackend for LocalBackend {
 
     // Removed unused methods: mark_watched, mark_unwatched, get_watch_status, search
     // Removed unused methods: get_last_sync_time, supports_offline, get_backend_id
+
+    async fn test_connection(
+        &self,
+        url: &str,
+        _auth_token: Option<&str>,
+    ) -> Result<(bool, Option<u64>)> {
+        // For local backend, check if the path exists
+        if url.starts_with("file://") {
+            let path = url.strip_prefix("file://").unwrap_or(url);
+            let exists = std::path::Path::new(path).exists();
+            Ok((exists, Some(0))) // Instant access for local files
+        } else {
+            // Not a file:// URL, assume it's a local path
+            let exists = std::path::Path::new(url).exists();
+            Ok((exists, Some(0)))
+        }
+    }
 }

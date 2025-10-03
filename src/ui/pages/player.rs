@@ -1667,22 +1667,34 @@ impl AsyncComponent for PlayerPage {
                                     // This requires restructuring to avoid Send/Sync issues with backend.as_any()
 
                                     // Get saved progress
-                                    if let Ok(Some((position_ms, _duration_ms))) =
-                                        (GetPlaybackProgressCommand {
-                                            db: db_clone.as_ref().clone(),
-                                            media_id: media_id_for_resume.clone(),
-                                            user_id: "default".to_string(), // TODO: Get actual user ID
-                                        })
-                                        .execute()
-                                        .await
+                                    if let Ok(Some(progress)) = (GetPlaybackProgressCommand {
+                                        db: db_clone.as_ref().clone(),
+                                        media_id: media_id_for_resume.clone(),
+                                        user_id: "default".to_string(), // TODO: Get actual user ID
+                                    })
+                                    .execute()
+                                    .await
                                     {
-                                        // Only resume if we've watched more than the threshold
+                                        // Only resume if:
+                                        // 1. Position is above threshold (e.g., 5 seconds)
+                                        // 2. Progress is less than 95% (not near completion)
+                                        // 3. Media is not marked as watched
                                         let threshold_ms = (resume_threshold_seconds as i64) * 1000;
-                                        if position_ms > threshold_ms {
+                                        let progress_percentage =
+                                            progress.get_progress_percentage();
+
+                                        if progress.position_ms > threshold_ms
+                                            && progress_percentage < 0.95
+                                            && !progress.watched
+                                        {
                                             let resume_position = std::time::Duration::from_millis(
-                                                position_ms as u64,
+                                                progress.position_ms as u64,
                                             );
-                                            info!("Resuming playback from {:?}", resume_position);
+                                            info!(
+                                                "Resuming playback from {:?} ({:.1}% complete)",
+                                                resume_position,
+                                                progress_percentage * 100.0
+                                            );
 
                                             // Seek to saved position
                                             if let Err(e) =
@@ -1817,22 +1829,34 @@ impl AsyncComponent for PlayerPage {
                                     // This requires restructuring to avoid Send/Sync issues with backend.as_any()
 
                                     // Get saved progress
-                                    if let Ok(Some((position_ms, _duration_ms))) =
-                                        (GetPlaybackProgressCommand {
-                                            db: db_clone.as_ref().clone(),
-                                            media_id: media_id_for_resume.clone(),
-                                            user_id: "default".to_string(), // TODO: Get actual user ID
-                                        })
-                                        .execute()
-                                        .await
+                                    if let Ok(Some(progress)) = (GetPlaybackProgressCommand {
+                                        db: db_clone.as_ref().clone(),
+                                        media_id: media_id_for_resume.clone(),
+                                        user_id: "default".to_string(), // TODO: Get actual user ID
+                                    })
+                                    .execute()
+                                    .await
                                     {
-                                        // Only resume if we've watched more than the threshold
+                                        // Only resume if:
+                                        // 1. Position is above threshold (e.g., 5 seconds)
+                                        // 2. Progress is less than 95% (not near completion)
+                                        // 3. Media is not marked as watched
                                         let threshold_ms = (resume_threshold_seconds as i64) * 1000;
-                                        if position_ms > threshold_ms {
+                                        let progress_percentage =
+                                            progress.get_progress_percentage();
+
+                                        if progress.position_ms > threshold_ms
+                                            && progress_percentage < 0.95
+                                            && !progress.watched
+                                        {
                                             let resume_position = std::time::Duration::from_millis(
-                                                position_ms as u64,
+                                                progress.position_ms as u64,
                                             );
-                                            info!("Resuming playback from {:?}", resume_position);
+                                            info!(
+                                                "Resuming playback from {:?} ({:.1}% complete)",
+                                                resume_position,
+                                                progress_percentage * 100.0
+                                            );
 
                                             // Seek to saved position
                                             if let Err(e) =

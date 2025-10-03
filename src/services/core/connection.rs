@@ -2,9 +2,7 @@ use crate::db::DatabaseConnection;
 use crate::models::{ServerConnection, ServerConnections, SourceId};
 use crate::services::core::connection_cache::{ConnectionCache, ConnectionState, ConnectionType};
 use anyhow::Result;
-use reqwest::Client;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 // Global connection cache - shared across all backends
@@ -47,12 +45,33 @@ impl ConnectionService {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
 
+        // Get auth token for the source (needed for authenticated connection testing)
+        let auth_token = {
+            use crate::db::repository::auth_token_repository::{
+                AuthTokenRepository, AuthTokenRepositoryImpl,
+            };
+
+            let auth_repo = AuthTokenRepositoryImpl::new(db.clone());
+            // Try to get the primary auth token for this source (Plex uses "auth", Jellyfin uses "access")
+            let token = auth_repo
+                .find_by_source_and_type(source_id.as_ref(), "auth")
+                .await?
+                .or_else(|| {
+                    // Future: try "access" for Jellyfin
+                    None
+                });
+
+            token.map(|t| t.token)
+        };
+
         // Get stored connections from JSON column
-        if let Some(connections_json) = source.connections {
-            let connections: ServerConnections = serde_json::from_value(connections_json)?;
+        if let Some(ref connections_json) = source.connections {
+            let connections: ServerConnections = serde_json::from_value(connections_json.clone())?;
 
             // Test all connections in parallel
-            let tested_connections = Self::test_connections(connections.connections).await;
+            let tested_connections =
+                Self::test_connections(db, &source, connections.connections, auth_token.as_deref())
+                    .await;
 
             // Find the best available connection
             let server_connections = ServerConnections::new(tested_connections);
@@ -109,52 +128,82 @@ impl ConnectionService {
         Ok(source.connection_url)
     }
 
-    /// Test multiple connections in parallel
-    async fn test_connections(connections: Vec<ServerConnection>) -> Vec<ServerConnection> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-            .unwrap_or_default();
+    /// Test multiple connections in parallel using backend-specific logic
+    async fn test_connections(
+        db: &DatabaseConnection,
+        source: &crate::db::entities::sources::Model,
+        connections: Vec<ServerConnection>,
+        auth_token: Option<&str>,
+    ) -> Vec<ServerConnection> {
+        use crate::services::core::backend::BackendService;
+
+        // Create backend for this source
+        let backend = match BackendService::create_backend_for_source(db, source).await {
+            Ok(backend) => backend,
+            Err(e) => {
+                warn!("Failed to create backend for connection testing: {}", e);
+                return connections; // Return unchanged connections if backend creation fails
+            }
+        };
 
         let mut handles = Vec::new();
 
         for mut conn in connections {
-            let client = client.clone();
-            let handle = tokio::spawn(async move {
-                let start = Instant::now();
+            let auth_token = auth_token.map(|t| t.to_string());
+            let uri = conn.uri.clone();
 
-                // Test the connection
-                let test_url = if conn.uri.contains("plex.tv") {
-                    // For Plex, test the identity endpoint
-                    format!("{}/identity", conn.uri.trim_end_matches('/'))
+            // Clone necessary data for the async task
+            // We need to create a new backend instance for each task since MediaBackend isn't Clone
+            let db = db.clone();
+            let source = source.clone();
+
+            let handle = tokio::spawn(async move {
+                let conn_type = if conn.local {
+                    "local"
+                } else if conn.relay {
+                    "relay"
                 } else {
-                    // For other servers, just test the root
-                    conn.uri.clone()
+                    "remote"
                 };
 
-                match client.get(&test_url).send().await {
-                    Ok(response) if response.status().is_success() => {
-                        conn.is_available = true;
-                        conn.response_time_ms = Some(start.elapsed().as_millis() as u64);
-                        debug!(
-                            "Connection {} available ({}ms)",
-                            conn.uri,
-                            conn.response_time_ms.unwrap_or(0)
-                        );
-                    }
-                    Ok(response) => {
+                debug!(
+                    "Testing {} connection: {} (auth: {})",
+                    conn_type,
+                    uri,
+                    if auth_token.is_some() { "YES" } else { "NO" }
+                );
+
+                // Create a backend instance for this task
+                let backend = match BackendService::create_backend_for_source(&db, &source).await {
+                    Ok(backend) => backend,
+                    Err(e) => {
+                        warn!("Failed to create backend for connection test: {}", e);
                         conn.is_available = false;
                         conn.response_time_ms = None;
-                        warn!(
-                            "Connection {} returned status: {}",
-                            conn.uri,
-                            response.status()
-                        );
+                        return conn;
+                    }
+                };
+
+                // Use backend's test_connection method
+                match backend.test_connection(&uri, auth_token.as_deref()).await {
+                    Ok((is_available, response_time_ms)) => {
+                        conn.is_available = is_available;
+                        conn.response_time_ms = response_time_ms;
+                        if is_available {
+                            info!(
+                                "✓ {} connection {} available ({}ms)",
+                                conn_type,
+                                uri,
+                                response_time_ms.unwrap_or(0)
+                            );
+                        } else {
+                            debug!("✗ {} connection {} not available", conn_type, uri);
+                        }
                     }
                     Err(e) => {
                         conn.is_available = false;
                         conn.response_time_ms = None;
-                        debug!("Connection {} failed: {}", conn.uri, e);
+                        debug!("✗ {} connection {} failed: {}", conn_type, uri, e);
                     }
                 }
 

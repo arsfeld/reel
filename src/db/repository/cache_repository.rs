@@ -28,6 +28,7 @@ pub trait CacheRepository: Send + Sync {
     ) -> Result<Option<CacheEntryModel>>;
     async fn insert_cache_entry(&self, entry: CacheEntryModel) -> Result<CacheEntryModel>;
     async fn update_cache_entry(&self, entry: CacheEntryModel) -> Result<CacheEntryModel>;
+    async fn update_expected_total_size(&self, id: i32, expected_total_size: i64) -> Result<()>;
     async fn delete_cache_entry(&self, id: i32) -> Result<()>;
     async fn list_cache_entries(&self) -> Result<Vec<CacheEntryModel>>;
     async fn mark_cache_accessed(&self, id: i32) -> Result<()>;
@@ -44,6 +45,8 @@ pub trait CacheRepository: Send + Sync {
     async fn add_cache_chunk(&self, chunk: CacheChunkModel) -> Result<CacheChunkModel>;
     async fn get_chunks_for_entry(&self, cache_entry_id: i32) -> Result<Vec<CacheChunkModel>>;
     async fn delete_chunks_for_entry(&self, cache_entry_id: i32) -> Result<()>;
+    async fn delete_chunks_in_range(&self, cache_entry_id: i32, start: i64, end: i64)
+    -> Result<()>;
     async fn has_byte_range(&self, cache_entry_id: i32, start: i64, end: i64) -> Result<bool>;
 
     // State derivation methods (for database-driven state computation)
@@ -165,6 +168,20 @@ impl CacheRepository for CacheRepositoryImpl {
         active_model.last_modified = Set(Utc::now().naive_utc());
 
         Ok(active_model.update(self.base.db.as_ref()).await?)
+    }
+
+    async fn update_expected_total_size(&self, id: i32, expected_total_size: i64) -> Result<()> {
+        use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+
+        let active_model = CacheEntryActiveModel {
+            id: Set(id),
+            expected_total_size: Set(Some(expected_total_size)),
+            last_modified: Set(Utc::now().naive_utc()),
+            ..Default::default()
+        };
+
+        active_model.update(self.base.db.as_ref()).await?;
+        Ok(())
     }
 
     async fn delete_cache_entry(&self, id: i32) -> Result<()> {
@@ -303,6 +320,23 @@ impl CacheRepository for CacheRepositoryImpl {
     async fn delete_chunks_for_entry(&self, cache_entry_id: i32) -> Result<()> {
         CacheChunk::delete_many()
             .filter(cache_chunks::Column::CacheEntryId.eq(cache_entry_id))
+            .exec(self.base.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_chunks_in_range(
+        &self,
+        cache_entry_id: i32,
+        start: i64,
+        end: i64,
+    ) -> Result<()> {
+        // Delete chunks that overlap with the given range
+        // A chunk overlaps if: chunk.start_byte <= end AND chunk.end_byte >= start
+        CacheChunk::delete_many()
+            .filter(cache_chunks::Column::CacheEntryId.eq(cache_entry_id))
+            .filter(cache_chunks::Column::StartByte.lte(end))
+            .filter(cache_chunks::Column::EndByte.gte(start))
             .exec(self.base.db.as_ref())
             .await?;
         Ok(())

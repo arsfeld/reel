@@ -1,4 +1,5 @@
 /// Consolidated worker components for background tasks
+pub mod cache_cleanup_worker;
 pub mod config_manager;
 pub mod connection_monitor;
 pub mod image_loader;
@@ -12,6 +13,10 @@ mod connection_monitor_tests;
 mod search_worker_tests;
 
 // Re-export commonly used types
+pub use cache_cleanup_worker::{
+    CacheCleanupInput, CacheCleanupOutput, CacheCleanupWorker, CleanupConfig, CleanupStats,
+    CleanupType,
+};
 pub use connection_monitor::{ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput};
 pub use image_loader::{ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize};
 pub use search_worker::{SearchWorker, SearchWorkerInput, SearchWorkerOutput};

@@ -495,4 +495,38 @@ impl MediaBackend for JellyfinBackend {
         let api = self.ensure_api_initialized().await?;
         api.get_home_sections().await
     }
+
+    async fn test_connection(
+        &self,
+        url: &str,
+        _auth_token: Option<&str>,
+    ) -> Result<(bool, Option<u64>)> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+        let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+
+        // For Jellyfin, test the public system info endpoint
+        let base = url.trim_end_matches('/');
+        let test_url = format!("{}/System/Info/Public", base);
+
+        match client.get(&test_url).send().await {
+            Ok(response) if response.status().is_success() => {
+                let response_time_ms = start.elapsed().as_millis() as u64;
+                Ok((true, Some(response_time_ms)))
+            }
+            Ok(response) => {
+                tracing::debug!(
+                    "Jellyfin connection test failed for {}: status {}",
+                    url,
+                    response.status()
+                );
+                Ok((false, None))
+            }
+            Err(e) => {
+                tracing::debug!("Jellyfin connection test failed for {}: {}", url, e);
+                Ok((false, None))
+            }
+        }
+    }
 }

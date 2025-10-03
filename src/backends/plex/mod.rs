@@ -142,8 +142,10 @@ impl PlexBackend {
                 .build();
 
             if let Ok(client) = client {
+                // Send token both in headers AND as URL parameter for maximum compatibility
+                let url_with_token = format!("{}/identity?X-Plex-Token={}", base_url, token);
                 let response = client
-                    .get(format!("{}/identity", base_url))
+                    .get(&url_with_token)
                     .headers(create_standard_headers(Some(token)))
                     .send()
                     .await;
@@ -184,25 +186,76 @@ impl PlexBackend {
                     .danger_accept_invalid_certs(true) // Plex uses self-signed certs
                     .build()?;
 
+                let headers = create_standard_headers(Some(&token));
+                let conn_type = if conn_clone.local {
+                    "local"
+                } else if conn_clone.relay {
+                    "relay"
+                } else {
+                    "remote"
+                };
+
+                // Log connection attempt with details
+                tracing::info!(
+                    "Testing {} connection: {} (protocol: {}, local: {}, relay: {})",
+                    conn_type,
+                    uri,
+                    conn_clone.protocol,
+                    conn_clone.local,
+                    conn_clone.relay
+                );
+
+                // Log token presence and first few chars for verification
+                let has_token = headers.get("X-Plex-Token").is_some();
+                let token_preview = if !token.is_empty() {
+                    format!("{}...", &token[..8.min(token.len())])
+                } else {
+                    "EMPTY".to_string()
+                };
+                tracing::debug!(
+                    "Auth token for {} connection {}: {} (token starts with: {})",
+                    conn_type,
+                    uri,
+                    if has_token { "YES" } else { "NO" },
+                    token_preview
+                );
+
                 // Try to access the server identity endpoint
-                let response = client
-                    .get(format!("{}/identity", uri))
-                    .headers(create_standard_headers(Some(&token)))
-                    .send()
-                    .await;
+                // Send token both in headers AND as URL parameter for maximum compatibility
+                let url_with_token = format!("{}/identity?X-Plex-Token={}", uri, token);
+                let response = client.get(&url_with_token).headers(headers).send().await;
 
                 match response {
                     Ok(resp) if resp.status().is_success() => {
                         let latency = start.elapsed();
-                        tracing::debug!("Connection {} responded in {:?}", uri, latency);
+                        tracing::info!(
+                            "✓ {} connection {} succeeded in {:?}",
+                            conn_type,
+                            uri,
+                            latency
+                        );
                         Ok((conn_clone, latency))
                     }
                     Ok(resp) => {
-                        tracing::debug!("Connection {} returned status: {}", uri, resp.status());
-                        Err(anyhow!("Connection failed with status: {}", resp.status()))
+                        let status = resp.status();
+                        tracing::warn!(
+                            "✗ {} connection {} returned status: {} ({})",
+                            conn_type,
+                            uri,
+                            status.as_u16(),
+                            status.canonical_reason().unwrap_or("Unknown")
+                        );
+                        if status.as_u16() == 401 {
+                            tracing::error!(
+                                "401 Unauthorized on {} connection {}. This suggests auth token issue.",
+                                conn_type,
+                                uri
+                            );
+                        }
+                        Err(anyhow!("Connection failed with status: {}", status))
                     }
                     Err(e) => {
-                        tracing::debug!("Connection {} failed: {}", uri, e);
+                        tracing::warn!("✗ {} connection {} failed: {}", conn_type, uri, e);
                         Err(anyhow!("Connection failed: {}", e))
                     }
                 }
@@ -243,17 +296,73 @@ impl PlexBackend {
                         .danger_accept_invalid_certs(true)
                         .build()?;
 
-                    let response = client
-                        .get(format!("{}/identity", conn.uri))
-                        .headers(create_standard_headers(Some(token)))
-                        .send()
-                        .await;
+                    let headers = create_standard_headers(Some(token));
+                    let conn_type = if conn.local {
+                        "local"
+                    } else if conn.relay {
+                        "relay"
+                    } else {
+                        "remote"
+                    };
 
-                    if let Ok(resp) = response
-                        && resp.status().is_success()
-                    {
-                        tracing::info!("Successfully connected to {} (fallback)", conn.uri);
-                        return Ok(conn);
+                    tracing::info!(
+                        "Sequential fallback: testing {} connection {}",
+                        conn_type,
+                        conn.uri
+                    );
+
+                    let has_token = headers.get("X-Plex-Token").is_some();
+                    let token_preview = if !token.is_empty() {
+                        format!("{}...", &token[..8.min(token.len())])
+                    } else {
+                        "EMPTY".to_string()
+                    };
+                    tracing::debug!(
+                        "Auth token for {} connection {}: {} (token starts with: {})",
+                        conn_type,
+                        conn.uri,
+                        if has_token { "YES" } else { "NO" },
+                        token_preview
+                    );
+
+                    // Send token both in headers AND as URL parameter for maximum compatibility
+                    let url_with_token = format!("{}/identity?X-Plex-Token={}", conn.uri, token);
+                    let response = client.get(&url_with_token).headers(headers).send().await;
+
+                    match response {
+                        Ok(resp) if resp.status().is_success() => {
+                            tracing::info!(
+                                "✓ Sequential {} connection {} succeeded",
+                                conn_type,
+                                conn.uri
+                            );
+                            return Ok(conn);
+                        }
+                        Ok(resp) => {
+                            let status = resp.status();
+                            tracing::warn!(
+                                "✗ Sequential {} connection {} returned status: {} ({})",
+                                conn_type,
+                                conn.uri,
+                                status.as_u16(),
+                                status.canonical_reason().unwrap_or("Unknown")
+                            );
+                            if status.as_u16() == 401 {
+                                tracing::error!(
+                                    "401 Unauthorized on {} connection {}. This suggests auth token issue.",
+                                    conn_type,
+                                    conn.uri
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "✗ Sequential {} connection {} failed: {}",
+                                conn_type,
+                                conn.uri,
+                                e
+                            );
+                        }
                     }
                 }
 
@@ -347,7 +456,10 @@ impl PlexBackend {
     async fn test_connection(&self, url: &str, timeout_secs: u64) -> bool {
         let token = match self.auth_token.read().await.as_ref() {
             Some(t) => t.clone(),
-            None => return false,
+            None => {
+                tracing::warn!("test_connection: No auth token available");
+                return false;
+            }
         };
 
         let client = match reqwest::Client::builder()
@@ -356,17 +468,55 @@ impl PlexBackend {
             .build()
         {
             Ok(c) => c,
-            Err(_) => return false,
+            Err(e) => {
+                tracing::warn!("test_connection: Failed to create HTTP client: {}", e);
+                return false;
+            }
         };
 
-        match client
-            .get(format!("{}/identity", url))
-            .headers(create_standard_headers(Some(&token)))
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => true,
-            _ => false,
+        let headers = create_standard_headers(Some(&token));
+        let has_token = headers.get("X-Plex-Token").is_some();
+        let token_preview = if !token.is_empty() {
+            format!("{}...", &token[..8.min(token.len())])
+        } else {
+            "EMPTY".to_string()
+        };
+
+        tracing::debug!(
+            "test_connection: Testing {} (timeout: {}s, auth token: {}, starts with: {})",
+            url,
+            timeout_secs,
+            if has_token { "YES" } else { "NO" },
+            token_preview
+        );
+
+        // Send token both in headers AND as URL parameter for maximum compatibility
+        let url_with_token = format!("{}/identity?X-Plex-Token={}", url, token);
+        match client.get(&url_with_token).headers(headers).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                tracing::debug!("✓ test_connection: {} succeeded", url);
+                true
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                tracing::warn!(
+                    "✗ test_connection: {} returned status: {} ({})",
+                    url,
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or("Unknown")
+                );
+                if status.as_u16() == 401 {
+                    tracing::error!(
+                        "401 Unauthorized on connection {}. This suggests auth token issue.",
+                        url
+                    );
+                }
+                false
+            }
+            Err(e) => {
+                tracing::warn!("✗ test_connection: {} failed: {}", url, e);
+                false
+            }
         }
     }
 
@@ -377,6 +527,8 @@ impl PlexBackend {
         token: &str,
     ) -> Result<PlexConnection> {
         use futures::future::select_ok;
+
+        tracing::info!("Testing {} cached connections", connections.len());
 
         let mut futures = Vec::new();
         for conn in connections {
@@ -390,15 +542,60 @@ impl PlexBackend {
                     .danger_accept_invalid_certs(true)
                     .build()?;
 
-                let response = client
-                    .get(format!("{}/identity", uri))
-                    .headers(create_standard_headers(Some(&token)))
-                    .send()
-                    .await;
+                let headers = create_standard_headers(Some(&token));
+                let conn_type = if conn_clone.local {
+                    "local"
+                } else if conn_clone.relay {
+                    "relay"
+                } else {
+                    "remote"
+                };
+
+                let has_token = headers.get("X-Plex-Token").is_some();
+                let token_preview = if !token.is_empty() {
+                    format!("{}...", &token[..8.min(token.len())])
+                } else {
+                    "EMPTY".to_string()
+                };
+                tracing::debug!(
+                    "Cached connection test: {} {} (auth token: {}, starts with: {})",
+                    conn_type,
+                    uri,
+                    if has_token { "YES" } else { "NO" },
+                    token_preview
+                );
+
+                // Send token both in headers AND as URL parameter for maximum compatibility
+                let url_with_token = format!("{}/identity?X-Plex-Token={}", uri, token);
+                let response = client.get(&url_with_token).headers(headers).send().await;
 
                 match response {
-                    Ok(resp) if resp.status().is_success() => Ok(conn_clone),
-                    _ => Err(anyhow!("Connection failed")),
+                    Ok(resp) if resp.status().is_success() => {
+                        tracing::info!("✓ Cached {} connection {} succeeded", conn_type, uri);
+                        Ok(conn_clone)
+                    }
+                    Ok(resp) => {
+                        let status = resp.status();
+                        tracing::warn!(
+                            "✗ Cached {} connection {} returned status: {} ({})",
+                            conn_type,
+                            uri,
+                            status.as_u16(),
+                            status.canonical_reason().unwrap_or("Unknown")
+                        );
+                        if status.as_u16() == 401 {
+                            tracing::error!(
+                                "401 Unauthorized on cached {} connection {}",
+                                conn_type,
+                                uri
+                            );
+                        }
+                        Err(anyhow!("Connection failed with status: {}", status))
+                    }
+                    Err(e) => {
+                        tracing::warn!("✗ Cached {} connection {} failed: {}", conn_type, uri, e);
+                        Err(anyhow!("Connection failed: {}", e))
+                    }
                 }
             };
 
@@ -786,8 +983,10 @@ impl MediaBackend for PlexBackend {
                     .danger_accept_invalid_certs(true)
                     .build()?;
 
+                // Send token both in headers AND as URL parameter for maximum compatibility
+                let url_with_token = format!("{}/identity?X-Plex-Token={}", url, token);
                 let test_result = test_client
-                    .get(format!("{}/identity", url))
+                    .get(&url_with_token)
                     .headers(create_standard_headers(Some(&token)))
                     .send()
                     .await;
@@ -1208,6 +1407,54 @@ impl MediaBackend for PlexBackend {
     async fn get_home_sections(&self) -> Result<Vec<crate::models::HomeSection>> {
         let api = self.get_api().await?;
         api.get_home_sections().await
+    }
+
+    async fn test_connection(
+        &self,
+        url: &str,
+        auth_token: Option<&str>,
+    ) -> Result<(bool, Option<u64>)> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .danger_accept_invalid_certs(true) // Plex uses self-signed certs
+            .build()?;
+
+        // For Plex, test the /identity endpoint
+        let base = url.trim_end_matches('/');
+        let test_url = if let Some(token) = auth_token {
+            format!("{}/identity?X-Plex-Token={}", base, token)
+        } else {
+            format!("{}/identity", base)
+        };
+
+        let mut request = client.get(&test_url);
+
+        // Add auth token as header as well for maximum compatibility
+        if let Some(token) = auth_token {
+            request = request.headers(create_standard_headers(Some(token)));
+        }
+
+        match request.send().await {
+            Ok(response) if response.status().is_success() => {
+                let response_time_ms = start.elapsed().as_millis() as u64;
+                Ok((true, Some(response_time_ms)))
+            }
+            Ok(response) => {
+                debug!(
+                    "Plex connection test failed for {}: status {}",
+                    url,
+                    response.status()
+                );
+                Ok((false, None))
+            }
+            Err(e) => {
+                debug!("Plex connection test failed for {}: {}", url, e);
+                Ok((false, None))
+            }
+        }
     }
 }
 

@@ -483,31 +483,125 @@ impl FileCache {
             debug!("Database entry exists but missing expected_total_size, updating...");
         }
 
-        // Make HEAD request to get Content-Length
+        // Make GET request with Range header to get file size
+        // Note: Using Range instead of HEAD because Plex returns 500 for HEAD requests
         debug!(
-            "Making HEAD request to get Content-Length for {:?}",
+            "Making Range request (bytes=0-0) to get file size for {:?}",
             original_url
         );
         let client = self.chunk_manager.client();
-        let response = client
-            .head(original_url)
+        let response = match client
+            .get(original_url)
+            .header("Range", "bytes=0-0")
             .send()
             .await
-            .with_context(|| format!("Failed to make HEAD request to {}", original_url))?;
+        {
+            Ok(resp) => {
+                debug!(
+                    "Range request completed with status: {}, headers: {:?}",
+                    resp.status(),
+                    resp.headers()
+                );
+                resp
+            }
+            Err(e) => {
+                error!("Range request failed with network error: {}", e);
+                return Err(anyhow::anyhow!(
+                    "Failed to make Range request to {}: {}",
+                    original_url,
+                    e
+                ));
+            }
+        };
 
-        if !response.status().is_success() {
+        // Accept both 206 Partial Content and 200 OK
+        let content_length = if response.status() == 206 {
+            // Parse Content-Range header: "bytes 0-0/[total]"
+            match response.headers().get("content-range") {
+                Some(value) => match value.to_str() {
+                    Ok(s) => {
+                        // Parse "bytes 0-0/12345" to extract 12345
+                        if let Some(total_str) = s.split('/').nth(1) {
+                            match total_str.parse::<i64>() {
+                                Ok(len) => {
+                                    debug!(
+                                        "Successfully parsed file size from Content-Range: {}",
+                                        len
+                                    );
+                                    len
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to parse total size from Content-Range '{}': {}",
+                                        s, e
+                                    );
+                                    return Err(anyhow::anyhow!(
+                                        "Content-Range header invalid format: {}",
+                                        s
+                                    ));
+                                }
+                            }
+                        } else {
+                            error!("Content-Range header missing total size: {}", s);
+                            return Err(anyhow::anyhow!(
+                                "Content-Range header invalid format: {}",
+                                s
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        error!("Content-Range header contains invalid UTF-8: {:?}", e);
+                        return Err(anyhow::anyhow!(
+                            "Content-Range header contains invalid UTF-8"
+                        ));
+                    }
+                },
+                None => {
+                    error!("Content-Range header missing from 206 response");
+                    return Err(anyhow::anyhow!(
+                        "Content-Range header missing from partial content response"
+                    ));
+                }
+            }
+        } else if response.status().is_success() {
+            // Server doesn't support Range requests, use Content-Length
+            match response.headers().get("content-length") {
+                Some(value) => match value.to_str() {
+                    Ok(s) => match s.parse::<i64>() {
+                        Ok(len) => {
+                            debug!("Successfully parsed Content-Length: {}", len);
+                            len
+                        }
+                        Err(e) => {
+                            error!("Failed to parse Content-Length value '{}': {}", s, e);
+                            return Err(anyhow::anyhow!("Content-Length header invalid: {}", s));
+                        }
+                    },
+                    Err(e) => {
+                        error!("Content-Length header contains invalid UTF-8: {:?}", e);
+                        return Err(anyhow::anyhow!(
+                            "Content-Length header contains invalid UTF-8"
+                        ));
+                    }
+                },
+                None => {
+                    error!("Content-Length header missing from response");
+                    return Err(anyhow::anyhow!(
+                        "Content-Length header missing from response"
+                    ));
+                }
+            }
+        } else {
+            error!(
+                "Range request returned error status: {} for URL: {}",
+                response.status(),
+                original_url
+            );
             return Err(anyhow::anyhow!(
-                "HEAD request failed with status: {}",
+                "Range request failed with status: {}",
                 response.status()
             ));
-        }
-
-        let content_length = response
-            .headers()
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<i64>().ok())
-            .ok_or_else(|| anyhow::anyhow!("Content-Length header missing or invalid"))?;
+        };
 
         debug!(
             "Got Content-Length: {} bytes for {:?}",
@@ -515,7 +609,7 @@ impl FileCache {
         );
 
         // Check if entry exists - update or insert
-        if let Some(mut entry) = repository
+        if let Some(entry) = repository
             .find_cache_entry(
                 &cache_key.source_id.to_string(),
                 &cache_key.media_id.to_string(),
@@ -523,10 +617,14 @@ impl FileCache {
             )
             .await?
         {
-            // Update existing entry
-            entry.expected_total_size = Some(content_length);
-            repository.update_cache_entry(entry).await?;
-            debug!("Updated database entry with expected_total_size");
+            // Update existing entry - use dedicated method to set expected_total_size
+            repository
+                .update_expected_total_size(entry.id, content_length)
+                .await?;
+            debug!(
+                "Updated database entry with expected_total_size={}",
+                content_length
+            );
         } else {
             // Create new database entry
             use crate::db::entities::CacheEntryModel;

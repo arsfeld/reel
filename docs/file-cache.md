@@ -90,6 +90,9 @@ request_chunk(entry_id: i32, chunk_index: u64, priority: Priority)
 
 // Wait for chunk (event-based)
 wait_for_chunk(entry_id: i32, chunk_index: u64, timeout: Duration)
+
+// Invalidate and retry corrupted chunks
+retry_range(entry_id: i32, start: u64, end: u64, total_size: u64, timeout: Duration)
 ```
 
 #### 2. ChunkDownloader
@@ -134,6 +137,7 @@ HTTP server that serves cached media to players.
 - Queries ChunkManager for chunk availability
 - Waits for missing chunks during streaming (event-based)
 - Handles client disconnects gracefully
+- **Automatic cache error recovery** with state machine-based fallback system
 
 **Key Behavior**:
 - All responses are `206 Partial Content` with `Content-Range` headers, even for full file requests
@@ -142,7 +146,9 @@ HTTP server that serves cached media to players.
 - Queries database for exact chunk availability (not file size guessing)
 - Requests missing chunks with CRITICAL priority during streaming
 - Waits for chunks with timeout (30 seconds default)
-- Returns 503 Service Unavailable only on timeout
+- **On cache read failures**: Automatically invalidates and re-downloads corrupted chunks
+- **Fallback strategy**: TryCache → RetryDownload → Passthrough/Error
+- Returns 503 Service Unavailable only on persistent failure or timeout
 
 ## Data Flow
 
@@ -413,6 +419,74 @@ println!("Complete: {}", status.is_complete);
 
 ## Error Handling
 
+### Cache Fallback System
+
+The cache proxy implements a **state machine-based fallback system** to handle cache read failures gracefully:
+
+#### State Machine (ServeStrategy)
+
+```rust
+enum ServeStrategy {
+    TryCache,              // Initial attempt to serve from cache
+    RetryDownload { attempt: u32 },  // Re-download corrupted chunks
+    Passthrough,           // Direct streaming from original URL (terminal)
+}
+```
+
+#### Fallback Flow
+
+When cache reads fail, the system progresses through states:
+
+```
+TryCache → RetryDownload (1 attempt) → Passthrough (error)
+```
+
+**1. TryCache**: Initial cache read attempt
+   - Reads chunks from ChunkStore
+   - On failure → advance to RetryDownload
+
+**2. RetryDownload**: Automatic chunk recovery
+   - Deletes corrupted chunks from database
+   - Re-requests chunks with HIGH priority
+   - Waits for download completion (30s timeout)
+   - Retries cache read
+   - On success → return data
+   - On failure → advance to Passthrough
+
+**3. Passthrough**: Last resort (terminal state)
+   - For small ranges: Returns error (re-download preferred)
+   - For streaming: Could direct-stream from original URL
+
+#### Handled Scenarios
+
+| Scenario | Action | Acceptance Criteria |
+|----------|--------|-------------------|
+| Cache entry exists but file missing | Retry download of chunks | AC #1 ✅ |
+| File exists but corrupted (read errors) | Invalidate & re-download chunks | AC #2 ✅ |
+| Database lookup fails | Return 503 SERVICE_UNAVAILABLE | AC #3 ✅ |
+| Invalid cache entry (no total size) | Direct passthrough streaming | AC #4 ✅ |
+
+#### Implementation Details
+
+**Small Ranges (<50MB)**:
+- Use `read_range_with_fallback()` with full state machine
+- Single retry attempt per range
+- Falls back to error (not passthrough) to avoid overhead
+
+**Large Ranges/Progressive Streaming**:
+- Embedded retry logic in stream
+- Per-chunk retry on read failure
+- Invalidates and re-downloads corrupted chunks on-the-fly
+
+**Retry Parameters**:
+- Max retry attempts: 1 per range
+- Retry timeout: 30 seconds
+- Retry priority: HIGH (for faster recovery)
+
+**Database Failures**:
+- Cannot fall back to passthrough (original URL unavailable)
+- Returns 503 SERVICE_UNAVAILABLE (appropriate for transient DB failures)
+
 ### Network Errors
 
 - **Transient errors**: Exponential backoff retry (max 3 attempts)
@@ -425,6 +499,7 @@ println!("Complete: {}", status.is_complete);
 - **Disk full**: Stops downloads, emits error event
 - **Write failure**: Marks chunk as failed, retries
 - **Sparse file unsupported**: Falls back to pre-allocated file
+- **Corrupted chunks**: Automatically invalidated and re-downloaded (see Cache Fallback System)
 
 ### Client Behavior
 

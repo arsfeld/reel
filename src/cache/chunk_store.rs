@@ -1,10 +1,38 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::path::{Path, PathBuf};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::db::entities::CacheEntryModel;
+
+/// Check if an I/O error is due to disk space exhaustion (ENOSPC)
+fn is_disk_full_error(err: &std::io::Error) -> bool {
+    // Check for StorageFull error kind (available in Rust 1.80+)
+    #[cfg(feature = "storage_full_error")]
+    if matches!(err.kind(), std::io::ErrorKind::StorageFull) {
+        return true;
+    }
+
+    // Check raw OS error code (28 = ENOSPC on Unix, ERROR_DISK_FULL on Windows)
+    #[cfg(unix)]
+    if err.raw_os_error() == Some(28) {
+        return true;
+    }
+
+    #[cfg(windows)]
+    if err.raw_os_error() == Some(112) {
+        // ERROR_DISK_FULL
+        return true;
+    }
+
+    // Fallback: check error message for common disk space error strings
+    let error_msg = err.to_string().to_lowercase();
+    error_msg.contains("no space left")
+        || error_msg.contains("disk full")
+        || error_msg.contains("out of space")
+        || error_msg.contains("enospc")
+}
 
 /// Manages physical storage of chunks on disk with sparse file support
 pub struct ChunkStore {
@@ -24,6 +52,9 @@ impl ChunkStore {
 
     /// Write a chunk to disk at the appropriate offset
     /// Uses sparse file writes - seeks to offset and writes data
+    ///
+    /// # Errors
+    /// Returns an error with "DISK_FULL" prefix if the write fails due to insufficient disk space (ENOSPC)
     pub async fn write_chunk(
         &self,
         entry_id: i32,
@@ -35,27 +66,93 @@ impl ChunkStore {
         let offset = chunk_index * chunk_size;
 
         // Open file for writing (create if doesn't exist)
-        let mut file = OpenOptions::new()
+        let mut file = match OpenOptions::new()
             .write(true)
             .create(true)
             .open(&file_path)
             .await
-            .with_context(|| format!("Failed to open cache file {:?}", file_path))?;
+        {
+            Ok(f) => f,
+            Err(e) if is_disk_full_error(&e) => {
+                // AC #4: Handle disk full errors gracefully
+                error!(
+                    "DISK_FULL: Cannot open cache file {:?} - disk space exhausted",
+                    file_path
+                );
+                return Err(anyhow!(
+                    "DISK_FULL: No space left on device to create cache file"
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                // AC #5: Handle permission errors gracefully
+                error!(
+                    "PERMISSION_DENIED: Cannot open cache file {:?} - permission denied",
+                    file_path
+                );
+                return Err(anyhow!(
+                    "PERMISSION_DENIED: Permission denied for cache file {:?}",
+                    file_path
+                ));
+            }
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("Failed to open cache file {:?}", file_path));
+            }
+        };
 
         // Seek to the correct offset
-        file.seek(SeekFrom::Start(offset))
-            .await
-            .with_context(|| format!("Failed to seek to offset {} in {:?}", offset, file_path))?;
+        if let Err(e) = file.seek(SeekFrom::Start(offset)).await {
+            if is_disk_full_error(&e) {
+                error!(
+                    "DISK_FULL: Cannot seek in cache file {:?} - disk space exhausted",
+                    file_path
+                );
+                return Err(anyhow!("DISK_FULL: No space left on device"));
+            }
+            return Err(e).with_context(|| {
+                format!("Failed to seek to offset {} in {:?}", offset, file_path)
+            });
+        }
 
         // Write the data
-        file.write_all(data)
-            .await
-            .with_context(|| format!("Failed to write {} bytes to {:?}", data.len(), file_path))?;
+        if let Err(e) = file.write_all(data).await {
+            if is_disk_full_error(&e) {
+                // AC #4: Handle disk full errors gracefully
+                error!(
+                    "DISK_FULL: Cannot write {} bytes to cache file {:?} - disk space exhausted",
+                    data.len(),
+                    file_path
+                );
+                return Err(anyhow!("DISK_FULL: No space left on device during write"));
+            }
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                // AC #5: Handle permission errors gracefully
+                error!(
+                    "PERMISSION_DENIED: Cannot write {} bytes to cache file {:?} - permission denied",
+                    data.len(),
+                    file_path
+                );
+                return Err(anyhow!(
+                    "PERMISSION_DENIED: Permission denied writing to cache file {:?}",
+                    file_path
+                ));
+            }
+            return Err(e).with_context(|| {
+                format!("Failed to write {} bytes to {:?}", data.len(), file_path)
+            });
+        }
 
         // Flush to ensure data is written
-        file.flush()
-            .await
-            .with_context(|| format!("Failed to flush data to {:?}", file_path))?;
+        if let Err(e) = file.flush().await {
+            if is_disk_full_error(&e) {
+                error!(
+                    "DISK_FULL: Cannot flush cache file {:?} - disk space exhausted",
+                    file_path
+                );
+                return Err(anyhow!("DISK_FULL: No space left on device during flush"));
+            }
+            return Err(e).with_context(|| format!("Failed to flush data to {:?}", file_path));
+        }
 
         Ok(())
     }

@@ -170,6 +170,7 @@ impl BackendService {
                 primary_url: entity.connection_url.clone(),
                 is_online: entity.is_online,
                 last_check: Some(chrono::Utc::now()),
+                connection_quality: None, // Will be set by ConnectionMonitor
             },
             enabled: true,
             last_sync: entity.last_sync.map(|dt| dt.and_utc()),

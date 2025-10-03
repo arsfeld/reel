@@ -554,6 +554,31 @@ impl ChunkManager {
     pub fn client(&self) -> &Client {
         self.downloader.client()
     }
+
+    /// Invalidate and retry downloading a byte range (for corrupted chunks)
+    /// This deletes the chunks covering the range from the database and re-requests them
+    pub async fn retry_range(
+        &self,
+        entry_id: i32,
+        start: u64,
+        end: u64,
+        total_size: u64,
+        timeout: Duration,
+    ) -> Result<()> {
+        // Delete chunks that overlap with this range
+        self.repository
+            .delete_chunks_in_range(entry_id, start as i64, end as i64)
+            .await?;
+
+        // Re-request the chunks for this range with HIGH priority
+        self.request_chunks_for_range(entry_id, start, end, total_size, Priority::HIGH)
+            .await?;
+
+        // Wait for the range to become available
+        self.wait_for_range(entry_id, start, end, timeout).await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
