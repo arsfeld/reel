@@ -30,6 +30,10 @@ pub struct Model {
     pub parent_id: Option<String>,   // For episodes: ID of parent show
     pub season_number: Option<i32>,  // For episodes: season number
     pub episode_number: Option<i32>, // For episodes: episode number
+    pub intro_marker_start_ms: Option<i64>,
+    pub intro_marker_end_ms: Option<i64>,
+    pub credits_marker_start_ms: Option<i64>,
+    pub credits_marker_end_ms: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -220,6 +224,27 @@ impl TryFrom<Model> for MediaItem {
                     .and_then(|v| v.as_u64())
                     .map(Duration::from_millis);
 
+                // Deserialize intro marker if both start and end are present
+                let intro_marker = match (model.intro_marker_start_ms, model.intro_marker_end_ms) {
+                    (Some(start_ms), Some(end_ms)) => Some(crate::models::ChapterMarker {
+                        start_time: Duration::from_millis(start_ms as u64),
+                        end_time: Duration::from_millis(end_ms as u64),
+                        marker_type: crate::models::ChapterType::Intro,
+                    }),
+                    _ => None,
+                };
+
+                // Deserialize credits marker if both start and end are present
+                let credits_marker =
+                    match (model.credits_marker_start_ms, model.credits_marker_end_ms) {
+                        (Some(start_ms), Some(end_ms)) => Some(crate::models::ChapterMarker {
+                            start_time: Duration::from_millis(start_ms as u64),
+                            end_time: Duration::from_millis(end_ms as u64),
+                            marker_type: crate::models::ChapterType::Credits,
+                        }),
+                        _ => None,
+                    };
+
                 Ok(MediaItem::Movie(Movie {
                     id: model.id.clone(),
                     backend_id: model.source_id.clone(),
@@ -239,8 +264,8 @@ impl TryFrom<Model> for MediaItem {
                     view_count,
                     last_watched_at,
                     playback_position,
-                    intro_marker: None,
-                    credits_marker: None,
+                    intro_marker,
+                    credits_marker,
                 }))
             }
             "show" => {
@@ -321,6 +346,27 @@ impl TryFrom<Model> for MediaItem {
                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                     .map(|dt| dt.with_timezone(&chrono::Utc));
 
+                // Deserialize intro marker if both start and end are present
+                let intro_marker = match (model.intro_marker_start_ms, model.intro_marker_end_ms) {
+                    (Some(start_ms), Some(end_ms)) => Some(crate::models::ChapterMarker {
+                        start_time: Duration::from_millis(start_ms as u64),
+                        end_time: Duration::from_millis(end_ms as u64),
+                        marker_type: crate::models::ChapterType::Intro,
+                    }),
+                    _ => None,
+                };
+
+                // Deserialize credits marker if both start and end are present
+                let credits_marker =
+                    match (model.credits_marker_start_ms, model.credits_marker_end_ms) {
+                        (Some(start_ms), Some(end_ms)) => Some(crate::models::ChapterMarker {
+                            start_time: Duration::from_millis(start_ms as u64),
+                            end_time: Duration::from_millis(end_ms as u64),
+                            marker_type: crate::models::ChapterType::Credits,
+                        }),
+                        _ => None,
+                    };
+
                 Ok(MediaItem::Episode(Episode {
                     id: model.id.clone(),
                     backend_id: model.source_id.clone(),
@@ -338,8 +384,8 @@ impl TryFrom<Model> for MediaItem {
                     playback_position,
                     show_title,
                     show_poster_url,
-                    intro_marker: None,
-                    credits_marker: None,
+                    intro_marker,
+                    credits_marker,
                 }))
             }
             "album" => {

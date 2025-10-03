@@ -297,11 +297,10 @@ impl MediaItem {
         };
 
         // Build metadata JSON with type-specific fields
+        // Note: cast/crew are NOT stored in metadata JSON - they are stored in people tables
         let metadata = match self {
             MediaItem::Movie(movie) => {
                 serde_json::json!({
-                    "cast": movie.cast,
-                    "crew": movie.crew,
                     "watched": movie.watched,
                     "view_count": movie.view_count,
                     "last_watched_at": movie.last_watched_at.map(|dt| dt.to_rfc3339()),
@@ -311,7 +310,6 @@ impl MediaItem {
             MediaItem::Show(show) => {
                 serde_json::json!({
                     "seasons": show.seasons,
-                    "cast": show.cast,
                     "watched_episode_count": show.watched_episode_count,
                     "total_episode_count": show.total_episode_count,
                     "last_watched_at": show.last_watched_at.map(|dt| dt.to_rfc3339()),
@@ -349,6 +347,54 @@ impl MediaItem {
             }
         };
 
+        // Extract intro and credits markers for movies and episodes
+        let (
+            intro_marker_start_ms,
+            intro_marker_end_ms,
+            credits_marker_start_ms,
+            credits_marker_end_ms,
+        ) = match self {
+            MediaItem::Movie(movie) => {
+                let intro_start = movie
+                    .intro_marker
+                    .as_ref()
+                    .map(|m| m.start_time.as_millis() as i64);
+                let intro_end = movie
+                    .intro_marker
+                    .as_ref()
+                    .map(|m| m.end_time.as_millis() as i64);
+                let credits_start = movie
+                    .credits_marker
+                    .as_ref()
+                    .map(|m| m.start_time.as_millis() as i64);
+                let credits_end = movie
+                    .credits_marker
+                    .as_ref()
+                    .map(|m| m.end_time.as_millis() as i64);
+                (intro_start, intro_end, credits_start, credits_end)
+            }
+            MediaItem::Episode(episode) => {
+                let intro_start = episode
+                    .intro_marker
+                    .as_ref()
+                    .map(|m| m.start_time.as_millis() as i64);
+                let intro_end = episode
+                    .intro_marker
+                    .as_ref()
+                    .map(|m| m.end_time.as_millis() as i64);
+                let credits_start = episode
+                    .credits_marker
+                    .as_ref()
+                    .map(|m| m.start_time.as_millis() as i64);
+                let credits_end = episode
+                    .credits_marker
+                    .as_ref()
+                    .map(|m| m.end_time.as_millis() as i64);
+                (intro_start, intro_end, credits_start, credits_end)
+            }
+            _ => (None, None, None, None),
+        };
+
         MediaItemModel {
             id: self.id().to_string(),
             source_id: source_id.to_string(),
@@ -369,6 +415,10 @@ impl MediaItem {
             added_at: Some(chrono::Utc::now().naive_utc()),
             updated_at: chrono::Utc::now().naive_utc(),
             metadata: Some(metadata),
+            intro_marker_start_ms,
+            intro_marker_end_ms,
+            credits_marker_start_ms,
+            credits_marker_end_ms,
         }
     }
 }

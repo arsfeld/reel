@@ -86,6 +86,34 @@ impl Command<Vec<Episode>> for GetEpisodesCommand {
     }
 }
 
+/// Load full metadata for a movie (including full cast/crew)
+pub struct LoadFullMovieMetadataCommand {
+    pub db: DatabaseConnection,
+    pub movie_id: MediaItemId,
+}
+
+#[async_trait]
+impl Command<()> for LoadFullMovieMetadataCommand {
+    async fn execute(&self) -> Result<()> {
+        use crate::services::core::backend::BackendService;
+        BackendService::load_full_movie_metadata(&self.db, &self.movie_id).await
+    }
+}
+
+/// Load full metadata for a show (including full cast)
+pub struct LoadFullShowMetadataCommand {
+    pub db: DatabaseConnection,
+    pub show_id: ShowId,
+}
+
+#[async_trait]
+impl Command<()> for LoadFullShowMetadataCommand {
+    async fn execute(&self) -> Result<()> {
+        use crate::services::core::backend::BackendService;
+        BackendService::load_full_show_metadata(&self.db, &self.show_id).await
+    }
+}
+
 // Tests disabled temporarily - need proper database mocking support
 #[cfg(test)]
 #[allow(dead_code)]

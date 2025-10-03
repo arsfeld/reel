@@ -6,7 +6,7 @@ use crate::db::{
     entities::LibraryModel,
     repository::{
         LibraryRepository, LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl,
-        PlaybackRepository, PlaybackRepositoryImpl, Repository,
+        PeopleRepository, PlaybackRepository, PlaybackRepositoryImpl, Repository,
     },
 };
 use crate::models::{Library, LibraryId, MediaItem, MediaItemId, MediaType, ShowId, SourceId};
@@ -148,6 +148,8 @@ impl MediaService {
         db: &DatabaseConnection,
         item_id: &MediaItemId,
     ) -> Result<Option<MediaItem>> {
+        use crate::db::repository::PeopleRepositoryImpl;
+
         let repo = MediaRepositoryImpl::new(db.clone());
         let model = repo
             .find_by_id(item_id.as_ref())
@@ -155,7 +157,47 @@ impl MediaService {
             .context("Failed to get media item from database")?;
 
         match model {
-            Some(m) => Ok(Some(m.try_into()?)),
+            Some(m) => {
+                // Load people (cast/crew) from people tables
+                let people_repo = PeopleRepositoryImpl::new(db.clone());
+                let people_with_relations =
+                    people_repo.find_by_media_item(item_id.as_ref()).await?;
+
+                // Separate cast and crew based on person_type
+                let mut cast = Vec::new();
+                let mut crew = Vec::new();
+
+                for (person, media_person) in people_with_relations {
+                    let person_obj = crate::models::Person {
+                        id: person.id.clone(),
+                        name: person.name.clone(),
+                        role: media_person.role.clone(),
+                        image_url: person.image_url.clone(),
+                    };
+
+                    match media_person.person_type.as_str() {
+                        "actor" | "cast" => cast.push(person_obj),
+                        "director" | "writer" | "producer" | "crew" => crew.push(person_obj),
+                        _ => {} // Unknown type, skip
+                    }
+                }
+
+                // Convert model to MediaItem and inject people data
+                let mut item: MediaItem = m.try_into()?;
+                match &mut item {
+                    MediaItem::Movie(movie) => {
+                        movie.cast = cast;
+                        movie.crew = crew;
+                    }
+                    MediaItem::Show(show) => {
+                        show.cast = cast;
+                        // Shows don't have crew in the model currently
+                    }
+                    _ => {} // Episodes and other types don't have cast/crew
+                }
+
+                Ok(Some(item))
+            }
             None => Ok(None),
         }
     }
@@ -332,6 +374,10 @@ impl MediaService {
                 // Other media types don't have watched status
             }
         }
+
+        // Note: Cast/crew are no longer saved during sync (task-388)
+        // They are fetched via lazy-loading when user views detail pages
+        // This ensures we always get complete metadata, not truncated preview data
 
         Ok(())
     }
@@ -669,6 +715,10 @@ mod tests {
                 "audio_codec": "aac",
                 "subtitles_available": ["en"]
             })),
+            intro_marker_start_ms: None,
+            intro_marker_end_ms: None,
+            credits_marker_start_ms: None,
+            credits_marker_end_ms: None,
         }
     }
 

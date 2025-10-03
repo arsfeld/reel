@@ -2,6 +2,8 @@ use crate::models::{Episode, MediaItem, MediaItemId, PlaylistContext, Show};
 use crate::services::commands::Command;
 use crate::services::commands::media_commands::{GetEpisodesCommand, GetItemDetailsCommand};
 use crate::services::core::PlaylistService;
+use crate::ui::shared::image_helpers::load_image_from_url;
+use crate::ui::shared::person_card::create_person_card;
 use crate::workers::image_loader::{
     ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize,
 };
@@ -24,10 +26,13 @@ pub struct ShowDetailsPage {
     loading: bool,
     episode_grid: gtk::FlowBox,
     season_dropdown: gtk::DropDown,
+    cast_box: gtk::Box,
     poster_texture: Option<gtk::gdk::Texture>,
     backdrop_texture: Option<gtk::gdk::Texture>,
     image_loader: WorkerController<ImageLoader>,
     episode_pictures: HashMap<usize, gtk::Picture>,
+    person_textures: HashMap<String, gtk::gdk::Texture>,
+    full_metadata_loaded: bool,
 }
 
 impl std::fmt::Debug for ShowDetailsPage {
@@ -84,11 +89,21 @@ pub enum ShowDetailsCommand {
     BackdropImageLoaded {
         texture: gtk::gdk::Texture,
     },
+    LoadPersonImage {
+        person_id: String,
+        url: String,
+    },
+    PersonImageLoaded {
+        person_id: String,
+        texture: gtk::gdk::Texture,
+    },
     PlayWithContext {
         episode_id: MediaItemId,
         context: PlaylistContext,
     },
     PlayWithoutContext(MediaItemId),
+    LoadFullMetadata,
+    FullMetadataLoaded,
 }
 
 #[relm4::component(pub, async)]
@@ -325,6 +340,27 @@ impl AsyncComponent for ShowDetailsPage {
                         },
                     },
 
+                    // Cast
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 12,
+                        #[watch]
+                        set_visible: model.show.as_ref().map(|s| !s.cast.is_empty()).unwrap_or(false),
+
+                        gtk::Label {
+                            set_label: "Cast",
+                            set_halign: gtk::Align::Start,
+                            add_css_class: "title-4",
+                        },
+
+                        gtk::ScrolledWindow {
+                            set_vscrollbar_policy: gtk::PolicyType::Never,
+                            set_min_content_height: 120,
+
+                            set_child: Some(&model.cast_box),
+                        },
+                    },
+
                     // Removed redundant overview section since it's now in the hero
                 },
             },
@@ -379,6 +415,12 @@ impl AsyncComponent for ShowDetailsPage {
                     }
                 });
 
+        let cast_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(16)
+            .css_classes(["stagger-animation"])
+            .build();
+
         let model = Self {
             show: None,
             episodes: Vec::new(),
@@ -388,10 +430,13 @@ impl AsyncComponent for ShowDetailsPage {
             loading: true,
             episode_grid,
             season_dropdown,
+            cast_box: cast_box.clone(),
             poster_texture: None,
             backdrop_texture: None,
             image_loader,
             episode_pictures: HashMap::new(),
+            person_textures: HashMap::new(),
+            full_metadata_loaded: false,
         };
 
         let widgets = view_output!();
@@ -458,19 +503,35 @@ impl AsyncComponent for ShowDetailsPage {
                     let db = (*self.db).clone();
                     let media_id = episode.id.clone();
                     let watched = episode.watched;
+                    let show_id = self.show.as_ref().map(|s| s.id.clone());
 
                     relm4::spawn(async move {
-                        use crate::db::repository::{PlaybackRepository, PlaybackRepositoryImpl};
+                        use crate::db::repository::{
+                            MediaRepository, MediaRepositoryImpl, PlaybackRepository,
+                            PlaybackRepositoryImpl,
+                        };
 
-                        let repo = PlaybackRepositoryImpl::new(db);
+                        let playback_repo = PlaybackRepositoryImpl::new(db.clone());
                         if watched {
-                            if let Err(e) = repo.mark_watched(&media_id.to_string(), None).await {
+                            if let Err(e) = playback_repo
+                                .mark_watched(&media_id.to_string(), None)
+                                .await
+                            {
                                 error!("Failed to mark episode as watched: {}", e);
                             }
-                        } else if let Err(e) =
-                            repo.mark_unwatched(&media_id.to_string(), None).await
+                        } else if let Err(e) = playback_repo
+                            .mark_unwatched(&media_id.to_string(), None)
+                            .await
                         {
                             error!("Failed to mark episode as unwatched: {}", e);
+                        }
+
+                        // Update the show's watched episode count
+                        if let Some(show_id) = show_id {
+                            let media_repo = MediaRepositoryImpl::new(db);
+                            if let Err(e) = media_repo.update_show_watched_count(&show_id).await {
+                                error!("Failed to update show watched count: {}", e);
+                            }
                         }
                     });
 
@@ -537,6 +598,18 @@ impl AsyncComponent for ShowDetailsPage {
                             self.show = Some(show.clone());
                             self.loading = false;
 
+                            // Check if we need to load full cast (if cast count <= 3, likely only preview)
+                            // Only attempt once to avoid infinite loop if show really has ≤3 cast members
+                            if show.cast.len() <= 3 && !self.full_metadata_loaded {
+                                tracing::debug!(
+                                    "Show has {} cast members, loading full metadata",
+                                    show.cast.len()
+                                );
+                                sender.oneshot_command(async {
+                                    ShowDetailsCommand::LoadFullMetadata
+                                });
+                            }
+
                             // Load poster and backdrop images
                             if let Some(poster_url) = show.poster_url.clone() {
                                 sender.oneshot_command(async move {
@@ -548,6 +621,28 @@ impl AsyncComponent for ShowDetailsPage {
                                 sender.oneshot_command(async move {
                                     ShowDetailsCommand::LoadBackdropImage { url: backdrop_url }
                                 });
+                            }
+
+                            // Update cast cards
+                            while let Some(child) = self.cast_box.first_child() {
+                                self.cast_box.remove(&child);
+                            }
+
+                            for person in show.cast.iter().take(10) {
+                                let texture = self.person_textures.get(&person.id).cloned();
+                                let card = create_person_card(person, texture.as_ref());
+                                self.cast_box.append(&card);
+
+                                // Load image if not already loaded
+                                if texture.is_none() {
+                                    if let Some(image_url) = &person.image_url {
+                                        let person_id = person.id.clone();
+                                        let url = image_url.clone();
+                                        sender.oneshot_command(async move {
+                                            ShowDetailsCommand::LoadPersonImage { person_id, url }
+                                        });
+                                    }
+                                }
                             }
 
                             // Update season dropdown
@@ -698,33 +793,127 @@ impl AsyncComponent for ShowDetailsPage {
             ShowDetailsCommand::BackdropImageLoaded { texture } => {
                 self.backdrop_texture = Some(texture);
             }
+            ShowDetailsCommand::LoadPersonImage { person_id, url } => {
+                // Spawn async task to download and create texture
+                let sender_clone = sender.clone();
+                relm4::spawn(async move {
+                    match load_image_from_url(&url, 150, 150).await {
+                        Ok(texture) => {
+                            sender_clone.oneshot_command(async move {
+                                ShowDetailsCommand::PersonImageLoaded { person_id, texture }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to load person image for {}: {}", person_id, e);
+                        }
+                    }
+                });
+            }
+            ShowDetailsCommand::PersonImageLoaded { person_id, texture } => {
+                // Store the loaded texture
+                self.person_textures.insert(person_id.clone(), texture);
+
+                // Recreate cast cards with the new texture
+                if let Some(show) = &self.show {
+                    // Update cast cards
+                    while let Some(child) = self.cast_box.first_child() {
+                        self.cast_box.remove(&child);
+                    }
+
+                    for person in show.cast.iter().take(10) {
+                        let texture = self.person_textures.get(&person.id).cloned();
+                        let card = create_person_card(person, texture.as_ref());
+                        self.cast_box.append(&card);
+                    }
+                }
+            }
+            ShowDetailsCommand::LoadFullMetadata => {
+                use crate::services::commands::media_commands::LoadFullShowMetadataCommand;
+
+                tracing::info!("Loading full metadata for show {}", self.item_id);
+                let cmd = LoadFullShowMetadataCommand {
+                    db: (*self.db).clone(),
+                    show_id: crate::models::ShowId::new(self.item_id.to_string()),
+                };
+
+                match Command::execute(&cmd).await {
+                    Ok(_) => {
+                        tracing::info!("Full metadata loaded, refreshing show details");
+                        sender.oneshot_command(async { ShowDetailsCommand::FullMetadataLoaded });
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load full metadata: {}", e);
+                    }
+                }
+            }
+            ShowDetailsCommand::FullMetadataLoaded => {
+                // Mark that we've loaded full metadata to prevent infinite loop
+                self.full_metadata_loaded = true;
+
+                // Directly reload cast from database without full page refresh
+                use crate::db::repository::{PeopleRepository, PeopleRepositoryImpl};
+
+                let db = (*self.db).clone();
+                let item_id = self.item_id.clone();
+
+                match (async move {
+                    let people_repo = PeopleRepositoryImpl::new(db);
+                    people_repo.find_by_media_item(item_id.as_ref()).await
+                })
+                .await
+                {
+                    Ok(people_with_relations) => {
+                        // Separate cast based on person_type
+                        let mut cast = Vec::new();
+
+                        for (person, media_person) in people_with_relations {
+                            let person_obj = crate::models::Person {
+                                id: person.id.clone(),
+                                name: person.name.clone(),
+                                role: media_person.role.clone(),
+                                image_url: person.image_url.clone(),
+                            };
+
+                            match media_person.person_type.as_str() {
+                                "actor" | "cast" => cast.push(person_obj),
+                                _ => {}
+                            }
+                        }
+
+                        // Update the show's cast in place
+                        if let Some(show) = &mut self.show {
+                            show.cast = cast.clone();
+                        }
+
+                        // Clear and rebuild cast box
+                        while let Some(child) = self.cast_box.first_child() {
+                            self.cast_box.remove(&child);
+                        }
+
+                        for person in cast.iter().take(10) {
+                            let texture = self.person_textures.get(&person.id).cloned();
+                            let card = create_person_card(person, texture.as_ref());
+                            self.cast_box.append(&card);
+
+                            // Load image if not already loaded
+                            if texture.is_none() {
+                                if let Some(image_url) = &person.image_url {
+                                    let person_id = person.id.clone();
+                                    let url = image_url.clone();
+                                    sender.oneshot_command(async move {
+                                        ShowDetailsCommand::LoadPersonImage { person_id, url }
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to reload cast after metadata load: {}", e);
+                    }
+                }
+            }
         }
     }
-}
-
-async fn load_image_from_url(
-    url: &str,
-    _width: i32,
-    _height: i32,
-) -> Result<gtk::gdk::Texture, String> {
-    // Download the image
-    let response = reqwest::get(url)
-        .await
-        .map_err(|e| format!("Failed to download image: {}", e))?;
-
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read bytes: {}", e))?;
-
-    // Create texture from bytes
-    let glib_bytes = gtk::glib::Bytes::from(&bytes[..]);
-    let texture = gtk::gdk::Texture::from_bytes(&glib_bytes)
-        .map_err(|e| format!("Failed to create texture: {}", e))?;
-
-    // If width and height are specified (not -1), we could resize here
-    // For now, just return the texture as is
-    Ok(texture)
 }
 
 impl ShowDetailsPage {

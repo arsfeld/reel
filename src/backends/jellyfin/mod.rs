@@ -426,6 +426,28 @@ impl MediaBackend for JellyfinBackend {
         api.get_shows(library_id.as_ref()).await
     }
 
+    async fn get_movie_metadata(&self, movie_id: &MediaItemId) -> Result<Movie> {
+        // TODO: Implement full metadata fetching for Jellyfin
+        // For now, use the bulk API (same as get_movies but for single item)
+        let api = self.ensure_api_initialized().await?;
+        let movies = api.get_movies(movie_id.as_ref()).await?;
+        movies
+            .into_iter()
+            .find(|m| m.id == movie_id.to_string())
+            .ok_or_else(|| anyhow!("Movie not found"))
+    }
+
+    async fn get_show_metadata(&self, show_id: &ShowId) -> Result<Show> {
+        // TODO: Implement full metadata fetching for Jellyfin
+        // For now, use the bulk API (same as get_shows but for single item)
+        let api = self.ensure_api_initialized().await?;
+        let shows = api.get_shows(show_id.as_ref()).await?;
+        shows
+            .into_iter()
+            .find(|s| s.id == show_id.to_string())
+            .ok_or_else(|| anyhow!("Show not found"))
+    }
+
     async fn get_seasons(&self, show_id: &ShowId) -> Result<Vec<Season>> {
         let api = self.ensure_api_initialized().await?;
         api.get_seasons(show_id.as_ref()).await

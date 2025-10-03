@@ -473,7 +473,8 @@ impl JellyfinApi {
             .into_iter()
             .map(|item| {
                 let duration = Duration::from_secs(item.run_time_ticks.unwrap_or(0) / 10_000_000);
-                let (cast, crew) = self.convert_people_to_cast_crew(item.people.clone());
+                // Skip cast/crew during sync - will be loaded lazily when viewing details
+                // This avoids storing incomplete data from bulk API responses
 
                 Movie {
                     id: item.id.clone(),
@@ -494,8 +495,8 @@ impl JellyfinApi {
                     ),
                     overview: item.overview,
                     genres: item.genres.unwrap_or_default(),
-                    cast,
-                    crew,
+                    cast: Vec::new(),
+                    crew: Vec::new(),
                     added_at: item
                         .date_created
                         .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())

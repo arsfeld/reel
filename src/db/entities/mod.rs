@@ -9,7 +9,9 @@ pub mod home_section_items;
 pub mod home_sections;
 pub mod libraries;
 pub mod media_items;
+pub mod media_people;
 pub mod offline_content;
+pub mod people;
 pub mod playback_progress;
 pub mod sources;
 pub mod sync_status;
@@ -50,6 +52,11 @@ pub use libraries::{ActiveModel as LibraryActiveModel, Entity as Library, Model 
 pub use media_items::{
     ActiveModel as MediaItemActiveModel, Entity as MediaItem, Model as MediaItemModel,
 };
+pub use media_people::{
+    ActiveModel as MediaPersonActiveModel, Entity as MediaPerson, Model as MediaPersonModel,
+    PersonType,
+};
+pub use people::{ActiveModel as PersonActiveModel, Entity as Person, Model as PersonModel};
 pub use playback_progress::{
     ActiveModel as PlaybackProgressActiveModel, Entity as PlaybackProgress,
     Model as PlaybackProgressModel,

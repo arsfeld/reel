@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::models::{MediaItemId, PlaylistContext};
+use crate::models::{ChapterMarker, MediaItemId, PlaylistContext};
 use crate::player::{PlayerController, PlayerHandle, PlayerState};
 use crate::services::commands::Command;
 use crate::ui::shared::broker::{BROKER, BrokerMessage, ConfigMessage};
@@ -106,6 +106,13 @@ pub struct PlayerPage {
     inactivity_timeout_secs: u64,
     mouse_move_threshold: f64,
     window_event_debounce_ms: u64,
+    // Skip intro/credits state
+    intro_marker: Option<ChapterMarker>,
+    credits_marker: Option<ChapterMarker>,
+    skip_intro_visible: bool,
+    skip_credits_visible: bool,
+    skip_intro_hide_timer: Option<SourceId>,
+    skip_credits_hide_timer: Option<SourceId>,
 }
 
 impl PlayerPage {
@@ -684,6 +691,16 @@ pub enum PlayerInput {
     CycleAudioTrack,
     // Control visibility (for keyboard toggle)
     ToggleControlsVisibility,
+    // Skip intro/credits
+    SkipIntro,
+    SkipCredits,
+    UpdateSkipButtonsVisibility,
+    HideSkipIntro,
+    HideSkipCredits,
+    LoadedMarkers {
+        intro: Option<ChapterMarker>,
+        credits: Option<ChapterMarker>,
+    },
     // Message broker messages
     BrokerMsg(BrokerMessage),
     // Zoom controls
@@ -856,6 +873,40 @@ impl AsyncComponent for PlayerPage {
                             sender.input(PlayerInput::NavigateBack);
                         },
                     },
+                },
+            },
+
+            // Skip intro button overlay
+            add_overlay = &gtk::Box {
+                set_halign: gtk::Align::End,
+                set_valign: gtk::Align::End,
+                set_margin_bottom: 140,
+                set_margin_end: 20,
+                #[watch]
+                set_visible: model.skip_intro_visible,
+
+                gtk::Button {
+                    set_label: "Skip Intro",
+                    add_css_class: "osd",
+                    add_css_class: "pill",
+                    connect_clicked => PlayerInput::SkipIntro,
+                },
+            },
+
+            // Skip credits button overlay
+            add_overlay = &gtk::Box {
+                set_halign: gtk::Align::End,
+                set_valign: gtk::Align::End,
+                set_margin_bottom: 140,
+                set_margin_end: 20,
+                #[watch]
+                set_visible: model.skip_credits_visible,
+
+                gtk::Button {
+                    set_label: "Skip Credits",
+                    add_css_class: "osd",
+                    add_css_class: "pill",
+                    connect_clicked => PlayerInput::SkipCredits,
                 },
             },
 
@@ -1208,6 +1259,13 @@ impl AsyncComponent for PlayerPage {
             inactivity_timeout_secs: Self::DEFAULT_INACTIVITY_TIMEOUT_SECS,
             mouse_move_threshold: Self::DEFAULT_MOUSE_MOVE_THRESHOLD,
             window_event_debounce_ms: Self::DEFAULT_WINDOW_EVENT_DEBOUNCE_MS,
+            // Skip intro/credits state
+            intro_marker: None,
+            credits_marker: None,
+            skip_intro_visible: false,
+            skip_credits_visible: false,
+            skip_intro_hide_timer: None,
+            skip_credits_hide_timer: None,
         };
 
         // Initialize the player controller
@@ -1611,6 +1669,51 @@ impl AsyncComponent for PlayerPage {
                 if let Some(timeout) = self.auto_play_timeout.take() {
                     timeout.remove();
                 }
+                // Clear skip button state
+                self.intro_marker = None;
+                self.credits_marker = None;
+                self.skip_intro_visible = false;
+                self.skip_credits_visible = false;
+                if let Some(timer) = self.skip_intro_hide_timer.take() {
+                    timer.remove();
+                }
+                if let Some(timer) = self.skip_credits_hide_timer.take() {
+                    timer.remove();
+                }
+
+                // Load marker data from database
+                let db_clone_for_markers = self.db.clone();
+                let media_id_for_markers = id.clone();
+                let sender_for_markers = sender.clone();
+                glib::spawn_future_local(async move {
+                    use crate::db::repository::{MediaRepository, MediaRepositoryImpl, Repository};
+                    use crate::models::MediaItem;
+
+                    let media_repo =
+                        MediaRepositoryImpl::new(db_clone_for_markers.as_ref().clone());
+                    if let Ok(Some(db_media)) =
+                        media_repo.find_by_id(media_id_for_markers.as_ref()).await
+                    {
+                        // Convert to domain model to get markers
+                        if let Ok(media_item) = MediaItem::try_from(db_media) {
+                            match media_item {
+                                MediaItem::Movie(movie) => {
+                                    sender_for_markers.input(PlayerInput::LoadedMarkers {
+                                        intro: movie.intro_marker,
+                                        credits: movie.credits_marker,
+                                    });
+                                }
+                                MediaItem::Episode(episode) => {
+                                    sender_for_markers.input(PlayerInput::LoadedMarkers {
+                                        intro: episode.intro_marker,
+                                        credits: episode.credits_marker,
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                });
 
                 // Get actual media URL from backend using GetStreamUrlCommand
                 let db_clone = self.db.clone();
@@ -1773,6 +1876,51 @@ impl AsyncComponent for PlayerPage {
                 if let Some(timeout) = self.auto_play_timeout.take() {
                     timeout.remove();
                 }
+                // Clear skip button state
+                self.intro_marker = None;
+                self.credits_marker = None;
+                self.skip_intro_visible = false;
+                self.skip_credits_visible = false;
+                if let Some(timer) = self.skip_intro_hide_timer.take() {
+                    timer.remove();
+                }
+                if let Some(timer) = self.skip_credits_hide_timer.take() {
+                    timer.remove();
+                }
+
+                // Load marker data from database
+                let db_clone_for_markers = self.db.clone();
+                let media_id_for_markers = media_id.clone();
+                let sender_for_markers = sender.clone();
+                glib::spawn_future_local(async move {
+                    use crate::db::repository::{MediaRepository, MediaRepositoryImpl, Repository};
+                    use crate::models::MediaItem;
+
+                    let media_repo =
+                        MediaRepositoryImpl::new(db_clone_for_markers.as_ref().clone());
+                    if let Ok(Some(db_media)) =
+                        media_repo.find_by_id(media_id_for_markers.as_ref()).await
+                    {
+                        // Convert to domain model to get markers
+                        if let Ok(media_item) = MediaItem::try_from(db_media) {
+                            match media_item {
+                                MediaItem::Movie(movie) => {
+                                    sender_for_markers.input(PlayerInput::LoadedMarkers {
+                                        intro: movie.intro_marker,
+                                        credits: movie.credits_marker,
+                                    });
+                                }
+                                MediaItem::Episode(episode) => {
+                                    sender_for_markers.input(PlayerInput::LoadedMarkers {
+                                        intro: episode.intro_marker,
+                                        credits: episode.credits_marker,
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                });
 
                 // Get actual media URL from backend using GetStreamUrlCommand
                 let db_clone = self.db.clone();
@@ -2359,6 +2507,105 @@ impl AsyncComponent for PlayerPage {
                     }
                 }
             }
+            PlayerInput::UpdateSkipButtonsVisibility => {
+                // Check if position is within intro marker range
+                if let Some(ref intro) = self.intro_marker {
+                    let was_visible = self.skip_intro_visible;
+                    let should_be_visible =
+                        self.position >= intro.start_time && self.position < intro.end_time;
+
+                    if should_be_visible != was_visible {
+                        self.skip_intro_visible = should_be_visible;
+
+                        // Start auto-hide timer when button becomes visible
+                        if should_be_visible {
+                            // Cancel any existing timer
+                            if let Some(timer) = self.skip_intro_hide_timer.take() {
+                                timer.remove();
+                            }
+
+                            // Start 5 second auto-hide timer
+                            let sender_clone = sender.clone();
+                            let timer = glib::timeout_add_seconds_local(5, move || {
+                                sender_clone.input(PlayerInput::HideSkipIntro);
+                                glib::ControlFlow::Break
+                            });
+                            self.skip_intro_hide_timer = Some(timer);
+                        }
+                    }
+                } else {
+                    self.skip_intro_visible = false;
+                }
+
+                // Check if position is within credits marker range
+                if let Some(ref credits) = self.credits_marker {
+                    let was_visible = self.skip_credits_visible;
+                    let should_be_visible =
+                        self.position >= credits.start_time && self.position < credits.end_time;
+
+                    if should_be_visible != was_visible {
+                        self.skip_credits_visible = should_be_visible;
+
+                        // Start auto-hide timer when button becomes visible
+                        if should_be_visible {
+                            // Cancel any existing timer
+                            if let Some(timer) = self.skip_credits_hide_timer.take() {
+                                timer.remove();
+                            }
+
+                            // Start 5 second auto-hide timer
+                            let sender_clone = sender.clone();
+                            let timer = glib::timeout_add_seconds_local(5, move || {
+                                sender_clone.input(PlayerInput::HideSkipCredits);
+                                glib::ControlFlow::Break
+                            });
+                            self.skip_credits_hide_timer = Some(timer);
+                        }
+                    }
+                } else {
+                    self.skip_credits_visible = false;
+                }
+            }
+            PlayerInput::HideSkipIntro => {
+                self.skip_intro_visible = false;
+                if let Some(timer) = self.skip_intro_hide_timer.take() {
+                    timer.remove();
+                }
+            }
+            PlayerInput::HideSkipCredits => {
+                self.skip_credits_visible = false;
+                if let Some(timer) = self.skip_credits_hide_timer.take() {
+                    timer.remove();
+                }
+            }
+            PlayerInput::SkipIntro => {
+                if let Some(ref intro) = self.intro_marker {
+                    // Seek to the end of the intro marker
+                    sender.input(PlayerInput::Seek(intro.end_time));
+                    // Hide the button immediately
+                    self.skip_intro_visible = false;
+                    if let Some(timer) = self.skip_intro_hide_timer.take() {
+                        timer.remove();
+                    }
+                }
+            }
+            PlayerInput::SkipCredits => {
+                if let Some(ref credits) = self.credits_marker {
+                    // Seek to the end of the credits marker
+                    sender.input(PlayerInput::Seek(credits.end_time));
+                    // Hide the button immediately
+                    self.skip_credits_visible = false;
+                    if let Some(timer) = self.skip_credits_hide_timer.take() {
+                        timer.remove();
+                    }
+                }
+            }
+            PlayerInput::LoadedMarkers { intro, credits } => {
+                self.intro_marker = intro;
+                self.credits_marker = credits;
+                // Trigger visibility check
+                sender.input(PlayerInput::UpdateSkipButtonsVisibility);
+            }
             PlayerInput::BrokerMsg(msg) => {
                 match msg {
                     BrokerMessage::Config(ConfigMessage::Updated { config }) => {
@@ -2702,6 +2949,9 @@ impl AsyncComponent for PlayerPage {
                     if !self.is_seeking {
                         self.seek_bar.set_value(pos.as_secs_f64());
                     }
+
+                    // Check skip button visibility based on position
+                    sender.input(PlayerInput::UpdateSkipButtonsVisibility);
 
                     // Save playback progress to database at configured interval
                     if let (Some(media_id), Some(dur)) = (&self.media_item_id, duration) {
