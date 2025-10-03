@@ -82,6 +82,7 @@ pub enum SourceMessage {
     },
     SyncProgress {
         source_id: String,
+        library_id: Option<String>,
         current: usize,
         total: usize,
     },

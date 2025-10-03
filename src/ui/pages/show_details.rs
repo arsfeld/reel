@@ -970,6 +970,21 @@ fn create_episode_card(
     info_box.append(&title);
     info_box.append(&details);
 
+    // Add episode description if available
+    if let Some(overview) = &episode.overview {
+        let description = gtk::Label::builder()
+            .label(overview)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::Word)
+            .lines(2)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .xalign(0.0)
+            .css_classes(["episode-description", "dim-label", "caption"])
+            .margin_top(4)
+            .build();
+        info_box.append(&description);
+    }
+
     card.append(&overlay);
     card.append(&info_box);
 

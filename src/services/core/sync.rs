@@ -263,6 +263,7 @@ impl SyncService {
             BROKER
                 .broadcast(BrokerMessage::Source(SourceMessage::SyncProgress {
                     source_id: source_id.to_string(),
+                    library_id: Some(library.id.clone()),
                     current: *cumulative_items_synced,
                     total: estimated_total,
                 }))
@@ -475,6 +476,7 @@ impl SyncService {
                         BROKER
                             .broadcast(BrokerMessage::Source(SourceMessage::SyncProgress {
                                 source_id: source_id.to_string(),
+                                library_id: Some(library_id.as_str().to_string()),
                                 current: *cumulative_items_synced,
                                 total: estimated_total,
                             }))
