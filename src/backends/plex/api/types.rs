@@ -216,6 +216,10 @@ pub struct PlexEpisodeMetadata {
     pub aired_at: Option<String>,
     #[serde(default)]
     pub view_offset: Option<i64>,
+    #[serde(default)]
+    pub view_count: Option<u32>,
+    #[serde(default)]
+    pub last_viewed_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
