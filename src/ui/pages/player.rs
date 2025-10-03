@@ -1,8 +1,11 @@
 use crate::config::Config;
-use crate::models::{ChapterMarker, MediaItemId, PlaylistContext};
+use crate::models::{ChapterMarker, MediaItemId, PlaylistContext, QualityOption, StreamInfo};
 use crate::player::{PlayerController, PlayerHandle, PlayerState};
 use crate::services::commands::Command;
 use crate::ui::shared::broker::{BROKER, BrokerMessage, ConfigMessage};
+use crate::ui::shared::quality_selector::{
+    QualitySelector, QualitySelectorMsg, QualitySelectorOutput,
+};
 use adw::prelude::*;
 use gtk::glib::{self, SourceId};
 use libadwaita as adw;
@@ -113,6 +116,9 @@ pub struct PlayerPage {
     skip_credits_visible: bool,
     skip_intro_hide_timer: Option<SourceId>,
     skip_credits_hide_timer: Option<SourceId>,
+    // Quality selector
+    quality_selector: Controller<QualitySelector>,
+    current_stream_info: Option<StreamInfo>,
 }
 
 impl PlayerPage {
@@ -714,6 +720,10 @@ pub enum PlayerInput {
     // Upscaling mode
     SetUpscalingMode(crate::player::UpscalingMode),
     UpdateQualityMenu,
+    // Stream quality selection
+    StreamInfoLoaded(StreamInfo),
+    QualityChanged(QualityOption),
+    AdaptiveModeChanged(crate::player::AdaptiveMode),
 }
 
 #[derive(Debug, Clone)]
@@ -1066,6 +1076,13 @@ impl AsyncComponent for PlayerPage {
                             set_tooltip_text: Some("Subtitles"),
                         },
 
+                        // Quality selector
+                        #[local_ref]
+                        quality_selector_widget -> gtk::Box {
+                            #[watch]
+                            set_visible: model.current_stream_info.is_some(),
+                        },
+
                         // Quality/Resolution button (hidden - doesn't work with current MPV embed)
                         model.quality_menu_button.clone() {
                             set_icon_name: "preferences-system-symbolic",
@@ -1193,6 +1210,19 @@ impl AsyncComponent for PlayerPage {
         let zoom_menu_button = gtk::MenuButton::new();
         let zoom_label = gtk::Label::new(Some("Fit"));
 
+        // Initialize quality selector
+        let quality_selector =
+            QualitySelector::builder()
+                .launch(Vec::new())
+                .forward(sender.input_sender(), |msg| match msg {
+                    QualitySelectorOutput::QualityChanged(quality) => {
+                        PlayerInput::QualityChanged(quality)
+                    }
+                    QualitySelectorOutput::AdaptiveModeChanged(mode) => {
+                        PlayerInput::AdaptiveModeChanged(mode)
+                    }
+                });
+
         // Load config once at initialization
         let config = Config::load().unwrap_or_default();
 
@@ -1266,6 +1296,8 @@ impl AsyncComponent for PlayerPage {
             skip_credits_visible: false,
             skip_intro_hide_timer: None,
             skip_credits_hide_timer: None,
+            quality_selector,
+            current_stream_info: None,
         };
 
         // Initialize the player controller
@@ -1637,6 +1669,7 @@ impl AsyncComponent for PlayerPage {
             sender.input(PlayerInput::LoadMedia(id.clone()));
         }
 
+        let quality_selector_widget = model.quality_selector.widget();
         let widgets = view_output!();
 
         // Grab focus to ensure keyboard shortcuts work
@@ -1742,6 +1775,7 @@ impl AsyncComponent for PlayerPage {
 
                         let stream_url = match command_result {
                             CommandResult::PlaybackStarted { url, .. } => url,
+                            CommandResult::QualityChanged { url, .. } => url,
                             CommandResult::Error(e) => {
                                 error!("Failed to start playback: {}", e);
                                 return PlayerCommandOutput::LoadError(format!(
@@ -1752,6 +1786,16 @@ impl AsyncComponent for PlayerPage {
                         };
 
                         info!("Got stream URL (potentially cached): {}", stream_url);
+
+                        // Set player handle in cache for bandwidth reporting
+                        use crate::services::cache_service::cache_service;
+                        if let Ok(cache_handle) = cache_service().get_handle().await {
+                            if let Err(e) =
+                                cache_handle.set_player_handle(Some(player_handle.clone()))
+                            {
+                                debug!("Failed to set player handle in cache: {}", e);
+                            }
+                        }
 
                         // Load the media into the player using channel-based API
                         match player_handle.load_media(&stream_url).await {
@@ -1949,6 +1993,7 @@ impl AsyncComponent for PlayerPage {
 
                         let stream_url = match command_result {
                             CommandResult::PlaybackStarted { url, .. } => url,
+                            CommandResult::QualityChanged { url, .. } => url,
                             CommandResult::Error(e) => {
                                 error!("Failed to start playback: {}", e);
                                 return PlayerCommandOutput::LoadError(format!(
@@ -1959,6 +2004,16 @@ impl AsyncComponent for PlayerPage {
                         };
 
                         info!("Got stream URL (potentially cached): {}", stream_url);
+
+                        // Set player handle in cache for bandwidth reporting
+                        use crate::services::cache_service::cache_service;
+                        if let Ok(cache_handle) = cache_service().get_handle().await {
+                            if let Err(e) =
+                                cache_handle.set_player_handle(Some(player_handle.clone()))
+                            {
+                                debug!("Failed to set player handle in cache: {}", e);
+                            }
+                        }
 
                         // Load the media into the player using channel-based API
                         match player_handle.load_media(&stream_url).await {
@@ -2091,6 +2146,14 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::Stop => {
+                // Clear player handle from cache
+                use crate::services::cache_service::cache_service;
+                if let Ok(cache_handle) = cache_service().get_handle().await {
+                    if let Err(e) = cache_handle.set_player_handle(None) {
+                        debug!("Failed to clear player handle in cache: {}", e);
+                    }
+                }
+
                 // Save current progress before stopping
                 if let Some(media_id) = &self.media_item_id {
                     let db = (*self.db).clone();
@@ -2829,6 +2892,91 @@ impl AsyncComponent for PlayerPage {
             }
             PlayerInput::UpdateQualityMenu => {
                 self.populate_quality_menu(sender.clone());
+            }
+
+            PlayerInput::StreamInfoLoaded(stream_info) => {
+                // Update quality selector with available quality options
+                self.quality_selector
+                    .emit(QualitySelectorMsg::UpdateQualities(
+                        stream_info.quality_options.clone(),
+                    ));
+                self.current_stream_info = Some(stream_info);
+            }
+
+            PlayerInput::QualityChanged(quality) => {
+                info!(
+                    "Quality changed to: {} ({}x{})",
+                    quality.name, quality.resolution.width, quality.resolution.height
+                );
+
+                // Get current playback position before switching
+                let current_position = self.position;
+
+                // Show loading state
+                self.player_state = PlayerState::Loading;
+
+                if let Some(ref media_id) = self.media_item_id {
+                    let db_clone = self.db.clone();
+                    let media_id_clone = media_id.clone();
+                    let quality_clone = quality.clone();
+
+                    if let Some(player) = &self.player {
+                        let player_handle = player.clone();
+
+                        sender.oneshot_command(async move {
+                            use crate::ui::shared::commands::{AppCommand, CommandResult, execute_command};
+
+                            // Request new stream URL for selected quality
+                            let command_result = execute_command(
+                                AppCommand::ChangeQuality {
+                                    media_id: media_id_clone.to_string(),
+                                    quality: quality_clone,
+                                },
+                                &db_clone,
+                            )
+                            .await;
+
+                            match command_result {
+                                CommandResult::QualityChanged { url, .. } => {
+                                    // Load new stream URL in player
+                                    if let Err(e) = player_handle.load_media(&url).await {
+                                        error!("Failed to load new quality stream: {}", e);
+                                        return PlayerCommandOutput::LoadError(format!("Failed to switch quality: {}", e));
+                                    }
+
+                                    // Restore playback position
+                                    if current_position.as_secs() > 0 {
+                                        if let Err(e) = player_handle.seek(current_position).await {
+                                            warn!("Failed to restore position after quality change: {}", e);
+                                        }
+                                    }
+
+                                    // Resume playback
+                                    if let Err(e) = player_handle.play().await {
+                                        error!("Failed to resume playback: {}", e);
+                                        return PlayerCommandOutput::LoadError(format!("Failed to resume playback: {}", e));
+                                    }
+
+                                    PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                                }
+                                CommandResult::Error(e) => {
+                                    error!("Failed to change quality: {}", e);
+                                    PlayerCommandOutput::LoadError(format!("Failed to change quality: {}", e))
+                                }
+                                _ => {
+                                    error!("Unexpected command result for quality change");
+                                    PlayerCommandOutput::LoadError("Unexpected error during quality change".to_string())
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+
+            PlayerInput::AdaptiveModeChanged(mode) => {
+                info!("Adaptive mode changed to: {:?}", mode);
+                // TODO: Notify adaptive quality manager of mode change
+                // This will be implemented when integrating with PlayerController
             }
         }
     }

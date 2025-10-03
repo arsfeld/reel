@@ -3,12 +3,14 @@ use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use reqwest::Client;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::db::entities::{CacheChunkModel, CacheEntryModel};
 use crate::db::repository::CacheRepository;
+use crate::player::controller::PlayerHandle;
 
 use super::chunk_store::{ChunkStore, calculate_chunk_range};
 
@@ -44,6 +46,7 @@ pub struct ChunkDownloader {
     chunk_size: u64,
     retry_config: RetryConfig,
     cache_config: Option<FileCacheConfig>,
+    player_handle: Arc<RwLock<Option<PlayerHandle>>>,
 }
 
 impl ChunkDownloader {
@@ -61,6 +64,7 @@ impl ChunkDownloader {
             chunk_size,
             retry_config: RetryConfig::default(),
             cache_config: None,
+            player_handle: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -74,6 +78,12 @@ impl ChunkDownloader {
     pub fn with_cache_config(mut self, cache_config: FileCacheConfig) -> Self {
         self.cache_config = Some(cache_config);
         self
+    }
+
+    /// Set the player handle for bandwidth reporting
+    pub async fn set_player_handle(&self, handle: Option<PlayerHandle>) {
+        let mut player_handle = self.player_handle.write().await;
+        *player_handle = handle;
     }
 
     /// Download a specific chunk and record in database
@@ -178,7 +188,9 @@ impl ChunkDownloader {
         // 2. Calculate byte range for this chunk
         let (start_byte, end_byte) = calculate_chunk_range(chunk_index, self.chunk_size, &entry);
 
-        // 3. Make HTTP range request
+        // 3. Make HTTP range request and measure download time
+        let download_start = Instant::now();
+
         let response = self
             .client
             .get(&entry.original_url)
@@ -212,6 +224,14 @@ impl ChunkDownloader {
         })?;
 
         let data_len = data.len();
+        let download_duration = download_start.elapsed();
+
+        // Report bandwidth metrics to player if available
+        if let Some(ref handle) = *self.player_handle.read().await {
+            if let Err(e) = handle.report_chunk_download(data_len as u64, download_duration) {
+                debug!("Failed to report chunk download metrics: {}", e);
+            }
+        }
 
         // 6. Write to chunk store with disk space error handling
         // AC #2: Trigger emergency cleanup when disk full

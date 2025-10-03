@@ -25,6 +25,14 @@ pub enum FileCacheCommand {
         original_stream: StreamInfo,
         respond_to: mpsc::UnboundedSender<Result<CachedStreamInfo>>,
     },
+    /// Get a cached stream URL with explicit quality selection
+    GetCachedStreamWithQuality {
+        source_id: SourceId,
+        media_id: MediaItemId,
+        quality: String,
+        original_url: String,
+        respond_to: mpsc::UnboundedSender<Result<String>>,
+    },
     /// Pre-cache a media file for offline viewing
     PreCache {
         source_id: SourceId,
@@ -58,6 +66,10 @@ pub enum FileCacheCommand {
     /// Cleanup cache to fit within limits
     CleanupCache {
         respond_to: mpsc::UnboundedSender<Result<()>>,
+    },
+    /// Set player handle for bandwidth reporting
+    SetPlayerHandle {
+        handle: Option<crate::player::controller::PlayerHandle>,
     },
     /// Shutdown the cache
     Shutdown,
@@ -196,6 +208,18 @@ impl FileCache {
                         .await;
                     let _ = respond_to.send(result);
                 }
+                FileCacheCommand::GetCachedStreamWithQuality {
+                    source_id,
+                    media_id,
+                    quality,
+                    original_url,
+                    respond_to,
+                } => {
+                    let result = self
+                        .get_cached_stream_with_quality(source_id, media_id, quality, original_url)
+                        .await;
+                    let _ = respond_to.send(result);
+                }
                 FileCacheCommand::PreCache {
                     source_id,
                     media_id,
@@ -240,6 +264,10 @@ impl FileCache {
                     let result = self.cleanup_cache().await;
                     let _ = respond_to.send(result);
                 }
+                FileCacheCommand::SetPlayerHandle { handle } => {
+                    debug!("FileCache: Setting player handle for bandwidth reporting");
+                    self.proxy.set_player_handle(handle).await;
+                }
                 FileCacheCommand::Shutdown => {
                     info!("🗄️ FileCache: Shutting down");
                     // Chunk downloads will naturally stop when the application exits
@@ -247,6 +275,77 @@ impl FileCache {
                 }
             }
         }
+    }
+
+    /// Get cached stream URL with explicit quality selection
+    /// Returns proxy URL for the cached stream
+    async fn get_cached_stream_with_quality(
+        &self,
+        source_id: SourceId,
+        media_id: MediaItemId,
+        quality: String,
+        original_url: String,
+    ) -> Result<String> {
+        let cache_key = MediaCacheKey::new(source_id.clone(), media_id.clone(), quality.clone());
+
+        // Get or create cache entry
+        let entry = {
+            let mut storage = self.storage.write().await;
+
+            if let Some(entry) = storage.get_entry(&cache_key) {
+                debug!(
+                    "Found existing cache entry for quality '{}': is_complete={}, expected_total_size={}, downloaded_bytes={}",
+                    quality,
+                    entry.metadata.is_complete,
+                    entry.metadata.expected_total_size,
+                    entry.metadata.downloaded_bytes
+                );
+
+                // Check if this is an invalid cache entry that needs cleanup
+                if !entry.metadata.is_complete && entry.metadata.expected_total_size == 0 {
+                    warn!(
+                        "Found invalid cache entry for quality '{}', removing and recreating",
+                        quality
+                    );
+
+                    if let Err(e) = storage.remove_entry(&cache_key).await {
+                        warn!("Failed to remove invalid cache entry: {}", e);
+                    }
+
+                    // Create fresh entry
+                    storage
+                        .create_entry(cache_key.clone(), original_url.clone())
+                        .await
+                        .context("Failed to create cache entry")?
+                } else {
+                    entry
+                }
+            } else {
+                trace!(
+                    "No existing cache entry found for quality '{}', creating new one",
+                    quality
+                );
+                storage
+                    .create_entry(cache_key.clone(), original_url.clone())
+                    .await
+                    .context("Failed to create cache entry")?
+            }
+        };
+
+        // Ensure database entry exists with expected_total_size
+        self.ensure_database_entry(&cache_key, &original_url, &entry.file_path)
+            .await
+            .context("Failed to ensure database entry")?;
+
+        // Register with proxy and return proxy URL
+        let proxy_url = self.proxy.register_stream(cache_key).await;
+
+        trace!(
+            "Serving cached stream for quality '{}': proxy_url={}",
+            quality, proxy_url
+        );
+
+        Ok(proxy_url)
     }
 
     /// Get cached stream information, starting download if necessary
@@ -767,6 +866,38 @@ impl FileCacheHandle {
             .ok_or_else(|| anyhow::anyhow!("No response from file cache"))?
     }
 
+    /// Get cached stream URL with explicit quality selection
+    pub async fn get_cached_stream_with_quality(
+        &self,
+        source_id: SourceId,
+        media_id: MediaItemId,
+        quality: String,
+        original_url: String,
+    ) -> Result<String> {
+        trace!(
+            "FileCacheHandle::get_cached_stream_with_quality called for media_id: {:?}, quality: {}",
+            media_id, quality
+        );
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        self.command_sender
+            .send(FileCacheCommand::GetCachedStreamWithQuality {
+                source_id,
+                media_id,
+                quality,
+                original_url,
+                respond_to: sender,
+            })
+            .map_err(|e| {
+                error!("Failed to send GetCachedStreamWithQuality command: {:?}", e);
+                anyhow::anyhow!("File cache disconnected")
+            })?;
+
+        receiver
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No response from file cache"))?
+    }
+
     /// Pre-cache media for offline viewing
     pub async fn pre_cache(
         &self,
@@ -883,6 +1014,16 @@ impl FileCacheHandle {
             .send(FileCacheCommand::Shutdown)
             .map_err(|_| anyhow::anyhow!("File cache disconnected"))
     }
+
+    /// Set the player handle for bandwidth reporting
+    pub fn set_player_handle(
+        &self,
+        handle: Option<crate::player::controller::PlayerHandle>,
+    ) -> Result<()> {
+        self.command_sender
+            .send(FileCacheCommand::SetPlayerHandle { handle })
+            .map_err(|_| anyhow::anyhow!("File cache disconnected"))
+    }
 }
 
 #[cfg(test)]
@@ -960,5 +1101,33 @@ mod tests {
             eta_seconds: Some(300),
         };
         assert_eq!(uncached_info.playback_url(), "http://test.com/video.mp4");
+    }
+
+    #[test]
+    fn test_media_cache_key_quality_separation() {
+        use crate::cache::metadata::MediaCacheKey;
+
+        // Test that different qualities create different cache keys
+        let source_id = SourceId::from("plex-server");
+        let media_id = MediaItemId::from("movie-123");
+
+        let key_original = MediaCacheKey::new(source_id.clone(), media_id.clone(), "original");
+        let key_1080p = MediaCacheKey::new(source_id.clone(), media_id.clone(), "1080p");
+        let key_720p = MediaCacheKey::new(source_id.clone(), media_id.clone(), "720p");
+
+        // Same source and media, different qualities should be different keys
+        assert_ne!(key_original, key_1080p);
+        assert_ne!(key_1080p, key_720p);
+        assert_ne!(key_original, key_720p);
+
+        // Filenames should also be different
+        assert_ne!(key_original.to_filename(), key_1080p.to_filename());
+        assert_ne!(key_1080p.to_filename(), key_720p.to_filename());
+        assert_ne!(key_original.to_filename(), key_720p.to_filename());
+
+        // Verify filenames contain quality
+        assert!(key_original.to_filename().contains("original"));
+        assert!(key_1080p.to_filename().contains("1080p"));
+        assert!(key_720p.to_filename().contains("720p"));
     }
 }

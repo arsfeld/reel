@@ -3,12 +3,34 @@ use gtk4;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 
 use super::{Player, PlayerState};
 use crate::config::Config;
-
+use crate::models::QualityOption;
+use crate::player::adaptive_quality::{AdaptiveMode, AdaptiveQualityManager, QualityDecision};
 use crate::player::{UpscalingMode, ZoomMode};
+
+/// Handle for communicating with the adaptive quality manager
+struct AdaptiveQualityHandle {
+    state_tx: mpsc::UnboundedSender<PlayerState>,
+    bandwidth_tx: mpsc::UnboundedSender<(u64, Duration)>,
+    decision_rx: mpsc::UnboundedReceiver<QualityDecision>,
+}
+
+impl AdaptiveQualityHandle {
+    fn broadcast_state(&self, state: PlayerState) {
+        let _ = self.state_tx.send(state);
+    }
+
+    fn report_bandwidth(&self, bytes: u64, duration: Duration) {
+        let _ = self.bandwidth_tx.send((bytes, duration));
+    }
+
+    async fn recv_decision(&mut self) -> Option<QualityDecision> {
+        self.decision_rx.recv().await
+    }
+}
 
 /// Commands that can be sent to the player controller
 #[derive(Debug)]
@@ -117,6 +139,28 @@ pub enum PlayerCommand {
         mode: ZoomMode,
         respond_to: oneshot::Sender<Result<()>>,
     },
+    /// Enable adaptive quality with quality options
+    EnableAdaptiveQuality {
+        quality_options: Vec<QualityOption>,
+        current_quality_index: usize,
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Disable adaptive quality
+    DisableAdaptiveQuality {
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Set adaptive quality mode (Auto/Manual)
+    SetAdaptiveMode {
+        mode: AdaptiveMode,
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Manually select quality (disables auto mode)
+    SetQuality {
+        quality_index: usize,
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Report chunk download for bandwidth monitoring
+    ReportChunkDownload { bytes: u64, duration: Duration },
 }
 
 /// Controller that owns the Player and processes commands
@@ -124,6 +168,10 @@ pub struct PlayerController {
     player: Player,
     receiver: mpsc::UnboundedReceiver<PlayerCommand>,
     error_sender: Option<mpsc::UnboundedSender<String>>,
+
+    // Adaptive quality components
+    adaptive_quality: Option<AdaptiveQualityHandle>,
+    current_state: PlayerState,
 }
 
 impl PlayerController {
@@ -137,6 +185,8 @@ impl PlayerController {
             player,
             receiver,
             error_sender: Some(error_tx.clone()),
+            adaptive_quality: None,
+            current_state: PlayerState::Idle,
         };
         let handle = PlayerHandle {
             sender,
@@ -153,6 +203,67 @@ impl PlayerController {
             self.player.set_error_callback(move |error_msg| {
                 let _ = sender.send(error_msg);
             });
+        }
+    }
+
+    /// Enable adaptive quality management
+    fn enable_adaptive_quality(
+        &mut self,
+        quality_options: Vec<QualityOption>,
+        current_quality_index: usize,
+    ) -> Result<()> {
+        info!(
+            "Enabling adaptive quality with {} quality options",
+            quality_options.len()
+        );
+
+        // Create state broadcaster channel
+        let (state_tx, state_rx) = mpsc::unbounded_channel();
+
+        // Create bandwidth update channel
+        let (bandwidth_tx, bandwidth_rx) = mpsc::unbounded_channel();
+
+        // Create quality decision channel
+        let (decision_tx, decision_rx) = mpsc::unbounded_channel();
+
+        // Create adaptive quality manager and spawn it
+        let manager = AdaptiveQualityManager::new(
+            quality_options,
+            current_quality_index,
+            state_rx,
+            bandwidth_rx,
+            decision_tx,
+        );
+
+        // Spawn manager task to run independently
+        tokio::spawn(async move {
+            manager.run().await;
+        });
+
+        // Store handle for communication
+        self.adaptive_quality = Some(AdaptiveQualityHandle {
+            state_tx,
+            bandwidth_tx,
+            decision_rx,
+        });
+
+        // Broadcast current state to initialize the manager
+        self.broadcast_state(self.current_state.clone());
+
+        Ok(())
+    }
+
+    /// Disable adaptive quality management
+    fn disable_adaptive_quality(&mut self) -> Result<()> {
+        info!("Disabling adaptive quality management");
+        self.adaptive_quality = None;
+        Ok(())
+    }
+
+    /// Broadcast state change to adaptive quality manager
+    fn broadcast_state(&self, state: PlayerState) {
+        if let Some(ref handle) = self.adaptive_quality {
+            handle.broadcast_state(state);
         }
     }
 
@@ -335,6 +446,71 @@ impl PlayerController {
                     let result = self.player.set_zoom_mode(mode).await;
                     let _ = respond_to.send(result);
                 }
+                PlayerCommand::EnableAdaptiveQuality {
+                    quality_options,
+                    current_quality_index,
+                    respond_to,
+                } => {
+                    trace!("Enabling adaptive quality");
+                    let result =
+                        self.enable_adaptive_quality(quality_options, current_quality_index);
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::DisableAdaptiveQuality { respond_to } => {
+                    trace!("Disabling adaptive quality");
+                    let result = self.disable_adaptive_quality();
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::SetAdaptiveMode { mode, respond_to } => {
+                    trace!("Setting adaptive mode to {:?}", mode);
+                    // TODO: Implement mode change - need to send to manager
+                    let _ = respond_to.send(Ok(()));
+                }
+                PlayerCommand::SetQuality {
+                    quality_index,
+                    respond_to,
+                } => {
+                    trace!("Setting quality to index {}", quality_index);
+                    // TODO: Implement quality change and disable auto mode
+                    let _ = respond_to.send(Ok(()));
+                }
+                PlayerCommand::ReportChunkDownload { bytes, duration } => {
+                    trace!("Chunk download reported: {} bytes in {:?}", bytes, duration);
+                    // Forward to adaptive quality manager via bandwidth channel
+                    if let Some(ref handle) = self.adaptive_quality {
+                        handle.report_bandwidth(bytes, duration);
+                    }
+                }
+            }
+
+            // Check for quality decisions from adaptive quality manager
+            if let Some(ref mut handle) = self.adaptive_quality {
+                if let Ok(decision) = handle.decision_rx.try_recv() {
+                    info!("Received quality decision: {:?}", decision);
+                    // TODO: Handle quality decision - trigger quality change
+                    match decision {
+                        QualityDecision::Maintain => {}
+                        QualityDecision::Decrease(quality) => {
+                            info!("Adaptive: Decreasing quality to {}", quality.name);
+                            // TODO: Trigger quality change
+                        }
+                        QualityDecision::Increase(quality) => {
+                            info!("Adaptive: Increasing quality to {}", quality.name);
+                            // TODO: Trigger quality change
+                        }
+                        QualityDecision::Recover(quality) => {
+                            info!("Adaptive: Recovering with quality {}", quality.name);
+                            // TODO: Trigger quality change with recovery flag
+                        }
+                    }
+                }
+            }
+
+            // Broadcast state changes
+            let new_state = self.player.get_state().await;
+            if new_state != self.current_state {
+                self.current_state = new_state.clone();
+                self.broadcast_state(new_state);
             }
         }
 
@@ -346,6 +522,15 @@ impl PlayerController {
 pub struct PlayerHandle {
     sender: mpsc::UnboundedSender<PlayerCommand>,
     error_receiver: Arc<Mutex<Option<mpsc::UnboundedReceiver<String>>>>,
+}
+
+impl std::fmt::Debug for PlayerHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlayerHandle")
+            .field("sender", &"<UnboundedSender>")
+            .field("error_receiver", &"<Arc<Mutex<...>>>")
+            .finish()
+    }
 }
 
 impl Clone for PlayerHandle {
@@ -653,5 +838,68 @@ impl PlayerHandle {
         response
             .await
             .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Enable adaptive quality management
+    pub async fn enable_adaptive_quality(
+        &self,
+        quality_options: Vec<QualityOption>,
+        current_quality_index: usize,
+    ) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::EnableAdaptiveQuality {
+                quality_options,
+                current_quality_index,
+                respond_to,
+            })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Disable adaptive quality management
+    pub async fn disable_adaptive_quality(&self) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::DisableAdaptiveQuality { respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Set adaptive quality mode
+    pub async fn set_adaptive_mode(&self, mode: AdaptiveMode) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::SetAdaptiveMode { mode, respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Set quality manually (disables auto mode)
+    pub async fn set_quality(&self, quality_index: usize) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::SetQuality {
+                quality_index,
+                respond_to,
+            })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Report chunk download for bandwidth monitoring
+    pub fn report_chunk_download(&self, bytes: u64, duration: Duration) -> Result<()> {
+        self.sender
+            .send(PlayerCommand::ReportChunkDownload { bytes, duration })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        Ok(())
     }
 }

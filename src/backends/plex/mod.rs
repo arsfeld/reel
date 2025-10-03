@@ -55,6 +55,52 @@ pub struct ServerInfo {
 }
 
 impl PlexBackend {
+    /// Get the current connection type from ConnectionService cache
+    pub async fn is_local_connection(&self) -> bool {
+        use crate::services::core::ConnectionService;
+        use crate::services::core::connection_cache::ConnectionType;
+
+        if let Some(ref source) = self.source {
+            let source_id = SourceId::new(source.id.clone());
+            let cache = ConnectionService::cache();
+
+            if let Some(state) = cache.get(&source_id).await {
+                let is_local = state.is_local();
+                let conn_type = match state.connection_type {
+                    ConnectionType::Local => "local",
+                    ConnectionType::Remote => "remote",
+                    ConnectionType::Relay => "relay",
+                };
+                tracing::debug!(
+                    "Connection type from cache for source {}: {} (is_local: {})",
+                    source.id,
+                    conn_type,
+                    is_local
+                );
+                return is_local;
+            } else {
+                tracing::debug!(
+                    "No connection state found in cache for source {}, assuming remote",
+                    source.id
+                );
+            }
+        } else {
+            tracing::debug!("No source available, assuming remote connection");
+        }
+
+        // If no cached connection, assume remote (safer default)
+        false
+    }
+
+    /// Get connection location string for decision endpoint
+    pub async fn get_connection_location(&self) -> &'static str {
+        if self.is_local_connection().await {
+            "lan"
+        } else {
+            "wan"
+        }
+    }
+
     // Internal helper method - used by initialize()
     async fn is_initialized(&self) -> bool {
         let has_token = self.auth_token.read().await.is_some();
@@ -1358,13 +1404,89 @@ impl MediaBackend for PlexBackend {
             temp_api
         };
 
-        tracing::debug!("Fetching stream URL from Plex API");
-        let result = api.get_stream_url(rating_key).await;
-        match &result {
-            Ok(_) => tracing::debug!("Successfully got stream URL"),
-            Err(e) => tracing::error!("Failed to get stream URL: {}", e),
+        // Determine connection type for proper stream URL generation
+        let is_local = self.is_local_connection().await;
+        let connection_location = self.get_connection_location().await;
+
+        tracing::info!(
+            "Connection type for stream URL: {} (location: {})",
+            if is_local { "local" } else { "remote" },
+            connection_location
+        );
+
+        // For remote/relay connections, always use decision endpoint (required for remote playback)
+        if !is_local {
+            tracing::info!("Remote connection detected, using decision endpoint for stream URL");
+            match api
+                .get_stream_url_via_decision(
+                    rating_key, true, // attempt direct play
+                    None, // no bitrate limit for original quality
+                    None, // no resolution limit for original quality
+                    is_local,
+                )
+                .await
+            {
+                Ok(stream_info) => {
+                    tracing::info!(
+                        "Successfully got stream URL via decision endpoint (remote): {}",
+                        stream_info.url
+                    );
+                    return Ok(stream_info);
+                }
+                Err(e) => {
+                    tracing::error!("Decision endpoint failed for remote connection: {}", e);
+                    return Err(e);
+                }
+            }
         }
-        result
+
+        // For local connections, try direct URL first (fast path)
+        tracing::debug!("Local connection detected, trying direct URL first");
+        match api.get_stream_url(rating_key).await {
+            Ok(stream_info) => {
+                tracing::info!(
+                    "Successfully got stream URL via direct method (local): {}",
+                    stream_info.url
+                );
+                Ok(stream_info)
+            }
+            Err(e) => {
+                // Fallback to decision endpoint if direct URL fails
+                tracing::warn!(
+                    "Direct URL failed on local connection: {}, falling back to decision endpoint",
+                    e
+                );
+                match api
+                    .get_stream_url_via_decision(
+                        rating_key, true, // attempt direct play
+                        None, // no bitrate limit
+                        None, // no resolution limit
+                        is_local,
+                    )
+                    .await
+                {
+                    Ok(stream_info) => {
+                        tracing::info!(
+                            "Successfully got stream URL via decision endpoint (fallback): {}",
+                            stream_info.url
+                        );
+                        Ok(stream_info)
+                    }
+                    Err(fallback_err) => {
+                        tracing::error!(
+                            "Both direct URL and decision endpoint failed: {} -> {}",
+                            e,
+                            fallback_err
+                        );
+                        Err(anyhow!(
+                            "Failed to get stream URL: direct method failed ({}), decision endpoint failed ({})",
+                            e,
+                            fallback_err
+                        ))
+                    }
+                }
+            }
+        }
     }
 
     async fn update_progress(

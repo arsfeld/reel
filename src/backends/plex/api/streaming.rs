@@ -73,6 +73,7 @@ impl PlexApi {
             });
 
             // Add transcoding options
+            // Note: URLs will be generated on-demand via decision endpoint
             let transcode_qualities = vec![
                 ("1080p", 1920, 1080, 8000000),
                 ("720p", 1280, 720, 4000000),
@@ -83,25 +84,11 @@ impl PlexApi {
             for (name, width, height, bitrate) in transcode_qualities {
                 // Only add qualities lower than original
                 if height < original_height {
-                    let path = format!("/library/metadata/{}", media_id);
-                    let transcode_url = format!(
-                        "{}/video/:/transcode/universal/start.m3u8?path={}&mediaIndex=0&partIndex=0&protocol=hls&directPlay=0&directStream=0&fastSeek=1&maxVideoBitrate={}&videoResolution={}x{}&X-Plex-Token={}",
-                        self.base_url,
-                        percent_encoding::utf8_percent_encode(
-                            &path,
-                            percent_encoding::NON_ALPHANUMERIC
-                        ),
-                        bitrate / 1000, // Convert to kbps
-                        width,
-                        height,
-                        self.auth_token
-                    );
-
                     quality_options.push(QualityOption {
                         name: name.to_string(),
                         resolution: Resolution { width, height },
                         bitrate: bitrate as u64,
-                        url: transcode_url,
+                        url: String::new(), // Generated on-demand via get_stream_url_for_quality()
                         requires_transcode: true,
                     });
                 }
@@ -139,5 +126,32 @@ impl PlexApi {
             media_id,
             plex_response.media_container.metadata.len()
         ))
+    }
+
+    /// Get stream URL for a specific quality option
+    /// Routes to direct URL for original quality or decision endpoint for transcoded qualities
+    pub async fn get_stream_url_for_quality(
+        &self,
+        media_id: &str,
+        quality: &QualityOption,
+        is_local: bool,
+    ) -> Result<String> {
+        if quality.requires_transcode {
+            // Use decision endpoint for transcoded streams
+            let stream_info = self
+                .get_stream_url_via_decision(
+                    media_id,
+                    false,                        // not direct play
+                    Some(quality.bitrate / 1000), // convert to kbps
+                    Some(quality.resolution.clone()),
+                    is_local,
+                )
+                .await?;
+
+            Ok(stream_info.url)
+        } else {
+            // Use direct URL for original quality
+            Ok(quality.url.clone())
+        }
     }
 }

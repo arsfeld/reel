@@ -1,11 +1,11 @@
 ---
 id: task-208
 title: Add Plex search endpoints for content discovery
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-09-22 14:18'
-updated_date: '2025-09-22 17:12'
+updated_date: '2025-10-03 21:22'
 labels:
   - backend
   - plex

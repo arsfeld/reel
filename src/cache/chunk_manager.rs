@@ -579,6 +579,11 @@ impl ChunkManager {
 
         Ok(())
     }
+
+    /// Set the player handle for bandwidth reporting
+    pub async fn set_player_handle(&self, handle: Option<crate::player::controller::PlayerHandle>) {
+        self.downloader.set_player_handle(handle).await;
+    }
 }
 
 #[cfg(test)]
