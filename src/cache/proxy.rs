@@ -8,6 +8,7 @@ use axum::{
     routing::{get, head},
 };
 use futures::stream::Stream;
+use reqwest::Client;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -18,6 +19,38 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
+
+/// State machine for handling cache read failures with retries and fallbacks
+#[derive(Debug, Clone)]
+enum ServeStrategy {
+    /// Try to serve from cache
+    TryCache,
+    /// Cache failed, retry downloading the chunks
+    RetryDownload { attempt: u32 },
+    /// Retries failed, fall back to passthrough streaming
+    Passthrough,
+}
+
+impl ServeStrategy {
+    const MAX_RETRY_ATTEMPTS: u32 = 1;
+
+    fn next_on_failure(&self) -> Self {
+        match self {
+            ServeStrategy::TryCache => ServeStrategy::RetryDownload { attempt: 1 },
+            ServeStrategy::RetryDownload { attempt } if *attempt < Self::MAX_RETRY_ATTEMPTS => {
+                ServeStrategy::RetryDownload {
+                    attempt: attempt + 1,
+                }
+            }
+            ServeStrategy::RetryDownload { .. } => ServeStrategy::Passthrough,
+            ServeStrategy::Passthrough => ServeStrategy::Passthrough, // Terminal state
+        }
+    }
+
+    fn is_terminal(&self) -> bool {
+        matches!(self, ServeStrategy::Passthrough)
+    }
+}
 
 use super::chunk_manager::{ChunkManager, Priority};
 use super::chunk_store::ChunkStore;
@@ -41,6 +74,7 @@ pub struct CacheProxy {
     stats: ProxyStats,
     enable_stats: bool,
     stats_interval_secs: u64,
+    client: Client,
 }
 
 impl CacheProxy {
@@ -66,6 +100,7 @@ impl CacheProxy {
             stats: ProxyStats::new(),
             enable_stats: true,
             stats_interval_secs: 30,
+            client: Client::new(),
         }
     }
 
@@ -92,6 +127,7 @@ impl CacheProxy {
             stats: ProxyStats::new(),
             enable_stats,
             stats_interval_secs,
+            client: Client::new(),
         }
     }
 
@@ -278,30 +314,37 @@ impl CacheProxy {
             }
             Ok(None) => {
                 self.stats.increment_cache_miss();
-                error!("Cache entry not found in database for key: {:?}", cache_key);
+                warn!("Cache entry not found in database for key: {:?}", cache_key);
                 return StatusCode::NOT_FOUND.into_response();
             }
             Err(e) => {
-                error!("Database error looking up cache entry: {}", e);
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                // AC #3: Database lookup fails
+                // Cannot fall back to original URL because we don't have it
+                error!(
+                    "Database error looking up cache entry for key {:?}: {}. Cannot fall back without URL.",
+                    cache_key, e
+                );
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
         };
 
         // Get entry ID and total size from database
         let entry_id = db_entry.id;
+        let original_url = db_entry.original_url.clone();
         let total_size = match db_entry.expected_total_size {
             Some(size) if size > 0 => size as u64,
             _ => {
-                error!(
-                    "Cache entry missing expected_total_size: entry_id={}",
+                // AC #4: Invalid cache entry (incomplete with no total size) → fetch from original
+                warn!(
+                    "Cache entry missing expected_total_size (entry_id={}), falling back to original URL",
                     entry_id
                 );
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return self.stream_from_original_url(&original_url, headers).await;
             }
         };
 
         // Parse range header - if missing, treat as full file (bytes=0-)
-        let range = headers
+        let range_result = headers
             .get(header::RANGE)
             .and_then(|v| v.to_str().ok())
             .and_then(|range_str| parse_range_header(range_str, total_size))
@@ -319,7 +362,7 @@ impl CacheProxy {
 
         // Always use range-based serving (even for full file)
         // This ensures GStreamer knows the stream is seekable
-        match range {
+        match range_result {
             Some((start, end)) => {
                 // For large ranges, use progressive streaming to avoid loading GB into memory
                 // For small ranges (< 50MB), check if available and read directly for better performance
@@ -374,17 +417,21 @@ impl CacheProxy {
                         }
                     }
 
-                    // Read small range directly into memory
+                    // Use state machine to handle cache reads with retries and fallback
                     let data = match self
-                        .chunk_store
-                        .read_range(entry_id, start, length as usize)
+                        .read_range_with_fallback(
+                            entry_id,
+                            start,
+                            end,
+                            length as usize,
+                            total_size,
+                            &original_url,
+                            &headers,
+                        )
                         .await
                     {
                         Ok(data) => data,
-                        Err(e) => {
-                            error!("Failed to read range {}-{}: {}", start, end, e);
-                            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                        }
+                        Err(response) => return response,
                     };
 
                     self.stats.add_bytes_served(data.len() as u64);
@@ -403,10 +450,12 @@ impl CacheProxy {
                         .unwrap()
                 } else {
                     // Large range (including full file) - use progressive streaming
-
+                    // AC #2: Fall back to passthrough streaming if cache fails
                     let stream = create_range_based_progressive_stream(
                         self.chunk_manager.clone(),
                         self.chunk_store.clone(),
+                        self.client.clone(),
+                        original_url.clone(),
                         entry_id,
                         start,
                         end,
@@ -493,12 +542,6 @@ impl CacheProxy {
                 .unwrap();
         };
 
-        // Parse range header if present (for validation)
-        let range = headers
-            .get(header::RANGE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|range_str| parse_range_header(range_str, total_size));
-
         // Build response headers without body
         let mut response = Response::builder();
 
@@ -520,24 +563,232 @@ impl CacheProxy {
     pub fn port(&self) -> u16 {
         self.port
     }
+
+    /// Read a byte range with automatic retry and fallback logic
+    /// Returns the data bytes or an error response
+    async fn read_range_with_fallback(
+        &self,
+        entry_id: i32,
+        start: u64,
+        end: u64,
+        length: usize,
+        total_size: u64,
+        _original_url: &str,
+        _headers: &HeaderMap,
+    ) -> std::result::Result<Vec<u8>, Response> {
+        let mut strategy = ServeStrategy::TryCache;
+
+        loop {
+            match strategy {
+                ServeStrategy::TryCache => {
+                    // Try to read from cache
+                    match self.chunk_store.read_range(entry_id, start, length).await {
+                        Ok(data) => return Ok(data),
+                        Err(e) => {
+                            warn!(
+                                "Cache read failed for range {}-{} (entry_id={}): {}",
+                                start, end, entry_id, e
+                            );
+                            strategy = strategy.next_on_failure();
+                        }
+                    }
+                }
+                ServeStrategy::RetryDownload { attempt } => {
+                    info!(
+                        "Attempting to retry download for range {}-{} (attempt {})",
+                        start, end, attempt
+                    );
+
+                    // Delete corrupted chunks and re-download
+                    let retry_timeout = std::time::Duration::from_secs(30);
+                    match self
+                        .chunk_manager
+                        .retry_range(entry_id, start, end, total_size, retry_timeout)
+                        .await
+                    {
+                        Ok(()) => {
+                            // Retry successful, try reading again
+                            match self.chunk_store.read_range(entry_id, start, length).await {
+                                Ok(data) => {
+                                    info!("Successfully read range {}-{} after retry", start, end);
+                                    return Ok(data);
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Read failed even after retry for range {}-{}: {}",
+                                        start, end, e
+                                    );
+                                    strategy = strategy.next_on_failure();
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Retry download failed for range {}-{}: {}", start, end, e);
+                            strategy = strategy.next_on_failure();
+                        }
+                    }
+                }
+                ServeStrategy::Passthrough => {
+                    error!(
+                        "All cache strategies failed for range {}-{}. Returning error - passthrough not applicable for small ranges",
+                        start, end
+                    );
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                }
+            }
+        }
+    }
+
+    /// Stream directly from the original URL (fallback when cache fails)
+    async fn stream_from_original_url(&self, original_url: &str, headers: HeaderMap) -> Response {
+        info!(
+            "Fallback: Streaming directly from original URL: {}",
+            original_url
+        );
+
+        // Build request with range headers if present
+        let mut request = self.client.get(original_url);
+
+        if let Some(range) = headers.get(header::RANGE) {
+            if let Ok(range_str) = range.to_str() {
+                request = request.header(header::RANGE, range_str);
+            }
+        }
+
+        // Send request
+        let response = match request.send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                error!("Failed to fetch from original URL: {}", e);
+                return StatusCode::BAD_GATEWAY.into_response();
+            }
+        };
+
+        // Check status
+        let status = response.status();
+        if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
+            error!("Original URL returned error status: {}", status);
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+
+        // Get content length
+        let content_length = response.content_length();
+
+        // Convert response to stream
+        let stream = response.bytes_stream();
+
+        // Build response with appropriate status and headers
+        let mut response_builder = Response::builder();
+
+        if status == reqwest::StatusCode::PARTIAL_CONTENT {
+            response_builder = response_builder.status(StatusCode::PARTIAL_CONTENT);
+        } else {
+            response_builder = response_builder.status(StatusCode::OK);
+        }
+
+        response_builder = response_builder
+            .header(header::CONTENT_TYPE, "video/mp4")
+            .header(header::ACCEPT_RANGES, "bytes");
+
+        if let Some(length) = content_length {
+            response_builder = response_builder.header(header::CONTENT_LENGTH, length.to_string());
+        }
+
+        // Content-range is automatically handled by the upstream server's response headers
+
+        response_builder.body(Body::from_stream(stream)).unwrap()
+    }
 }
 
-/// Create a chunk-based progressive file stream
-/// Requests and waits for chunks as needed during streaming
+/// Create a chunk-based progressive file stream with fallback to passthrough streaming
+/// Requests and waits for chunks as needed during streaming. If cache operations fail
+/// (e.g., disk full, permissions), falls back to streaming directly from source.
 fn create_range_based_progressive_stream(
     chunk_manager: Arc<ChunkManager>,
     chunk_store: Arc<ChunkStore>,
+    client: Client,
+    original_url: String,
     entry_id: i32,
     start: u64,
     end: u64,
     total_size: u64,
 ) -> impl Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>> {
     async_stream::stream! {
-        let chunk_size = chunk_manager.chunk_size();
+        let _chunk_size = chunk_manager.chunk_size();
         let mut current_byte = start;
         let end_byte = end;
+        let mut cache_failed = false;
+        let mut passthrough_stream: Option<Pin<Box<dyn Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>> = None;
 
         while current_byte <= end_byte {
+            // If cache has failed, use passthrough streaming for the remainder
+            if cache_failed {
+                if passthrough_stream.is_none() {
+                    // Initialize passthrough streaming from current position
+                    warn!(
+                        "Cache operations failed, switching to passthrough streaming from byte {} to {}",
+                        current_byte, end_byte
+                    );
+
+                    // Make HTTP range request for the remaining bytes
+                    let response = match client
+                        .get(&original_url)
+                        .header("Range", format!("bytes={}-{}", current_byte, end_byte))
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => resp,
+                        Err(e) => {
+                            error!("Passthrough: Failed to fetch from original URL: {}", e);
+                            yield Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Passthrough streaming failed: {}", e),
+                            ));
+                            break;
+                        }
+                    };
+
+                    // Check status
+                    let status = response.status();
+                    if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
+                        error!("Passthrough: Original URL returned error status: {}", status);
+                        yield Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Passthrough streaming failed with status: {}", status),
+                        ));
+                        break;
+                    }
+
+                    // Convert to stream
+                    passthrough_stream = Some(Box::pin(response.bytes_stream()));
+                }
+
+                // Stream from passthrough
+                if let Some(ref mut stream) = passthrough_stream {
+                    use futures::StreamExt;
+                    match stream.next().await {
+                        Some(Ok(chunk)) => {
+                            current_byte += chunk.len() as u64;
+                            yield Ok(chunk);
+                        }
+                        Some(Err(e)) => {
+                            error!("Passthrough: Stream error: {}", e);
+                            yield Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Passthrough stream error: {}", e),
+                            ));
+                            break;
+                        }
+                        None => {
+                            // Stream ended
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Try cache-based streaming
             // Calculate current chunk
             let chunk_index = chunk_manager.byte_to_chunk_index(current_byte);
             let chunk_start = chunk_manager.chunk_start_byte(chunk_index);
@@ -552,53 +803,72 @@ fn create_range_based_progressive_stream(
             let has_chunk = match chunk_manager.has_chunk(entry_id, chunk_index).await {
                 Ok(available) => available,
                 Err(e) => {
-                    error!("Failed to check chunk availability: {}", e);
-                    yield Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Chunk availability check failed: {}", e),
-                    ));
-                    break;
+                    // AC #1: Detect write failures during cache operations
+                    warn!("Cache: Failed to check chunk availability ({}), falling back to passthrough", e);
+                    cache_failed = true;
+                    continue;
                 }
             };
 
             if !has_chunk {
                 // Request chunk with CRITICAL priority
                 if let Err(e) = chunk_manager.request_chunk(entry_id, chunk_index, Priority::CRITICAL).await {
-                    error!("Failed to request chunk: {}", e);
-                    yield Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Chunk request failed: {}", e),
-                    ));
-                    break;
+                    // AC #1: Detect write failures during cache operations
+                    // AC #3: Log cache write failures but continue streaming
+                    warn!("Cache: Failed to request chunk {} ({}), falling back to passthrough", chunk_index, e);
+                    cache_failed = true;
+                    continue;
                 }
 
                 // Wait for chunk (30 second timeout)
                 let timeout = std::time::Duration::from_secs(30);
                 if let Err(e) = chunk_manager.wait_for_chunk(entry_id, chunk_index, timeout).await {
-                    warn!("Timeout waiting for chunk {}: {}", chunk_index, e);
-                    yield Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!("Chunk {} timeout", chunk_index),
-                    ));
-                    break;
+                    // AC #1: Detect write failures during cache operations
+                    // AC #3: Log cache write failures but continue streaming
+                    warn!("Cache: Timeout waiting for chunk {} ({}), falling back to passthrough", chunk_index, e);
+                    cache_failed = true;
+                    continue;
                 }
             }
 
-            // Read the required portion from this chunk
-            match chunk_store.read_range(entry_id, read_start, read_length).await {
-                Ok(data) => {
-                    current_byte += data.len() as u64;
-                    yield Ok(bytes::Bytes::from(data));
-                }
+            // Read the required portion from this chunk - try with one retry on failure
+            let data = match chunk_store.read_range(entry_id, read_start, read_length).await {
+                Ok(data) => data,
                 Err(e) => {
-                    error!("Failed to read chunk {}: {}", chunk_index, e);
-                    yield Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Chunk read failed: {}", e),
-                    ));
-                    break;
+                    // First failure - attempt retry
+                    warn!("Cache: Failed to read chunk {} at byte {}: {}. Attempting retry...", chunk_index, read_start, e);
+
+                    let retry_timeout = std::time::Duration::from_secs(30);
+                    match chunk_manager.retry_range(entry_id, read_start, read_end, total_size, retry_timeout).await {
+                        Ok(()) => {
+                            // Retry successful, try reading again
+                            match chunk_store.read_range(entry_id, read_start, read_length).await {
+                                Ok(data) => {
+                                    info!("Cache: Successfully read chunk {} after retry", chunk_index);
+                                    data
+                                }
+                                Err(e) => {
+                                    // AC #1: Detect write failures during cache operations
+                                    // AC #3: Log cache write failures but continue streaming
+                                    warn!("Cache: Read failed for chunk {} even after retry ({}), falling back to passthrough", chunk_index, e);
+                                    cache_failed = true;
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            // AC #1: Detect write failures during cache operations
+                            // AC #3: Log cache write failures but continue streaming
+                            warn!("Cache: Retry failed for chunk {} ({}), falling back to passthrough", chunk_index, e);
+                            cache_failed = true;
+                            continue;
+                        }
+                    }
                 }
-            }
+            };
+
+            current_byte += data.len() as u64;
+            yield Ok(bytes::Bytes::from(data));
         }
     }
 }
@@ -610,7 +880,7 @@ fn create_chunk_based_progressive_stream(
     total_size: u64,
 ) -> impl Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>> {
     async_stream::stream! {
-        let chunk_size = chunk_manager.chunk_size();
+        let _chunk_size = chunk_manager.chunk_size();
         let mut current_byte = 0u64;
 
         while current_byte < total_size {

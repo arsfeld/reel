@@ -9,6 +9,7 @@ use crate::db::connection::DatabaseConnection;
 use crate::models::auth_provider::{Source, SourceType};
 use crate::models::{Library, LibraryId, LibraryType, SourceId};
 use crate::services::commands::{Command, auth_commands::LoadSourcesCommand};
+use crate::services::core::ConnectionType as ConnType;
 use crate::services::core::media::MediaService;
 use crate::ui::shared::broker::{BROKER, BrokerMessage, SourceMessage};
 
@@ -45,6 +46,7 @@ pub enum SidebarInput {
         source_id: SourceId,
         state: ConnectionState,
         error: Option<String>,
+        connection_type: Option<ConnType>,
     },
     /// Connection check from monitor (doesn't override SyncFailed)
     ConnectionCheckResult {
@@ -75,6 +77,7 @@ pub struct SourceGroup {
     db: DatabaseConnection,
     syncing_libraries: HashSet<String>,
     connection_state: ConnectionState,
+    connection_type: Option<ConnType>, // Track connection type (local/remote/relay)
     sync_error_message: Option<String>,
     is_syncing: bool,
 }
@@ -167,8 +170,8 @@ pub enum SourceGroupInput {
     ToggleExpanded,
     /// Reload libraries from database (e.g., after sync)
     ReloadLibraries,
-    /// Update connection status with optional error message
-    UpdateConnectionStatus(ConnectionState, Option<String>),
+    /// Update connection status with optional error message and connection type
+    UpdateConnectionStatus(ConnectionState, Option<String>, Option<ConnType>),
     /// Library sync started
     LibrarySyncStarted(String),
     /// Library sync completed
@@ -227,6 +230,18 @@ impl FactoryComponent for SourceGroup {
                         set_text: &self.source.name,
                         set_halign: gtk::Align::Start,
                         set_hexpand: true,
+                    },
+
+                    // Connection type warning icon - shown for remote/relay connections
+                    #[name = "connection_type_icon"]
+                    gtk::Image {
+                        // Manually updated in UpdateConnectionStatus handler
+                        // #[watch] doesn't work in factory components
+                        set_visible: false, // Will be updated manually
+                        set_icon_name: Some("dialog-warning-symbolic"),
+                        set_pixel_size: 16,
+                        set_halign: gtk::Align::End,
+                        add_css_class: "warning-icon",
                     },
 
                     // Sync spinner - shown when source is syncing
@@ -306,6 +321,7 @@ impl FactoryComponent for SourceGroup {
             db,
             syncing_libraries: HashSet::new(),
             connection_state: ConnectionState::Connected, // Assume connected initially
+            connection_type: None, // Will be set when connection status is updated
             sync_error_message: None,
             is_syncing: false,
         }
@@ -422,10 +438,10 @@ impl FactoryComponent for SourceGroup {
                 // Update the library list to hide spinners
                 self.update_library_list(&widgets.library_list);
             }
-            SourceGroupInput::UpdateConnectionStatus(state, error_msg) => {
+            SourceGroupInput::UpdateConnectionStatus(state, error_msg, conn_type) => {
                 debug!(
-                    "Source {} connection status updating from {:?} to {:?} (error: {:?})",
-                    self.source.name, self.connection_state, state, error_msg
+                    "Source {} connection status updating from {:?} to {:?} (error: {:?}, type: {:?})",
+                    self.source.name, self.connection_state, state, error_msg, conn_type
                 );
 
                 // Log stack trace to see who's calling this
@@ -442,6 +458,61 @@ impl FactoryComponent for SourceGroup {
 
                 self.connection_state = state;
                 self.sync_error_message = error_msg.clone();
+
+                // Only update connection_type if a value is provided
+                // This preserves the existing type when None is passed
+                if conn_type.is_some() {
+                    self.connection_type = conn_type;
+                    info!(
+                        "SourceGroup {} updated: state={:?}, conn_type={:?} (updated)",
+                        self.source.name, state, conn_type
+                    );
+                } else {
+                    info!(
+                        "SourceGroup {} updated: state={:?}, conn_type={:?} (preserved existing: {:?})",
+                        self.source.name, state, conn_type, self.connection_type
+                    );
+                }
+
+                // Manually update the connection type warning icon widget
+                // #[watch] doesn't work in factory components, so we must update manually
+                // Use self.connection_type (the stored value) not conn_type (the parameter)
+                // because we may have preserved the existing value
+                // Only show warning icon for remote/relay connections (not local)
+                let show_warning = matches!(
+                    self.connection_type,
+                    Some(ConnType::Remote) | Some(ConnType::Relay)
+                );
+                widgets.connection_type_icon.set_visible(show_warning);
+
+                if let Some(ct) = self.connection_type {
+                    let tooltip_text = match ct {
+                        ConnType::Remote => {
+                            "Using remote connection - Local connection unavailable. This may have higher latency."
+                        }
+                        ConnType::Relay => {
+                            "Using relay connection - Direct connection unavailable. This will have higher latency and limited bandwidth."
+                        }
+                        ConnType::Local => "", // No warning for local
+                    };
+
+                    if show_warning {
+                        widgets
+                            .connection_type_icon
+                            .set_tooltip_text(Some(tooltip_text));
+                        info!(
+                            "⚠️  Connection warning for {}: showing={}, type={:?}",
+                            self.source.name, show_warning, ct
+                        );
+                    } else {
+                        info!("✓ Connection OK for {}: local connection", self.source.name);
+                    }
+                } else {
+                    info!(
+                        "Connection type unknown for {} (hiding warning)",
+                        self.source.name
+                    );
+                }
 
                 // Manually update the connection icon widget
                 // Hide icon when Connected or when syncing (spinner takes precedence)
@@ -794,9 +865,38 @@ impl Component for Sidebar {
                 // Update source groups
                 self.source_groups.guard().clear();
                 for source in sources {
+                    // Convert connection_quality string to ConnectionType
+                    let conn_type = source
+                        .connection_info
+                        .connection_quality
+                        .as_deref()
+                        .and_then(|q| match q {
+                            "local" => Some(ConnType::Local),
+                            "remote" => Some(ConnType::Remote),
+                            "relay" => Some(ConnType::Relay),
+                            _ => None,
+                        });
+
                     self.source_groups
                         .guard()
-                        .push_back((source, self.db.clone()));
+                        .push_back((source.clone(), self.db.clone()));
+
+                    // Send initial connection type to the source group
+                    if let Some(ct) = conn_type {
+                        let source_id = SourceId::new(source.id.clone());
+                        info!("Initial connection type for {}: {:?}", source_id, ct);
+
+                        // Find the index of the source we just added
+                        let idx = self.source_groups.guard().len() - 1;
+                        self.source_groups.send(
+                            idx,
+                            SourceGroupInput::UpdateConnectionStatus(
+                                ConnectionState::Connected,
+                                None,
+                                Some(ct),
+                            ),
+                        );
+                    }
                 }
             }
 
@@ -833,6 +933,7 @@ impl Component for Sidebar {
                 source_id,
                 state,
                 error,
+                connection_type,
             } => {
                 // Find the source group and update its connection status
                 let idx_to_update = {
@@ -847,8 +948,10 @@ impl Component for Sidebar {
                 };
 
                 if let Some(idx) = idx_to_update {
-                    self.source_groups
-                        .send(idx, SourceGroupInput::UpdateConnectionStatus(state, error));
+                    self.source_groups.send(
+                        idx,
+                        SourceGroupInput::UpdateConnectionStatus(state, error, connection_type),
+                    );
                 }
             }
 
@@ -891,6 +994,7 @@ impl Component for Sidebar {
                             SourceGroupInput::UpdateConnectionStatus(
                                 ConnectionState::Connected,
                                 None,
+                                None,
                             ),
                         );
                     } else {
@@ -902,6 +1006,7 @@ impl Component for Sidebar {
                             idx,
                             SourceGroupInput::UpdateConnectionStatus(
                                 ConnectionState::Disconnected,
+                                None,
                                 None,
                             ),
                         );
@@ -1000,6 +1105,7 @@ impl Component for Sidebar {
                                     SourceGroupInput::UpdateConnectionStatus(
                                         ConnectionState::Connected,
                                         None, // No error on successful sync
+                                        None, // Don't override connection type on sync success
                                     ),
                                 );
                             } else {
@@ -1040,6 +1146,7 @@ impl Component for Sidebar {
                                 SourceGroupInput::UpdateConnectionStatus(
                                     ConnectionState::SyncFailed,
                                     Some(error.clone()), // Pass the error message for tooltip
+                                    None, // Don't override connection type on sync failure
                                 ),
                             );
                         }

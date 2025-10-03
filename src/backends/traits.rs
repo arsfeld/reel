@@ -61,6 +61,14 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
 
     // get_last_sync_time and supports_offline removed - never used
     // get_backend_id removed - never used
+
+    /// Test a connection URL for availability and latency
+    /// Returns (is_available, response_time_ms)
+    async fn test_connection(
+        &self,
+        url: &str,
+        auth_token: Option<&str>,
+    ) -> Result<(bool, Option<u64>)>;
 }
 
 #[cfg(test)]

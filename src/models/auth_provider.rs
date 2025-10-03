@@ -83,6 +83,16 @@ impl AuthProvider {
             _ => false,
         }
     }
+
+    /// Get the authentication token for this provider (if applicable)
+    /// Used for connection testing and API requests
+    pub fn auth_token(&self) -> Option<&str> {
+        match self {
+            Self::PlexAccount { token, .. } => Some(token),
+            Self::JellyfinAuth { access_token, .. } => Some(access_token),
+            Self::NetworkCredentials { .. } | Self::LocalFiles { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -152,6 +162,8 @@ pub struct ConnectionInfo {
     pub primary_url: Option<String>,
     pub is_online: bool,
     pub last_check: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub connection_quality: Option<String>, // "local", "remote", or "relay"
 }
 
 impl Source {
@@ -170,6 +182,7 @@ impl Source {
                 primary_url: None,
                 is_online: false,
                 last_check: None,
+                connection_quality: None,
             },
             enabled: true,
             last_sync: None,
@@ -217,6 +230,7 @@ impl From<crate::db::entities::SourceModel> for Source {
                 last_check: model
                     .last_sync
                     .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
+                connection_quality: model.connection_quality, // Load from database
             },
             enabled: true, // Database doesn't have this field, default to true
             last_sync: model

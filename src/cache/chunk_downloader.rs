@@ -1,3 +1,4 @@
+use crate::cache::config::{DiskSpaceStatus, FileCacheConfig};
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use reqwest::Client;
@@ -42,6 +43,7 @@ pub struct ChunkDownloader {
     chunk_store: Arc<ChunkStore>,
     chunk_size: u64,
     retry_config: RetryConfig,
+    cache_config: Option<FileCacheConfig>,
 }
 
 impl ChunkDownloader {
@@ -58,12 +60,19 @@ impl ChunkDownloader {
             chunk_store,
             chunk_size,
             retry_config: RetryConfig::default(),
+            cache_config: None,
         }
     }
 
     /// Create a ChunkDownloader with custom retry configuration
     pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
+        self
+    }
+
+    /// Set cache configuration for disk space monitoring
+    pub fn with_cache_config(mut self, cache_config: FileCacheConfig) -> Self {
+        self.cache_config = Some(cache_config);
         self
     }
 
@@ -126,6 +135,39 @@ impl ChunkDownloader {
 
     /// Try to download a chunk once (no retries)
     async fn try_download_chunk(&self, entry_id: i32, chunk_index: u64) -> Result<()> {
+        // AC #5: Proactively check disk space before download
+        if let Some(ref config) = self.cache_config {
+            match config.check_disk_space_status() {
+                Ok(status) => match status {
+                    DiskSpaceStatus::Critical { message, .. } => {
+                        error!("{}", message);
+                        warn!(
+                            "Attempting emergency cleanup before download due to critical disk space"
+                        );
+                        // Trigger emergency cleanup
+                        if let Err(e) = self.emergency_cleanup().await {
+                            error!("Emergency cleanup failed: {}", e);
+                            return Err(anyhow!(
+                                "Cannot download chunk: disk space critically low and cleanup failed"
+                            ));
+                        }
+                    }
+                    DiskSpaceStatus::Warning { message, .. } => {
+                        warn!("{}", message);
+                    }
+                    DiskSpaceStatus::Info { message, .. } => {
+                        info!("{}", message);
+                    }
+                    DiskSpaceStatus::Healthy { .. } => {
+                        // All good, continue
+                    }
+                },
+                Err(e) => {
+                    debug!("Could not check disk space status: {}", e);
+                }
+            }
+        }
+
         // 1. Get cache entry from database
         let entries = self.repository.list_cache_entries().await?;
         let entry = entries
@@ -171,16 +213,72 @@ impl ChunkDownloader {
 
         let data_len = data.len();
 
-        // 6. Write to chunk store
-        self.chunk_store
+        // 6. Write to chunk store with disk space error handling
+        // AC #2: Trigger emergency cleanup when disk full
+        // AC #3: Retry write after cleanup
+        let write_result = self
+            .chunk_store
             .write_chunk(entry_id, chunk_index, self.chunk_size, &data)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to write chunk {} to disk (entry {})",
+            .await;
+
+        if let Err(e) = write_result {
+            // Check if this is a disk full error
+            if e.to_string().contains("DISK_FULL") {
+                warn!(
+                    "Disk full detected while writing chunk {} for entry {}. Attempting emergency cleanup...",
                     chunk_index, entry_id
-                )
-            })?;
+                );
+
+                // AC #2: Trigger emergency cleanup
+                match self.emergency_cleanup().await {
+                    Ok(freed_bytes) => {
+                        info!(
+                            "Emergency cleanup freed {} MB. Retrying write for chunk {} (entry {})...",
+                            freed_bytes / (1024 * 1024),
+                            chunk_index,
+                            entry_id
+                        );
+
+                        // AC #3: Retry write after cleanup
+                        self.chunk_store
+                            .write_chunk(entry_id, chunk_index, self.chunk_size, &data)
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "Failed to write chunk {} even after emergency cleanup (entry {})",
+                                    chunk_index, entry_id
+                                )
+                            })?;
+
+                        info!(
+                            "Successfully wrote chunk {} after emergency cleanup",
+                            chunk_index
+                        );
+                    }
+                    Err(cleanup_err) => {
+                        error!(
+                            "Emergency cleanup failed: {}. Cannot write chunk {} (entry {})",
+                            cleanup_err, chunk_index, entry_id
+                        );
+                        // AC #4: Fall back to passthrough (error propagates up, caller handles fallback)
+                        return Err(e).with_context(|| {
+                            format!(
+                                "Disk full and emergency cleanup failed for chunk {} (entry {})",
+                                chunk_index, entry_id
+                            )
+                        });
+                    }
+                }
+            } else {
+                // Not a disk full error, just propagate
+                return Err(e).with_context(|| {
+                    format!(
+                        "Failed to write chunk {} to disk (entry {})",
+                        chunk_index, entry_id
+                    )
+                });
+            }
+        }
 
         // 7. Record chunk in database
         let chunk = CacheChunkModel {
@@ -245,6 +343,76 @@ impl ChunkDownloader {
     /// Get a reference to the HTTP client
     pub fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// Perform emergency cache cleanup to free disk space
+    /// Returns the number of bytes freed
+    async fn emergency_cleanup(&self) -> Result<i64> {
+        info!("Starting emergency cache cleanup due to disk space exhaustion");
+
+        // Get current cache entries sorted by last access time (LRU)
+        let entries = self.repository.get_entries_for_cleanup(10).await?;
+
+        if entries.is_empty() {
+            warn!("No cache entries available for emergency cleanup");
+            return Ok(0);
+        }
+
+        let mut total_freed = 0i64;
+
+        // Delete oldest entries until we free at least 1GB or run out of entries
+        const TARGET_FREE_BYTES: i64 = 1024 * 1024 * 1024; // 1 GB
+
+        for entry in entries {
+            let entry_id = entry.id;
+            let entry_size = entry.downloaded_bytes;
+
+            info!(
+                "Emergency cleanup: Deleting cache entry {} (size: {} MB)",
+                entry_id,
+                entry_size / (1024 * 1024)
+            );
+
+            // Delete chunks for this entry
+            if let Err(e) = self.repository.delete_chunks_for_entry(entry_id).await {
+                warn!("Failed to delete chunks for entry {}: {}", entry_id, e);
+                continue;
+            }
+
+            // Delete the entry itself
+            if let Err(e) = self.repository.delete_cache_entry(entry_id).await {
+                warn!("Failed to delete cache entry {}: {}", entry_id, e);
+                continue;
+            }
+
+            // Delete the file from chunk store
+            if let Err(e) = self.chunk_store.delete_file(entry_id).await {
+                warn!("Failed to delete cache file for entry {}: {}", entry_id, e);
+                // Continue anyway - database is cleaned up
+            }
+
+            total_freed += entry_size;
+
+            // Check if we've freed enough space
+            if total_freed >= TARGET_FREE_BYTES {
+                info!(
+                    "Emergency cleanup: Freed {} MB (target reached)",
+                    total_freed / (1024 * 1024)
+                );
+                break;
+            }
+        }
+
+        if total_freed > 0 {
+            info!(
+                "Emergency cleanup completed: {} MB freed",
+                total_freed / (1024 * 1024)
+            );
+        } else {
+            warn!("Emergency cleanup freed no space");
+        }
+
+        Ok(total_freed)
     }
 }
 

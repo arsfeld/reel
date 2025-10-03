@@ -12,5 +12,6 @@ pub mod sync;
 
 pub use backend::BackendService;
 pub use connection::ConnectionService;
+pub use connection_cache::ConnectionType;
 pub use media::MediaService;
 pub use playlist::PlaylistService;

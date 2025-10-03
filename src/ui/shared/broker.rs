@@ -43,6 +43,7 @@ pub enum BrokerMessage {
     Data(DataMessage),
     Source(SourceMessage),
     Config(ConfigMessage),
+    Cache(CacheMessage),
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +110,20 @@ pub enum SourceMessage {
 pub enum ConfigMessage {
     Updated { config: Arc<crate::config::Config> },
     PlayerBackendChanged { backend: String },
+}
+
+#[derive(Debug, Clone)]
+pub enum CacheMessage {
+    CleanupStarted,
+    CleanupCompleted {
+        entries_removed: u64,
+        space_freed_mb: i64,
+        duration_ms: u128,
+        cleanup_type: String,
+    },
+    CleanupFailed {
+        error: String,
+    },
 }
 
 pub struct MessageBroker {

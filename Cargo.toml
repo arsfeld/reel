@@ -90,6 +90,7 @@ lru = "0.16"
 lazy_static = "1.5"
 tantivy = "0.25"
 notify = "8.2"
+sysinfo = "0.35"
 
 # Localization
 gettext-rs = { version = "0.7", features = ["gettext-system"] }

@@ -27,14 +27,11 @@ pub struct GetPlaybackProgressCommand {
 }
 
 #[async_trait]
-impl Command<Option<(i64, i64)>> for GetPlaybackProgressCommand {
-    async fn execute(&self) -> Result<Option<(i64, i64)>> {
+impl Command<Option<crate::db::entities::PlaybackProgressModel>> for GetPlaybackProgressCommand {
+    async fn execute(&self) -> Result<Option<crate::db::entities::PlaybackProgressModel>> {
         use crate::services::core::playback::PlaybackService;
 
-        let progress =
-            PlaybackService::get_progress(&self.db, &self.user_id, &self.media_id).await?;
-
-        Ok(progress.map(|p| (p.position_ms, p.duration_ms)))
+        PlaybackService::get_progress(&self.db, &self.user_id, &self.media_id).await
     }
 }
 

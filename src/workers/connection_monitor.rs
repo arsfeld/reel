@@ -7,6 +7,7 @@ use tracing::{debug, info, warn};
 use crate::db::DatabaseConnection;
 use crate::models::SourceId;
 use crate::services::core::connection::ConnectionService;
+use crate::services::core::connection_cache::ConnectionType;
 
 #[derive(Debug)]
 pub struct ConnectionMonitor {
@@ -27,6 +28,7 @@ pub enum ConnectionMonitorOutput {
     ConnectionChanged {
         source_id: SourceId,
         new_url: String,
+        connection_type: ConnectionType,
     },
     ConnectionLost {
         source_id: SourceId,
@@ -34,6 +36,7 @@ pub enum ConnectionMonitorOutput {
     ConnectionRestored {
         source_id: SourceId,
         url: String,
+        connection_type: ConnectionType,
     },
 }
 
@@ -63,9 +66,19 @@ impl Worker for ConnectionMonitor {
                     match ConnectionService::select_best_connection(&db, &source_id).await {
                         Ok(Some(new_url)) => {
                             info!("Selected connection for {}: {}", source_id, new_url);
+
+                            // Get connection type from cache
+                            let cache = ConnectionService::cache();
+                            let connection_type = if let Some(state) = cache.get(&source_id).await {
+                                state.connection_type
+                            } else {
+                                ConnectionType::Remote // Default to remote if not in cache
+                            };
+
                             let _ = sender.output(ConnectionMonitorOutput::ConnectionRestored {
                                 source_id: source_id.clone(),
                                 url: new_url.clone(),
+                                connection_type,
                             });
                         }
                         Ok(None) => {
@@ -121,16 +134,31 @@ impl Worker for ConnectionMonitor {
                                     .await
                                 {
                                     Ok(Some(new_url)) => {
-                                        // Check if URL changed
-                                        if previous_url.as_ref() != Some(&new_url) {
+                                        // Get connection type from cache
+                                        let cache = ConnectionService::cache();
+                                        let connection_type =
+                                            if let Some(state) = cache.get(&source_id).await {
+                                                state.connection_type
+                                            } else {
+                                                ConnectionType::Remote // Default to remote if not in cache
+                                            };
+
+                                        // Check if URL changed or quality changed
+                                        let quality_changed = previous_quality.as_deref()
+                                            != Some(&connection_type.to_string());
+
+                                        if previous_url.as_ref() != Some(&new_url)
+                                            || quality_changed
+                                        {
                                             info!(
-                                                "Connection changed for {}: {:?} -> {}",
-                                                source_id, previous_url, new_url
+                                                "Connection changed for {}: {:?} -> {} ({:?})",
+                                                source_id, previous_url, new_url, connection_type
                                             );
                                             let _ = sender.output(
                                                 ConnectionMonitorOutput::ConnectionChanged {
                                                     source_id: source_id.clone(),
                                                     new_url: new_url.clone(),
+                                                    connection_type,
                                                 },
                                             );
                                         }

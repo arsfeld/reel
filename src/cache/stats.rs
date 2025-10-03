@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use super::config::DynamicCacheLimit;
+
 /// Statistics for the cache downloader
 #[derive(Debug, Clone)]
 pub struct DownloaderStats {
@@ -59,7 +61,11 @@ impl DownloaderStats {
         self.queued_downloads.store(count, Ordering::Relaxed);
     }
 
-    pub fn format_report(&self, active_download_details: Vec<(String, u64, f64)>) -> String {
+    pub fn format_report(
+        &self,
+        active_download_details: Vec<(String, u64, f64)>,
+        cache_limit: Option<&DynamicCacheLimit>,
+    ) -> String {
         let uptime_secs = self.start_time.elapsed().as_secs();
         let hours = uptime_secs / 3600;
         let minutes = (uptime_secs % 3600) / 60;
@@ -102,6 +108,25 @@ impl DownloaderStats {
                         speed_kbps
                     ));
                 }
+            }
+        }
+
+        // Add cache limit information if available
+        if let Some(limit) = cache_limit {
+            let effective_mb = limit.effective_limit_bytes / (1024 * 1024);
+            let fixed_max_mb = limit.fixed_max_bytes / (1024 * 1024);
+            let cleanup_threshold_mb = limit.cleanup_threshold_bytes / (1024 * 1024);
+
+            if limit.is_limited_by_disk {
+                report.push_str(&format!(
+                    "\n   Cache Limit: {} MB (disk-limited, fixed max: {} MB) | Cleanup at: {} MB",
+                    effective_mb, fixed_max_mb, cleanup_threshold_mb
+                ));
+            } else {
+                report.push_str(&format!(
+                    "\n   Cache Limit: {} MB (fixed max) | Cleanup at: {} MB",
+                    effective_mb, cleanup_threshold_mb
+                ));
             }
         }
 
@@ -279,7 +304,7 @@ mod tests {
             ("source2:media2".to_string(), 1024 * 200, 0.75),
         ];
 
-        let report = stats.format_report(active_details);
+        let report = stats.format_report(active_details, None);
 
         // Check that report contains expected elements
         assert!(report.contains("Started: 2"));
