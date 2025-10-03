@@ -42,6 +42,58 @@ impl BackendService {
         backend.get_stream_url(media_item_id).await
     }
 
+    /// Get stream URL for a specific quality option - pure function
+    pub async fn get_stream_with_quality(
+        db: &DatabaseConnection,
+        media_item_id: &MediaItemId,
+        quality: &crate::models::QualityOption,
+    ) -> Result<String> {
+        use crate::backends::plex::PlexBackend;
+
+        // Load media item to find its source
+        let media_repo = MediaRepositoryImpl::new(db.clone());
+        let media_item = media_repo
+            .find_by_id(media_item_id.as_str())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Media item not found"))?;
+
+        // Load source configuration
+        let source_repo = SourceRepositoryImpl::new(db.clone());
+        let source_entity = source_repo
+            .find_by_id(&media_item.source_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
+
+        // Create backend and get stream URL for specific quality
+        let backend = Self::create_backend_for_source(db, &source_entity).await?;
+
+        // Check connection type from ConnectionService cache
+        let is_local = {
+            use crate::services::core::connection::ConnectionService;
+            let cache = ConnectionService::cache();
+            let source_id = SourceId::new(source_entity.id.clone());
+            if let Some(state) = cache.get(&source_id).await {
+                state.is_local()
+            } else {
+                false // Default to remote if no cached connection
+            }
+        };
+
+        // Get stream URL for quality (currently only Plex supports this)
+        if let Some(plex_backend) = backend.as_any().downcast_ref::<PlexBackend>() {
+            let api = plex_backend
+                .get_api_for_playqueue()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("Plex API not available"))?;
+
+            api.get_stream_url_for_quality(media_item_id.as_ref(), quality, is_local)
+                .await
+        } else {
+            // For non-Plex backends, fall back to the URL in the quality option
+            Ok(quality.url.clone())
+        }
+    }
+
     /// Create a backend instance for a source - stateless factory
     pub async fn create_backend_for_source(
         db: &DatabaseConnection,

@@ -1,11 +1,11 @@
 ---
 id: task-370
 title: Sync cast and crew metadata from backend servers
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-10-03 16:57'
-updated_date: '2025-10-03 17:09'
+updated_date: '2025-10-03 21:22'
 labels:
   - feature
   - sync
@@ -18,7 +18,9 @@ priority: high
 
 ## Description
 
+<!-- SECTION:DESCRIPTION:BEGIN -->
 Cast and crew information (actors, directors, writers, producers) is not currently synced from Plex and Jellyfin backends. Need to implement proper fetching and storage of people metadata during sync, including roles, character names, and profile images. This information should be stored in a normalized database structure and displayed in movie/show detail pages.
+<!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
@@ -33,9 +35,9 @@ Cast and crew information (actors, directors, writers, producers) is not current
 - [ ] #9 Display cast information in show details page
 <!-- AC:END -->
 
-
 ## Implementation Plan
 
+<!-- SECTION:PLAN:BEGIN -->
 1. Research Plex and Jellyfin API responses to understand cast/crew data structure
 2. Add Role/Director types to Plex and Jellyfin API type definitions
 3. Design database schema (people table + media_people junction table)
@@ -44,10 +46,11 @@ Cast and crew information (actors, directors, writers, producers) is not current
 6. Store people and relationships in database during sync
 7. Update repository to load cast/crew when fetching media
 8. Update UI to display cast in movie/show details pages
-
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
+<!-- SECTION:NOTES:BEGIN -->
 ## Progress Summary
 
 ### Completed:
@@ -80,3 +83,4 @@ Cast and crew information (actors, directors, writers, producers) is not current
 - task-374: Store people metadata in database during sync
 - task-375: Display cast information in movie details page
 - task-376: Display cast information in show details page
+<!-- SECTION:NOTES:END -->

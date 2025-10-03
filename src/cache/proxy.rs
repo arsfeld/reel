@@ -564,6 +564,11 @@ impl CacheProxy {
         self.port
     }
 
+    /// Set the player handle for bandwidth reporting
+    pub async fn set_player_handle(&self, handle: Option<crate::player::controller::PlayerHandle>) {
+        self.chunk_manager.set_player_handle(handle).await;
+    }
+
     /// Read a byte range with automatic retry and fallback logic
     /// Returns the data bytes or an error response
     async fn read_range_with_fallback(

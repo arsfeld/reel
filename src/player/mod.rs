@@ -1,3 +1,4 @@
+pub mod adaptive_quality;
 pub mod controller;
 pub mod factory;
 #[cfg(feature = "gstreamer")]
@@ -8,6 +9,10 @@ pub mod gstreamer_player;
 pub mod mpv_player;
 pub mod types;
 
+pub use adaptive_quality::{
+    AdaptiveMode, AdaptiveQualityManager, BandwidthMetrics, BandwidthTrend, PlaybackHealth,
+    PlaybackMetrics, QualityDecision,
+};
 pub use controller::{PlayerController, PlayerHandle};
 pub use factory::Player;
 #[allow(unused_imports)]

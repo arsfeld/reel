@@ -1,6 +1,7 @@
 // Module organization for Plex API
 
 mod client;
+mod decision;
 mod home;
 mod library;
 pub mod playqueue;

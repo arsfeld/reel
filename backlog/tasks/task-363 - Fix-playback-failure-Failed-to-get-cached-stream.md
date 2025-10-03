@@ -1,11 +1,11 @@
 ---
 id: task-363
 title: 'Fix playback failure: Failed to get cached stream'
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-10-03 14:49'
-updated_date: '2025-10-03 15:02'
+updated_date: '2025-10-03 21:22'
 labels:
   - bug
   - player
@@ -17,7 +17,9 @@ priority: high
 
 ## Description
 
+<!-- SECTION:DESCRIPTION:BEGIN -->
 Player fails to start playback with error 'Failed to get cached stream'. The cache system creates a new entry and makes a HEAD request to get Content-Length, but the player attempts to start playback before the cache initialization completes. This is a timing/async issue where the cache entry isn't fully ready when get_cached_stream is called.
+<!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
@@ -28,18 +30,19 @@ Player fails to start playback with error 'Failed to get cached stream'. The cac
 - [x] #5 Cache entry is properly initialized with Content-Length before use
 <!-- AC:END -->
 
-
 ## Implementation Plan
 
+<!-- SECTION:PLAN:BEGIN -->
 1. Analyze the database transaction handling in cache repository
 2. Check if database updates are properly committed before verification
 3. Identify why verification query sees stale data (None/0 for expected_total_size)
 4. Fix the timing issue - ensure database commits are visible before verification
 5. Test playback to confirm the fix works
-
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
+<!-- SECTION:NOTES:BEGIN -->
 Fixed database update issue in cache repository:
 
 1. Root cause: When updating a CacheEntryModel via update_cache_entry(), the conversion to ActiveModel was marking all fields as Unchanged, preventing the update from actually modifying the database.
@@ -90,3 +93,4 @@ Replaced HEAD request with GET + Range header in ensure_database_entry():
 - Solution works around Plex server limitation that returns HTTP 500 for HEAD requests
 
 The fix properly initializes cache entries with file size before playback starts.
+<!-- SECTION:NOTES:END -->

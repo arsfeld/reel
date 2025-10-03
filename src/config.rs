@@ -44,6 +44,15 @@ pub struct PlaybackConfig {
 
     #[serde(default)]
     pub mpv_upscaling_mode: String,
+
+    #[serde(default)]
+    pub adaptive_quality_enabled: bool,
+
+    #[serde(default)]
+    pub adaptive_quality_cooldown_secs: u64,
+
+    #[serde(default)]
+    pub adaptive_quality_min_quality: Option<String>,
 }
 
 impl Default for PlaybackConfig {
@@ -59,6 +68,9 @@ impl Default for PlaybackConfig {
             resume_threshold_seconds: 10,
             progress_update_interval_seconds: 10,
             mpv_upscaling_mode: "bilinear".to_string(),
+            adaptive_quality_enabled: true,
+            adaptive_quality_cooldown_secs: 10,
+            adaptive_quality_min_quality: None,
         }
     }
 }

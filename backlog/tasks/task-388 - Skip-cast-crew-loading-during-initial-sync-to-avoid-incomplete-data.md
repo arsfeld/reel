@@ -1,11 +1,11 @@
 ---
 id: task-388
 title: Skip cast/crew loading during initial sync to avoid incomplete data
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-10-03 19:13'
-updated_date: '2025-10-03 19:15'
+updated_date: '2025-10-03 21:22'
 labels:
   - backend
   - sync
@@ -17,7 +17,9 @@ priority: high
 
 ## Description
 
+<!-- SECTION:DESCRIPTION:BEGIN -->
 During initial sync, backends return truncated cast/crew data (only 3 members from preview endpoints). This incomplete data gets stored in people tables, requiring lazy loading to fetch complete data later. Skip cast/crew entirely during sync and only fetch them when user views detail pages, ensuring we always get complete data on first load.
+<!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
@@ -31,9 +33,11 @@ During initial sync, backends return truncated cast/crew data (only 3 members fr
 
 ## Implementation Plan
 
+<!-- SECTION:PLAN:BEGIN -->
 1. Find where Plex get_movies/get_shows extract cast/crew during sync
 2. Find where Jellyfin get_movies/get_shows extract cast/crew during sync
 3. Locate save_people_for_media calls during sync
 4. Remove cast/crew extraction from bulk sync endpoints
 5. Verify detail pages trigger full metadata fetch for cast/crew
 6. Test sync performance improvement
+<!-- SECTION:PLAN:END -->

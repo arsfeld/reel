@@ -1,11 +1,11 @@
 ---
 id: task-326.08
 title: Optimize chunk size and database query performance
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2025-10-01 15:42'
-updated_date: '2025-10-01 17:58'
+updated_date: '2025-10-03 21:22'
 labels:
   - cache
   - performance
@@ -16,6 +16,7 @@ parent_task_id: task-326
 
 ## Description
 
+<!-- SECTION:DESCRIPTION:BEGIN -->
 Optimize the chunk-based system for performance:
 
 **Chunk Size Tuning**:
@@ -40,6 +41,7 @@ Optimize the chunk-based system for performance:
 - Track query times
 - Monitor chunk write performance
 - Measure seek latency
+<!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
@@ -52,9 +54,9 @@ Optimize the chunk-based system for performance:
 - [ ] #7 Optimize slow queries identified by metrics
 <!-- AC:END -->
 
-
 ## Implementation Plan
 
+<!-- SECTION:PLAN:BEGIN -->
 1. Review current state and identify what needs optimization:
    - Check database indexes (already done in migration)
    - Identify hardcoded chunk sizes
@@ -97,10 +99,11 @@ Optimize the chunk-based system for performance:
    - Document new config options
    - Update integration tests to use config
    - Add performance benchmarks
-
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
+<!-- SECTION:NOTES:BEGIN -->
 Refocused task on what's actually needed to support task-326.10 (aggressive chunk queueing on playback start).
 
 **Config Extensions (DONE)**:
@@ -133,3 +136,4 @@ Refocused task on what's actually needed to support task-326.10 (aggressive chun
 - Most work for 326.08 is done (config infrastructure)
 - Can proceed to 326.10 which will use these configs
 - Performance benchmarking can be done after 326.10 is implemented
+<!-- SECTION:NOTES:END -->
