@@ -49,12 +49,6 @@ impl GStreamerPlayer {
             }
         }
 
-        // On macOS, prioritize curlhttpsrc over souphttpsrc for HTTPS support
-        #[cfg(target_os = "macos")]
-        {
-            Self::configure_macos_http_source_priority();
-        }
-
         // Check for required elements
         Self::check_gstreamer_plugins();
 
@@ -67,22 +61,6 @@ impl GStreamerPlayer {
             stream_manager: StreamManager::new(),
             pipeline_ready: Arc::new(Mutex::new(false)),
         })
-    }
-
-    #[cfg(target_os = "macos")]
-    fn configure_macos_http_source_priority() {
-        // Get the GStreamer registry
-        let registry = gst::Registry::get();
-
-        // Prioritize curlhttpsrc over souphttpsrc for better TLS support on macOS
-        if let Some(curl_feature) =
-            registry.find_feature("curlhttpsrc", gst::ElementFactory::static_type())
-        {
-            curl_feature.set_rank(gst::Rank::PRIMARY + 100);
-            info!("Set curlhttpsrc to higher rank for macOS HTTPS support");
-        } else {
-            warn!("curlhttpsrc not found - HTTPS streaming may have issues on macOS");
-        }
     }
 
     fn check_gstreamer_plugins() {
@@ -304,31 +282,6 @@ impl GStreamerPlayer {
             playbin.set_property_from_str("subtitle-font-desc", "Sans, 18");
             info!("Set subtitle font to Sans, 18");
         }
-
-        debug!("Using playbin3");
-
-        // Connect to source-setup signal to configure HTTP source for better seeking
-        playbin.connect("source-setup", false, |values| {
-            let source = values[1]
-                .get::<gst::Element>()
-                .expect("Failed to get source");
-
-            // Only configure if it's an HTTP source
-            if let Some(factory) = source.factory() {
-                let name = factory.name();
-                if name == "souphttpsrc" || name == "curlhttpsrc" {
-                    info!("Configuring HTTP source: {}", name);
-
-                    // Disable compression for better range request support
-                    if source.has_property("compress") {
-                        source.set_property("compress", false);
-                        debug!("Disabled compression on HTTP source");
-                    }
-                }
-            }
-
-            None
-        });
 
         // Use our stored video sink if available
         if let Some(sink) = self.video_sink.lock().unwrap().as_ref() {
