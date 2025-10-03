@@ -45,6 +45,7 @@ pub struct PlexBackend {
 #[derive(Debug, Clone, Default)]
 struct PlayQueueState {
     play_queue_id: Option<i64>,
+    play_queue_version: Option<i32>,
     play_queue_item_id: Option<i64>,
 }
 
@@ -529,6 +530,7 @@ impl PlexBackend {
         if let Some(container) = Some(&play_queue.media_container) {
             let mut state = self.play_queue_state.lock().await;
             state.play_queue_id = container.play_queue_id;
+            state.play_queue_version = container.play_queue_version;
 
             // Find the current item ID (usually the first one)
             if let Some(first_item) = container.metadata.first() {
@@ -536,8 +538,8 @@ impl PlexBackend {
             }
 
             debug!(
-                "Created PlayQueue - ID: {:?}, Item: {:?}",
-                state.play_queue_id, state.play_queue_item_id
+                "Created PlayQueue - ID: {:?}, Version: {:?}, Item: {:?}",
+                state.play_queue_id, state.play_queue_version, state.play_queue_item_id
             );
         }
 
@@ -548,6 +550,7 @@ impl PlexBackend {
     pub async fn clear_play_queue(&self) {
         let mut state = self.play_queue_state.lock().await;
         state.play_queue_id = None;
+        state.play_queue_version = None;
         state.play_queue_item_id = None;
         debug!("Cleared PlayQueue state");
     }
@@ -1173,19 +1176,20 @@ impl MediaBackend for PlexBackend {
 
         // Check if we have an active PlayQueue
         let play_queue_state = self.play_queue_state.lock().await;
-        if let (Some(queue_id), Some(item_id)) = (
+        if let (Some(queue_id), Some(version), Some(item_id)) = (
             play_queue_state.play_queue_id,
+            play_queue_state.play_queue_version,
             play_queue_state.play_queue_item_id,
         ) {
             drop(play_queue_state); // Release the lock early
 
             // Use PlayQueue-based progress tracking
             debug!(
-                "Using PlayQueue progress tracking - queue: {}, item: {}",
-                queue_id, item_id
+                "Using PlayQueue progress tracking - queue: {}, version: {}, item: {}",
+                queue_id, version, item_id
             );
             api.update_play_queue_progress(
-                queue_id, item_id, rating_key, position, duration, "playing",
+                queue_id, version, item_id, rating_key, position, duration, "playing",
             )
             .await
         } else {
