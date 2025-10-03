@@ -216,6 +216,12 @@ impl PlexApi {
                 let duration_ms = meta.duration.unwrap_or(0);
                 let duration = Duration::from_millis(duration_ms as u64);
 
+                // Consider watched if view_count > 0 or view_offset is close to duration
+                let watched = meta.view_count.unwrap_or(0) > 0
+                    || (meta.view_offset.is_some()
+                        && duration_ms > 0
+                        && meta.view_offset.unwrap_or(0) as f64 / duration_ms as f64 > 0.9);
+
                 Episode {
                     id: meta.rating_key,
                     backend_id: self.backend_id.clone(),
@@ -230,9 +236,11 @@ impl PlexApi {
                         .aired_at
                         .and_then(|date| DateTime::parse_from_rfc3339(&date).ok())
                         .map(|dt| dt.with_timezone(&Utc)),
-                    watched: false,
-                    view_count: 0,
-                    last_watched_at: None,
+                    watched,
+                    view_count: meta.view_count.unwrap_or(0),
+                    last_watched_at: meta
+                        .last_viewed_at
+                        .and_then(|ts| DateTime::from_timestamp(ts, 0)),
                     playback_position: meta.view_offset.map(|v| Duration::from_millis(v as u64)),
                     show_title: None,
                     show_poster_url: None,
