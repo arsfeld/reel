@@ -244,12 +244,6 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 
 ### 🚧 Outstanding Issues (Migration Completion)
 
-**UI Polish:**
-- Toast notifications for errors and status updates
-- View mode switching doesn't update layout
-- Image loading disconnected from ImageWorker
-- Person images using placeholders only
-
 **Data Persistence:**
 - Preferences not persisting to config/database
 - Cache clearing non-functional
