@@ -933,6 +933,16 @@ impl AsyncComponent for AuthDialog {
         // Store reference to profile_flowbox from the view
         model.profile_flowbox = widgets.profile_flowbox.clone();
 
+        // Explicitly ensure no icons are displayed on auth tabs
+        if let Some(plex_child) = widgets.view_stack.child_by_name("plex") {
+            let plex_page = widgets.view_stack.page(&plex_child);
+            plex_page.set_icon_name(None);
+        }
+        if let Some(jellyfin_child) = widgets.view_stack.child_by_name("jellyfin") {
+            let jellyfin_page = widgets.view_stack.page(&jellyfin_child);
+            jellyfin_page.set_icon_name(None);
+        }
+
         // Start progress bar pulse animations
         glib::timeout_add_local(std::time::Duration::from_millis(100), {
             let auth_progress = model.auth_progress.clone();
