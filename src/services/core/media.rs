@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::db::{
     connection::DatabaseConnection,
@@ -222,9 +222,49 @@ impl MediaService {
         let playback_repo = PlaybackRepositoryImpl::new(db.clone());
 
         // Convert to entity using the new mapper
-        let entity = item.to_model(source_id.as_str(), Some(library_id.to_string()));
+        let mut entity = item.to_model(source_id.as_str(), Some(library_id.to_string()));
 
-        let existing = repo.find_by_id(&entity.id).await?;
+        // For episodes, check using the UNIQUE constraint (parent_id, season_number, episode_number)
+        // This prevents UNIQUE constraint violations when episode IDs change but the natural key stays the same
+        let existing = if entity.media_type == "episode" {
+            if let (Some(parent_id), Some(season_num), Some(episode_num)) = (
+                &entity.parent_id,
+                entity.season_number,
+                entity.episode_number,
+            ) {
+                // First check by natural key (parent_id, season, episode)
+                match repo
+                    .find_episode_by_parent_season_episode(parent_id, season_num, episode_num)
+                    .await?
+                {
+                    Some(existing_episode) => {
+                        // Found an existing episode with same parent/season/episode
+                        // Update it and preserve its ID to maintain playback progress references
+                        debug!(
+                            "Found existing episode by natural key: {} S{}E{} - updating (old_id={}, new_id={})",
+                            parent_id, season_num, episode_num, existing_episode.id, entity.id
+                        );
+                        entity.id = existing_episode.id.clone();
+                        Some(existing_episode)
+                    }
+                    None => {
+                        // No episode with this parent/season/episode exists, check by ID
+                        repo.find_by_id(&entity.id).await?
+                    }
+                }
+            } else {
+                // Episode missing required fields, fall back to ID check
+                warn!(
+                    "Episode missing required fields (parent_id, season_number, episode_number): {}",
+                    entity.id
+                );
+                repo.find_by_id(&entity.id).await?
+            }
+        } else {
+            // For non-episodes, use simple ID-based check
+            repo.find_by_id(&entity.id).await?
+        };
+
         if existing.is_some() {
             let _result = repo.update(entity.clone()).await?;
 
@@ -1066,6 +1106,437 @@ mod tests {
             crate::models::MediaItem::Movie(movie) => assert_eq!(movie.title, "Movie 2"),
             _ => panic!("Expected Movie variant"),
         }
+
+        Ok(())
+    }
+
+    fn create_test_episode_model(
+        id: &str,
+        parent_id: &str,
+        season: i32,
+        episode: i32,
+        title: &str,
+        library_id: &str,
+    ) -> MediaItemModel {
+        use sea_orm::JsonValue;
+        MediaItemModel {
+            id: id.to_string(),
+            source_id: "test-source".to_string(),
+            library_id: library_id.to_string(),
+            parent_id: Some(parent_id.to_string()),
+            media_type: "episode".to_string(),
+            title: title.to_string(),
+            sort_title: Some(title.to_lowercase()),
+            year: Some(2024),
+            duration_ms: Some(2700000), // 45 minutes
+            rating: Some(8.5),
+            genres: Some(JsonValue::from(vec!["Drama".to_string()])),
+            poster_url: Some(format!("https://example.com/{}.jpg", id)),
+            backdrop_url: None,
+            overview: Some(format!("Episode summary for {}", title)),
+            season_number: Some(season),
+            episode_number: Some(episode),
+            added_at: Some(Utc::now().naive_utc()),
+            updated_at: Utc::now().naive_utc(),
+            metadata: Some(serde_json::json!({
+                "show_title": "Test Show",
+                "show_poster_url": "https://example.com/show.jpg",
+                "air_date": "2024-01-01",
+                "watched": false,
+                "view_count": 0
+            })),
+            intro_marker_start_ms: None,
+            intro_marker_end_ms: None,
+            credits_marker_start_ms: None,
+            credits_marker_end_ms: None,
+        }
+    }
+
+    fn create_test_episode_domain(
+        id: &str,
+        parent_id: &str,
+        season: u32,
+        episode: u32,
+        title: &str,
+    ) -> crate::models::Episode {
+        crate::models::Episode {
+            id: id.to_string(),
+            backend_id: "test-source".to_string(),
+            show_id: Some(parent_id.to_string()),
+            title: title.to_string(),
+            season_number: season,
+            episode_number: episode,
+            duration: Duration::from_secs(2700), // 45 minutes
+            thumbnail_url: Some(format!("https://example.com/{}.jpg", id)),
+            overview: Some(format!("Episode summary for {}", title)),
+            air_date: Some(chrono::Utc::now()),
+            watched: false,
+            view_count: 0,
+            last_watched_at: None,
+            playback_position: None,
+            show_title: Some("Test Show".to_string()),
+            show_poster_url: Some("https://example.com/show.jpg".to_string()),
+            intro_marker: None,
+            credits_marker: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_save_episode_insert_new() -> Result<()> {
+        let db = setup_test_database().await?;
+        let db_conn = db.get_connection();
+
+        // Create library
+        let lib_repo = LibraryRepositoryImpl::new(db_conn.clone());
+        let lib = LibraryModel {
+            id: "test-lib".to_string(),
+            source_id: "test-source".to_string(),
+            title: "Test Library".to_string(),
+            library_type: "show".to_string(),
+            icon: Some("video-x-generic".to_string()),
+            item_count: 0,
+            created_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
+        };
+        lib_repo.insert(lib).await?;
+
+        // Create and save an episode
+        let episode = create_test_episode_domain("ep-1", "show-1", 1, 1, "Pilot");
+        let library_id = LibraryId::from("test-lib");
+        let source_id = SourceId::from("test-source");
+
+        MediaService::save_media_item(
+            &db_conn,
+            MediaItem::Episode(episode.clone()),
+            &library_id,
+            &source_id,
+        )
+        .await?;
+
+        // Verify it was saved
+        let media_repo = MediaRepositoryImpl::new(db_conn.clone());
+        let saved = media_repo.find_by_id("ep-1").await?;
+        assert!(saved.is_some());
+        let saved = saved.unwrap();
+        assert_eq!(saved.title, "Pilot");
+        assert_eq!(saved.season_number, Some(1));
+        assert_eq!(saved.episode_number, Some(1));
+        assert_eq!(saved.parent_id, Some("show-1".to_string()));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_episode_update_same_id() -> Result<()> {
+        let db = setup_test_database().await?;
+        let db_conn = db.get_connection();
+
+        // Create library
+        let lib_repo = LibraryRepositoryImpl::new(db_conn.clone());
+        let lib = LibraryModel {
+            id: "test-lib".to_string(),
+            source_id: "test-source".to_string(),
+            title: "Test Library".to_string(),
+            library_type: "show".to_string(),
+            icon: Some("video-x-generic".to_string()),
+            item_count: 0,
+            created_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
+        };
+        lib_repo.insert(lib).await?;
+
+        // Insert initial episode
+        let episode = create_test_episode_domain("ep-1", "show-1", 1, 1, "Pilot");
+        let library_id = LibraryId::from("test-lib");
+        let source_id = SourceId::from("test-source");
+
+        MediaService::save_media_item(
+            &db_conn,
+            MediaItem::Episode(episode.clone()),
+            &library_id,
+            &source_id,
+        )
+        .await?;
+
+        // Update the same episode with new title
+        let mut updated_episode = episode;
+        updated_episode.title = "Pilot - Updated".to_string();
+        updated_episode.overview = Some("Updated overview".to_string());
+
+        MediaService::save_media_item(
+            &db_conn,
+            MediaItem::Episode(updated_episode),
+            &library_id,
+            &source_id,
+        )
+        .await?;
+
+        // Verify it was updated
+        let media_repo = MediaRepositoryImpl::new(db_conn.clone());
+        let saved = media_repo.find_by_id("ep-1").await?;
+        assert!(saved.is_some());
+        let saved = saved.unwrap();
+        assert_eq!(saved.title, "Pilot - Updated");
+        assert_eq!(saved.overview, Some("Updated overview".to_string()));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_episode_update_different_id_same_natural_key() -> Result<()> {
+        // This is the critical test case: episode ID changes but parent_id/season/episode stays the same
+        // Without our fix, this would cause a UNIQUE constraint violation
+        let db = setup_test_database().await?;
+        let db_conn = db.get_connection();
+
+        // Create library
+        let lib_repo = LibraryRepositoryImpl::new(db_conn.clone());
+        let lib = LibraryModel {
+            id: "test-lib".to_string(),
+            source_id: "test-source".to_string(),
+            title: "Test Library".to_string(),
+            library_type: "show".to_string(),
+            icon: Some("video-x-generic".to_string()),
+            item_count: 0,
+            created_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
+        };
+        lib_repo.insert(lib).await?;
+
+        // Insert initial episode with ID "ep-old"
+        let episode = create_test_episode_domain("ep-old", "show-1", 1, 1, "Pilot");
+        let library_id = LibraryId::from("test-lib");
+        let source_id = SourceId::from("test-source");
+
+        MediaService::save_media_item(
+            &db_conn,
+            MediaItem::Episode(episode.clone()),
+            &library_id,
+            &source_id,
+        )
+        .await?;
+
+        // Verify initial save
+        let media_repo = MediaRepositoryImpl::new(db_conn.clone());
+        let initial = media_repo.find_by_id("ep-old").await?;
+        assert!(initial.is_some());
+        assert_eq!(initial.unwrap().title, "Pilot");
+
+        // Now save an episode with DIFFERENT ID but SAME parent_id/season/episode
+        // This simulates a backend regenerating IDs
+        let new_episode = create_test_episode_domain("ep-new", "show-1", 1, 1, "Pilot - Updated");
+
+        // This should NOT fail with UNIQUE constraint violation
+        // Our fix should detect the existing episode by natural key and update it
+        MediaService::save_media_item(
+            &db_conn,
+            MediaItem::Episode(new_episode),
+            &library_id,
+            &source_id,
+        )
+        .await?;
+
+        // Verify the episode was updated (using the OLD ID)
+        let saved = media_repo.find_by_id("ep-old").await?;
+        assert!(saved.is_some());
+        let saved = saved.unwrap();
+        assert_eq!(saved.title, "Pilot - Updated");
+        assert_eq!(saved.id, "ep-old"); // ID should be preserved
+        assert_eq!(saved.parent_id, Some("show-1".to_string()));
+        assert_eq!(saved.season_number, Some(1));
+        assert_eq!(saved.episode_number, Some(1));
+
+        // Verify the NEW ID doesn't exist as a separate record
+        let new_id_result = media_repo.find_by_id("ep-new").await?;
+        assert!(new_id_result.is_none());
+
+        // Verify there's only ONE episode with this parent/season/episode combination
+        let episodes = media_repo
+            .find_episode_by_parent_season_episode("show-1", 1, 1)
+            .await?;
+        assert!(episodes.is_some());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_multiple_episodes_same_show() -> Result<()> {
+        let db = setup_test_database().await?;
+        let db_conn = db.get_connection();
+
+        // Create library
+        let lib_repo = LibraryRepositoryImpl::new(db_conn.clone());
+        let lib = LibraryModel {
+            id: "test-lib".to_string(),
+            source_id: "test-source".to_string(),
+            title: "Test Library".to_string(),
+            library_type: "show".to_string(),
+            icon: Some("video-x-generic".to_string()),
+            item_count: 0,
+            created_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
+        };
+        lib_repo.insert(lib).await?;
+
+        let library_id = LibraryId::from("test-lib");
+        let source_id = SourceId::from("test-source");
+
+        // Save multiple episodes for the same show
+        for ep_num in 1..=5 {
+            let episode = create_test_episode_domain(
+                &format!("ep-{}", ep_num),
+                "show-1",
+                1,
+                ep_num,
+                &format!("Episode {}", ep_num),
+            );
+            MediaService::save_media_item(
+                &db_conn,
+                MediaItem::Episode(episode),
+                &library_id,
+                &source_id,
+            )
+            .await?;
+        }
+
+        // Verify all episodes were saved
+        let media_repo = MediaRepositoryImpl::new(db_conn.clone());
+        let episodes = media_repo.find_episodes_by_show("show-1").await?;
+        assert_eq!(episodes.len(), 5);
+
+        // Verify each episode has correct season/episode numbers
+        for ep_num in 1..=5 {
+            let episode = media_repo
+                .find_episode_by_parent_season_episode("show-1", 1, ep_num as i32)
+                .await?;
+            assert!(episode.is_some());
+            let episode = episode.unwrap();
+            assert_eq!(episode.episode_number, Some(ep_num as i32));
+            assert_eq!(episode.title, format!("Episode {}", ep_num));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_episode_batch_with_id_changes() -> Result<()> {
+        // Test batch save scenario where some episodes have ID changes
+        let db = setup_test_database().await?;
+        let db_conn = db.get_connection();
+
+        // Create library
+        let lib_repo = LibraryRepositoryImpl::new(db_conn.clone());
+        let lib = LibraryModel {
+            id: "test-lib".to_string(),
+            source_id: "test-source".to_string(),
+            title: "Test Library".to_string(),
+            library_type: "show".to_string(),
+            icon: Some("video-x-generic".to_string()),
+            item_count: 0,
+            created_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
+        };
+        lib_repo.insert(lib).await?;
+
+        let library_id = LibraryId::from("test-lib");
+        let source_id = SourceId::from("test-source");
+
+        // First sync: Save episodes with IDs ep-1, ep-2, ep-3
+        for ep_num in 1..=3 {
+            let episode = create_test_episode_domain(
+                &format!("ep-{}", ep_num),
+                "show-1",
+                1,
+                ep_num,
+                &format!("Episode {}", ep_num),
+            );
+            MediaService::save_media_item(
+                &db_conn,
+                MediaItem::Episode(episode),
+                &library_id,
+                &source_id,
+            )
+            .await?;
+        }
+
+        // Second sync: Re-sync with NEW IDs (simulating backend ID regeneration)
+        // ep-1 -> ep-new-1, ep-2 -> ep-new-2, ep-3 -> ep-new-3
+        for ep_num in 1..=3 {
+            let episode = create_test_episode_domain(
+                &format!("ep-new-{}", ep_num),
+                "show-1",
+                1,
+                ep_num,
+                &format!("Episode {} - Resync", ep_num),
+            );
+            MediaService::save_media_item(
+                &db_conn,
+                MediaItem::Episode(episode),
+                &library_id,
+                &source_id,
+            )
+            .await?;
+        }
+
+        // Verify we still have exactly 3 episodes (not 6)
+        let media_repo = MediaRepositoryImpl::new(db_conn.clone());
+        let episodes = media_repo.find_episodes_by_show("show-1").await?;
+        assert_eq!(episodes.len(), 3);
+
+        // Verify episodes have updated titles and old IDs
+        for ep_num in 1..=3 {
+            let episode = media_repo.find_by_id(&format!("ep-{}", ep_num)).await?;
+            assert!(episode.is_some());
+            let episode = episode.unwrap();
+            assert_eq!(episode.title, format!("Episode {} - Resync", ep_num));
+
+            // Verify new IDs don't exist
+            let new_id_result = media_repo.find_by_id(&format!("ep-new-{}", ep_num)).await?;
+            assert!(new_id_result.is_none());
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_episode_missing_required_fields() -> Result<()> {
+        let db = setup_test_database().await?;
+        let db_conn = db.get_connection();
+
+        // Create library
+        let lib_repo = LibraryRepositoryImpl::new(db_conn.clone());
+        let lib = LibraryModel {
+            id: "test-lib".to_string(),
+            source_id: "test-source".to_string(),
+            title: "Test Library".to_string(),
+            library_type: "show".to_string(),
+            icon: Some("video-x-generic".to_string()),
+            item_count: 0,
+            created_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
+        };
+        lib_repo.insert(lib).await?;
+
+        // Create an episode with missing parent_id
+        let mut episode = create_test_episode_domain("ep-1", "show-1", 1, 1, "Pilot");
+        episode.show_id = None; // Remove parent_id
+
+        let library_id = LibraryId::from("test-lib");
+        let source_id = SourceId::from("test-source");
+
+        // This should still work (falls back to ID-based check)
+        MediaService::save_media_item(
+            &db_conn,
+            MediaItem::Episode(episode),
+            &library_id,
+            &source_id,
+        )
+        .await?;
+
+        // Verify it was saved
+        let media_repo = MediaRepositoryImpl::new(db_conn.clone());
+        let saved = media_repo.find_by_id("ep-1").await?;
+        assert!(saved.is_some());
 
         Ok(())
     }
