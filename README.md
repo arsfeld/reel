@@ -39,13 +39,13 @@ Reel is a native Linux media player that brings your Plex and Jellyfin libraries
 
 | Feature | Description |
 |---------|-------------|
-| **🦀 Pure Rust** | Fast, memory-safe, and concurrent by design |
-| **⚛️ Relm4 Reactive** | Component-based reactive UI with AsyncComponents and Factory patterns |
-| **🔌 Multi-Backend** | Simultaneous Plex and Jellyfin connections with automatic failover |
-| **💾 Offline-First** | SQLite metadata cache + chunk-based file cache for progressive streaming and offline playback |
-| **🎨 Native UI** | Built with Relm4 for seamless GNOME desktop integration |
-| **⚡ Async Everything** | Built on Tokio for responsive, non-blocking operations |
-| **🎥 Dual Players** | MPV (Linux/Windows) and GStreamer (all platforms) for maximum compatibility |
+| **🦀 Pure Rust + Relm4** | Reactive UI with AsyncComponents, Factory patterns, and Worker components for background tasks |
+| **🔌 Multi-Backend** | Simultaneous Plex and Jellyfin with connection monitoring, PIN profiles, and keyring credential storage |
+| **💾 Intelligent Cache** | Database-driven chunk cache with progressive streaming, smart cleanup, and replay of watched content |
+| **🔍 Full-Text Search** | Tantivy-powered instant search across all media with lazy-loaded cast/crew metadata |
+| **🎥 Dual Players** | MPV (Linux default) and GStreamer (macOS/fallback) with skip intro/credits and progress sync |
+| **⚙️ Live Config** | Hot-reload configuration without restart, hardware acceleration support |
+| **🎨 Native GNOME** | Relm4/libadwaita with responsive design and seamless desktop integration |
 
 ## 🚀 Getting Started
 
@@ -116,7 +116,7 @@ Download the latest release from the [Releases page](https://github.com/arsfeld/
 | **libadwaita** | 1.5 | UI toolkit |
 | **Relm4** | 0.10.0 | Reactive UI framework |
 | **GStreamer** | 1.20+ | Media framework with plugins-bad |
-| **MPV** | libmpv2 0.29+ | Primary video player backend (Linux/Windows only) |
+| **MPV** | libmpv2 0.29+ | Primary video player backend (Linux only) |
 | **glibc** | 2.35+ | With 64-bit time_t support |
 | **OpenSSL** | 3.0+ | TLS/SSL support |
 
@@ -130,7 +130,7 @@ curl -fsSL https://getbin.io/arsfeld/reel?os=linux -o reel
 chmod +x reel
 ./reel
 # Note: Requires GTK4, libadwaita, and GStreamer to be installed
-# MPV (libmpv2) is only required on Linux/Windows
+# MPV (libmpv2) is only required on Linux
 ```
 
 #### Debian/Ubuntu (.deb)
@@ -233,7 +233,7 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 
 - **Relm4 UI Foundation** - ~85% complete migration to reactive component architecture
 - **Multi-Backend Support** - Simultaneous Plex and Jellyfin with OAuth/credential auth
-- **Media Playback** - MPV (Linux/Windows) and GStreamer (all platforms) backends with OSD controls and keyboard shortcuts
+- **Media Playback** - MPV (Linux) and GStreamer (macOS/fallback) backends with OSD controls and keyboard shortcuts
 - **Library Browsing** - Movies and TV shows with virtual scrolling and pagination
 - **Continue Watching** - Progress tracking and resume functionality
 - **Offline-First** - SQLite metadata cache for instant startup and offline browsing
@@ -261,10 +261,16 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 
 ### ⚠️ Known Limitations
 
-- **macOS**: Only GStreamer backend is available (MPV has critical OpenGL issues on macOS)
-- GStreamer has subtitle color artifacts (use MPV player instead on Linux/Windows)
+- **macOS**: Full support available (GStreamer backend), but pre-built binary coming soon - build from source using Nix for now
+- GStreamer has subtitle color artifacts (use MPV player instead on Linux)
 - Local files backend is 10% implemented (structure only)
 - Some features require server-side support (e.g., Jellyfin chapter markers)
+
+### 🔮 Coming Soon
+
+- **Downloads** - Download media for offline playback on demand
+- **Transcoding** - Server-side transcoding for incompatible formats
+- **macOS Binary** - Pre-built macOS application bundle
 
 
 ## 🛠️ Tech Stack
@@ -274,7 +280,7 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 - **Database**: SQLite with [SeaORM](https://www.sea-ql.org/SeaORM/) and typed IDs
 - **Async Runtime**: [Tokio](https://tokio.rs/) with MessageBroker for component communication
 - **HTTP Client**: [Reqwest](https://github.com/seanmonstar/reqwest) with HTTP/2
-- **Video Playback**: MPV (Linux/Windows default) via libmpv2, GStreamer (macOS default, fallback on other platforms) via [gstreamer-rs](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
+- **Video Playback**: MPV (Linux default) via libmpv2, GStreamer (macOS default, fallback) via [gstreamer-rs](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
 - **Caching**: Three-tier (Memory LRU → SQLite → Backend API)
 - **Serialization**: [Serde](https://serde.rs/)
 - **Security**: System keyring via [keyring-rs](https://github.com/hwchen/keyring-rs)
