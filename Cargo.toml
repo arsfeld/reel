@@ -1,6 +1,6 @@
 [package]
 name = "reel"
-version = "0.7.3"
+version = "0.7.4"
 edition = "2024"
 authors = ["Alexandre Rosenfeld <alex@rosenfeld.one>"]
 license = "GPL-3.0-or-later"
