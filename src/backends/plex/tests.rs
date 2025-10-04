@@ -256,7 +256,7 @@ mod tests {
         let backend = create_test_backend(&server).await;
 
         let _m = server
-            .mock("GET", "/library/sections/1/all")
+            .mock("GET", "/library/sections/1/all?includeExtras=1&includeRelated=1&includePopularLeaves=1&includeGuids=1")
             .match_header("X-Plex-Token", "test_token")
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -285,7 +285,7 @@ mod tests {
 
         // Mock the shows response
         let _m1 = server
-            .mock("GET", "/library/sections/2/all")
+            .mock("GET", "/library/sections/2/all?includeExtras=1&includeRelated=1&includePopularLeaves=1&includeGuids=1")
             .match_header("X-Plex-Token", "test_token")
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -375,19 +375,18 @@ mod tests {
         let backend = create_test_backend(&server).await;
 
         let _m = server
-            .mock("GET", "/:/timeline")
+            .mock("POST", "/:/timeline")
             .match_header("X-Plex-Token", "test_token")
             .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("ratingKey".into(), "movie-1".into()),
+                mockito::Matcher::UrlEncoded("key".into(), "/library/metadata/movie-1".into()),
                 mockito::Matcher::UrlEncoded(
                     "identifier".into(),
                     "com.plexapp.plugins.library".into(),
                 ),
-                mockito::Matcher::UrlEncoded("key".into(), "/library/metadata/movie-1".into()),
-                mockito::Matcher::UrlEncoded("ratingKey".into(), "movie-1".into()),
                 mockito::Matcher::UrlEncoded("state".into(), "playing".into()),
                 mockito::Matcher::UrlEncoded("time".into(), "5000".into()),
                 mockito::Matcher::UrlEncoded("duration".into(), "7200000".into()),
-                mockito::Matcher::UrlEncoded("playbackTime".into(), "5000".into()),
             ]))
             .with_status(200)
             .create_async()
@@ -425,7 +424,7 @@ mod tests {
         let backend = create_test_backend(&server).await;
 
         let _m = server
-            .mock("GET", "/library/sections/1/all")
+            .mock("GET", "/library/sections/1/all?includeExtras=1&includeRelated=1&includePopularLeaves=1&includeGuids=1")
             .with_status(500)
             .with_body("Internal Server Error")
             .create_async()

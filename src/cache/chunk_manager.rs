@@ -626,6 +626,14 @@ mod tests {
             Ok(entry)
         }
 
+        async fn update_expected_total_size(
+            &self,
+            _id: i32,
+            _expected_total_size: i64,
+        ) -> Result<()> {
+            Ok(())
+        }
+
         async fn delete_cache_entry(&self, _id: i32) -> Result<()> {
             Ok(())
         }
@@ -676,6 +684,15 @@ mod tests {
         }
 
         async fn delete_chunks_for_entry(&self, _cache_entry_id: i32) -> Result<()> {
+            Ok(())
+        }
+
+        async fn delete_chunks_in_range(
+            &self,
+            _cache_entry_id: i32,
+            _start: i64,
+            _end: i64,
+        ) -> Result<()> {
             Ok(())
         }
 

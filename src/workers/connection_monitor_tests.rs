@@ -4,6 +4,7 @@ mod tests {
     use crate::db::repository::source_repository::SourceRepositoryImpl;
     use crate::models::{ServerConnection, ServerConnections, SourceId};
     use crate::services::core::connection::ConnectionService;
+    use crate::services::core::connection_cache::ConnectionType;
     use crate::workers::connection_monitor::{
         ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput,
     };
@@ -136,6 +137,7 @@ mod tests {
                     let _ = test_sender.send(ConnectionMonitorOutput::ConnectionRestored {
                         source_id: test_source_id.clone(),
                         url,
+                        connection_type: ConnectionType::Local,
                     });
                 }
                 Ok(None) => {
@@ -155,7 +157,11 @@ mod tests {
         assert!(result.is_ok(), "Timeout waiting for connection message");
 
         match result.unwrap().await {
-            Some(ConnectionMonitorOutput::ConnectionRestored { source_id, url }) => {
+            Some(ConnectionMonitorOutput::ConnectionRestored {
+                source_id,
+                url,
+                connection_type: _,
+            }) => {
                 assert_eq!(source_id.as_ref(), "test-1");
                 assert_eq!(url, "http://test-1.local");
             }
