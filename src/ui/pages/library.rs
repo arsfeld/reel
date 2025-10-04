@@ -49,6 +49,21 @@ pub struct LibraryPage {
     genre_popover: Option<gtk::Popover>,
     genre_menu_button: Option<gtk::MenuButton>,
     genre_label_text: String,
+    // Year range filtering
+    min_year: Option<i32>,
+    max_year: Option<i32>,
+    selected_min_year: Option<i32>,
+    selected_max_year: Option<i32>,
+    year_popover: Option<gtk::Popover>,
+    year_menu_button: Option<gtk::MenuButton>,
+    // Rating filtering
+    min_rating: Option<f32>,
+    rating_popover: Option<gtk::Popover>,
+    rating_menu_button: Option<gtk::MenuButton>,
+    // Watch status filtering
+    watch_status_filter: WatchStatus,
+    watch_status_popover: Option<gtk::Popover>,
+    watch_status_menu_button: Option<gtk::MenuButton>,
     // Media type filtering (for mixed libraries)
     library_type: Option<String>, // 'movies', 'shows', 'music', 'photos', 'mixed'
     selected_media_type: Option<String>, // Filter for mixed libraries
@@ -64,6 +79,8 @@ pub struct LibraryPage {
     pending_image_cancels: Vec<String>,
     // Handler IDs for cleanup
     scroll_handler_id: Option<gtk::glib::SignalHandlerId>,
+    // Filter panel visibility
+    filter_panel_visible: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -78,6 +95,13 @@ pub enum SortBy {
 pub enum SortOrder {
     Ascending,
     Descending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WatchStatus {
+    All,
+    Watched,
+    Unwatched,
 }
 
 #[derive(Debug)]
@@ -105,6 +129,18 @@ pub enum LibraryPageInput {
     ToggleGenreFilter(String),
     /// Clear all genre filters
     ClearGenreFilters,
+    /// Set year range filter
+    SetYearRange { min: Option<i32>, max: Option<i32> },
+    /// Clear year range filter
+    ClearYearRange,
+    /// Set rating filter (minimum rating threshold)
+    SetRatingFilter(Option<f32>),
+    /// Clear rating filter
+    ClearRatingFilter,
+    /// Set watch status filter
+    SetWatchStatusFilter(WatchStatus),
+    /// Clear watch status filter
+    ClearWatchStatusFilter,
     /// Set media type filter (for mixed libraries)
     SetMediaTypeFilter(Option<String>),
     /// Clear all items and reload
@@ -113,6 +149,10 @@ pub enum LibraryPageInput {
     ShowSearch,
     /// Hide search bar
     HideSearch,
+    /// Toggle filter panel visibility
+    ToggleFilterPanel,
+    /// Clear all filters
+    ClearAllFilters,
     /// Image loaded from worker
     ImageLoaded {
         id: String,
@@ -178,6 +218,29 @@ impl AsyncComponent for LibraryPage {
                     set_margin_all: 12,
                     set_halign: gtk::Align::Start,
 
+                    // Filter panel toggle button with badge
+                    gtk::Button {
+                        set_icon_name: "funnel-symbolic",
+                        set_tooltip_text: Some("Show filters"),
+                        add_css_class: "flat",
+                        #[watch]
+                        set_label: &{
+                            let count = model.get_active_filter_count();
+                            if count > 0 {
+                                format!(" {}", count)
+                            } else {
+                                String::new()
+                            }
+                        },
+                        connect_clicked[sender] => move |_| {
+                            sender.input(LibraryPageInput::ToggleFilterPanel);
+                        }
+                    },
+
+                    gtk::Separator {
+                        set_orientation: gtk::Orientation::Vertical,
+                    },
+
                     gtk::Label {
                         set_text: "Sort by:",
                     },
@@ -221,16 +284,6 @@ impl AsyncComponent for LibraryPage {
                         connect_clicked[sender] => move |_| {
                             sender.input(LibraryPageInput::ToggleSortOrder);
                         }
-                    },
-
-                    // Genre filter button with dropdown
-                    #[name = "genre_menu_button"]
-                    gtk::MenuButton {
-                        set_icon_name: "view-filter-symbolic",
-                        set_always_show_arrow: true,
-                        set_tooltip_text: Some("Filter by genre"),
-                        #[watch]
-                        set_visible: !model.available_genres.is_empty(),
                     },
 
                     // Add search button
@@ -311,9 +364,146 @@ impl AsyncComponent for LibraryPage {
                     },
                 },
 
-                // Scrolled window with media content
-                #[name = "scrolled_window"]
-                gtk::ScrolledWindow {
+                // Main content area with filter panel and media grid
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 0,
+                    set_vexpand: true,
+
+                    // Filter panel sidebar
+                    gtk::Revealer {
+                        set_transition_type: gtk::RevealerTransitionType::SlideRight,
+                        set_transition_duration: 200,
+                        #[watch]
+                        set_reveal_child: model.filter_panel_visible,
+
+                        gtk::ScrolledWindow {
+                            set_hscrollbar_policy: gtk::PolicyType::Never,
+                            set_vscrollbar_policy: gtk::PolicyType::Automatic,
+                            set_width_request: 280,
+
+                            gtk::Box {
+                                set_orientation: gtk::Orientation::Vertical,
+                                set_spacing: 12,
+                                set_margin_all: 16,
+
+                                // Header with title and clear all button
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Horizontal,
+                                    set_spacing: 12,
+
+                                    gtk::Label {
+                                        set_label: "Filters",
+                                        set_halign: gtk::Align::Start,
+                                        set_hexpand: true,
+                                        add_css_class: "title-3",
+                                    },
+
+                                    gtk::Button {
+                                        set_label: "Clear All",
+                                        add_css_class: "flat",
+                                        #[watch]
+                                        set_sensitive: model.get_active_filter_count() > 0,
+                                        connect_clicked[sender] => move |_| {
+                                            sender.input(LibraryPageInput::ClearAllFilters);
+                                        }
+                                    },
+                                },
+
+                                gtk::Separator {
+                                    set_orientation: gtk::Orientation::Horizontal,
+                                },
+
+                                // Genre filter section
+                                #[name = "genre_section"]
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_spacing: 8,
+                                    #[watch]
+                                    set_visible: !model.available_genres.is_empty(),
+
+                                    gtk::Label {
+                                        set_label: "Genre",
+                                        set_halign: gtk::Align::Start,
+                                        add_css_class: "heading",
+                                    },
+
+                                    #[name = "genre_menu_button"]
+                                    gtk::MenuButton {
+                                        set_label: &model.get_genre_label(),
+                                        set_always_show_arrow: true,
+                                    },
+                                },
+
+                                // Year range filter section
+                                #[name = "year_section"]
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_spacing: 8,
+                                    #[watch]
+                                    set_visible: model.min_year.is_some() && model.max_year.is_some(),
+
+                                    gtk::Label {
+                                        set_label: "Year",
+                                        set_halign: gtk::Align::Start,
+                                        add_css_class: "heading",
+                                    },
+
+                                    #[name = "year_menu_button"]
+                                    gtk::MenuButton {
+                                        set_label: &model.get_year_label(),
+                                        set_always_show_arrow: true,
+                                    },
+                                },
+
+                                // Rating filter section
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_spacing: 8,
+
+                                    gtk::Label {
+                                        set_label: "Rating",
+                                        set_halign: gtk::Align::Start,
+                                        add_css_class: "heading",
+                                    },
+
+                                    #[name = "rating_menu_button"]
+                                    gtk::MenuButton {
+                                        set_label: &model.get_rating_label(),
+                                        set_always_show_arrow: true,
+                                    },
+                                },
+
+                                // Watch status filter section
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_spacing: 8,
+
+                                    gtk::Label {
+                                        set_label: "Watch Status",
+                                        set_halign: gtk::Align::Start,
+                                        add_css_class: "heading",
+                                    },
+
+                                    #[name = "watch_status_menu_button"]
+                                    gtk::MenuButton {
+                                        set_label: &model.get_watch_status_label(),
+                                        set_always_show_arrow: true,
+                                    },
+                                },
+                            }
+                        }
+                    },
+
+                    gtk::Separator {
+                        set_orientation: gtk::Orientation::Vertical,
+                        #[watch]
+                        set_visible: model.filter_panel_visible,
+                    },
+
+                    // Scrolled window with media content
+                    #[name = "scrolled_window"]
+                    gtk::ScrolledWindow {
                     set_vexpand: true,
                     set_hscrollbar_policy: gtk::PolicyType::Never,
                     set_vscrollbar_policy: gtk::PolicyType::Automatic,
@@ -377,6 +567,7 @@ impl AsyncComponent for LibraryPage {
                             add_css_class: "compact",
                         }
                     },
+                }
                 }
             },
 
@@ -461,6 +652,21 @@ impl AsyncComponent for LibraryPage {
             genre_popover: None,
             genre_menu_button: None,
             genre_label_text: String::new(),
+            // Year range filtering
+            min_year: None,
+            max_year: None,
+            selected_min_year: None,
+            selected_max_year: None,
+            year_popover: None,
+            year_menu_button: None,
+            // Rating filtering
+            min_rating: None,
+            rating_popover: None,
+            rating_menu_button: None,
+            // Watch status filtering
+            watch_status_filter: WatchStatus::All,
+            watch_status_popover: None,
+            watch_status_menu_button: None,
             // Media type filtering (for mixed libraries)
             library_type: None,
             selected_media_type: None,
@@ -476,6 +682,8 @@ impl AsyncComponent for LibraryPage {
             pending_image_cancels: Vec::new(),
             // Handler IDs for cleanup
             scroll_handler_id: None,
+            // Filter panel visibility
+            filter_panel_visible: false,
         };
 
         let mut model = model;
@@ -506,6 +714,38 @@ impl AsyncComponent for LibraryPage {
             .set_label(&model.get_genre_label());
         model.genre_popover = Some(genre_popover);
         model.genre_menu_button = Some(widgets.genre_menu_button.clone());
+
+        // Create and set the year range filter popover
+        let year_popover = gtk::Popover::new();
+        year_popover.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
+        widgets.year_menu_button.set_popover(Some(&year_popover));
+        widgets.year_menu_button.set_label(&model.get_year_label());
+        model.year_popover = Some(year_popover);
+        model.year_menu_button = Some(widgets.year_menu_button.clone());
+
+        // Create and set the rating filter popover
+        let rating_popover = gtk::Popover::new();
+        rating_popover.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
+        widgets
+            .rating_menu_button
+            .set_popover(Some(&rating_popover));
+        widgets
+            .rating_menu_button
+            .set_label(&model.get_rating_label());
+        model.rating_popover = Some(rating_popover);
+        model.rating_menu_button = Some(widgets.rating_menu_button.clone());
+
+        // Create and set the watch status filter popover
+        let watch_status_popover = gtk::Popover::new();
+        watch_status_popover.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
+        widgets
+            .watch_status_menu_button
+            .set_popover(Some(&watch_status_popover));
+        widgets
+            .watch_status_menu_button
+            .set_label(&model.get_watch_status_label());
+        model.watch_status_popover = Some(watch_status_popover);
+        model.watch_status_menu_button = Some(widgets.watch_status_menu_button.clone());
 
         // Connect scroll handler and store the ID
         let sender_for_scroll = sender.clone();
@@ -575,7 +815,59 @@ impl AsyncComponent for LibraryPage {
                     self.update_genre_popover(popover, sender.clone());
                 }
 
-                // Apply text and genre filtering
+                // Calculate min and max years from items
+                let years: Vec<i32> = items.iter().filter_map(|item| item.year).collect();
+
+                if !years.is_empty() {
+                    self.min_year = years.iter().min().copied();
+                    self.max_year = years.iter().max().copied();
+                    debug!("Year range: {:?} - {:?}", self.min_year, self.max_year);
+
+                    // Update the year popover with available range
+                    if let Some(ref popover) = self.year_popover {
+                        self.update_year_popover(popover, sender.clone());
+                    }
+
+                    // Update the year menu button label
+                    if let Some(ref button) = self.year_menu_button {
+                        button.set_label(&self.get_year_label());
+                    }
+                }
+
+                // Initialize the rating popover
+                if let Some(ref popover) = self.rating_popover {
+                    self.update_rating_popover(popover, sender.clone());
+                }
+
+                // Update the rating menu button label
+                if let Some(ref button) = self.rating_menu_button {
+                    button.set_label(&self.get_rating_label());
+                }
+
+                // Initialize the watch status popover
+                if let Some(ref popover) = self.watch_status_popover {
+                    self.update_watch_status_popover(popover, sender.clone());
+                }
+
+                // Fetch playback progress for all items if watch status filter is active
+                let playback_progress_map = if self.watch_status_filter != WatchStatus::All {
+                    let media_ids: Vec<String> = items.iter().map(|item| item.id.clone()).collect();
+                    match crate::services::core::MediaService::get_playback_progress_batch(
+                        &self.db, &media_ids,
+                    )
+                    .await
+                    {
+                        Ok(map) => map,
+                        Err(e) => {
+                            debug!("Failed to fetch playback progress for filtering: {}", e);
+                            std::collections::HashMap::new()
+                        }
+                    }
+                } else {
+                    std::collections::HashMap::new()
+                };
+
+                // Apply text, genre, year range, rating, and watch status filtering
                 let filtered_items: Vec<MediaItemModel> = items
                     .into_iter()
                     .filter(|item| {
@@ -594,7 +886,69 @@ impl AsyncComponent for LibraryPage {
                                 .any(|selected| item_genres.contains(selected))
                         };
 
-                        text_match && genre_match
+                        // Year range filter
+                        let year_match = if let Some(year) = item.year {
+                            let min_match = self.selected_min_year.map_or(true, |min| year >= min);
+                            let max_match = self.selected_max_year.map_or(true, |max| year <= max);
+                            min_match && max_match
+                        } else {
+                            // Include items without a year if no year filter is set
+                            self.selected_min_year.is_none() && self.selected_max_year.is_none()
+                        };
+
+                        // Rating filter
+                        let rating_match = if let Some(min_rating) = self.min_rating {
+                            // Check if item has a rating and it meets the minimum threshold
+                            item.rating.map_or(false, |r| r >= min_rating)
+                        } else {
+                            // No rating filter set, include all items
+                            true
+                        };
+
+                        // Watch status filter
+                        let watch_status_match = match self.watch_status_filter {
+                            WatchStatus::All => true,
+                            WatchStatus::Watched | WatchStatus::Unwatched => {
+                                // Determine watched status based on media type
+                                let is_watched = if item.media_type == "show" {
+                                    // For TV shows, check metadata for watched_episode_count
+                                    let watched_count = item
+                                        .metadata
+                                        .as_ref()
+                                        .and_then(|m| m.get("watched_episode_count"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0)
+                                        as u32;
+                                    let total_count = item
+                                        .metadata
+                                        .as_ref()
+                                        .and_then(|m| m.get("total_episode_count"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0)
+                                        as u32;
+
+                                    total_count > 0 && watched_count == total_count
+                                } else {
+                                    // For movies and episodes, use playback_progress table
+                                    playback_progress_map
+                                        .get(&item.id)
+                                        .map_or(false, |progress| progress.watched)
+                                };
+
+                                // Apply filter based on selected status
+                                match self.watch_status_filter {
+                                    WatchStatus::Watched => is_watched,
+                                    WatchStatus::Unwatched => !is_watched,
+                                    WatchStatus::All => true,
+                                }
+                            }
+                        };
+
+                        text_match
+                            && genre_match
+                            && year_match
+                            && rating_match
+                            && watch_status_match
                     })
                     .collect();
 
@@ -814,6 +1168,134 @@ impl AsyncComponent for LibraryPage {
                 self.load_all_items(sender.clone());
             }
 
+            LibraryPageInput::SetYearRange { min, max } => {
+                debug!("Setting year range filter: {:?} - {:?}", min, max);
+                self.selected_min_year = min;
+                self.selected_max_year = max;
+
+                // Update the menu button label
+                if let Some(ref button) = self.year_menu_button {
+                    button.set_label(&self.get_year_label());
+                }
+
+                // Update the popover UI
+                if let Some(ref popover) = self.year_popover {
+                    self.update_year_popover(popover, sender.clone());
+                }
+
+                // Apply filter and re-render
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
+            }
+
+            LibraryPageInput::ClearYearRange => {
+                debug!("Clearing year range filter");
+                self.selected_min_year = None;
+                self.selected_max_year = None;
+
+                // Update the menu button label
+                if let Some(ref button) = self.year_menu_button {
+                    button.set_label(&self.get_year_label());
+                }
+
+                // Update the popover UI
+                if let Some(ref popover) = self.year_popover {
+                    self.update_year_popover(popover, sender.clone());
+                }
+
+                // Apply filter and re-render
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
+            }
+
+            LibraryPageInput::SetRatingFilter(min_rating) => {
+                debug!("Setting rating filter: {:?}", min_rating);
+                self.min_rating = min_rating;
+
+                // Update the menu button label
+                if let Some(ref button) = self.rating_menu_button {
+                    button.set_label(&self.get_rating_label());
+                }
+
+                // Update the popover UI
+                if let Some(ref popover) = self.rating_popover {
+                    self.update_rating_popover(popover, sender.clone());
+                }
+
+                // Apply filter and re-render
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
+            }
+
+            LibraryPageInput::ClearRatingFilter => {
+                debug!("Clearing rating filter");
+                self.min_rating = None;
+
+                // Update the menu button label
+                if let Some(ref button) = self.rating_menu_button {
+                    button.set_label(&self.get_rating_label());
+                }
+
+                // Update the popover UI
+                if let Some(ref popover) = self.rating_popover {
+                    self.update_rating_popover(popover, sender.clone());
+                }
+
+                // Apply filter and re-render
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
+            }
+
+            LibraryPageInput::SetWatchStatusFilter(status) => {
+                debug!("Setting watch status filter: {:?}", status);
+                self.watch_status_filter = status;
+
+                // Update the menu button label
+                if let Some(ref button) = self.watch_status_menu_button {
+                    button.set_label(&self.get_watch_status_label());
+                }
+
+                // Update the popover UI
+                if let Some(ref popover) = self.watch_status_popover {
+                    self.update_watch_status_popover(popover, sender.clone());
+                }
+
+                // Apply filter and re-render
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
+            }
+
+            LibraryPageInput::ClearWatchStatusFilter => {
+                debug!("Clearing watch status filter");
+                self.watch_status_filter = WatchStatus::All;
+
+                // Update the menu button label
+                if let Some(ref button) = self.watch_status_menu_button {
+                    button.set_label(&self.get_watch_status_label());
+                }
+
+                // Update the popover UI
+                if let Some(ref popover) = self.watch_status_popover {
+                    self.update_watch_status_popover(popover, sender.clone());
+                }
+
+                // Apply filter and re-render
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
+            }
+
             LibraryPageInput::SetMediaTypeFilter(media_type) => {
                 debug!("Setting media type filter: {:?}", media_type);
                 self.selected_media_type = media_type;
@@ -840,6 +1322,70 @@ impl AsyncComponent for LibraryPage {
                     self.filter_text.clear();
                     self.refresh(sender.clone());
                 }
+            }
+
+            LibraryPageInput::ToggleFilterPanel => {
+                self.filter_panel_visible = !self.filter_panel_visible;
+            }
+
+            LibraryPageInput::ClearAllFilters => {
+                debug!("Clearing all filters");
+
+                // Clear genre filters
+                if !self.selected_genres.is_empty() {
+                    self.selected_genres.clear();
+                    if let Some(ref button) = self.genre_menu_button {
+                        button.set_label(&self.get_genre_label());
+                    }
+                    if let Some(ref popover) = self.genre_popover {
+                        self.update_genre_popover(popover, sender.clone());
+                    }
+                }
+
+                // Clear year range filter
+                if self.selected_min_year.is_some() || self.selected_max_year.is_some() {
+                    self.selected_min_year = None;
+                    self.selected_max_year = None;
+                    if let Some(ref button) = self.year_menu_button {
+                        button.set_label(&self.get_year_label());
+                    }
+                    if let Some(ref popover) = self.year_popover {
+                        self.update_year_popover(popover, sender.clone());
+                    }
+                }
+
+                // Clear rating filter
+                if self.min_rating.is_some() {
+                    self.min_rating = None;
+                    if let Some(ref button) = self.rating_menu_button {
+                        button.set_label(&self.get_rating_label());
+                    }
+                    if let Some(ref popover) = self.rating_popover {
+                        self.update_rating_popover(popover, sender.clone());
+                    }
+                }
+
+                // Clear watch status filter
+                if self.watch_status_filter != WatchStatus::All {
+                    self.watch_status_filter = WatchStatus::All;
+                    if let Some(ref button) = self.watch_status_menu_button {
+                        button.set_label(&self.get_watch_status_label());
+                    }
+                    if let Some(ref popover) = self.watch_status_popover {
+                        self.update_watch_status_popover(popover, sender.clone());
+                    }
+                }
+
+                // Clear text filter
+                if !self.filter_text.is_empty() {
+                    self.filter_text.clear();
+                }
+
+                // Reload items with cleared filters
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
             }
 
             LibraryPageInput::ImageLoaded { id, texture } => {
@@ -936,6 +1482,34 @@ impl Drop for LibraryPage {
 }
 
 impl LibraryPage {
+    fn get_active_filter_count(&self) -> usize {
+        let mut count = 0;
+
+        // Count genre filters
+        if !self.selected_genres.is_empty() {
+            count += 1;
+        }
+
+        // Count year range filter
+        if self.selected_min_year.is_some() || self.selected_max_year.is_some() {
+            count += 1;
+        }
+
+        // Count rating filter
+        if self.min_rating.is_some() {
+            count += 1;
+        }
+
+        // Count watch status filter
+        if self.watch_status_filter != WatchStatus::All {
+            count += 1;
+        }
+
+        // Don't count text filter as it's shown in the search bar
+
+        count
+    }
+
     fn get_genre_label(&self) -> String {
         if self.selected_genres.is_empty() {
             "All Genres".to_string()
@@ -943,6 +1517,31 @@ impl LibraryPage {
             self.selected_genres[0].clone()
         } else {
             format!("{} genres", self.selected_genres.len())
+        }
+    }
+
+    fn get_year_label(&self) -> String {
+        match (self.selected_min_year, self.selected_max_year) {
+            (Some(min), Some(max)) if min == max => format!("{}", min),
+            (Some(min), Some(max)) => format!("{} - {}", min, max),
+            (Some(min), None) => format!("{} +", min),
+            (None, Some(max)) => format!("- {}", max),
+            (None, None) => "All Years".to_string(),
+        }
+    }
+
+    fn get_rating_label(&self) -> String {
+        match self.min_rating {
+            Some(rating) => format!("{:.1}+ ★", rating),
+            None => "All Ratings".to_string(),
+        }
+    }
+
+    fn get_watch_status_label(&self) -> String {
+        match self.watch_status_filter {
+            WatchStatus::All => "All Items".to_string(),
+            WatchStatus::Watched => "Watched".to_string(),
+            WatchStatus::Unwatched => "Unwatched".to_string(),
         }
     }
 
@@ -1003,6 +1602,244 @@ impl LibraryPage {
 
         scrolled_window.set_child(Some(&genre_box));
         content.append(&scrolled_window);
+
+        popover.set_child(Some(&content));
+    }
+
+    fn update_year_popover(&self, popover: &gtk::Popover, sender: AsyncComponentSender<Self>) {
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+        content.set_width_request(250);
+
+        // Header with clear button
+        let header_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let header_label = gtk::Label::new(Some("Filter by Year"));
+        header_label.set_halign(gtk::Align::Start);
+        header_label.set_hexpand(true);
+        header_label.add_css_class("heading");
+        header_box.append(&header_label);
+
+        if self.selected_min_year.is_some() || self.selected_max_year.is_some() {
+            let clear_button = gtk::Button::with_label("Clear");
+            clear_button.add_css_class("flat");
+            let sender_clone = sender.clone();
+            clear_button.connect_clicked(move |_| {
+                sender_clone.input(LibraryPageInput::ClearYearRange);
+            });
+            header_box.append(&clear_button);
+        }
+        content.append(&header_box);
+
+        // Separator
+        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+        content.append(&separator);
+
+        // Year range info
+        if let (Some(min), Some(max)) = (self.min_year, self.max_year) {
+            let info_label = gtk::Label::new(Some(&format!("Available: {} - {}", min, max)));
+            info_label.set_halign(gtk::Align::Start);
+            info_label.add_css_class("dim-label");
+            content.append(&info_label);
+
+            // Min year input
+            let min_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            min_box.set_margin_top(6);
+            let min_label = gtk::Label::new(Some("From:"));
+            min_label.set_width_request(50);
+            min_label.set_halign(gtk::Align::Start);
+            min_box.append(&min_label);
+
+            let min_spinbutton = gtk::SpinButton::with_range(min as f64, max as f64, 1.0);
+            min_spinbutton.set_value(self.selected_min_year.unwrap_or(min) as f64);
+            min_spinbutton.set_hexpand(true);
+            min_box.append(&min_spinbutton);
+            content.append(&min_box);
+
+            // Max year input
+            let max_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            max_box.set_margin_top(6);
+            let max_label = gtk::Label::new(Some("To:"));
+            max_label.set_width_request(50);
+            max_label.set_halign(gtk::Align::Start);
+            max_box.append(&max_label);
+
+            let max_spinbutton = gtk::SpinButton::with_range(min as f64, max as f64, 1.0);
+            max_spinbutton.set_value(self.selected_max_year.unwrap_or(max) as f64);
+            max_spinbutton.set_hexpand(true);
+            max_box.append(&max_spinbutton);
+            content.append(&max_box);
+
+            // Apply button
+            let apply_button = gtk::Button::with_label("Apply");
+            apply_button.set_margin_top(12);
+            apply_button.add_css_class("suggested-action");
+
+            let sender_clone = sender.clone();
+            apply_button.connect_clicked(move |_| {
+                let min_year = min_spinbutton.value() as i32;
+                let max_year = max_spinbutton.value() as i32;
+                sender_clone.input(LibraryPageInput::SetYearRange {
+                    min: Some(min_year),
+                    max: Some(max_year),
+                });
+            });
+            content.append(&apply_button);
+        }
+
+        popover.set_child(Some(&content));
+    }
+
+    fn update_rating_popover(&self, popover: &gtk::Popover, sender: AsyncComponentSender<Self>) {
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+        content.set_width_request(250);
+
+        // Header with clear button
+        let header_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let header_label = gtk::Label::new(Some("Filter by Rating"));
+        header_label.set_halign(gtk::Align::Start);
+        header_label.set_hexpand(true);
+        header_label.add_css_class("heading");
+        header_box.append(&header_label);
+
+        if self.min_rating.is_some() {
+            let clear_button = gtk::Button::with_label("Clear");
+            clear_button.add_css_class("flat");
+            let sender_clone = sender.clone();
+            clear_button.connect_clicked(move |_| {
+                sender_clone.input(LibraryPageInput::ClearRatingFilter);
+            });
+            header_box.append(&clear_button);
+        }
+        content.append(&header_box);
+
+        // Separator
+        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+        content.append(&separator);
+
+        // Info label
+        let info_label = gtk::Label::new(Some("Minimum rating (0-10):"));
+        info_label.set_halign(gtk::Align::Start);
+        info_label.add_css_class("dim-label");
+        content.append(&info_label);
+
+        // Rating scale
+        let rating_scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 10.0, 0.5);
+        rating_scale.set_value(self.min_rating.unwrap_or(0.0) as f64);
+        rating_scale.set_draw_value(true);
+        rating_scale.set_value_pos(gtk::PositionType::Right);
+        rating_scale.set_digits(1);
+        rating_scale.set_hexpand(true);
+
+        // Add marks for better UX
+        for i in 0..=10 {
+            rating_scale.add_mark(i as f64, gtk::PositionType::Bottom, None);
+        }
+
+        content.append(&rating_scale);
+
+        // Apply button
+        let apply_button = gtk::Button::with_label("Apply");
+        apply_button.set_margin_top(12);
+        apply_button.add_css_class("suggested-action");
+
+        let sender_clone = sender.clone();
+        apply_button.connect_clicked(move |_| {
+            let rating = rating_scale.value() as f32;
+            sender_clone.input(LibraryPageInput::SetRatingFilter(if rating > 0.0 {
+                Some(rating)
+            } else {
+                None
+            }));
+        });
+        content.append(&apply_button);
+
+        popover.set_child(Some(&content));
+    }
+
+    fn update_watch_status_popover(
+        &self,
+        popover: &gtk::Popover,
+        sender: AsyncComponentSender<Self>,
+    ) {
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+        content.set_width_request(250);
+
+        // Header with clear button
+        let header_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let header_label = gtk::Label::new(Some("Filter by Watch Status"));
+        header_label.set_halign(gtk::Align::Start);
+        header_label.set_hexpand(true);
+        header_label.add_css_class("heading");
+        header_box.append(&header_label);
+
+        if self.watch_status_filter != WatchStatus::All {
+            let clear_button = gtk::Button::with_label("Clear");
+            clear_button.add_css_class("flat");
+            let sender_clone = sender.clone();
+            clear_button.connect_clicked(move |_| {
+                sender_clone.input(LibraryPageInput::ClearWatchStatusFilter);
+            });
+            header_box.append(&clear_button);
+        }
+        content.append(&header_box);
+
+        // Separator
+        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+        content.append(&separator);
+
+        // Radio buttons for watch status
+        let radio_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        radio_box.set_margin_top(6);
+
+        // All items option
+        let all_radio = gtk::CheckButton::with_label("All Items");
+        all_radio.set_active(self.watch_status_filter == WatchStatus::All);
+        let sender_clone = sender.clone();
+        all_radio.connect_toggled(move |btn| {
+            if btn.is_active() {
+                sender_clone.input(LibraryPageInput::SetWatchStatusFilter(WatchStatus::All));
+            }
+        });
+        radio_box.append(&all_radio);
+
+        // Watched option
+        let watched_radio = gtk::CheckButton::with_label("Watched");
+        watched_radio.set_group(Some(&all_radio));
+        watched_radio.set_active(self.watch_status_filter == WatchStatus::Watched);
+        let sender_clone = sender.clone();
+        watched_radio.connect_toggled(move |btn| {
+            if btn.is_active() {
+                sender_clone.input(LibraryPageInput::SetWatchStatusFilter(WatchStatus::Watched));
+            }
+        });
+        radio_box.append(&watched_radio);
+
+        // Unwatched option
+        let unwatched_radio = gtk::CheckButton::with_label("Unwatched");
+        unwatched_radio.set_group(Some(&all_radio));
+        unwatched_radio.set_active(self.watch_status_filter == WatchStatus::Unwatched);
+        let sender_clone = sender;
+        unwatched_radio.connect_toggled(move |btn| {
+            if btn.is_active() {
+                sender_clone.input(LibraryPageInput::SetWatchStatusFilter(
+                    WatchStatus::Unwatched,
+                ));
+            }
+        });
+        radio_box.append(&unwatched_radio);
+
+        content.append(&radio_box);
 
         popover.set_child(Some(&content));
     }
