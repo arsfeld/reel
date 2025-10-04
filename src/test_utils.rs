@@ -197,6 +197,36 @@ pub mod mock_backend {
             Ok(self.episodes.lock().unwrap().clone())
         }
 
+        async fn get_movie_metadata(&self, movie_id: &MediaItemId) -> Result<Movie> {
+            if self.should_fail.load(std::sync::atomic::Ordering::SeqCst) {
+                anyhow::bail!("Mock get_movie_metadata failure");
+            }
+
+            // Return first movie that matches the ID
+            self.movies
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|m| m.id == movie_id.as_str())
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Movie not found"))
+        }
+
+        async fn get_show_metadata(&self, show_id: &ShowId) -> Result<Show> {
+            if self.should_fail.load(std::sync::atomic::Ordering::SeqCst) {
+                anyhow::bail!("Mock get_show_metadata failure");
+            }
+
+            // Return first show that matches the ID
+            self.shows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|s| s.id == show_id.as_str())
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Show not found"))
+        }
+
         async fn get_stream_url(&self, _media_id: &MediaItemId) -> Result<StreamInfo> {
             if self.should_fail.load(std::sync::atomic::Ordering::SeqCst) {
                 anyhow::bail!("Mock get_stream_url failure");
@@ -236,6 +266,18 @@ pub mod mock_backend {
             }
 
             Ok(vec![])
+        }
+
+        async fn test_connection(
+            &self,
+            _url: &str,
+            _auth_token: Option<&str>,
+        ) -> Result<(bool, Option<u64>)> {
+            if self.should_fail.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok((false, None))
+            } else {
+                Ok((true, Some(50)))
+            }
         }
     }
 }
