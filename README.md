@@ -39,6 +39,7 @@ Reel is a native Linux media player that brings your Plex and Jellyfin libraries
 
 | Feature | Description |
 |---------|-------------|
+| **📴 Offline-First** | Full library metadata synced to local SQLite - browse your entire collection without internet (downloads coming soon) |
 | **🦀 Pure Rust + Relm4** | Reactive UI with AsyncComponents, Factory patterns, and Worker components for background tasks |
 | **🔌 Multi-Backend** | Simultaneous Plex and Jellyfin with connection monitoring, PIN profiles, and keyring credential storage |
 | **💾 Intelligent Cache** | Database-driven chunk cache with progressive streaming, smart cleanup, and replay of watched content |
