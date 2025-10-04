@@ -43,7 +43,7 @@
       whitesurTheme = pkgs.stdenv.mkDerivation {
         name = "whitesur-gtk-theme-prebuilt";
         src = pkgs.fetchurl {
-          url = "https://github.com/vinceliuice/WhiteSur-gtk-theme/blob/120d5a1de8f86e42a6e759a4e58df387d536cff2/release/WhiteSur-Dark.tar.xz";
+          url = "https://raw.githubusercontent.com/vinceliuice/WhiteSur-gtk-theme/120d5a1de8f86e42a6e759a4e58df387d536cff2/release/WhiteSur-Dark.tar.xz";
           sha256 = "sha256-wxiFmq17hNbC4VfpJqJ2yWHzVUYvphHHR0wdUHfJQ7U=";
         };
 
