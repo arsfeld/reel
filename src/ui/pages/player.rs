@@ -113,6 +113,8 @@ pub struct PlayerPage {
     skip_credits_visible: bool,
     skip_intro_hide_timer: Option<SourceId>,
     skip_credits_hide_timer: Option<SourceId>,
+    // Sleep inhibition
+    inhibit_cookie: Option<u32>,
 }
 
 impl PlayerPage {
@@ -230,6 +232,38 @@ impl PlayerPage {
             // Fallback to heuristic: bottom 20% of window
             let window_height = self.window.height() as f64;
             y >= window_height * 0.8
+        }
+    }
+
+    /// Set up sleep inhibition when playback starts
+    fn setup_sleep_inhibition(&mut self) {
+        // Only set up inhibition if not already active
+        if self.inhibit_cookie.is_some() {
+            return;
+        }
+
+        if let Some(app) = self.window.application() {
+            if let Ok(gtk_app) = app.downcast::<adw::Application>() {
+                use gtk4::ApplicationInhibitFlags;
+
+                let flags = ApplicationInhibitFlags::IDLE | ApplicationInhibitFlags::SUSPEND;
+                let cookie = gtk_app.inhibit(Some(&self.window), flags, Some("Playing video"));
+
+                self.inhibit_cookie = Some(cookie);
+                debug!("Sleep inhibition enabled (cookie: {})", cookie);
+            }
+        }
+    }
+
+    /// Release sleep inhibition when playback stops/pauses
+    fn release_sleep_inhibition(&mut self) {
+        if let Some(cookie) = self.inhibit_cookie.take() {
+            if let Some(app) = self.window.application() {
+                if let Ok(gtk_app) = app.downcast::<adw::Application>() {
+                    gtk_app.uninhibit(cookie);
+                    debug!("Sleep inhibition disabled (cookie: {})", cookie);
+                }
+            }
         }
     }
 
@@ -1266,6 +1300,8 @@ impl AsyncComponent for PlayerPage {
             skip_credits_visible: false,
             skip_intro_hide_timer: None,
             skip_credits_hide_timer: None,
+            // Sleep inhibition
+            inhibit_cookie: None,
         };
 
         // Initialize the player controller
@@ -2850,6 +2886,16 @@ impl AsyncComponent for PlayerPage {
                 // Grab focus when media starts playing to ensure keyboard shortcuts work
                 if matches!(&state, PlayerState::Playing) {
                     root.grab_focus();
+                    // Enable sleep inhibition when playback starts
+                    self.setup_sleep_inhibition();
+                }
+
+                // Release sleep inhibition when playback stops, pauses, or errors
+                if matches!(
+                    &state,
+                    PlayerState::Paused | PlayerState::Stopped | PlayerState::Error
+                ) {
+                    self.release_sleep_inhibition();
                 }
 
                 // Send immediate timeline update on play, pause, or stop state changes
@@ -3139,6 +3185,9 @@ impl AsyncComponent for PlayerPage {
         if let Some(timer) = self.auto_play_timeout.take() {
             timer.remove();
         }
+
+        // Release sleep inhibition
+        self.release_sleep_inhibition();
 
         tracing::debug!("PlayerPage shutdown: restored cursor and cleaned up timers");
     }
