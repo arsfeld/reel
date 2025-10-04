@@ -242,18 +242,6 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 - **Source Management** - Add/remove/test/sync sources with automatic connection failover
 - **GNOME Integration** - Native Relm4/libadwaita UI with proper NavigationSplitView
 
-### 🚧 Outstanding Issues (Migration Completion)
-
-**Data Persistence:**
-- Preferences not persisting to config/database
-- Cache clearing non-functional
-- Some library counts show placeholder values
-
-**Search & Discovery:**
-- Search UI implementation needed (backend ready)
-- Genres not populated in search filters
-- Cast & crew display UI needed
-
 ### ⚠️ Known Limitations
 
 - **macOS**: Full support available (GStreamer backend), but pre-built binary coming soon - build from source using Nix for now
