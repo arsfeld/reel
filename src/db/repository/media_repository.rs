@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set,
+    QueryFilter, QueryOrder, QuerySelect, QueryTrait, Set,
 };
 use std::sync::Arc;
 
@@ -789,6 +789,369 @@ impl MediaRepositoryImpl {
             .fetch_page(offset / limit)
             .await?)
     }
+
+    /// Find media items with complex filter and sort combinations
+    pub async fn find_filtered(&self, filters: MediaFilterBuilder) -> Result<Vec<MediaItemModel>> {
+        let start = std::time::Instant::now();
+        tracing::info!("[PERF] MediaRepository::find_filtered: Starting query");
+
+        // Build the base query
+        let mut query = MediaItem::find();
+
+        // Apply library filter
+        if let Some(library_id) = &filters.library_id {
+            query = query.filter(media_items::Column::LibraryId.eq(library_id));
+        }
+
+        // Apply source filter
+        if let Some(source_id) = &filters.source_id {
+            query = query.filter(media_items::Column::SourceId.eq(source_id));
+        }
+
+        // Apply media type filter
+        if let Some(media_type) = &filters.media_type {
+            query = query.filter(media_items::Column::MediaType.eq(media_type));
+        }
+
+        // Apply text search filter
+        if let Some(text) = &filters.text_search {
+            if !text.is_empty() {
+                let search_pattern = format!("%{}%", text);
+                query = query.filter(media_items::Column::Title.like(&search_pattern));
+            }
+        }
+
+        // Apply year range filter
+        if let Some(min_year) = filters.min_year {
+            query = query.filter(media_items::Column::Year.gte(min_year));
+        }
+        if let Some(max_year) = filters.max_year {
+            query = query.filter(media_items::Column::Year.lte(max_year));
+        }
+
+        // Apply rating filter
+        if let Some(min_rating) = filters.min_rating {
+            query = query.filter(media_items::Column::Rating.gte(min_rating));
+        }
+
+        // Apply genre filter (JSON contains query for SQLite)
+        if !filters.genres.is_empty() {
+            for genre in &filters.genres {
+                let search_pattern = format!("%\"{}%", genre);
+                query = query.filter(media_items::Column::Genres.like(&search_pattern));
+            }
+        }
+
+        // Apply parent ID filter (for episodes)
+        if let Some(parent_id) = &filters.parent_id {
+            query = query.filter(media_items::Column::ParentId.eq(parent_id));
+        }
+
+        // Apply sorting
+        query = match filters.sort_by {
+            MediaSortBy::Title => match filters.sort_order {
+                SortDirection::Ascending => query.order_by_asc(media_items::Column::SortTitle),
+                SortDirection::Descending => query.order_by_desc(media_items::Column::SortTitle),
+            },
+            MediaSortBy::Year => match filters.sort_order {
+                SortDirection::Ascending => query.order_by_asc(media_items::Column::Year),
+                SortDirection::Descending => query.order_by_desc(media_items::Column::Year),
+            },
+            MediaSortBy::Rating => match filters.sort_order {
+                SortDirection::Ascending => query.order_by_asc(media_items::Column::Rating),
+                SortDirection::Descending => query.order_by_desc(media_items::Column::Rating),
+            },
+            MediaSortBy::DateAdded => match filters.sort_order {
+                SortDirection::Ascending => query.order_by_asc(media_items::Column::AddedAt),
+                SortDirection::Descending => query.order_by_desc(media_items::Column::AddedAt),
+            },
+            MediaSortBy::Duration => match filters.sort_order {
+                SortDirection::Ascending => query.order_by_asc(media_items::Column::DurationMs),
+                SortDirection::Descending => query.order_by_desc(media_items::Column::DurationMs),
+            },
+        };
+
+        // Apply pagination if specified
+        let result = match (filters.offset, filters.limit) {
+            (Some(offset), Some(limit)) => {
+                query
+                    .offset(offset)
+                    .limit(limit)
+                    .all(self.base.db.as_ref())
+                    .await?
+            }
+            (None, Some(limit)) => query.limit(limit).all(self.base.db.as_ref()).await?,
+            (Some(offset), None) => query.offset(offset).all(self.base.db.as_ref()).await?,
+            (None, None) => query.all(self.base.db.as_ref()).await?,
+        };
+
+        let elapsed = start.elapsed();
+        tracing::warn!(
+            "[PERF] MediaRepository::find_filtered: Query completed in {:?} ({} items)",
+            elapsed,
+            result.len()
+        );
+
+        Ok(result)
+    }
+
+    /// Count media items matching filter criteria (for pagination)
+    pub async fn count_filtered(&self, filters: MediaFilterBuilder) -> Result<u64> {
+        use sea_orm::PaginatorTrait;
+
+        // Build the base query (same as find_filtered but without sorting/pagination)
+        let mut query = MediaItem::find();
+
+        // Apply library filter
+        if let Some(library_id) = &filters.library_id {
+            query = query.filter(media_items::Column::LibraryId.eq(library_id));
+        }
+
+        // Apply source filter
+        if let Some(source_id) = &filters.source_id {
+            query = query.filter(media_items::Column::SourceId.eq(source_id));
+        }
+
+        // Apply media type filter
+        if let Some(media_type) = &filters.media_type {
+            query = query.filter(media_items::Column::MediaType.eq(media_type));
+        }
+
+        // Apply text search filter
+        if let Some(text) = &filters.text_search {
+            if !text.is_empty() {
+                let search_pattern = format!("%{}%", text);
+                query = query.filter(media_items::Column::Title.like(&search_pattern));
+            }
+        }
+
+        // Apply year range filter
+        if let Some(min_year) = filters.min_year {
+            query = query.filter(media_items::Column::Year.gte(min_year));
+        }
+        if let Some(max_year) = filters.max_year {
+            query = query.filter(media_items::Column::Year.lte(max_year));
+        }
+
+        // Apply rating filter
+        if let Some(min_rating) = filters.min_rating {
+            query = query.filter(media_items::Column::Rating.gte(min_rating));
+        }
+
+        // Apply genre filter (JSON contains query for SQLite)
+        if !filters.genres.is_empty() {
+            for genre in &filters.genres {
+                let search_pattern = format!("%\"{}%", genre);
+                query = query.filter(media_items::Column::Genres.like(&search_pattern));
+            }
+        }
+
+        // Apply parent ID filter (for episodes)
+        if let Some(parent_id) = &filters.parent_id {
+            query = query.filter(media_items::Column::ParentId.eq(parent_id));
+        }
+
+        Ok(query.count(self.base.db.as_ref()).await?)
+    }
+
+    /// Profile a filtered query and return the SQL EXPLAIN QUERY PLAN output
+    /// This is useful for debugging and optimizing query performance
+    #[cfg(debug_assertions)]
+    pub async fn explain_filtered_query(&self, filters: MediaFilterBuilder) -> Result<String> {
+        use sea_orm::DatabaseBackend;
+        use sea_orm::sea_query::QueryStatementBuilder;
+
+        // Build the query using the same logic as find_filtered
+        let mut query = MediaItem::find();
+
+        // Apply all filters (same as find_filtered)
+        if let Some(library_id) = &filters.library_id {
+            query = query.filter(media_items::Column::LibraryId.eq(library_id));
+        }
+        if let Some(source_id) = &filters.source_id {
+            query = query.filter(media_items::Column::SourceId.eq(source_id));
+        }
+        if let Some(media_type) = &filters.media_type {
+            query = query.filter(media_items::Column::MediaType.eq(media_type));
+        }
+        if let Some(text) = &filters.text_search {
+            if !text.is_empty() {
+                let search_pattern = format!("%{}%", text);
+                query = query.filter(media_items::Column::Title.like(&search_pattern));
+            }
+        }
+        if let Some(min_year) = filters.min_year {
+            query = query.filter(media_items::Column::Year.gte(min_year));
+        }
+        if let Some(max_year) = filters.max_year {
+            query = query.filter(media_items::Column::Year.lte(max_year));
+        }
+        if let Some(min_rating) = filters.min_rating {
+            query = query.filter(media_items::Column::Rating.gte(min_rating));
+        }
+        if !filters.genres.is_empty() {
+            for genre in &filters.genres {
+                let search_pattern = format!("%\"{}%", genre);
+                query = query.filter(media_items::Column::Genres.like(&search_pattern));
+            }
+        }
+        if let Some(parent_id) = &filters.parent_id {
+            query = query.filter(media_items::Column::ParentId.eq(parent_id));
+        }
+
+        // Apply sorting
+        query = match filters.sort_by {
+            MediaSortBy::Title => match filters.sort_order {
+                SortDirection::Ascending => query.order_by_asc(media_items::Column::SortTitle),
+                SortDirection::Descending => query.order_by_desc(media_items::Column::SortTitle),
+            },
+            MediaSortBy::Year => match filters.sort_order {
+                SortDirection::Ascending => query.order_by_asc(media_items::Column::Year),
+                SortDirection::Descending => query.order_by_desc(media_items::Column::Year),
+            },
+            MediaSortBy::Rating => match filters.sort_order {
+                SortDirection::Ascending => query.order_by_asc(media_items::Column::Rating),
+                SortDirection::Descending => query.order_by_desc(media_items::Column::Rating),
+            },
+            MediaSortBy::DateAdded => match filters.sort_order {
+                SortDirection::Ascending => query.order_by_asc(media_items::Column::AddedAt),
+                SortDirection::Descending => query.order_by_desc(media_items::Column::AddedAt),
+            },
+            MediaSortBy::Duration => match filters.sort_order {
+                SortDirection::Ascending => query.order_by_asc(media_items::Column::DurationMs),
+                SortDirection::Descending => query.order_by_desc(media_items::Column::DurationMs),
+            },
+        };
+
+        if let Some(limit) = filters.limit {
+            query = query.limit(limit);
+        }
+        if let Some(offset) = filters.offset {
+            query = query.offset(offset);
+        }
+
+        // Get the SQL query
+        let (sql, values) = query
+            .as_query()
+            .build(sea_orm::sea_query::SqliteQueryBuilder);
+
+        let explain_sql = format!("EXPLAIN QUERY PLAN {}", sql);
+
+        tracing::info!("Query SQL: {}", sql);
+        tracing::info!("Query Values: {:?}", values);
+        tracing::info!("Explain SQL: {}", explain_sql);
+
+        // Note: Actually executing EXPLAIN QUERY PLAN would require raw SQL execution
+        // For now, we just return the SQL for manual inspection
+        Ok(format!(
+            "SQL: {}\nValues: {:?}\n\nTo profile this query, run:\n{}",
+            sql, values, explain_sql
+        ))
+    }
+}
+
+/// Builder for constructing complex media item queries with filtering and sorting
+#[derive(Debug, Clone, Default)]
+pub struct MediaFilterBuilder {
+    pub library_id: Option<String>,
+    pub source_id: Option<String>,
+    pub media_type: Option<String>,
+    pub text_search: Option<String>,
+    pub min_year: Option<i32>,
+    pub max_year: Option<i32>,
+    pub min_rating: Option<f32>,
+    pub genres: Vec<String>,
+    pub parent_id: Option<String>,
+    pub sort_by: MediaSortBy,
+    pub sort_order: SortDirection,
+    pub offset: Option<u64>,
+    pub limit: Option<u64>,
+}
+
+impl MediaFilterBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn library_id(mut self, id: impl Into<String>) -> Self {
+        self.library_id = Some(id.into());
+        self
+    }
+
+    pub fn source_id(mut self, id: impl Into<String>) -> Self {
+        self.source_id = Some(id.into());
+        self
+    }
+
+    pub fn media_type(mut self, media_type: impl Into<String>) -> Self {
+        self.media_type = Some(media_type.into());
+        self
+    }
+
+    pub fn text_search(mut self, text: impl Into<String>) -> Self {
+        self.text_search = Some(text.into());
+        self
+    }
+
+    pub fn year_range(mut self, min: Option<i32>, max: Option<i32>) -> Self {
+        self.min_year = min;
+        self.max_year = max;
+        self
+    }
+
+    pub fn min_rating(mut self, rating: f32) -> Self {
+        self.min_rating = Some(rating);
+        self
+    }
+
+    pub fn genres(mut self, genres: Vec<String>) -> Self {
+        self.genres = genres;
+        self
+    }
+
+    pub fn parent_id(mut self, id: impl Into<String>) -> Self {
+        self.parent_id = Some(id.into());
+        self
+    }
+
+    pub fn sort(mut self, by: MediaSortBy, order: SortDirection) -> Self {
+        self.sort_by = by;
+        self.sort_order = order;
+        self
+    }
+
+    pub fn offset(mut self, offset: u64) -> Self {
+        self.offset = Some(offset);
+        self
+    }
+
+    pub fn limit(mut self, limit: u64) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    pub fn paginate(mut self, page: u64, page_size: u64) -> Self {
+        self.offset = Some(page * page_size);
+        self.limit = Some(page_size);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum MediaSortBy {
+    #[default]
+    Title,
+    Year,
+    Rating,
+    DateAdded,
+    Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum SortDirection {
+    #[default]
+    Ascending,
+    Descending,
 }
 
 #[cfg(test)]

@@ -179,6 +179,103 @@ impl ConfigService {
 
         Ok(())
     }
+
+    /// Get the saved filter tab for a library
+    pub async fn get_library_filter_tab(&self, library_id: &str) -> Option<String> {
+        let config = self.config.read().await;
+        config.ui.library_filter_tabs.get(library_id).cloned()
+    }
+
+    /// Set the filter tab for a library
+    pub async fn set_library_filter_tab(
+        &self,
+        library_id: String,
+        filter_tab: String,
+    ) -> Result<()> {
+        debug!(
+            "Setting filter tab for library {}: {}",
+            library_id, filter_tab
+        );
+
+        let mut config = self.get_config().await;
+        config.ui.library_filter_tabs.insert(library_id, filter_tab);
+        self.update_config(config).await?;
+
+        Ok(())
+    }
+
+    /// Get the saved filter state for a library
+    pub async fn get_library_filter_state(&self, library_id: &str) -> Option<String> {
+        let config = self.config.read().await;
+        config.ui.library_filter_states.get(library_id).cloned()
+    }
+
+    /// Set the filter state for a library (stored as JSON string)
+    pub async fn set_library_filter_state(
+        &self,
+        library_id: String,
+        filter_state: String,
+    ) -> Result<()> {
+        debug!("Setting filter state for library {}", library_id);
+
+        let mut config = self.get_config().await;
+        config
+            .ui
+            .library_filter_states
+            .insert(library_id, filter_state);
+        self.update_config(config).await?;
+
+        Ok(())
+    }
+
+    /// Remove the saved filter state for a library
+    pub async fn clear_library_filter_state(&self, library_id: &str) -> Result<()> {
+        debug!("Clearing filter state for library {}", library_id);
+
+        let mut config = self.get_config().await;
+        config.ui.library_filter_states.remove(library_id);
+        self.update_config(config).await?;
+
+        Ok(())
+    }
+
+    /// Get a filter preset by name
+    pub async fn get_filter_preset(&self, preset_name: &str) -> Option<String> {
+        let config = self.config.read().await;
+        config.ui.filter_presets.get(preset_name).cloned()
+    }
+
+    /// Save a filter preset
+    pub async fn save_filter_preset(
+        &self,
+        preset_name: String,
+        filter_state: String,
+    ) -> Result<()> {
+        debug!("Saving filter preset: {}", preset_name);
+
+        let mut config = self.get_config().await;
+        config.ui.filter_presets.insert(preset_name, filter_state);
+        self.update_config(config).await?;
+
+        Ok(())
+    }
+
+    /// Get all filter preset names
+    pub async fn get_filter_preset_names(&self) -> Vec<String> {
+        let config = self.config.read().await;
+        config.ui.filter_presets.keys().cloned().collect()
+    }
+
+    /// Delete a filter preset
+    pub async fn delete_filter_preset(&self, preset_name: &str) -> Result<()> {
+        debug!("Deleting filter preset: {}", preset_name);
+
+        let mut config = self.get_config().await;
+        config.ui.filter_presets.remove(preset_name);
+        self.update_config(config).await?;
+
+        Ok(())
+    }
 }
 
 impl Default for ConfigService {

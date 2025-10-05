@@ -69,6 +69,16 @@ impl PlexBackend {
         self.api.read().await.clone()
     }
 
+    /// Create a PlexBackend for testing with API initialized
+    /// **Warning**: This is only for integration tests and should not be used in production
+    #[doc(hidden)]
+    pub async fn new_for_test(base_url: String, token: String, backend_id: String) -> Self {
+        let api = PlexApi::with_backend_id(base_url.clone(), token.clone(), backend_id.clone());
+        let backend = Self::new_for_auth(base_url, token);
+        *backend.api.write().await = Some(api);
+        backend
+    }
+
     /// Create a temporary PlexBackend for authentication purposes
     pub fn new_for_auth(base_url: String, token: String) -> Self {
         let url = Some(base_url);

@@ -81,6 +81,21 @@ pub trait PlaybackRepository: Repository<PlaybackProgressModel> {
         play_queue_id: i64,
         source_id: i32,
     ) -> Result<Option<PlaybackProgressModel>>;
+
+    /// Batch upsert playback progress for multiple media items
+    /// Returns the number of records affected
+    async fn batch_upsert_progress(
+        &self,
+        progress_updates: Vec<(
+            String,
+            Option<String>,
+            i64,
+            i64,
+            bool,
+            i32,
+            Option<chrono::NaiveDateTime>,
+        )>,
+    ) -> Result<u64>;
 }
 
 #[derive(Debug)]
@@ -443,5 +458,87 @@ impl PlaybackRepository for PlaybackRepositoryImpl {
             .filter(playback_progress::Column::SourceId.eq(source_id))
             .one(self.base.db.as_ref())
             .await?)
+    }
+
+    async fn batch_upsert_progress(
+        &self,
+        progress_updates: Vec<(
+            String,
+            Option<String>,
+            i64,
+            i64,
+            bool,
+            i32,
+            Option<chrono::NaiveDateTime>,
+        )>,
+    ) -> Result<u64> {
+        use sea_orm::{DatabaseTransaction, TransactionTrait};
+
+        if progress_updates.is_empty() {
+            return Ok(0);
+        }
+
+        let now = chrono::Utc::now().naive_utc();
+        let mut affected_rows = 0u64;
+
+        // Start a transaction for atomicity
+        let txn: DatabaseTransaction = self.base.db.begin().await?;
+
+        // Process each progress update within the transaction
+        // We need to use upsert logic since SQLite doesn't have full UPSERT support in SeaORM
+        for (media_id, user_id, position_ms, duration_ms, watched, view_count, last_watched_at) in
+            progress_updates
+        {
+            // Check if progress exists
+            let existing = if let Some(ref uid) = user_id {
+                PlaybackProgress::find()
+                    .filter(playback_progress::Column::MediaId.eq(&media_id))
+                    .filter(playback_progress::Column::UserId.eq(uid))
+                    .one(&txn)
+                    .await?
+            } else {
+                PlaybackProgress::find()
+                    .filter(playback_progress::Column::MediaId.eq(&media_id))
+                    .one(&txn)
+                    .await?
+            };
+
+            if let Some(progress) = existing {
+                // Update existing progress
+                let mut active_model: PlaybackProgressActiveModel = progress.into();
+                active_model.position_ms = Set(position_ms);
+                active_model.duration_ms = Set(duration_ms);
+                active_model.watched = Set(watched);
+                active_model.view_count = Set(view_count);
+                active_model.last_watched_at = Set(last_watched_at);
+                active_model.updated_at = Set(now);
+                active_model.update(&txn).await?;
+                affected_rows += 1;
+            } else {
+                // Insert new progress
+                let active_model = PlaybackProgressActiveModel {
+                    id: NotSet,
+                    media_id: Set(media_id),
+                    user_id: Set(user_id),
+                    position_ms: Set(position_ms),
+                    duration_ms: Set(duration_ms),
+                    watched: Set(watched),
+                    view_count: Set(view_count),
+                    last_watched_at: Set(last_watched_at),
+                    updated_at: Set(now),
+                    play_queue_id: Set(None),
+                    play_queue_version: Set(None),
+                    play_queue_item_id: Set(None),
+                    source_id: Set(None),
+                };
+                active_model.insert(&txn).await?;
+                affected_rows += 1;
+            }
+        }
+
+        // Commit the transaction
+        txn.commit().await?;
+
+        Ok(affected_rows)
     }
 }

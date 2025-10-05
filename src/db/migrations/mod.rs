@@ -11,6 +11,7 @@ mod m20250928_000001_add_auth_tokens;
 mod m20250929_000001_add_cache_tracking;
 mod m20251003_000001_add_people_tables;
 mod m20251003_000002_add_marker_fields;
+mod m20251004_000001_add_filter_indexes;
 
 pub struct Migrator;
 
@@ -29,6 +30,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20250929_000001_add_cache_tracking::Migration),
             Box::new(m20251003_000001_add_people_tables::Migration),
             Box::new(m20251003_000002_add_marker_fields::Migration),
+            Box::new(m20251004_000001_add_filter_indexes::Migration),
         ]
     }
 }

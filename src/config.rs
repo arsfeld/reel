@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tracing::{debug, info};
@@ -11,6 +12,9 @@ pub struct Config {
 
     #[serde(default)]
     pub cache: crate::cache::FileCacheConfig,
+
+    #[serde(default)]
+    pub ui: UiPreferences,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -61,6 +65,21 @@ impl Default for PlaybackConfig {
             mpv_upscaling_mode: "bilinear".to_string(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct UiPreferences {
+    /// Map of library_id -> filter_tab (e.g., "All", "Unwatched", "RecentlyAdded")
+    #[serde(default)]
+    pub library_filter_tabs: HashMap<String, String>,
+
+    /// Map of library_id -> serialized FilterState JSON
+    #[serde(default)]
+    pub library_filter_states: HashMap<String, String>,
+
+    /// Map of preset_name -> serialized FilterState JSON
+    #[serde(default)]
+    pub filter_presets: HashMap<String, String>,
 }
 
 impl Config {
