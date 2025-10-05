@@ -1420,9 +1420,27 @@ impl MediaBackend for PlexBackend {
         }
     }
 
+    async fn fetch_markers(
+        &self,
+        media_id: &MediaItemId,
+    ) -> Result<(
+        Option<crate::models::ChapterMarker>,
+        Option<crate::models::ChapterMarker>,
+    )> {
+        // Extract the actual Plex rating key from the composite ID
+        let media_id_str = media_id.as_str();
+        let rating_key = if media_id_str.contains(':') {
+            media_id_str.split(':').next_back().unwrap_or(media_id_str)
+        } else {
+            media_id_str
+        };
+
+        let api = self.get_api().await?;
+        api.fetch_episode_markers(rating_key).await
+    }
+
     // Removed unused trait methods: mark_watched, mark_unwatched, get_watch_status, search,
-    // get_backend_info, get_last_sync_time, supports_offline, fetch_episode_markers,
-    // fetch_media_markers, find_next_episode
+    // get_backend_info, get_last_sync_time, supports_offline, find_next_episode
 
     async fn get_home_sections(&self) -> Result<Vec<crate::models::HomeSection>> {
         let api = self.get_api().await?;

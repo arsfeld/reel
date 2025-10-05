@@ -535,6 +535,55 @@ impl MediaBackend for JellyfinBackend {
         Ok(())
     }
 
+    async fn fetch_markers(
+        &self,
+        media_id: &MediaItemId,
+    ) -> Result<(
+        Option<crate::models::ChapterMarker>,
+        Option<crate::models::ChapterMarker>,
+    )> {
+        use crate::backends::jellyfin::api::MediaSegmentType;
+        use crate::models::{ChapterMarker, ChapterType};
+
+        let api = self.ensure_api_initialized().await?;
+        let jellyfin_item_id = self.extract_jellyfin_item_id(media_id);
+
+        let segments = api.get_media_segments(&jellyfin_item_id).await?;
+
+        let mut intro_marker = None;
+        let mut credits_marker = None;
+
+        for segment in segments {
+            // Convert Jellyfin ticks (100ns units) to Duration
+            // 1 tick = 100 nanoseconds, so ticks/10 = microseconds
+            let start_time = Duration::from_micros(segment.start_ticks / 10);
+            let end_time = Duration::from_micros(segment.end_ticks / 10);
+
+            match segment.segment_type {
+                MediaSegmentType::Intro => {
+                    intro_marker = Some(ChapterMarker {
+                        start_time,
+                        end_time,
+                        marker_type: ChapterType::Intro,
+                    });
+                }
+                MediaSegmentType::Credits | MediaSegmentType::Outro => {
+                    // Treat both Credits and Outro as credits markers
+                    credits_marker = Some(ChapterMarker {
+                        start_time,
+                        end_time,
+                        marker_type: ChapterType::Credits,
+                    });
+                }
+                _ => {
+                    // Ignore other segment types (Recap, Preview, Commercial, Other)
+                }
+            }
+        }
+
+        Ok((intro_marker, credits_marker))
+    }
+
     async fn get_home_sections(&self) -> Result<Vec<HomeSection>> {
         let api = self.ensure_api_initialized().await?;
         api.get_home_sections().await
