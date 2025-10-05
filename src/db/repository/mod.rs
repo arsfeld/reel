@@ -55,7 +55,9 @@ pub use auth_token_repository::{AuthTokenRepository, AuthTokenRepositoryImpl};
 pub use cache_repository::{CacheRepository, CacheRepositoryImpl};
 pub use home_section_repository::{HomeSectionRepository, HomeSectionRepositoryImpl};
 pub use library_repository::{LibraryRepository, LibraryRepositoryImpl};
-pub use media_repository::{MediaRepository, MediaRepositoryImpl};
+pub use media_repository::{
+    MediaFilterBuilder, MediaRepository, MediaRepositoryImpl, MediaSortBy, SortDirection,
+};
 pub use people_repository::{PeopleRepository, PeopleRepositoryImpl};
 pub use playback_repository::{PlaybackRepository, PlaybackRepositoryImpl};
 pub use source_repository::SourceRepositoryImpl;

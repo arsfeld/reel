@@ -3,6 +3,7 @@ use libadwaita as adw;
 use relm4::factory::FactoryVecDeque;
 use relm4::gtk;
 use relm4::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use tracing::{debug, error, trace};
 
@@ -24,6 +25,7 @@ impl std::fmt::Debug for LibraryPage {
             .field("sort_by", &self.sort_by)
             .field("filter_text", &self.filter_text)
             .field("search_visible", &self.search_visible)
+            .field("selected_filter_tab", &self.selected_filter_tab)
             .finish()
     }
 }
@@ -81,33 +83,175 @@ pub struct LibraryPage {
     scroll_handler_id: Option<gtk::glib::SignalHandlerId>,
     // Filter panel visibility
     filter_panel_visible: bool,
+    // Filter tab selection
+    selected_filter_tab: FilterTab,
+    // Active filters container
+    active_filters_box: Option<gtk::Box>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum SortBy {
     Title,
     Year,
     DateAdded,
     Rating,
+    LastWatched,
+    Duration,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+impl Default for SortBy {
+    fn default() -> Self {
+        Self::Title
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum SortOrder {
     Ascending,
     Descending,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+impl Default for SortOrder {
+    fn default() -> Self {
+        Self::Ascending
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum WatchStatus {
     All,
     Watched,
     Unwatched,
 }
 
+impl Default for WatchStatus {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum FilterTab {
+    All,
+    Unwatched,
+    RecentlyAdded,
+    Genres,
+    Years,
+}
+
+impl Default for FilterTab {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+/// Statistics about filtered items
+#[derive(Debug, Clone, Default)]
+pub struct FilterStatistics {
+    pub total_count: usize,
+    pub avg_rating: Option<f32>,
+    pub min_year: Option<i32>,
+    pub max_year: Option<i32>,
+}
+
+/// Represents an active filter for display
+#[derive(Debug, Clone)]
+pub struct ActiveFilter {
+    pub label: String,
+    pub filter_type: ActiveFilterType,
+}
+
+/// Type of active filter for removal actions
+#[derive(Debug, Clone)]
+pub enum ActiveFilterType {
+    Text,
+    Genre(String),
+    YearRange,
+    Rating,
+    WatchStatus,
+    Tab,
+}
+
+/// Filter state that can be persisted and shared via URL
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FilterState {
+    #[serde(default)]
+    pub sort_by: SortBy,
+    #[serde(default)]
+    pub sort_order: SortOrder,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub filter_text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_genres: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_min_year: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_max_year: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_rating: Option<f32>,
+    #[serde(default)]
+    pub watch_status_filter: WatchStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_media_type: Option<String>,
+    #[serde(default)]
+    pub selected_filter_tab: FilterTab,
+    #[serde(default)]
+    pub filter_panel_visible: bool,
+}
+
+impl Default for FilterState {
+    fn default() -> Self {
+        Self {
+            sort_by: SortBy::Title,
+            sort_order: SortOrder::Ascending,
+            filter_text: String::new(),
+            selected_genres: Vec::new(),
+            selected_min_year: None,
+            selected_max_year: None,
+            min_rating: None,
+            watch_status_filter: WatchStatus::All,
+            selected_media_type: None,
+            selected_filter_tab: FilterTab::All,
+            filter_panel_visible: false,
+        }
+    }
+}
+
+impl FilterState {
+    /// Create FilterState from LibraryPage state
+    pub fn from_library_page(page: &LibraryPage) -> Self {
+        Self {
+            sort_by: page.sort_by,
+            sort_order: page.sort_order,
+            filter_text: page.filter_text.clone(),
+            selected_genres: page.selected_genres.clone(),
+            selected_min_year: page.selected_min_year,
+            selected_max_year: page.selected_max_year,
+            min_rating: page.min_rating,
+            watch_status_filter: page.watch_status_filter,
+            selected_media_type: page.selected_media_type.clone(),
+            selected_filter_tab: page.selected_filter_tab,
+            filter_panel_visible: page.filter_panel_visible,
+        }
+    }
+
+    /// Encode filter state as URL query string
+    pub fn to_url_params(&self) -> Result<String, serde_urlencoded::ser::Error> {
+        serde_urlencoded::to_string(self)
+    }
+
+    /// Decode filter state from URL query string
+    pub fn from_url_params(params: &str) -> Result<Self, serde_urlencoded::de::Error> {
+        serde_urlencoded::from_str(params)
+    }
+}
+
 #[derive(Debug)]
 pub enum LibraryPageInput {
     /// Set the library to display
     SetLibrary(LibraryId),
+    /// Restore filter state from saved state
+    RestoreFilterState(FilterState),
     /// Load more items into view
     LoadMoreBatch,
     /// All media items loaded from database
@@ -153,6 +297,10 @@ pub enum LibraryPageInput {
     ToggleFilterPanel,
     /// Clear all filters
     ClearAllFilters,
+    /// Remove a specific filter
+    RemoveFilter(ActiveFilterType),
+    /// Set filter tab
+    SetFilterTab(FilterTab),
     /// Image loaded from worker
     ImageLoaded {
         id: String,
@@ -251,6 +399,8 @@ impl AsyncComponent for LibraryPage {
                             "Year",
                             "Date Added",
                             "Rating",
+                            "Last Watched",
+                            "Duration",
                         ])),
                         #[watch]
                         set_selected: match model.sort_by {
@@ -258,6 +408,8 @@ impl AsyncComponent for LibraryPage {
                             SortBy::Year => 1,
                             SortBy::DateAdded => 2,
                             SortBy::Rating => 3,
+                            SortBy::LastWatched => 4,
+                            SortBy::Duration => 5,
                         },
                         connect_selected_notify[sender] => move |dropdown| {
                             let sort_by = match dropdown.selected() {
@@ -265,6 +417,8 @@ impl AsyncComponent for LibraryPage {
                                 1 => SortBy::Year,
                                 2 => SortBy::DateAdded,
                                 3 => SortBy::Rating,
+                                4 => SortBy::LastWatched,
+                                5 => SortBy::Duration,
                                 _ => SortBy::Title,
                             };
                             sender.input(LibraryPageInput::SetSortBy(sort_by));
@@ -293,6 +447,71 @@ impl AsyncComponent for LibraryPage {
                         add_css_class: "flat",
                         connect_clicked[sender] => move |_| {
                             sender.input(LibraryPageInput::ShowSearch);
+                        }
+                    },
+                },
+
+                // Filter tabs
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 6,
+                    set_margin_start: 12,
+                    set_margin_end: 12,
+                    set_margin_bottom: 6,
+                    add_css_class: "linked",
+
+                    gtk::ToggleButton {
+                        set_label: "All",
+                        #[watch]
+                        set_active: model.selected_filter_tab == FilterTab::All,
+                        connect_toggled[sender] => move |btn| {
+                            if btn.is_active() {
+                                sender.input(LibraryPageInput::SetFilterTab(FilterTab::All));
+                            }
+                        }
+                    },
+
+                    gtk::ToggleButton {
+                        set_label: "Unwatched",
+                        #[watch]
+                        set_active: model.selected_filter_tab == FilterTab::Unwatched,
+                        connect_toggled[sender] => move |btn| {
+                            if btn.is_active() {
+                                sender.input(LibraryPageInput::SetFilterTab(FilterTab::Unwatched));
+                            }
+                        }
+                    },
+
+                    gtk::ToggleButton {
+                        set_label: "Recently Added",
+                        #[watch]
+                        set_active: model.selected_filter_tab == FilterTab::RecentlyAdded,
+                        connect_toggled[sender] => move |btn| {
+                            if btn.is_active() {
+                                sender.input(LibraryPageInput::SetFilterTab(FilterTab::RecentlyAdded));
+                            }
+                        }
+                    },
+
+                    gtk::ToggleButton {
+                        set_label: "Genres",
+                        #[watch]
+                        set_active: model.selected_filter_tab == FilterTab::Genres,
+                        connect_toggled[sender] => move |btn| {
+                            if btn.is_active() {
+                                sender.input(LibraryPageInput::SetFilterTab(FilterTab::Genres));
+                            }
+                        }
+                    },
+
+                    gtk::ToggleButton {
+                        set_label: "Years",
+                        #[watch]
+                        set_active: model.selected_filter_tab == FilterTab::Years,
+                        connect_toggled[sender] => move |btn| {
+                            if btn.is_active() {
+                                sender.input(LibraryPageInput::SetFilterTab(FilterTab::Years));
+                            }
                         }
                     },
                 },
@@ -523,6 +742,127 @@ impl AsyncComponent for LibraryPage {
                         set_orientation: gtk::Orientation::Vertical,
                         set_spacing: 0,
 
+                        // Filter summary section
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 12,
+                            set_margin_start: 16,
+                            set_margin_end: 16,
+                            set_margin_top: 12,
+                            #[watch]
+                            set_visible: !model.is_loading && (model.has_active_filters() || !model.total_items.is_empty()),
+
+                            // Result count and statistics
+                            gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 24,
+                                set_halign: gtk::Align::Start,
+
+                                // Result count
+                                gtk::Label {
+                                    #[watch]
+                                    set_markup: &{
+                                        let stats = model.get_filter_statistics();
+                                        if stats.total_count == 0 {
+                                            if model.has_active_filters() {
+                                                format!("<b>No results found</b>")
+                                            } else {
+                                                String::new()
+                                            }
+                                        } else {
+                                            format!("<b>{} item{}</b>",
+                                                stats.total_count,
+                                                if stats.total_count == 1 { "" } else { "s" }
+                                            )
+                                        }
+                                    },
+                                    set_halign: gtk::Align::Start,
+                                },
+
+                                // Average rating (if available)
+                                gtk::Label {
+                                    #[watch]
+                                    set_markup: &{
+                                        let stats = model.get_filter_statistics();
+                                        if let Some(avg_rating) = stats.avg_rating {
+                                            format!("Avg Rating: <b>{:.1} ★</b>", avg_rating)
+                                        } else {
+                                            String::new()
+                                        }
+                                    },
+                                    #[watch]
+                                    set_visible: model.get_filter_statistics().avg_rating.is_some() && !model.total_items.is_empty(),
+                                    add_css_class: "dim-label",
+                                },
+
+                                // Year range (if available)
+                                gtk::Label {
+                                    #[watch]
+                                    set_markup: &{
+                                        let stats = model.get_filter_statistics();
+                                        match (stats.min_year, stats.max_year) {
+                                            (Some(min), Some(max)) if min == max => format!("Year: <b>{}</b>", min),
+                                            (Some(min), Some(max)) => format!("Years: <b>{} - {}</b>", min, max),
+                                            _ => String::new(),
+                                        }
+                                    },
+                                    #[watch]
+                                    set_visible: {
+                                        let stats = model.get_filter_statistics();
+                                        stats.min_year.is_some() && !model.total_items.is_empty()
+                                    },
+                                    add_css_class: "dim-label",
+                                },
+                            },
+
+                            // Active filters list with remove buttons
+                            #[name = "active_filters_box"]
+                            gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 6,
+                                set_halign: gtk::Align::Start,
+                                #[watch]
+                                set_visible: model.has_active_filters(),
+                            },
+
+                            // No results state with suggestions
+                            gtk::Box {
+                                set_orientation: gtk::Orientation::Vertical,
+                                set_spacing: 12,
+                                set_margin_all: 24,
+                                #[watch]
+                                set_visible: !model.is_loading && model.has_active_filters() && model.total_items.is_empty(),
+
+                                gtk::Label {
+                                    set_markup: "<big><b>No results found</b></big>",
+                                    set_halign: gtk::Align::Center,
+                                },
+
+                                gtk::Label {
+                                    set_text: "Try adjusting your filters:",
+                                    set_halign: gtk::Align::Center,
+                                    add_css_class: "dim-label",
+                                },
+
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_spacing: 6,
+                                    set_halign: gtk::Align::Center,
+                                    set_margin_top: 12,
+
+                                    // We'll dynamically populate suggestions
+                                    // For now, show a clear all filters button
+                                    gtk::Button {
+                                        set_label: "Clear All Filters",
+                                        add_css_class: "suggested-action",
+                                        connect_clicked[sender] => move |_| {
+                                            sender.input(LibraryPageInput::ClearAllFilters);
+                                        }
+                                    },
+                                },
+                            },
+                        },
+
                         #[local_ref]
                         media_box -> gtk::FlowBox {
                             set_column_spacing: 12,  // Tighter grid spacing
@@ -684,11 +1024,18 @@ impl AsyncComponent for LibraryPage {
             scroll_handler_id: None,
             // Filter panel visibility
             filter_panel_visible: false,
+            // Filter tab selection
+            selected_filter_tab: FilterTab::All,
+            // Active filters container
+            active_filters_box: None,
         };
 
         let mut model = model;
 
         let widgets = view_output!();
+
+        // Store reference to active filters box
+        model.active_filters_box = Some(widgets.active_filters_box.clone());
 
         // Subscribe to MessageBroker for config updates
         {
@@ -767,6 +1114,10 @@ impl AsyncComponent for LibraryPage {
         match msg {
             LibraryPageInput::SetLibrary(library_id) => {
                 debug!("Setting library: {}", library_id);
+
+                // Save current filter state before switching libraries
+                self.save_filter_state().await;
+
                 self.library_id = Some(library_id.clone());
                 self.loaded_count = 0;
                 self.total_items.clear();
@@ -777,6 +1128,58 @@ impl AsyncComponent for LibraryPage {
                 self.visible_start_idx = 0;
                 self.visible_end_idx = 0;
                 self.cancel_pending_images();
+
+                // Load saved filter state for the new library
+                let library_id_for_config = library_id.clone();
+                let sender_for_config = sender.clone();
+                relm4::spawn(async move {
+                    use crate::services::config_service::config_service;
+
+                    // Try to load full filter state first
+                    if let Some(saved_state_json) = config_service()
+                        .get_library_filter_state(library_id_for_config.as_ref())
+                        .await
+                    {
+                        if let Ok(state) = serde_json::from_str::<FilterState>(&saved_state_json) {
+                            debug!(
+                                "Restoring saved filter state for library {}",
+                                library_id_for_config
+                            );
+                            // Apply the entire filter state
+                            sender_for_config.input(LibraryPageInput::RestoreFilterState(state));
+                            return;
+                        }
+                    }
+
+                    // Fallback to loading just the filter tab (backward compatibility)
+                    if let Some(saved_tab) = config_service()
+                        .get_library_filter_tab(library_id_for_config.as_ref())
+                        .await
+                    {
+                        // Parse saved tab string back to FilterTab enum
+                        let filter_tab = match saved_tab.as_str() {
+                            "All" => FilterTab::All,
+                            "Unwatched" => FilterTab::Unwatched,
+                            "RecentlyAdded" => FilterTab::RecentlyAdded,
+                            "Genres" => FilterTab::Genres,
+                            "Years" => FilterTab::Years,
+                            _ => FilterTab::All,
+                        };
+                        sender_for_config.input(LibraryPageInput::SetFilterTab(filter_tab));
+                    }
+                });
+
+                self.load_all_items(sender.clone());
+            }
+
+            LibraryPageInput::RestoreFilterState(state) => {
+                debug!("Restoring filter state: {:?}", state);
+                self.apply_filter_state(&state);
+
+                // Trigger a refresh with the restored state
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
                 self.load_all_items(sender.clone());
             }
 
@@ -867,7 +1270,7 @@ impl AsyncComponent for LibraryPage {
                     std::collections::HashMap::new()
                 };
 
-                // Apply text, genre, year range, rating, and watch status filtering
+                // Apply text, genre, year range, rating, watch status, and tab filtering
                 let filtered_items: Vec<MediaItemModel> = items
                     .into_iter()
                     .filter(|item| {
@@ -944,11 +1347,31 @@ impl AsyncComponent for LibraryPage {
                             }
                         };
 
+                        // Filter tab filter (for RecentlyAdded)
+                        let tab_match = match self.selected_filter_tab {
+                            FilterTab::All
+                            | FilterTab::Unwatched
+                            | FilterTab::Genres
+                            | FilterTab::Years => true,
+                            FilterTab::RecentlyAdded => {
+                                // Show items added in the last 30 days
+                                if let Some(added_at) = item.added_at {
+                                    let now = chrono::Utc::now();
+                                    let thirty_days_ago =
+                                        (now - chrono::Duration::days(30)).naive_utc();
+                                    added_at >= thirty_days_ago
+                                } else {
+                                    false
+                                }
+                            }
+                        };
+
                         text_match
                             && genre_match
                             && year_match
                             && rating_match
                             && watch_status_match
+                            && tab_match
                     })
                     .collect();
 
@@ -958,6 +1381,9 @@ impl AsyncComponent for LibraryPage {
 
                 // Clear image requests when loading new items
                 self.images_requested.clear();
+
+                // Update active filters display
+                self.update_active_filters_display(sender.clone());
 
                 // Start rendering the first batch immediately
                 if !self.total_items.is_empty() {
@@ -1089,7 +1515,10 @@ impl AsyncComponent for LibraryPage {
                 // Set default sort order based on field
                 self.sort_order = match sort_by {
                     SortBy::Title => SortOrder::Ascending,
-                    SortBy::Year | SortBy::DateAdded | SortBy::Rating => SortOrder::Descending,
+                    SortBy::Year | SortBy::DateAdded | SortBy::Rating | SortBy::LastWatched => {
+                        SortOrder::Descending
+                    }
+                    SortBy::Duration => SortOrder::Descending,
                 };
                 self.refresh(sender.clone());
             }
@@ -1388,6 +1817,127 @@ impl AsyncComponent for LibraryPage {
                 self.load_all_items(sender.clone());
             }
 
+            LibraryPageInput::RemoveFilter(filter_type) => {
+                debug!("Removing filter: {:?}", filter_type);
+
+                match filter_type {
+                    ActiveFilterType::Text => {
+                        self.filter_text.clear();
+                    }
+                    ActiveFilterType::Genre(genre) => {
+                        self.selected_genres.retain(|g| g != &genre);
+                        if let Some(ref button) = self.genre_menu_button {
+                            button.set_label(&self.get_genre_label());
+                        }
+                        if let Some(ref popover) = self.genre_popover {
+                            self.update_genre_popover(popover, sender.clone());
+                        }
+                    }
+                    ActiveFilterType::YearRange => {
+                        self.selected_min_year = None;
+                        self.selected_max_year = None;
+                        if let Some(ref button) = self.year_menu_button {
+                            button.set_label(&self.get_year_label());
+                        }
+                        if let Some(ref popover) = self.year_popover {
+                            self.update_year_popover(popover, sender.clone());
+                        }
+                    }
+                    ActiveFilterType::Rating => {
+                        self.min_rating = None;
+                        if let Some(ref button) = self.rating_menu_button {
+                            button.set_label(&self.get_rating_label());
+                        }
+                        if let Some(ref popover) = self.rating_popover {
+                            self.update_rating_popover(popover, sender.clone());
+                        }
+                    }
+                    ActiveFilterType::WatchStatus => {
+                        self.watch_status_filter = WatchStatus::All;
+                        if let Some(ref button) = self.watch_status_menu_button {
+                            button.set_label(&self.get_watch_status_label());
+                        }
+                        if let Some(ref popover) = self.watch_status_popover {
+                            self.update_watch_status_popover(popover, sender.clone());
+                        }
+                    }
+                    ActiveFilterType::Tab => {
+                        self.selected_filter_tab = FilterTab::All;
+                    }
+                }
+
+                // Reload items with updated filters
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
+            }
+
+            LibraryPageInput::SetFilterTab(tab) => {
+                debug!("Setting filter tab: {:?}", tab);
+                self.selected_filter_tab = tab;
+
+                // Save the selected tab to config
+                if let Some(ref library_id) = self.library_id {
+                    let library_id_clone = library_id.clone();
+                    let tab_str = match tab {
+                        FilterTab::All => "All",
+                        FilterTab::Unwatched => "Unwatched",
+                        FilterTab::RecentlyAdded => "RecentlyAdded",
+                        FilterTab::Genres => "Genres",
+                        FilterTab::Years => "Years",
+                    }
+                    .to_string();
+
+                    relm4::spawn(async move {
+                        use crate::services::config_service::config_service;
+                        let _ = config_service()
+                            .set_library_filter_tab(library_id_clone.to_string(), tab_str)
+                            .await;
+                    });
+                }
+
+                // Apply tab-specific filters
+                match tab {
+                    FilterTab::All => {
+                        // Clear any tab-specific filters
+                        if self.watch_status_filter != WatchStatus::All {
+                            self.watch_status_filter = WatchStatus::All;
+                        }
+                        if self.selected_min_year.is_some() || self.selected_max_year.is_some() {
+                            self.selected_min_year = None;
+                            self.selected_max_year = None;
+                        }
+                    }
+                    FilterTab::Unwatched => {
+                        // Set watch status to unwatched
+                        self.watch_status_filter = WatchStatus::Unwatched;
+                    }
+                    FilterTab::RecentlyAdded => {
+                        // Set date filter to last 30 days
+                        // We'll use the sort_by mechanism for now as a placeholder
+                        // In the future, we might add a specific date range filter
+                        // For now, we'll just sort by date added
+                        self.sort_by = SortBy::DateAdded;
+                        self.sort_order = SortOrder::Descending;
+                    }
+                    FilterTab::Genres => {
+                        // Show placeholder - toggle filter panel to show genre filter
+                        self.filter_panel_visible = true;
+                    }
+                    FilterTab::Years => {
+                        // Show placeholder - toggle filter panel to show year filter
+                        self.filter_panel_visible = true;
+                    }
+                }
+
+                // Re-filter and re-render
+                self.loaded_count = 0;
+                self.media_factory.guard().clear();
+                self.image_requests.clear();
+                self.load_all_items(sender.clone());
+            }
+
             LibraryPageInput::ImageLoaded { id, texture } => {
                 // Find the card index for this image ID and update it
                 if let Some(&index) = self.image_requests.get(&id) {
@@ -1459,6 +2009,20 @@ impl AsyncComponent for LibraryPage {
     }
 
     fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        // Save filter state before shutdown
+        if let Some(ref library_id) = self.library_id {
+            let state = FilterState::from_library_page(self);
+            if let Ok(json) = serde_json::to_string(&state) {
+                let library_id_clone = library_id.clone();
+                relm4::spawn(async move {
+                    use crate::services::config_service::config_service;
+                    let _ = config_service()
+                        .set_library_filter_state(library_id_clone.to_string(), json)
+                        .await;
+                });
+            }
+        }
+
         // Unsubscribe from MessageBroker
         relm4::spawn(async move {
             BROKER.unsubscribe("LibraryPage").await;
@@ -1482,6 +2046,37 @@ impl Drop for LibraryPage {
 }
 
 impl LibraryPage {
+    /// Apply a FilterState to the current page
+    fn apply_filter_state(&mut self, state: &FilterState) {
+        self.sort_by = state.sort_by;
+        self.sort_order = state.sort_order;
+        self.filter_text = state.filter_text.clone();
+        self.selected_genres = state.selected_genres.clone();
+        self.selected_min_year = state.selected_min_year;
+        self.selected_max_year = state.selected_max_year;
+        self.min_rating = state.min_rating;
+        self.watch_status_filter = state.watch_status_filter;
+        self.selected_media_type = state.selected_media_type.clone();
+        self.selected_filter_tab = state.selected_filter_tab;
+        self.filter_panel_visible = state.filter_panel_visible;
+    }
+
+    /// Save the current filter state to config
+    async fn save_filter_state(&self) {
+        if let Some(ref library_id) = self.library_id {
+            let state = FilterState::from_library_page(self);
+            if let Ok(json) = serde_json::to_string(&state) {
+                let library_id_clone = library_id.clone();
+                relm4::spawn(async move {
+                    use crate::services::config_service::config_service;
+                    let _ = config_service()
+                        .set_library_filter_state(library_id_clone.to_string(), json)
+                        .await;
+                });
+            }
+        }
+    }
+
     fn get_active_filter_count(&self) -> usize {
         let mut count = 0;
 
@@ -2052,6 +2647,25 @@ impl LibraryPage {
 
                 match media_result {
                     Ok(mut items) => {
+                        // For LastWatched sort, we need to fetch playback progress data
+                        let playback_map = if matches!(sort_by, SortBy::LastWatched) {
+                            let media_ids: Vec<String> =
+                                items.iter().map(|item| item.id.clone()).collect();
+                            match crate::services::core::MediaService::get_playback_progress_batch(
+                                &db, &media_ids,
+                            )
+                            .await
+                            {
+                                Ok(map) => map,
+                                Err(e) => {
+                                    error!("Failed to fetch playback progress for sorting: {}", e);
+                                    std::collections::HashMap::new()
+                                }
+                            }
+                        } else {
+                            std::collections::HashMap::new()
+                        };
+
                         // Sort items based on sort criteria and order
                         match (sort_by, sort_order) {
                             (SortBy::Title, SortOrder::Ascending) => {
@@ -2086,6 +2700,30 @@ impl LibraryPage {
                                         .unwrap_or(std::cmp::Ordering::Equal)
                                 });
                             }
+                            (SortBy::Duration, SortOrder::Ascending) => {
+                                items.sort_by(|a, b| a.duration_ms.cmp(&b.duration_ms));
+                            }
+                            (SortBy::Duration, SortOrder::Descending) => {
+                                items.sort_by(|a, b| b.duration_ms.cmp(&a.duration_ms));
+                            }
+                            (SortBy::LastWatched, SortOrder::Ascending) => {
+                                items.sort_by(|a, b| {
+                                    let a_time =
+                                        playback_map.get(&a.id).and_then(|p| p.last_watched_at);
+                                    let b_time =
+                                        playback_map.get(&b.id).and_then(|p| p.last_watched_at);
+                                    a_time.cmp(&b_time)
+                                });
+                            }
+                            (SortBy::LastWatched, SortOrder::Descending) => {
+                                items.sort_by(|a, b| {
+                                    let a_time =
+                                        playback_map.get(&a.id).and_then(|p| p.last_watched_at);
+                                    let b_time =
+                                        playback_map.get(&b.id).and_then(|p| p.last_watched_at);
+                                    b_time.cmp(&a_time)
+                                });
+                            }
                         }
 
                         sender.input(LibraryPageInput::AllItemsLoaded {
@@ -2117,5 +2755,206 @@ impl LibraryPage {
         // Keep genre filters during refresh to maintain user selection
         self.cancel_pending_images();
         self.load_all_items(sender);
+    }
+
+    /// Get statistics about the filtered items
+    fn get_filter_statistics(&self) -> FilterStatistics {
+        if self.total_items.is_empty() {
+            return FilterStatistics::default();
+        }
+
+        // Calculate average rating
+        let ratings: Vec<f32> = self
+            .total_items
+            .iter()
+            .filter_map(|item| item.rating)
+            .collect();
+        let avg_rating = if !ratings.is_empty() {
+            Some(ratings.iter().sum::<f32>() / ratings.len() as f32)
+        } else {
+            None
+        };
+
+        // Calculate year range from filtered items
+        let years: Vec<i32> = self
+            .total_items
+            .iter()
+            .filter_map(|item| item.year)
+            .collect();
+        let (min_year, max_year) = if !years.is_empty() {
+            let min = *years.iter().min().unwrap();
+            let max = *years.iter().max().unwrap();
+            (Some(min), Some(max))
+        } else {
+            (None, None)
+        };
+
+        FilterStatistics {
+            total_count: self.total_items.len(),
+            avg_rating,
+            min_year,
+            max_year,
+        }
+    }
+
+    /// Check if any filters are active
+    fn has_active_filters(&self) -> bool {
+        !self.selected_genres.is_empty()
+            || self.selected_min_year.is_some()
+            || self.selected_max_year.is_some()
+            || self.min_rating.is_some()
+            || self.watch_status_filter != WatchStatus::All
+            || !self.filter_text.is_empty()
+            || self.selected_filter_tab != FilterTab::All
+    }
+
+    /// Get list of active filters for display
+    fn get_active_filters_list(&self) -> Vec<ActiveFilter> {
+        let mut filters = Vec::new();
+
+        // Text filter
+        if !self.filter_text.is_empty() {
+            filters.push(ActiveFilter {
+                label: format!("Search: \"{}\"", self.filter_text),
+                filter_type: ActiveFilterType::Text,
+            });
+        }
+
+        // Genre filters
+        if !self.selected_genres.is_empty() {
+            for genre in &self.selected_genres {
+                filters.push(ActiveFilter {
+                    label: format!("Genre: {}", genre),
+                    filter_type: ActiveFilterType::Genre(genre.clone()),
+                });
+            }
+        }
+
+        // Year range filter
+        if self.selected_min_year.is_some() || self.selected_max_year.is_some() {
+            let label = match (self.selected_min_year, self.selected_max_year) {
+                (Some(min), Some(max)) if min == max => format!("Year: {}", min),
+                (Some(min), Some(max)) => format!("Year: {} - {}", min, max),
+                (Some(min), None) => format!("Year: {} and later", min),
+                (None, Some(max)) => format!("Year: {} and earlier", max),
+                (None, None) => unreachable!(),
+            };
+            filters.push(ActiveFilter {
+                label,
+                filter_type: ActiveFilterType::YearRange,
+            });
+        }
+
+        // Rating filter
+        if let Some(rating) = self.min_rating {
+            filters.push(ActiveFilter {
+                label: format!("Rating: {:.1}+ ★", rating),
+                filter_type: ActiveFilterType::Rating,
+            });
+        }
+
+        // Watch status filter
+        if self.watch_status_filter != WatchStatus::All {
+            let label = match self.watch_status_filter {
+                WatchStatus::Watched => "Watched".to_string(),
+                WatchStatus::Unwatched => "Unwatched".to_string(),
+                WatchStatus::All => unreachable!(),
+            };
+            filters.push(ActiveFilter {
+                label,
+                filter_type: ActiveFilterType::WatchStatus,
+            });
+        }
+
+        // Filter tab
+        if self.selected_filter_tab != FilterTab::All {
+            let label = match self.selected_filter_tab {
+                FilterTab::RecentlyAdded => "Recently Added (30 days)".to_string(),
+                FilterTab::Unwatched => "Unwatched Items".to_string(),
+                FilterTab::Genres => "Genres View".to_string(),
+                FilterTab::Years => "Years View".to_string(),
+                FilterTab::All => unreachable!(),
+            };
+            filters.push(ActiveFilter {
+                label,
+                filter_type: ActiveFilterType::Tab,
+            });
+        }
+
+        filters
+    }
+
+    /// Get suggestions for clearing filters when no results found
+    fn get_filter_suggestions(&self) -> Vec<String> {
+        let mut suggestions = Vec::new();
+
+        if !self.filter_text.is_empty() {
+            suggestions.push("Try removing the search text".to_string());
+        }
+
+        if !self.selected_genres.is_empty() {
+            suggestions.push("Try selecting different genres".to_string());
+        }
+
+        if self.selected_min_year.is_some() || self.selected_max_year.is_some() {
+            suggestions.push("Try expanding the year range".to_string());
+        }
+
+        if self.min_rating.is_some() {
+            suggestions.push("Try lowering the minimum rating".to_string());
+        }
+
+        if self.watch_status_filter != WatchStatus::All {
+            suggestions.push("Try viewing all items (watched and unwatched)".to_string());
+        }
+
+        if suggestions.is_empty() {
+            suggestions.push("This library might be empty or still syncing".to_string());
+        }
+
+        suggestions
+    }
+
+    /// Update the active filters display with filter chips
+    fn update_active_filters_display(&self, sender: AsyncComponentSender<Self>) {
+        if let Some(ref container) = self.active_filters_box {
+            // Clear existing children
+            while let Some(child) = container.first_child() {
+                container.remove(&child);
+            }
+
+            // Add filter chips for each active filter
+            let active_filters = self.get_active_filters_list();
+            for filter in active_filters {
+                let chip = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                chip.add_css_class("pill");
+                chip.set_margin_end(6);
+                chip.set_margin_bottom(6);
+
+                let label = gtk::Label::new(Some(&filter.label));
+                label.set_margin_start(12);
+                label.set_margin_end(6);
+                label.set_margin_top(6);
+                label.set_margin_bottom(6);
+                chip.append(&label);
+
+                let close_button = gtk::Button::new();
+                close_button.set_icon_name("window-close-symbolic");
+                close_button.add_css_class("flat");
+                close_button.add_css_class("circular");
+                close_button.set_margin_end(6);
+                close_button.set_margin_top(4);
+                close_button.set_margin_bottom(4);
+
+                let sender_clone = sender.clone();
+                let filter_type = filter.filter_type.clone();
+                close_button.connect_clicked(move |_| {
+                    sender_clone.input(LibraryPageInput::RemoveFilter(filter_type.clone()));
+                });
+
+                chip.append(&close_button);
+                container.append(&chip);
+            }
+        }
     }
 }

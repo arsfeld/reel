@@ -433,11 +433,121 @@ impl MediaService {
             return Ok(());
         }
 
-        // Process items without holding a transaction lock
-        // This prevents blocking other database operations during sync
+        let repo = MediaRepositoryImpl::new(db.clone());
+        let playback_repo = PlaybackRepositoryImpl::new(db.clone());
+
+        // Collect playback progress updates for batch operation
+        let mut progress_updates = Vec::new();
+
+        // Process each media item
         for item in items.iter() {
-            Self::save_media_item(db, item.clone(), library_id, source_id).await?;
+            // Convert to entity using the mapper
+            let mut entity = item.to_model(source_id.as_str(), Some(library_id.to_string()));
+
+            // Handle episode natural key lookups (same logic as save_media_item)
+            let existing = if entity.media_type == "episode" {
+                if let (Some(parent_id), Some(season_num), Some(episode_num)) = (
+                    &entity.parent_id,
+                    entity.season_number,
+                    entity.episode_number,
+                ) {
+                    match repo
+                        .find_episode_by_parent_season_episode(parent_id, season_num, episode_num)
+                        .await?
+                    {
+                        Some(existing_episode) => {
+                            debug!(
+                                "Found existing episode by natural key: {} S{}E{} - updating (old_id={}, new_id={})",
+                                parent_id, season_num, episode_num, existing_episode.id, entity.id
+                            );
+                            entity.id = existing_episode.id.clone();
+                            Some(existing_episode)
+                        }
+                        None => repo.find_by_id(&entity.id).await?,
+                    }
+                } else {
+                    warn!(
+                        "Episode missing required fields (parent_id, season_number, episode_number): {}",
+                        entity.id
+                    );
+                    repo.find_by_id(&entity.id).await?
+                }
+            } else {
+                repo.find_by_id(&entity.id).await?
+            };
+
+            // Save or update media item
+            if existing.is_some() {
+                repo.update(entity.clone()).await?;
+            } else {
+                repo.insert(entity.clone()).await?;
+            }
+
+            // Collect playback progress data for batch upsert
+            match item {
+                MediaItem::Movie(movie) => {
+                    if movie.watched || movie.view_count > 0 || movie.playback_position.is_some() {
+                        let position_ms = movie
+                            .playback_position
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        let duration_ms = movie.duration.as_millis() as i64;
+
+                        progress_updates.push((
+                            movie.id.clone(),
+                            None, // user_id
+                            position_ms,
+                            duration_ms,
+                            movie.watched,
+                            movie.view_count as i32,
+                            movie.last_watched_at.map(|dt| dt.naive_utc()),
+                        ));
+                    }
+                }
+                MediaItem::Episode(episode) => {
+                    if episode.watched
+                        || episode.view_count > 0
+                        || episode.playback_position.is_some()
+                    {
+                        let position_ms = episode
+                            .playback_position
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        let duration_ms = episode.duration.as_millis() as i64;
+
+                        progress_updates.push((
+                            episode.id.clone(),
+                            None, // user_id
+                            position_ms,
+                            duration_ms,
+                            episode.watched,
+                            episode.view_count as i32,
+                            episode.last_watched_at.map(|dt| dt.naive_utc()),
+                        ));
+                    }
+                }
+                _ => {
+                    // Other media types don't have playback progress
+                }
+            }
         }
+
+        // Perform batch upsert of playback progress
+        if !progress_updates.is_empty() {
+            let start = std::time::Instant::now();
+            let count = progress_updates.len();
+
+            playback_repo
+                .batch_upsert_progress(progress_updates)
+                .await?;
+
+            let elapsed = start.elapsed();
+            debug!(
+                "Batch upsert of {} playback progress records completed in {:?}",
+                count, elapsed
+            );
+        }
+
         Ok(())
     }
 

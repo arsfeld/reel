@@ -65,6 +65,28 @@ impl JellyfinBackend {
         }
     }
 
+    /// Create a Jellyfin backend for testing
+    /// **Warning**: This is only for integration tests and should not be used in production
+    #[doc(hidden)]
+    pub async fn new_for_test(
+        url: String,
+        token: String,
+        user_id: String,
+        backend_id: String,
+    ) -> Self {
+        let backend = Self::with_id(backend_id.clone());
+        let api =
+            JellyfinApi::with_backend_id(url.clone(), token.clone(), user_id.clone(), backend_id);
+
+        // Note: Using async set
+        *backend.base_url.write().await = Some(url);
+        *backend.api_key.write().await = Some(token);
+        *backend.user_id.write().await = Some(user_id);
+        *backend.api.write().await = Some(api);
+
+        backend
+    }
+
     /// Create a new JellyfinBackend from an AuthProvider and Source
     pub fn from_auth(auth_provider: AuthProvider, source: Source) -> Result<Self> {
         // Validate that this is a Jellyfin auth provider

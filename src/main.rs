@@ -1,27 +1,7 @@
 use anyhow::Result;
-
-mod app;
-mod backends;
-mod cache;
-mod config;
-mod constants;
-mod core;
-mod db;
-mod mapper;
-mod models;
-mod player;
-mod services;
-// State module removed in Relm4 migration - components manage their own state
-// mod state;
-mod ui;
-mod utils;
-mod workers;
-
-#[cfg(test)]
-mod test_utils;
+use reel::app::AppPlatform;
 
 fn main() -> Result<()> {
-    use app::AppPlatform;
     use std::sync::Arc;
     use tracing::info;
 
