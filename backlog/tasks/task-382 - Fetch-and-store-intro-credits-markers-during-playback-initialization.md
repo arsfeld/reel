@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@assistant'
 created_date: '2025-10-03 18:08'
-updated_date: '2025-10-05 21:41'
+updated_date: '2025-10-05 22:17'
 labels:
   - player
   - backend
@@ -22,8 +22,8 @@ When starting playback, fetch intro and credits markers from the backend API and
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [x] #1 Player initialization calls backend.fetch_markers() for Plex using rating_key
-- [x] #2 Player initialization calls backend.get_media_segments() for Jellyfin using item_id
+- [ ] #1 Player initialization calls backend.fetch_markers() for Plex using rating_key
+- [ ] #2 Player initialization calls backend.get_media_segments() for Jellyfin using item_id
 - [ ] #3 Fetched markers are stored in database via repository update
 - [ ] #4 Markers loaded from database when available, only fetch from API if missing
 - [ ] #5 Error handling for marker fetch failures (graceful degradation)
@@ -75,4 +75,6 @@ Implemented backend abstraction layer for marker fetching:
 - Check DB for existing markers, fetch from API if missing
 - Add error handling with fallback to no markers
 - Test with both MPV and GStreamer
+
+**Important Note:** AC#1 and AC#2 were incorrectly marked complete. The backend methods are implemented, but the player doesn't actually call them yet. Player integration is still needed as part of AC#4.
 <!-- SECTION:NOTES:END -->
