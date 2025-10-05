@@ -4,7 +4,7 @@ title: Implement skip credits and skip intro functionality
 status: To Do
 assignee: []
 created_date: '2025-09-18 13:49'
-updated_date: '2025-10-03 18:09'
+updated_date: '2025-10-05 22:17'
 labels:
   - player
   - ui
@@ -14,7 +14,9 @@ priority: high
 
 ## Description
 
+<!-- SECTION:DESCRIPTION:BEGIN -->
 Add Netflix-style skip intro and skip credits buttons that appear at appropriate times during playback, allowing users to quickly jump past opening sequences and end credits
+<!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
@@ -28,4 +30,12 @@ Add Netflix-style skip intro and skip credits buttons that appear at appropriate
 
 ## Implementation Notes
 
-This high-level task has been broken down into specific implementation tasks: task-381 (database schema), task-382 (marker fetching), task-383 (UI implementation), and task-384 (user preferences). Work on those tasks instead.
+<!-- SECTION:NOTES:BEGIN -->
+This high-level task has been broken down into specific implementation tasks:
+- task-381 (database schema) ✅ Done
+- task-382 (marker fetching) ⏳ In Progress  
+- task-383 (UI implementation) ✅ Done
+- task-403 (user preferences) 📋 To Do
+
+Work on those subtasks to complete this feature.
+<!-- SECTION:NOTES:END -->
