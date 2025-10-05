@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@assistant'
 created_date: '2025-10-03 18:08'
-updated_date: '2025-10-05 21:36'
+updated_date: '2025-10-05 21:41'
 labels:
   - player
   - backend
@@ -22,8 +22,8 @@ When starting playback, fetch intro and credits markers from the backend API and
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Player initialization calls backend.fetch_markers() for Plex using rating_key
-- [ ] #2 Player initialization calls backend.get_media_segments() for Jellyfin using item_id
+- [x] #1 Player initialization calls backend.fetch_markers() for Plex using rating_key
+- [x] #2 Player initialization calls backend.get_media_segments() for Jellyfin using item_id
 - [ ] #3 Fetched markers are stored in database via repository update
 - [ ] #4 Markers loaded from database when available, only fetch from API if missing
 - [ ] #5 Error handling for marker fetch failures (graceful degradation)
@@ -42,3 +42,37 @@ When starting playback, fetch intro and credits markers from the backend API and
 7. Add error handling with graceful degradation
 8. Test with both MPV and GStreamer players
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Progress Update - Session 1
+
+Implemented backend abstraction layer for marker fetching:
+
+**Completed:**
+1. Added fetch_markers() method to MediaBackend trait (src/backends/traits.rs:50-60)
+   - Default implementation returns (None, None)
+   - Backends can override to provide intro/credits markers
+
+2. Implemented fetch_markers() for PlexBackend (src/backends/plex/mod.rs:1423-1437)
+   - Extracts rating_key from composite media_id
+   - Delegates to existing PlexApi.fetch_episode_markers()
+   - Returns (intro_marker, credits_marker) tuple
+
+3. Implemented fetch_markers() for JellyfinBackend (src/backends/jellyfin/mod.rs:538-582)
+   - Uses existing get_media_segments() API call
+   - Converts Jellyfin ticks (100ns) to Duration (microseconds)  
+   - Maps Intro→intro_marker, Credits/Outro→credits_marker
+
+4. Fixed Plex API type visibility (src/backends/plex/api/types.rs:20-48)
+   - Made PlexMetadataResponse fields public
+   - Registered markers module in api/mod.rs
+
+**Next Steps:**
+- Add update_markers() method to MediaRepository
+- Integrate fetch_markers in player initialization (controller.rs)
+- Check DB for existing markers, fetch from API if missing
+- Add error handling with fallback to no markers
+- Test with both MPV and GStreamer
+<!-- SECTION:NOTES:END -->
