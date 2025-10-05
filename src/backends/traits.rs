@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 use crate::models::{
-    Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId, Movie, Season, Show,
-    ShowId, StreamInfo, User,
+    ChapterMarker, Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId, Movie,
+    Season, Show, ShowId, StreamInfo, User,
 };
 
 #[async_trait]
@@ -46,6 +46,18 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
         position: Duration,
         duration: Duration,
     ) -> Result<()>;
+
+    /// Fetch intro and credits markers for a media item
+    /// Returns (intro_marker, credits_marker) tuple with None if markers don't exist
+    /// Used during playback initialization to enable skip intro/credits buttons
+    async fn fetch_markers(
+        &self,
+        media_id: &MediaItemId,
+    ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
+        // Default implementation returns no markers
+        // Backends should override this if they support markers
+        Ok((None, None))
+    }
 
     // Watch status methods removed - never used in production
     // Search method removed - never used in production

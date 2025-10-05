@@ -21,30 +21,30 @@ pub struct PlexIdentityContainer {
 #[serde(rename_all = "PascalCase")]
 pub struct PlexMetadataResponse {
     #[serde(rename = "MediaContainer")]
-    _media_container: PlexMetadataContainer,
+    pub media_container: PlexMetadataContainer,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexMetadataContainer {
     #[serde(rename = "Metadata", default)]
-    _metadata: Vec<PlexMetadataWithMarkers>,
+    pub metadata: Vec<PlexMetadataWithMarkers>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexMetadataWithMarkers {
     #[serde(rename = "Marker", default)]
-    _marker: Option<Vec<PlexMarker>>,
+    pub marker: Option<Vec<PlexMarker>>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexMarker {
     #[serde(rename = "type")]
-    _type: String,
-    _start_time_offset: i64,
-    _end_time_offset: i64,
+    pub type_: String,
+    pub start_time_offset: i64,
+    pub end_time_offset: i64,
 }
 
 #[derive(Debug, Deserialize)]
