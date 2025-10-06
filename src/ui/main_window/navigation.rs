@@ -551,6 +551,9 @@ pub fn navigate_to_library(
                 crate::ui::pages::library::LibraryPageOutput::NavigateToMediaItem(id) => {
                     MainWindowInput::NavigateToMediaItem(id)
                 }
+                crate::ui::pages::library::LibraryPageOutput::SetHeaderTitleWidget(widget) => {
+                    MainWindowInput::SetTitleWidget(Some(widget))
+                }
             });
 
     // Set the library on the new controller

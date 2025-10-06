@@ -102,6 +102,7 @@ pub enum MainWindowInput {
     ResizeWindow(i32, i32),
     SetHeaderStartContent(Option<gtk::Widget>),
     SetHeaderEndContent(Option<gtk::Widget>),
+    SetTitleWidget(Option<gtk::Widget>),
     ClearHeaderContent,
     ShowToast(String),
     ConnectionStatusChanged {
@@ -769,6 +770,15 @@ impl AsyncComponent for MainWindow {
                     tracing::info!("No widget provided to add");
                 }
             }
+            MainWindowInput::SetTitleWidget(widget) => {
+                if let Some(widget) = widget {
+                    self.content_header.set_title_widget(Some(&widget));
+                } else {
+                    // Reset to default title widget
+                    self.content_header
+                        .set_title_widget(Some(&self.content_title));
+                }
+            }
             MainWindowInput::ClearHeaderContent => {
                 // Clear both header boxes
                 while let Some(child) = self.header_start_box.first_child() {
@@ -777,6 +787,9 @@ impl AsyncComponent for MainWindow {
                 while let Some(child) = self.header_end_box.first_child() {
                     self.header_end_box.remove(&child);
                 }
+                // Reset title widget to default
+                self.content_header
+                    .set_title_widget(Some(&self.content_title));
             }
             MainWindowInput::ShowToast(message) => {
                 let toast = adw::Toast::new(&message);
@@ -786,12 +799,6 @@ impl AsyncComponent for MainWindow {
             MainWindowInput::ConfigUpdated => {
                 // Handle configuration updates from file watcher
                 tracing::info!("Configuration has been updated from disk");
-                self.toast_overlay.add_toast(
-                    adw::Toast::builder()
-                        .title("Configuration reloaded")
-                        .timeout(2)
-                        .build(),
-                );
             }
             MainWindowInput::ConnectionStatusChanged { source_id, status } => {
                 // Handle connection status changes from ConnectionMonitor
