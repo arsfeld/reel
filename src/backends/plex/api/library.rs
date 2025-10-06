@@ -12,17 +12,14 @@ impl PlexApi {
         let url = self.build_url("/library/sections");
 
         let response = self
-            .client
-            .get(&url)
-            .headers(self.standard_headers())
-            .send()
-            .await?;
+            .execute_get(&url, "get_libraries")
+            .await
+            .map_err(|e| anyhow!("Failed to get libraries: {}", e))?;
 
-        if !response.status().is_success() {
-            return Err(anyhow!("Failed to get libraries: {}", response.status()));
-        }
-
-        let plex_response: PlexLibrariesResponse = response.json().await?;
+        let plex_response: PlexLibrariesResponse = response
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse libraries response: {}", e))?;
 
         let libraries: Vec<Library> = plex_response
             .media_container
@@ -55,17 +52,14 @@ impl PlexApi {
         ));
 
         let response = self
-            .client
-            .get(&url)
-            .headers(self.standard_headers())
-            .send()
-            .await?;
+            .execute_get(&url, "get_movies")
+            .await
+            .map_err(|e| anyhow!("Failed to get movies from library {}: {}", library_id, e))?;
 
-        if !response.status().is_success() {
-            return Err(anyhow!("Failed to get movies: {}", response.status()));
-        }
-
-        let plex_response: PlexMoviesResponse = response.json().await?;
+        let plex_response: PlexMoviesResponse = response
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse movies response: {}", e))?;
 
         tracing::info!(
             "Fetched {} movies from Plex library {}",

@@ -2,8 +2,10 @@ use anyhow::{Result, anyhow};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{HeaderMap, HeaderValue};
 use std::time::Duration;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
+use super::errors::PlexApiError;
+use super::retry::RetryPolicy;
 use super::types::PlexIdentityResponse;
 
 /// Standard Plex headers used across all API requests.
@@ -84,6 +86,7 @@ pub struct PlexApi {
     pub(super) base_url: String,
     pub(super) auth_token: String,
     pub(super) backend_id: String,
+    pub(super) retry_policy: RetryPolicy,
 }
 
 impl PlexApi {
@@ -98,6 +101,28 @@ impl PlexApi {
             base_url,
             auth_token,
             backend_id,
+            retry_policy: RetryPolicy::default(),
+        }
+    }
+
+    /// Create a PlexApi with a custom retry policy
+    pub fn with_retry_policy(
+        base_url: String,
+        auth_token: String,
+        backend_id: String,
+        retry_policy: RetryPolicy,
+    ) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("Failed to create HTTP client");
+
+        Self {
+            client,
+            base_url,
+            auth_token,
+            backend_id,
+            retry_policy,
         }
     }
 
@@ -108,6 +133,88 @@ impl PlexApi {
     /// Build standard headers that should be included in all Plex API requests
     pub(super) fn standard_headers(&self) -> HeaderMap {
         create_standard_headers(Some(&self.auth_token))
+    }
+
+    /// Execute an HTTP GET request with retry logic and error handling
+    ///
+    /// This method provides:
+    /// - Automatic retries with exponential backoff for transient failures
+    /// - Rate limit detection and handling
+    /// - Detailed error logging with request/response details
+    /// - Typed error differentiation
+    ///
+    /// # Arguments
+    /// * `url` - The full URL to request
+    /// * `operation_name` - A descriptive name for logging (e.g., "get_libraries")
+    ///
+    /// # Returns
+    /// The response on success, or a PlexApiError with details
+    pub(super) async fn execute_get(
+        &self,
+        url: &str,
+        operation_name: &str,
+    ) -> Result<reqwest::Response, PlexApiError> {
+        let headers = self.standard_headers();
+
+        self.retry_policy
+            .execute(operation_name, || async {
+                // Log the request
+                debug!(
+                    "[{}] GET {} (backend: {})",
+                    operation_name, url, self.backend_id
+                );
+
+                // Execute the request
+                let response = self
+                    .client
+                    .get(url)
+                    .headers(headers.clone())
+                    .send()
+                    .await
+                    .map_err(PlexApiError::from_reqwest)?;
+
+                let status = response.status();
+
+                // Log response status
+                debug!(
+                    "[{}] Response: {} (backend: {})",
+                    operation_name, status, self.backend_id
+                );
+
+                // Handle error responses
+                if !status.is_success() {
+                    // Extract response body for error details
+                    let body = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "<failed to read response body>".to_string());
+
+                    // Log error response details
+                    warn!(
+                        "[{}] Error response - Status: {}, Body: {}",
+                        operation_name,
+                        status.as_u16(),
+                        body
+                    );
+
+                    // Check for rate limiting headers
+                    // Note: This is a simplified check; actual implementation might need
+                    // to parse headers from the original response before reading body
+                    let error = PlexApiError::from_status(status.as_u16(), body);
+
+                    if error.is_rate_limit() {
+                        warn!(
+                            "[{}] Rate limit detected, will retry with backoff",
+                            operation_name
+                        );
+                    }
+
+                    return Err(error);
+                }
+
+                Ok(response)
+            })
+            .await
     }
 
     /// Build full image URL from Plex path
@@ -127,23 +234,16 @@ impl PlexApi {
 
     pub async fn get_machine_id(&self) -> Result<String> {
         let url = self.build_url("/identity");
-        debug!("Fetching machine ID from: {}", url);
 
         let response = self
-            .client
-            .get(&url)
-            .headers(self.standard_headers())
-            .send()
-            .await?;
+            .execute_get(&url, "get_machine_id")
+            .await
+            .map_err(|e| anyhow!("Failed to fetch machine ID: {}", e))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            error!("Failed to fetch machine ID: {} - {}", status, text);
-            return Err(anyhow!("Failed to fetch machine ID: {}", status));
-        }
-
-        let identity: PlexIdentityResponse = response.json().await?;
+        let identity: PlexIdentityResponse = response
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse machine ID response: {}", e))?;
 
         debug!(
             "Got machine ID: {} (version: {})",
