@@ -215,6 +215,49 @@ impl BackendService {
         backend.update_progress(media_id, position, duration).await
     }
 
+    /// Fetch intro and credits markers from the backend
+    /// Returns tuple of (intro_marker, credits_marker) where each is Option<(start_ms, end_ms)>
+    pub async fn fetch_markers(
+        db: &DatabaseConnection,
+        media_id: &MediaItemId,
+    ) -> Result<(Option<(i64, i64)>, Option<(i64, i64)>)> {
+        use crate::models::ChapterMarker;
+
+        // Load media item to find its source
+        let media_repo = MediaRepositoryImpl::new(db.clone());
+        let media_item = media_repo
+            .find_by_id(media_id.as_str())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Media item not found"))?;
+
+        // Load source configuration
+        let source_repo = SourceRepositoryImpl::new(db.clone());
+        let source_entity = source_repo
+            .find_by_id(&media_item.source_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
+
+        // Create backend and fetch markers
+        let backend = Self::create_backend_for_source(db, &source_entity).await?;
+        let (intro_marker, credits_marker) = backend.fetch_markers(media_id).await?;
+
+        // Convert ChapterMarker to (start_ms, end_ms) tuples
+        let intro_tuple = intro_marker.map(|m| {
+            (
+                m.start_time.as_millis() as i64,
+                m.end_time.as_millis() as i64,
+            )
+        });
+        let credits_tuple = credits_marker.map(|m| {
+            (
+                m.start_time.as_millis() as i64,
+                m.end_time.as_millis() as i64,
+            )
+        });
+
+        Ok((intro_tuple, credits_tuple))
+    }
+
     /// Get home sections from all active sources
     pub async fn get_all_home_sections(
         db: &DatabaseConnection,
