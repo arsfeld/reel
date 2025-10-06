@@ -104,6 +104,14 @@ pub trait MediaRepository: Repository<MediaItemModel> {
 
     /// Update show's watched_episode_count based on actual episode watch status
     async fn update_show_watched_count(&self, show_id: &str) -> Result<()>;
+
+    /// Update intro and credits markers for a media item
+    async fn update_markers(
+        &self,
+        media_id: &str,
+        intro_marker: Option<(i64, i64)>,
+        credits_marker: Option<(i64, i64)>,
+    ) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -716,6 +724,49 @@ impl MediaRepository for MediaRepositoryImpl {
                 media_id: show_id.to_string(),
             }))
             .await;
+
+        Ok(())
+    }
+
+    async fn update_markers(
+        &self,
+        media_id: &str,
+        intro_marker: Option<(i64, i64)>,
+        credits_marker: Option<(i64, i64)>,
+    ) -> Result<()> {
+        // Get the current media item
+        let item = match self.find_by_id(media_id).await? {
+            Some(item) => item,
+            None => {
+                tracing::warn!("Cannot update markers: media item {} not found", media_id);
+                return Ok(());
+            }
+        };
+
+        // Create active model with updated marker fields
+        let mut active_model: MediaItemActiveModel = item.into();
+
+        // Update intro markers
+        if let Some((start, end)) = intro_marker {
+            active_model.intro_marker_start_ms = Set(Some(start));
+            active_model.intro_marker_end_ms = Set(Some(end));
+        }
+
+        // Update credits markers
+        if let Some((start, end)) = credits_marker {
+            active_model.credits_marker_start_ms = Set(Some(start));
+            active_model.credits_marker_end_ms = Set(Some(end));
+        }
+
+        active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+        active_model.update(self.base.db.as_ref()).await?;
+
+        tracing::debug!(
+            "Updated markers for media item {}: intro={:?}, credits={:?}",
+            media_id,
+            intro_marker,
+            credits_marker
+        );
 
         Ok(())
     }
