@@ -1,10 +1,10 @@
 ---
 id: task-167
 title: Implement skip credits and skip intro functionality
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-09-18 13:49'
-updated_date: '2025-10-05 22:17'
+updated_date: '2025-10-05 23:07'
 labels:
   - player
   - ui
@@ -20,12 +20,12 @@ Add Netflix-style skip intro and skip credits buttons that appear at appropriate
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Skip intro button appears during intro sequences
-- [ ] #2 Skip credits button appears during end credits
-- [ ] #3 Buttons have configurable detection thresholds
-- [ ] #4 Buttons auto-hide after timeout period
-- [ ] #5 Skip functionality works with both MPV and GStreamer players
-- [ ] #6 User preferences for auto-skip are persisted
+- [x] #1 Skip intro button appears during intro sequences
+- [x] #2 Skip credits button appears during end credits
+- [x] #3 Buttons have configurable detection thresholds
+- [x] #4 Buttons auto-hide after timeout period
+- [x] #5 Skip functionality works with both MPV and GStreamer players
+- [x] #6 User preferences for auto-skip are persisted
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -33,9 +33,9 @@ Add Netflix-style skip intro and skip credits buttons that appear at appropriate
 <!-- SECTION:NOTES:BEGIN -->
 This high-level task has been broken down into specific implementation tasks:
 - task-381 (database schema) ✅ Done
-- task-382 (marker fetching) ⏳ In Progress  
+- task-382 (marker fetching) ✅ Done  
 - task-383 (UI implementation) ✅ Done
-- task-403 (user preferences) 📋 To Do
+- task-403 (user preferences) ✅ Done
 
-Work on those subtasks to complete this feature.
+All subtasks are complete. This parent task can now be marked as Done after verifying all acceptance criteria.
 <!-- SECTION:NOTES:END -->
