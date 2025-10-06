@@ -15,6 +15,9 @@ pub struct Config {
 
     #[serde(default)]
     pub ui: UiPreferences,
+
+    #[serde(default)]
+    pub updates: UpdateConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -48,6 +51,29 @@ pub struct PlaybackConfig {
 
     #[serde(default)]
     pub mpv_upscaling_mode: String,
+
+    #[serde(default = "default_true")]
+    pub skip_intro_enabled: bool,
+
+    #[serde(default = "default_true")]
+    pub skip_credits_enabled: bool,
+
+    #[serde(default)]
+    pub auto_skip_intro: bool,
+
+    #[serde(default)]
+    pub auto_skip_credits: bool,
+
+    #[serde(default = "default_minimum_marker_duration")]
+    pub minimum_marker_duration_seconds: u32,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_minimum_marker_duration() -> u32 {
+    5
 }
 
 impl Default for PlaybackConfig {
@@ -63,6 +89,11 @@ impl Default for PlaybackConfig {
             resume_threshold_seconds: 10,
             progress_update_interval_seconds: 10,
             mpv_upscaling_mode: "bilinear".to_string(),
+            skip_intro_enabled: true,
+            skip_credits_enabled: true,
+            auto_skip_intro: false,
+            auto_skip_credits: false,
+            minimum_marker_duration_seconds: 5,
         }
     }
 }
@@ -80,6 +111,45 @@ pub struct UiPreferences {
     /// Map of preset_name -> serialized FilterState JSON
     #[serde(default)]
     pub filter_presets: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpdateConfig {
+    /// Update behavior: "auto", "manual", or "disabled"
+    #[serde(default = "default_update_behavior")]
+    pub behavior: String,
+
+    /// Check for updates on startup
+    #[serde(default = "default_true")]
+    pub check_on_startup: bool,
+
+    /// Automatically download updates
+    #[serde(default)]
+    pub auto_download: bool,
+
+    /// Automatically install updates
+    #[serde(default)]
+    pub auto_install: bool,
+
+    /// Check for pre-release versions
+    #[serde(default)]
+    pub check_prerelease: bool,
+}
+
+fn default_update_behavior() -> String {
+    "manual".to_string()
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            behavior: "manual".to_string(),
+            check_on_startup: true,
+            auto_download: false,
+            auto_install: false,
+            check_prerelease: false,
+        }
+    }
 }
 
 impl Config {
