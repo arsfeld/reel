@@ -110,18 +110,20 @@ impl FactoryComponent for SourceItem {
                         },
                     },
 
-                    // Connection status indicator
+                    // Connection status indicator with glossy badge
                     gtk::Box {
-                        set_spacing: 6,
-
-                        gtk::Spinner {
-                            set_visible: matches!(self.connection_status, ConnectionStatus::Connecting),
-                            set_spinning: true,
-                            set_size_request: (16, 16),
+                        set_visible: !matches!(self.connection_status, ConnectionStatus::Connecting),
+                        add_css_class: "connection-status-badge",
+                        add_css_class: match self.connection_status {
+                            ConnectionStatus::Connected => "connected",
+                            ConnectionStatus::Error => "error",
+                            ConnectionStatus::Disconnected => "warning",
+                            _ => "",
                         },
+                        set_halign: gtk::Align::Center,
+                        set_valign: gtk::Align::Center,
 
                         gtk::Image {
-                            set_visible: !matches!(self.connection_status, ConnectionStatus::Connecting),
                             set_icon_name: match self.connection_status {
                                 ConnectionStatus::Connected => Some("emblem-ok-symbolic"),
                                 ConnectionStatus::Disconnected => Some("network-offline-symbolic"),
@@ -129,12 +131,14 @@ impl FactoryComponent for SourceItem {
                                 _ => None,
                             },
                             set_pixel_size: 16,
-                            add_css_class: match self.connection_status {
-                                ConnectionStatus::Connected => "success",
-                                ConnectionStatus::Error => "error",
-                                _ => "dim-label",
-                            },
                         },
+                    },
+
+                    // Spinner for connecting state (no badge)
+                    gtk::Spinner {
+                        set_visible: matches!(self.connection_status, ConnectionStatus::Connecting),
+                        set_spinning: true,
+                        set_size_request: (16, 16),
                     },
                 },
             },

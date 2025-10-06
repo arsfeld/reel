@@ -411,3 +411,75 @@ statuspage > box {
     background: rgba(255, 255, 255, 0.15);
     transform: translateY(-1px);
 }
+
+/* Connection Status Badge Container */
+.connection-status-badge {
+    border-radius: 12px;
+    padding: 6px 8px;
+    min-width: 32px;
+    min-height: 32px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.15),
+                inset 0 -1px 0 rgba(0, 0, 0, 0.15);
+    transition: all 200ms ease-in-out;
+}
+
+/* Connected - Glossy Green */
+.connection-status-badge.connected {
+    background: linear-gradient(135deg,
+                rgba(38, 162, 105, 0.95) 0%,
+                rgba(30, 130, 76, 0.95) 100%);
+    border: 1px solid rgba(46, 194, 126, 0.4);
+}
+
+.connection-status-badge.connected:hover {
+    background: linear-gradient(135deg,
+                rgba(46, 194, 126, 1) 0%,
+                rgba(38, 162, 105, 1) 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(38, 162, 105, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2),
+                inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+/* Warning/Error - Glossy Amber */
+.connection-status-badge.warning {
+    background: linear-gradient(135deg,
+                rgba(229, 165, 10, 0.95) 0%,
+                rgba(192, 132, 0, 0.95) 100%);
+    border: 1px solid rgba(246, 190, 0, 0.4);
+}
+
+.connection-status-badge.warning:hover {
+    background: linear-gradient(135deg,
+                rgba(246, 190, 0, 1) 0%,
+                rgba(229, 165, 10, 1) 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(229, 165, 10, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2),
+                inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+/* Disconnected - Glossy Red */
+.connection-status-badge.error {
+    background: linear-gradient(135deg,
+                rgba(192, 28, 40, 0.95) 0%,
+                rgba(164, 0, 0, 0.95) 100%);
+    border: 1px solid rgba(246, 97, 81, 0.4);
+}
+
+.connection-status-badge.error:hover {
+    background: linear-gradient(135deg,
+                rgba(246, 97, 81, 1) 0%,
+                rgba(192, 28, 40, 1) 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(192, 28, 40, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2),
+                inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+/* Icon inside badge styling */
+.connection-status-badge image {
+    color: white;
+    -gtk-icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
