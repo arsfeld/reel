@@ -113,6 +113,12 @@ pub struct PlayerPage {
     skip_credits_visible: bool,
     skip_intro_hide_timer: Option<SourceId>,
     skip_credits_hide_timer: Option<SourceId>,
+    // Cached skip intro/credits config values
+    config_skip_intro_enabled: bool,
+    config_skip_credits_enabled: bool,
+    config_auto_skip_intro: bool,
+    config_auto_skip_credits: bool,
+    config_minimum_marker_duration_seconds: u64,
     // Sleep inhibition
     inhibit_cookie: Option<u32>,
 }
@@ -1300,6 +1306,13 @@ impl AsyncComponent for PlayerPage {
             skip_credits_visible: false,
             skip_intro_hide_timer: None,
             skip_credits_hide_timer: None,
+            // Cached skip intro/credits config values
+            config_skip_intro_enabled: config.playback.skip_intro_enabled,
+            config_skip_credits_enabled: config.playback.skip_credits_enabled,
+            config_auto_skip_intro: config.playback.auto_skip_intro,
+            config_auto_skip_credits: config.playback.auto_skip_credits,
+            config_minimum_marker_duration_seconds: config.playback.minimum_marker_duration_seconds
+                as u64,
             // Sleep inhibition
             inhibit_cookie: None,
         };
@@ -1717,19 +1730,73 @@ impl AsyncComponent for PlayerPage {
                     timer.remove();
                 }
 
-                // Load marker data from database
+                // Load marker data from database and fetch from backend if missing
                 let db_clone_for_markers = self.db.clone();
                 let media_id_for_markers = id.clone();
                 let sender_for_markers = sender.clone();
                 glib::spawn_future_local(async move {
                     use crate::db::repository::{MediaRepository, MediaRepositoryImpl, Repository};
-                    use crate::models::MediaItem;
+                    use crate::models::{MediaItem, MediaItemId};
+                    use crate::services::core::backend::BackendService;
 
                     let media_repo =
                         MediaRepositoryImpl::new(db_clone_for_markers.as_ref().clone());
-                    if let Ok(Some(db_media)) =
+                    if let Ok(Some(mut db_media)) =
                         media_repo.find_by_id(media_id_for_markers.as_ref()).await
                     {
+                        // Check if markers are missing in database
+                        let markers_missing = db_media.intro_marker_start_ms.is_none()
+                            && db_media.credits_marker_start_ms.is_none();
+
+                        if markers_missing {
+                            // Fetch markers from backend
+                            let media_id_typed = MediaItemId::new(media_id_for_markers.to_string());
+                            match BackendService::fetch_markers(
+                                &db_clone_for_markers,
+                                &media_id_typed,
+                            )
+                            .await
+                            {
+                                Ok((intro_marker, credits_marker)) => {
+                                    // Store markers in database
+                                    let intro_tuple =
+                                        intro_marker.as_ref().map(|(start, end)| (*start, *end));
+                                    let credits_tuple =
+                                        credits_marker.as_ref().map(|(start, end)| (*start, *end));
+
+                                    if let Err(e) = media_repo
+                                        .update_markers(
+                                            media_id_for_markers.as_ref(),
+                                            intro_tuple,
+                                            credits_tuple,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            "Failed to store markers in database: {}",
+                                            e
+                                        );
+                                    } else {
+                                        // Update local db_media with the new markers
+                                        if let Some((start, end)) = intro_tuple {
+                                            db_media.intro_marker_start_ms = Some(start);
+                                            db_media.intro_marker_end_ms = Some(end);
+                                        }
+                                        if let Some((start, end)) = credits_tuple {
+                                            db_media.credits_marker_start_ms = Some(start);
+                                            db_media.credits_marker_end_ms = Some(end);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::debug!(
+                                        "Could not fetch markers from backend: {} (this is normal if markers aren't available)",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+
                         // Convert to domain model to get markers
                         if let Ok(media_item) = MediaItem::try_from(db_media) {
                             match media_item {
@@ -1924,19 +1991,73 @@ impl AsyncComponent for PlayerPage {
                     timer.remove();
                 }
 
-                // Load marker data from database
+                // Load marker data from database and fetch from backend if missing
                 let db_clone_for_markers = self.db.clone();
                 let media_id_for_markers = media_id.clone();
                 let sender_for_markers = sender.clone();
                 glib::spawn_future_local(async move {
                     use crate::db::repository::{MediaRepository, MediaRepositoryImpl, Repository};
-                    use crate::models::MediaItem;
+                    use crate::models::{MediaItem, MediaItemId};
+                    use crate::services::core::backend::BackendService;
 
                     let media_repo =
                         MediaRepositoryImpl::new(db_clone_for_markers.as_ref().clone());
-                    if let Ok(Some(db_media)) =
+                    if let Ok(Some(mut db_media)) =
                         media_repo.find_by_id(media_id_for_markers.as_ref()).await
                     {
+                        // Check if markers are missing in database
+                        let markers_missing = db_media.intro_marker_start_ms.is_none()
+                            && db_media.credits_marker_start_ms.is_none();
+
+                        if markers_missing {
+                            // Fetch markers from backend
+                            let media_id_typed = MediaItemId::new(media_id_for_markers.to_string());
+                            match BackendService::fetch_markers(
+                                &db_clone_for_markers,
+                                &media_id_typed,
+                            )
+                            .await
+                            {
+                                Ok((intro_marker, credits_marker)) => {
+                                    // Store markers in database
+                                    let intro_tuple =
+                                        intro_marker.as_ref().map(|(start, end)| (*start, *end));
+                                    let credits_tuple =
+                                        credits_marker.as_ref().map(|(start, end)| (*start, *end));
+
+                                    if let Err(e) = media_repo
+                                        .update_markers(
+                                            media_id_for_markers.as_ref(),
+                                            intro_tuple,
+                                            credits_tuple,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            "Failed to store markers in database: {}",
+                                            e
+                                        );
+                                    } else {
+                                        // Update local db_media with the new markers
+                                        if let Some((start, end)) = intro_tuple {
+                                            db_media.intro_marker_start_ms = Some(start);
+                                            db_media.intro_marker_end_ms = Some(end);
+                                        }
+                                        if let Some((start, end)) = credits_tuple {
+                                            db_media.credits_marker_start_ms = Some(start);
+                                            db_media.credits_marker_end_ms = Some(end);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::debug!(
+                                        "Could not fetch markers from backend: {} (this is normal if markers aren't available)",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+
                         // Convert to domain model to get markers
                         if let Ok(media_item) = MediaItem::try_from(db_media) {
                             match media_item {
@@ -2546,28 +2667,48 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::UpdateSkipButtonsVisibility => {
                 // Check if position is within intro marker range
                 if let Some(ref intro) = self.intro_marker {
-                    let was_visible = self.skip_intro_visible;
-                    let should_be_visible =
+                    // Check if marker meets minimum duration threshold
+                    let marker_duration = intro.end_time.as_secs() - intro.start_time.as_secs();
+                    let meets_threshold =
+                        marker_duration >= self.config_minimum_marker_duration_seconds;
+
+                    // Check if we're in the intro time range
+                    let in_intro_range =
                         self.position >= intro.start_time && self.position < intro.end_time;
 
-                    if should_be_visible != was_visible {
-                        self.skip_intro_visible = should_be_visible;
-
-                        // Start auto-hide timer when button becomes visible
-                        if should_be_visible {
-                            // Cancel any existing timer
-                            if let Some(timer) = self.skip_intro_hide_timer.take() {
-                                timer.remove();
+                    if in_intro_range && meets_threshold {
+                        // Auto-skip if configured
+                        if self.config_auto_skip_intro {
+                            // Only skip once at the start of the intro
+                            if !self.skip_intro_visible
+                                && self.position < intro.start_time + Duration::from_secs(1)
+                            {
+                                debug!("Auto-skipping intro");
+                                sender.input(PlayerInput::Seek(intro.end_time));
                             }
+                        } else if self.config_skip_intro_enabled {
+                            // Show button if enabled
+                            let was_visible = self.skip_intro_visible;
+                            if !was_visible {
+                                self.skip_intro_visible = true;
 
-                            // Start 5 second auto-hide timer
-                            let sender_clone = sender.clone();
-                            let timer = glib::timeout_add_seconds_local(5, move || {
-                                sender_clone.input(PlayerInput::HideSkipIntro);
-                                glib::ControlFlow::Break
-                            });
-                            self.skip_intro_hide_timer = Some(timer);
+                                // Start auto-hide timer when button becomes visible
+                                // Cancel any existing timer
+                                if let Some(timer) = self.skip_intro_hide_timer.take() {
+                                    timer.remove();
+                                }
+
+                                // Start 5 second auto-hide timer
+                                let sender_clone = sender.clone();
+                                let timer = glib::timeout_add_seconds_local(5, move || {
+                                    sender_clone.input(PlayerInput::HideSkipIntro);
+                                    glib::ControlFlow::Break
+                                });
+                                self.skip_intro_hide_timer = Some(timer);
+                            }
                         }
+                    } else {
+                        self.skip_intro_visible = false;
                     }
                 } else {
                     self.skip_intro_visible = false;
@@ -2575,28 +2716,48 @@ impl AsyncComponent for PlayerPage {
 
                 // Check if position is within credits marker range
                 if let Some(ref credits) = self.credits_marker {
-                    let was_visible = self.skip_credits_visible;
-                    let should_be_visible =
+                    // Check if marker meets minimum duration threshold
+                    let marker_duration = credits.end_time.as_secs() - credits.start_time.as_secs();
+                    let meets_threshold =
+                        marker_duration >= self.config_minimum_marker_duration_seconds;
+
+                    // Check if we're in the credits time range
+                    let in_credits_range =
                         self.position >= credits.start_time && self.position < credits.end_time;
 
-                    if should_be_visible != was_visible {
-                        self.skip_credits_visible = should_be_visible;
-
-                        // Start auto-hide timer when button becomes visible
-                        if should_be_visible {
-                            // Cancel any existing timer
-                            if let Some(timer) = self.skip_credits_hide_timer.take() {
-                                timer.remove();
+                    if in_credits_range && meets_threshold {
+                        // Auto-skip if configured
+                        if self.config_auto_skip_credits {
+                            // Only skip once at the start of the credits
+                            if !self.skip_credits_visible
+                                && self.position < credits.start_time + Duration::from_secs(1)
+                            {
+                                debug!("Auto-skipping credits");
+                                sender.input(PlayerInput::Seek(credits.end_time));
                             }
+                        } else if self.config_skip_credits_enabled {
+                            // Show button if enabled
+                            let was_visible = self.skip_credits_visible;
+                            if !was_visible {
+                                self.skip_credits_visible = true;
 
-                            // Start 5 second auto-hide timer
-                            let sender_clone = sender.clone();
-                            let timer = glib::timeout_add_seconds_local(5, move || {
-                                sender_clone.input(PlayerInput::HideSkipCredits);
-                                glib::ControlFlow::Break
-                            });
-                            self.skip_credits_hide_timer = Some(timer);
+                                // Start auto-hide timer when button becomes visible
+                                // Cancel any existing timer
+                                if let Some(timer) = self.skip_credits_hide_timer.take() {
+                                    timer.remove();
+                                }
+
+                                // Start 5 second auto-hide timer
+                                let sender_clone = sender.clone();
+                                let timer = glib::timeout_add_seconds_local(5, move || {
+                                    sender_clone.input(PlayerInput::HideSkipCredits);
+                                    glib::ControlFlow::Break
+                                });
+                                self.skip_credits_hide_timer = Some(timer);
+                            }
                         }
+                    } else {
+                        self.skip_credits_visible = false;
                     }
                 } else {
                     self.skip_credits_visible = false;
@@ -2651,6 +2812,12 @@ impl AsyncComponent for PlayerPage {
                             config.playback.resume_threshold_seconds as u64;
                         self.config_progress_update_interval_seconds =
                             config.playback.progress_update_interval_seconds as u64;
+                        self.config_skip_intro_enabled = config.playback.skip_intro_enabled;
+                        self.config_skip_credits_enabled = config.playback.skip_credits_enabled;
+                        self.config_auto_skip_intro = config.playback.auto_skip_intro;
+                        self.config_auto_skip_credits = config.playback.auto_skip_credits;
+                        self.config_minimum_marker_duration_seconds =
+                            config.playback.minimum_marker_duration_seconds as u64;
 
                         // Handle player backend changes
                         let new_backend = &config.playback.player_backend;
