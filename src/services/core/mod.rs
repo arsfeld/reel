@@ -9,9 +9,11 @@ pub mod playback;
 pub mod playlist;
 pub mod playqueue;
 pub mod sync;
+pub mod update;
 
 pub use backend::BackendService;
 pub use connection::ConnectionService;
 pub use connection_cache::ConnectionType;
 pub use media::MediaService;
 pub use playlist::PlaylistService;
+pub use update::UpdateService;
