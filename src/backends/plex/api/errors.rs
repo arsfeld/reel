@@ -13,7 +13,7 @@ pub enum PlexApiError {
 
     /// Rate limiting error (429)
     /// Should be retried with exponential backoff
-    #[error("Rate limited: {message} (retry after: {retry_after:?}s)")]
+    #[error("Rate limited: {message} (status: 429, retry after: {retry_after:?}s)")]
     RateLimit {
         message: String,
         retry_after: Option<u64>,
