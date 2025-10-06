@@ -659,6 +659,9 @@ pub fn navigate_to_movie(
 
     // Push the page to navigation
     window.navigation_view.push(&page);
+
+    // Clear any custom header content (like library view tabs)
+    sender.input(MainWindowInput::ClearHeaderContent);
 }
 
 /// Navigate to show details page
@@ -699,6 +702,9 @@ pub fn navigate_to_show(
 
     // Push the page to navigation
     window.navigation_view.push(&page);
+
+    // Clear any custom header content (like library view tabs)
+    sender.input(MainWindowInput::ClearHeaderContent);
 }
 
 /// Navigate to player page
