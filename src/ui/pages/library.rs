@@ -25,7 +25,7 @@ impl std::fmt::Debug for LibraryPage {
             .field("sort_by", &self.sort_by)
             .field("filter_text", &self.filter_text)
             .field("search_visible", &self.search_visible)
-            .field("selected_filter_tab", &self.selected_filter_tab)
+            .field("selected_view_mode", &self.selected_view_mode)
             .finish()
     }
 }
@@ -49,7 +49,6 @@ pub struct LibraryPage {
     selected_genres: Vec<String>,
     available_genres: Vec<String>,
     genre_popover: Option<gtk::Popover>,
-    genre_menu_button: Option<gtk::MenuButton>,
     genre_label_text: String,
     // Year range filtering
     min_year: Option<i32>,
@@ -57,15 +56,12 @@ pub struct LibraryPage {
     selected_min_year: Option<i32>,
     selected_max_year: Option<i32>,
     year_popover: Option<gtk::Popover>,
-    year_menu_button: Option<gtk::MenuButton>,
     // Rating filtering
     min_rating: Option<f32>,
     rating_popover: Option<gtk::Popover>,
-    rating_menu_button: Option<gtk::MenuButton>,
     // Watch status filtering
     watch_status_filter: WatchStatus,
     watch_status_popover: Option<gtk::Popover>,
-    watch_status_menu_button: Option<gtk::MenuButton>,
     // Media type filtering (for mixed libraries)
     library_type: Option<String>, // 'movies', 'shows', 'music', 'photos', 'mixed'
     selected_media_type: Option<String>, // Filter for mixed libraries
@@ -81,12 +77,16 @@ pub struct LibraryPage {
     pending_image_cancels: Vec<String>,
     // Handler IDs for cleanup
     scroll_handler_id: Option<gtk::glib::SignalHandlerId>,
-    // Filter panel visibility
-    filter_panel_visible: bool,
-    // Filter tab selection
-    selected_filter_tab: FilterTab,
+    // View mode selection
+    selected_view_mode: ViewMode,
+    // Tab widgets for header bar
+    tab_view: adw::TabView,
+    tab_bar: adw::TabBar,
     // Active filters container
     active_filters_box: Option<gtk::Box>,
+    // Unified filters popover
+    filters_popover: Option<gtk::Popover>,
+    filters_button: Option<gtk::Button>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -131,15 +131,13 @@ impl Default for WatchStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum FilterTab {
+pub enum ViewMode {
     All,
     Unwatched,
     RecentlyAdded,
-    Genres,
-    Years,
 }
 
-impl Default for FilterTab {
+impl Default for ViewMode {
     fn default() -> Self {
         Self::All
     }
@@ -194,9 +192,7 @@ pub struct FilterState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_media_type: Option<String>,
     #[serde(default)]
-    pub selected_filter_tab: FilterTab,
-    #[serde(default)]
-    pub filter_panel_visible: bool,
+    pub selected_view_mode: ViewMode,
 }
 
 impl Default for FilterState {
@@ -211,8 +207,7 @@ impl Default for FilterState {
             min_rating: None,
             watch_status_filter: WatchStatus::All,
             selected_media_type: None,
-            selected_filter_tab: FilterTab::All,
-            filter_panel_visible: false,
+            selected_view_mode: ViewMode::All,
         }
     }
 }
@@ -230,8 +225,7 @@ impl FilterState {
             min_rating: page.min_rating,
             watch_status_filter: page.watch_status_filter,
             selected_media_type: page.selected_media_type.clone(),
-            selected_filter_tab: page.selected_filter_tab,
-            filter_panel_visible: page.filter_panel_visible,
+            selected_view_mode: page.selected_view_mode,
         }
     }
 
@@ -293,14 +287,14 @@ pub enum LibraryPageInput {
     ShowSearch,
     /// Hide search bar
     HideSearch,
-    /// Toggle filter panel visibility
-    ToggleFilterPanel,
+    /// Toggle filters popover
+    ToggleFiltersPopover,
     /// Clear all filters
     ClearAllFilters,
     /// Remove a specific filter
     RemoveFilter(ActiveFilterType),
-    /// Set filter tab
-    SetFilterTab(FilterTab),
+    /// Set view mode
+    SetViewMode(ViewMode),
     /// Image loaded from worker
     ImageLoaded {
         id: String,
@@ -322,6 +316,8 @@ pub enum LibraryPageInput {
 pub enum LibraryPageOutput {
     /// Navigate to media item
     NavigateToMediaItem(MediaItemId),
+    /// Set header title widget (for view switcher tabs)
+    SetHeaderTitleWidget(gtk::Widget),
 }
 
 #[relm4::component(pub async)]
@@ -365,29 +361,6 @@ impl AsyncComponent for LibraryPage {
                     set_spacing: 12,
                     set_margin_all: 12,
                     set_halign: gtk::Align::Start,
-
-                    // Filter panel toggle button with badge
-                    gtk::Button {
-                        set_icon_name: "funnel-symbolic",
-                        set_tooltip_text: Some("Show filters"),
-                        add_css_class: "flat",
-                        #[watch]
-                        set_label: &{
-                            let count = model.get_active_filter_count();
-                            if count > 0 {
-                                format!(" {}", count)
-                            } else {
-                                String::new()
-                            }
-                        },
-                        connect_clicked[sender] => move |_| {
-                            sender.input(LibraryPageInput::ToggleFilterPanel);
-                        }
-                    },
-
-                    gtk::Separator {
-                        set_orientation: gtk::Orientation::Vertical,
-                    },
 
                     gtk::Label {
                         set_text: "Sort by:",
@@ -449,69 +422,15 @@ impl AsyncComponent for LibraryPage {
                             sender.input(LibraryPageInput::ShowSearch);
                         }
                     },
-                },
 
-                // Filter tabs
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Horizontal,
-                    set_spacing: 6,
-                    set_margin_start: 12,
-                    set_margin_end: 12,
-                    set_margin_bottom: 6,
-                    add_css_class: "linked",
-
-                    gtk::ToggleButton {
-                        set_label: "All",
-                        #[watch]
-                        set_active: model.selected_filter_tab == FilterTab::All,
-                        connect_toggled[sender] => move |btn| {
-                            if btn.is_active() {
-                                sender.input(LibraryPageInput::SetFilterTab(FilterTab::All));
-                            }
-                        }
-                    },
-
-                    gtk::ToggleButton {
-                        set_label: "Unwatched",
-                        #[watch]
-                        set_active: model.selected_filter_tab == FilterTab::Unwatched,
-                        connect_toggled[sender] => move |btn| {
-                            if btn.is_active() {
-                                sender.input(LibraryPageInput::SetFilterTab(FilterTab::Unwatched));
-                            }
-                        }
-                    },
-
-                    gtk::ToggleButton {
-                        set_label: "Recently Added",
-                        #[watch]
-                        set_active: model.selected_filter_tab == FilterTab::RecentlyAdded,
-                        connect_toggled[sender] => move |btn| {
-                            if btn.is_active() {
-                                sender.input(LibraryPageInput::SetFilterTab(FilterTab::RecentlyAdded));
-                            }
-                        }
-                    },
-
-                    gtk::ToggleButton {
-                        set_label: "Genres",
-                        #[watch]
-                        set_active: model.selected_filter_tab == FilterTab::Genres,
-                        connect_toggled[sender] => move |btn| {
-                            if btn.is_active() {
-                                sender.input(LibraryPageInput::SetFilterTab(FilterTab::Genres));
-                            }
-                        }
-                    },
-
-                    gtk::ToggleButton {
-                        set_label: "Years",
-                        #[watch]
-                        set_active: model.selected_filter_tab == FilterTab::Years,
-                        connect_toggled[sender] => move |btn| {
-                            if btn.is_active() {
-                                sender.input(LibraryPageInput::SetFilterTab(FilterTab::Years));
-                            }
+                    // Add filters button
+                    #[name = "filters_button"]
+                    gtk::Button {
+                        set_icon_name: "funnel-symbolic",
+                        set_tooltip_text: Some("Filters"),
+                        add_css_class: "flat",
+                        connect_clicked[sender] => move |_| {
+                            sender.input(LibraryPageInput::ToggleFiltersPopover);
                         }
                     },
                 },
@@ -583,142 +502,11 @@ impl AsyncComponent for LibraryPage {
                     },
                 },
 
-                // Main content area with filter panel and media grid
+                // Main content area with media grid
                 gtk::Box {
                     set_orientation: gtk::Orientation::Horizontal,
                     set_spacing: 0,
                     set_vexpand: true,
-
-                    // Filter panel sidebar
-                    gtk::Revealer {
-                        set_transition_type: gtk::RevealerTransitionType::SlideRight,
-                        set_transition_duration: 200,
-                        #[watch]
-                        set_reveal_child: model.filter_panel_visible,
-
-                        gtk::ScrolledWindow {
-                            set_hscrollbar_policy: gtk::PolicyType::Never,
-                            set_vscrollbar_policy: gtk::PolicyType::Automatic,
-                            set_width_request: 280,
-
-                            gtk::Box {
-                                set_orientation: gtk::Orientation::Vertical,
-                                set_spacing: 12,
-                                set_margin_all: 16,
-
-                                // Header with title and clear all button
-                                gtk::Box {
-                                    set_orientation: gtk::Orientation::Horizontal,
-                                    set_spacing: 12,
-
-                                    gtk::Label {
-                                        set_label: "Filters",
-                                        set_halign: gtk::Align::Start,
-                                        set_hexpand: true,
-                                        add_css_class: "title-3",
-                                    },
-
-                                    gtk::Button {
-                                        set_label: "Clear All",
-                                        add_css_class: "flat",
-                                        #[watch]
-                                        set_sensitive: model.get_active_filter_count() > 0,
-                                        connect_clicked[sender] => move |_| {
-                                            sender.input(LibraryPageInput::ClearAllFilters);
-                                        }
-                                    },
-                                },
-
-                                gtk::Separator {
-                                    set_orientation: gtk::Orientation::Horizontal,
-                                },
-
-                                // Genre filter section
-                                #[name = "genre_section"]
-                                gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
-                                    set_spacing: 8,
-                                    #[watch]
-                                    set_visible: !model.available_genres.is_empty(),
-
-                                    gtk::Label {
-                                        set_label: "Genre",
-                                        set_halign: gtk::Align::Start,
-                                        add_css_class: "heading",
-                                    },
-
-                                    #[name = "genre_menu_button"]
-                                    gtk::MenuButton {
-                                        set_label: &model.get_genre_label(),
-                                        set_always_show_arrow: true,
-                                    },
-                                },
-
-                                // Year range filter section
-                                #[name = "year_section"]
-                                gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
-                                    set_spacing: 8,
-                                    #[watch]
-                                    set_visible: model.min_year.is_some() && model.max_year.is_some(),
-
-                                    gtk::Label {
-                                        set_label: "Year",
-                                        set_halign: gtk::Align::Start,
-                                        add_css_class: "heading",
-                                    },
-
-                                    #[name = "year_menu_button"]
-                                    gtk::MenuButton {
-                                        set_label: &model.get_year_label(),
-                                        set_always_show_arrow: true,
-                                    },
-                                },
-
-                                // Rating filter section
-                                gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
-                                    set_spacing: 8,
-
-                                    gtk::Label {
-                                        set_label: "Rating",
-                                        set_halign: gtk::Align::Start,
-                                        add_css_class: "heading",
-                                    },
-
-                                    #[name = "rating_menu_button"]
-                                    gtk::MenuButton {
-                                        set_label: &model.get_rating_label(),
-                                        set_always_show_arrow: true,
-                                    },
-                                },
-
-                                // Watch status filter section
-                                gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
-                                    set_spacing: 8,
-
-                                    gtk::Label {
-                                        set_label: "Watch Status",
-                                        set_halign: gtk::Align::Start,
-                                        add_css_class: "heading",
-                                    },
-
-                                    #[name = "watch_status_menu_button"]
-                                    gtk::MenuButton {
-                                        set_label: &model.get_watch_status_label(),
-                                        set_always_show_arrow: true,
-                                    },
-                                },
-                            }
-                        }
-                    },
-
-                    gtk::Separator {
-                        set_orientation: gtk::Orientation::Vertical,
-                        #[watch]
-                        set_visible: model.filter_panel_visible,
-                    },
 
                     // Scrolled window with media content
                     #[name = "scrolled_window"]
@@ -990,7 +778,6 @@ impl AsyncComponent for LibraryPage {
             selected_genres: Vec::new(),
             available_genres: Vec::new(),
             genre_popover: None,
-            genre_menu_button: None,
             genre_label_text: String::new(),
             // Year range filtering
             min_year: None,
@@ -998,15 +785,12 @@ impl AsyncComponent for LibraryPage {
             selected_min_year: None,
             selected_max_year: None,
             year_popover: None,
-            year_menu_button: None,
             // Rating filtering
             min_rating: None,
             rating_popover: None,
-            rating_menu_button: None,
             // Watch status filtering
             watch_status_filter: WatchStatus::All,
             watch_status_popover: None,
-            watch_status_menu_button: None,
             // Media type filtering (for mixed libraries)
             library_type: None,
             selected_media_type: None,
@@ -1022,12 +806,16 @@ impl AsyncComponent for LibraryPage {
             pending_image_cancels: Vec::new(),
             // Handler IDs for cleanup
             scroll_handler_id: None,
-            // Filter panel visibility
-            filter_panel_visible: false,
-            // Filter tab selection
-            selected_filter_tab: FilterTab::All,
+            // View mode selection
+            selected_view_mode: ViewMode::All,
+            // Tab widgets for header bar
+            tab_view: adw::TabView::new(),
+            tab_bar: adw::TabBar::new(),
             // Active filters container
             active_filters_box: None,
+            // Unified filters popover
+            filters_popover: None,
+            filters_button: None,
         };
 
         let mut model = model;
@@ -1036,6 +824,12 @@ impl AsyncComponent for LibraryPage {
 
         // Store reference to active filters box
         model.active_filters_box = Some(widgets.active_filters_box.clone());
+
+        // Store reference to filters button and create unified filters popover
+        model.filters_button = Some(widgets.filters_button.clone());
+        let filters_popover = gtk::Popover::new();
+        filters_popover.set_parent(&widgets.filters_button);
+        model.filters_popover = Some(filters_popover);
 
         // Subscribe to MessageBroker for config updates
         {
@@ -1055,44 +849,22 @@ impl AsyncComponent for LibraryPage {
         // Create and set the genre filter popover
         let genre_popover = gtk::Popover::new();
         genre_popover.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
-        widgets.genre_menu_button.set_popover(Some(&genre_popover));
-        widgets
-            .genre_menu_button
-            .set_label(&model.get_genre_label());
         model.genre_popover = Some(genre_popover);
-        model.genre_menu_button = Some(widgets.genre_menu_button.clone());
 
         // Create and set the year range filter popover
         let year_popover = gtk::Popover::new();
         year_popover.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
-        widgets.year_menu_button.set_popover(Some(&year_popover));
-        widgets.year_menu_button.set_label(&model.get_year_label());
         model.year_popover = Some(year_popover);
-        model.year_menu_button = Some(widgets.year_menu_button.clone());
 
         // Create and set the rating filter popover
         let rating_popover = gtk::Popover::new();
         rating_popover.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
-        widgets
-            .rating_menu_button
-            .set_popover(Some(&rating_popover));
-        widgets
-            .rating_menu_button
-            .set_label(&model.get_rating_label());
         model.rating_popover = Some(rating_popover);
-        model.rating_menu_button = Some(widgets.rating_menu_button.clone());
 
         // Create and set the watch status filter popover
         let watch_status_popover = gtk::Popover::new();
         watch_status_popover.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
-        widgets
-            .watch_status_menu_button
-            .set_popover(Some(&watch_status_popover));
-        widgets
-            .watch_status_menu_button
-            .set_label(&model.get_watch_status_label());
         model.watch_status_popover = Some(watch_status_popover);
-        model.watch_status_menu_button = Some(widgets.watch_status_menu_button.clone());
 
         // Connect scroll handler and store the ID
         let sender_for_scroll = sender.clone();
@@ -1101,6 +873,54 @@ impl AsyncComponent for LibraryPage {
             sender_for_scroll.input(LibraryPageInput::ViewportScrolled);
         });
         model.scroll_handler_id = Some(scroll_handler_id);
+
+        // Setup tab bar for header bar
+        // Add pages to the tab view as pinned tabs (pinned tabs don't show close buttons)
+        let all_page = model
+            .tab_view
+            .append(&gtk::Box::new(gtk::Orientation::Vertical, 0));
+        all_page.set_title("All");
+        model.tab_view.set_page_pinned(&all_page, true);
+
+        let unwatched_page = model
+            .tab_view
+            .append(&gtk::Box::new(gtk::Orientation::Vertical, 0));
+        unwatched_page.set_title("Unwatched");
+        model.tab_view.set_page_pinned(&unwatched_page, true);
+
+        let recent_page = model
+            .tab_view
+            .append(&gtk::Box::new(gtk::Orientation::Vertical, 0));
+        recent_page.set_title("Recently Added");
+        model.tab_view.set_page_pinned(&recent_page, true);
+
+        // Prevent closing tabs by connecting to close-page signal
+        model.tab_view.connect_close_page(|_, _| {
+            // Return false to prevent closing
+            gtk::glib::Propagation::Stop
+        });
+
+        // Connect tab bar to tab view
+        model.tab_bar.set_view(Some(&model.tab_view));
+        model.tab_bar.set_autohide(false);
+        model.tab_bar.set_expand_tabs(false);
+
+        // Connect tab view page changes to view mode updates
+        let sender_for_view = sender.clone();
+        model
+            .tab_view
+            .connect_selected_page_notify(move |tab_view| {
+                if let Some(page) = tab_view.selected_page() {
+                    let title = page.title();
+                    let view_mode = match title.as_str() {
+                        "All" => ViewMode::All,
+                        "Unwatched" => ViewMode::Unwatched,
+                        "Recently Added" => ViewMode::RecentlyAdded,
+                        _ => ViewMode::All,
+                    };
+                    sender_for_view.input(LibraryPageInput::SetViewMode(view_mode));
+                }
+            });
 
         AsyncComponentParts { model, widgets }
     }
@@ -1129,10 +949,21 @@ impl AsyncComponent for LibraryPage {
                 self.visible_end_idx = 0;
                 self.cancel_pending_images();
 
+                // Send tab bar to main window header
+                // The tab bar provides navigation tabs in the header
+                // Wrap in a centered box for proper visual centering
+                let center_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                center_box.set_halign(gtk::Align::Center);
+                center_box.set_hexpand(true);
+                center_box.append(&self.tab_bar);
+                sender
+                    .output(LibraryPageOutput::SetHeaderTitleWidget(center_box.upcast()))
+                    .expect("Failed to send header widget");
+
                 // Load saved filter state for the new library
                 let library_id_for_config = library_id.clone();
                 let sender_for_config = sender.clone();
-                relm4::spawn(async move {
+                relm4::spawn_local(async move {
                     use crate::services::config_service::config_service;
 
                     // Try to load full filter state first
@@ -1151,21 +982,19 @@ impl AsyncComponent for LibraryPage {
                         }
                     }
 
-                    // Fallback to loading just the filter tab (backward compatibility)
-                    if let Some(saved_tab) = config_service()
+                    // Fallback to loading just the view mode (backward compatibility)
+                    if let Some(saved_mode) = config_service()
                         .get_library_filter_tab(library_id_for_config.as_ref())
                         .await
                     {
-                        // Parse saved tab string back to FilterTab enum
-                        let filter_tab = match saved_tab.as_str() {
-                            "All" => FilterTab::All,
-                            "Unwatched" => FilterTab::Unwatched,
-                            "RecentlyAdded" => FilterTab::RecentlyAdded,
-                            "Genres" => FilterTab::Genres,
-                            "Years" => FilterTab::Years,
-                            _ => FilterTab::All,
+                        // Parse saved mode string back to ViewMode enum
+                        let view_mode = match saved_mode.as_str() {
+                            "All" => ViewMode::All,
+                            "Unwatched" => ViewMode::Unwatched,
+                            "RecentlyAdded" => ViewMode::RecentlyAdded,
+                            _ => ViewMode::All, // Default to All for legacy Genres/Years
                         };
-                        sender_for_config.input(LibraryPageInput::SetFilterTab(filter_tab));
+                        sender_for_config.input(LibraryPageInput::SetViewMode(view_mode));
                     }
                 });
 
@@ -1230,21 +1059,11 @@ impl AsyncComponent for LibraryPage {
                     if let Some(ref popover) = self.year_popover {
                         self.update_year_popover(popover, sender.clone());
                     }
-
-                    // Update the year menu button label
-                    if let Some(ref button) = self.year_menu_button {
-                        button.set_label(&self.get_year_label());
-                    }
                 }
 
                 // Initialize the rating popover
                 if let Some(ref popover) = self.rating_popover {
                     self.update_rating_popover(popover, sender.clone());
-                }
-
-                // Update the rating menu button label
-                if let Some(ref button) = self.rating_menu_button {
-                    button.set_label(&self.get_rating_label());
                 }
 
                 // Initialize the watch status popover
@@ -1348,12 +1167,9 @@ impl AsyncComponent for LibraryPage {
                         };
 
                         // Filter tab filter (for RecentlyAdded)
-                        let tab_match = match self.selected_filter_tab {
-                            FilterTab::All
-                            | FilterTab::Unwatched
-                            | FilterTab::Genres
-                            | FilterTab::Years => true,
-                            FilterTab::RecentlyAdded => {
+                        let tab_match = match self.selected_view_mode {
+                            ViewMode::All | ViewMode::Unwatched => true,
+                            ViewMode::RecentlyAdded => {
                                 // Show items added in the last 30 days
                                 if let Some(added_at) = item.added_at {
                                     let now = chrono::Utc::now();
@@ -1559,11 +1375,6 @@ impl AsyncComponent for LibraryPage {
                     self.selected_genres.push(genre);
                 }
 
-                // Update the menu button label
-                if let Some(ref button) = self.genre_menu_button {
-                    button.set_label(&self.get_genre_label());
-                }
-
                 // Update the popover UI
                 if let Some(ref popover) = self.genre_popover {
                     self.update_genre_popover(popover, sender.clone());
@@ -1579,11 +1390,6 @@ impl AsyncComponent for LibraryPage {
             LibraryPageInput::ClearGenreFilters => {
                 debug!("Clearing all genre filters");
                 self.selected_genres.clear();
-
-                // Update the menu button label
-                if let Some(ref button) = self.genre_menu_button {
-                    button.set_label(&self.get_genre_label());
-                }
 
                 // Update the popover UI
                 if let Some(ref popover) = self.genre_popover {
@@ -1602,11 +1408,6 @@ impl AsyncComponent for LibraryPage {
                 self.selected_min_year = min;
                 self.selected_max_year = max;
 
-                // Update the menu button label
-                if let Some(ref button) = self.year_menu_button {
-                    button.set_label(&self.get_year_label());
-                }
-
                 // Update the popover UI
                 if let Some(ref popover) = self.year_popover {
                     self.update_year_popover(popover, sender.clone());
@@ -1624,11 +1425,6 @@ impl AsyncComponent for LibraryPage {
                 self.selected_min_year = None;
                 self.selected_max_year = None;
 
-                // Update the menu button label
-                if let Some(ref button) = self.year_menu_button {
-                    button.set_label(&self.get_year_label());
-                }
-
                 // Update the popover UI
                 if let Some(ref popover) = self.year_popover {
                     self.update_year_popover(popover, sender.clone());
@@ -1644,11 +1440,6 @@ impl AsyncComponent for LibraryPage {
             LibraryPageInput::SetRatingFilter(min_rating) => {
                 debug!("Setting rating filter: {:?}", min_rating);
                 self.min_rating = min_rating;
-
-                // Update the menu button label
-                if let Some(ref button) = self.rating_menu_button {
-                    button.set_label(&self.get_rating_label());
-                }
 
                 // Update the popover UI
                 if let Some(ref popover) = self.rating_popover {
@@ -1666,11 +1457,6 @@ impl AsyncComponent for LibraryPage {
                 debug!("Clearing rating filter");
                 self.min_rating = None;
 
-                // Update the menu button label
-                if let Some(ref button) = self.rating_menu_button {
-                    button.set_label(&self.get_rating_label());
-                }
-
                 // Update the popover UI
                 if let Some(ref popover) = self.rating_popover {
                     self.update_rating_popover(popover, sender.clone());
@@ -1687,11 +1473,6 @@ impl AsyncComponent for LibraryPage {
                 debug!("Setting watch status filter: {:?}", status);
                 self.watch_status_filter = status;
 
-                // Update the menu button label
-                if let Some(ref button) = self.watch_status_menu_button {
-                    button.set_label(&self.get_watch_status_label());
-                }
-
                 // Update the popover UI
                 if let Some(ref popover) = self.watch_status_popover {
                     self.update_watch_status_popover(popover, sender.clone());
@@ -1707,11 +1488,6 @@ impl AsyncComponent for LibraryPage {
             LibraryPageInput::ClearWatchStatusFilter => {
                 debug!("Clearing watch status filter");
                 self.watch_status_filter = WatchStatus::All;
-
-                // Update the menu button label
-                if let Some(ref button) = self.watch_status_menu_button {
-                    button.set_label(&self.get_watch_status_label());
-                }
 
                 // Update the popover UI
                 if let Some(ref popover) = self.watch_status_popover {
@@ -1753,8 +1529,18 @@ impl AsyncComponent for LibraryPage {
                 }
             }
 
-            LibraryPageInput::ToggleFilterPanel => {
-                self.filter_panel_visible = !self.filter_panel_visible;
+            LibraryPageInput::ToggleFiltersPopover => {
+                if let Some(ref popover) = self.filters_popover {
+                    // Update the popover content before showing
+                    self.update_unified_filters_popover(sender.clone());
+
+                    // Toggle the popover
+                    if popover.is_visible() {
+                        popover.popdown();
+                    } else {
+                        popover.popup();
+                    }
+                }
             }
 
             LibraryPageInput::ClearAllFilters => {
@@ -1763,9 +1549,6 @@ impl AsyncComponent for LibraryPage {
                 // Clear genre filters
                 if !self.selected_genres.is_empty() {
                     self.selected_genres.clear();
-                    if let Some(ref button) = self.genre_menu_button {
-                        button.set_label(&self.get_genre_label());
-                    }
                     if let Some(ref popover) = self.genre_popover {
                         self.update_genre_popover(popover, sender.clone());
                     }
@@ -1775,9 +1558,6 @@ impl AsyncComponent for LibraryPage {
                 if self.selected_min_year.is_some() || self.selected_max_year.is_some() {
                     self.selected_min_year = None;
                     self.selected_max_year = None;
-                    if let Some(ref button) = self.year_menu_button {
-                        button.set_label(&self.get_year_label());
-                    }
                     if let Some(ref popover) = self.year_popover {
                         self.update_year_popover(popover, sender.clone());
                     }
@@ -1786,9 +1566,6 @@ impl AsyncComponent for LibraryPage {
                 // Clear rating filter
                 if self.min_rating.is_some() {
                     self.min_rating = None;
-                    if let Some(ref button) = self.rating_menu_button {
-                        button.set_label(&self.get_rating_label());
-                    }
                     if let Some(ref popover) = self.rating_popover {
                         self.update_rating_popover(popover, sender.clone());
                     }
@@ -1797,9 +1574,6 @@ impl AsyncComponent for LibraryPage {
                 // Clear watch status filter
                 if self.watch_status_filter != WatchStatus::All {
                     self.watch_status_filter = WatchStatus::All;
-                    if let Some(ref button) = self.watch_status_menu_button {
-                        button.set_label(&self.get_watch_status_label());
-                    }
                     if let Some(ref popover) = self.watch_status_popover {
                         self.update_watch_status_popover(popover, sender.clone());
                     }
@@ -1826,9 +1600,6 @@ impl AsyncComponent for LibraryPage {
                     }
                     ActiveFilterType::Genre(genre) => {
                         self.selected_genres.retain(|g| g != &genre);
-                        if let Some(ref button) = self.genre_menu_button {
-                            button.set_label(&self.get_genre_label());
-                        }
                         if let Some(ref popover) = self.genre_popover {
                             self.update_genre_popover(popover, sender.clone());
                         }
@@ -1836,33 +1607,24 @@ impl AsyncComponent for LibraryPage {
                     ActiveFilterType::YearRange => {
                         self.selected_min_year = None;
                         self.selected_max_year = None;
-                        if let Some(ref button) = self.year_menu_button {
-                            button.set_label(&self.get_year_label());
-                        }
                         if let Some(ref popover) = self.year_popover {
                             self.update_year_popover(popover, sender.clone());
                         }
                     }
                     ActiveFilterType::Rating => {
                         self.min_rating = None;
-                        if let Some(ref button) = self.rating_menu_button {
-                            button.set_label(&self.get_rating_label());
-                        }
                         if let Some(ref popover) = self.rating_popover {
                             self.update_rating_popover(popover, sender.clone());
                         }
                     }
                     ActiveFilterType::WatchStatus => {
                         self.watch_status_filter = WatchStatus::All;
-                        if let Some(ref button) = self.watch_status_menu_button {
-                            button.set_label(&self.get_watch_status_label());
-                        }
                         if let Some(ref popover) = self.watch_status_popover {
                             self.update_watch_status_popover(popover, sender.clone());
                         }
                     }
                     ActiveFilterType::Tab => {
-                        self.selected_filter_tab = FilterTab::All;
+                        self.selected_view_mode = ViewMode::All;
                     }
                 }
 
@@ -1873,61 +1635,54 @@ impl AsyncComponent for LibraryPage {
                 self.load_all_items(sender.clone());
             }
 
-            LibraryPageInput::SetFilterTab(tab) => {
-                debug!("Setting filter tab: {:?}", tab);
-                self.selected_filter_tab = tab;
+            LibraryPageInput::SetViewMode(mode) => {
+                debug!("Setting view mode: {:?}", mode);
+                self.selected_view_mode = mode;
 
-                // Save the selected tab to config
+                // Update tab view to match the selected mode
+                let page_index = match mode {
+                    ViewMode::All => 0,
+                    ViewMode::Unwatched => 1,
+                    ViewMode::RecentlyAdded => 2,
+                };
+                let page = self.tab_view.nth_page(page_index);
+                self.tab_view.set_selected_page(&page);
+
+                // Save the selected mode to config
                 if let Some(ref library_id) = self.library_id {
                     let library_id_clone = library_id.clone();
-                    let tab_str = match tab {
-                        FilterTab::All => "All",
-                        FilterTab::Unwatched => "Unwatched",
-                        FilterTab::RecentlyAdded => "RecentlyAdded",
-                        FilterTab::Genres => "Genres",
-                        FilterTab::Years => "Years",
+                    let mode_str = match mode {
+                        ViewMode::All => "All",
+                        ViewMode::Unwatched => "Unwatched",
+                        ViewMode::RecentlyAdded => "RecentlyAdded",
                     }
                     .to_string();
 
                     relm4::spawn(async move {
                         use crate::services::config_service::config_service;
                         let _ = config_service()
-                            .set_library_filter_tab(library_id_clone.to_string(), tab_str)
+                            .set_library_filter_tab(library_id_clone.to_string(), mode_str)
                             .await;
                     });
                 }
 
-                // Apply tab-specific filters
-                match tab {
-                    FilterTab::All => {
-                        // Clear any tab-specific filters
+                // Apply mode-specific filters (these don't modify the filter state, just the view)
+                match mode {
+                    ViewMode::All => {
+                        // Show all items - no additional filtering
                         if self.watch_status_filter != WatchStatus::All {
                             self.watch_status_filter = WatchStatus::All;
                         }
-                        if self.selected_min_year.is_some() || self.selected_max_year.is_some() {
-                            self.selected_min_year = None;
-                            self.selected_max_year = None;
-                        }
                     }
-                    FilterTab::Unwatched => {
-                        // Set watch status to unwatched
+                    ViewMode::Unwatched => {
+                        // Show only unwatched items
                         self.watch_status_filter = WatchStatus::Unwatched;
                     }
-                    FilterTab::RecentlyAdded => {
-                        // Set date filter to last 30 days
-                        // We'll use the sort_by mechanism for now as a placeholder
-                        // In the future, we might add a specific date range filter
-                        // For now, we'll just sort by date added
+                    ViewMode::RecentlyAdded => {
+                        // Show recently added items (last 30 days)
+                        // Sort by date added in descending order
                         self.sort_by = SortBy::DateAdded;
                         self.sort_order = SortOrder::Descending;
-                    }
-                    FilterTab::Genres => {
-                        // Show placeholder - toggle filter panel to show genre filter
-                        self.filter_panel_visible = true;
-                    }
-                    FilterTab::Years => {
-                        // Show placeholder - toggle filter panel to show year filter
-                        self.filter_panel_visible = true;
                     }
                 }
 
@@ -2057,8 +1812,7 @@ impl LibraryPage {
         self.min_rating = state.min_rating;
         self.watch_status_filter = state.watch_status_filter;
         self.selected_media_type = state.selected_media_type.clone();
-        self.selected_filter_tab = state.selected_filter_tab;
-        self.filter_panel_visible = state.filter_panel_visible;
+        self.selected_view_mode = state.selected_view_mode;
     }
 
     /// Save the current filter state to config
@@ -2592,7 +2346,7 @@ impl LibraryPage {
             let sort_order = self.sort_order;
             let selected_media_type = self.selected_media_type.clone();
 
-            relm4::spawn(async move {
+            relm4::spawn_local(async move {
                 use crate::db::repository::{
                     LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl, Repository,
                 };
@@ -2805,7 +2559,7 @@ impl LibraryPage {
             || self.min_rating.is_some()
             || self.watch_status_filter != WatchStatus::All
             || !self.filter_text.is_empty()
-            || self.selected_filter_tab != FilterTab::All
+            || self.selected_view_mode != ViewMode::All
     }
 
     /// Get list of active filters for display
@@ -2867,13 +2621,11 @@ impl LibraryPage {
         }
 
         // Filter tab
-        if self.selected_filter_tab != FilterTab::All {
-            let label = match self.selected_filter_tab {
-                FilterTab::RecentlyAdded => "Recently Added (30 days)".to_string(),
-                FilterTab::Unwatched => "Unwatched Items".to_string(),
-                FilterTab::Genres => "Genres View".to_string(),
-                FilterTab::Years => "Years View".to_string(),
-                FilterTab::All => unreachable!(),
+        if self.selected_view_mode != ViewMode::All {
+            let label = match self.selected_view_mode {
+                ViewMode::RecentlyAdded => "Recently Added (30 days)".to_string(),
+                ViewMode::Unwatched => "Unwatched Items".to_string(),
+                ViewMode::All => unreachable!(),
             };
             filters.push(ActiveFilter {
                 label,
@@ -2927,13 +2679,14 @@ impl LibraryPage {
             let active_filters = self.get_active_filters_list();
             for filter in active_filters {
                 let chip = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                chip.add_css_class("pill");
-                chip.set_margin_end(6);
+                chip.add_css_class("metadata-pill-modern");
+                chip.add_css_class("interactive-element");
+                chip.set_margin_end(8);
                 chip.set_margin_bottom(6);
 
                 let label = gtk::Label::new(Some(&filter.label));
                 label.set_margin_start(12);
-                label.set_margin_end(6);
+                label.set_margin_end(12);
                 label.set_margin_top(6);
                 label.set_margin_bottom(6);
                 chip.append(&label);
@@ -2956,5 +2709,247 @@ impl LibraryPage {
                 container.append(&chip);
             }
         }
+    }
+
+    /// Build and update the unified filters popover with all filter options
+    fn update_unified_filters_popover(&self, sender: AsyncComponentSender<Self>) {
+        if let Some(ref popover) = self.filters_popover {
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+            content.set_margin_top(12);
+            content.set_margin_bottom(12);
+            content.set_margin_start(12);
+            content.set_margin_end(12);
+            content.set_width_request(320);
+
+            // Genre Filter Section
+            let genre_section = self.build_genre_filter_section(sender.clone());
+            content.append(&genre_section);
+
+            // Separator
+            content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+            // Year Range Filter Section
+            let year_section = self.build_year_filter_section(sender.clone());
+            content.append(&year_section);
+
+            // Separator
+            content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+            // Rating Filter Section
+            let rating_section = self.build_rating_filter_section(sender.clone());
+            content.append(&rating_section);
+
+            // Separator
+            content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+            // Watch Status Filter Section
+            let watch_status_section = self.build_watch_status_filter_section(sender.clone());
+            content.append(&watch_status_section);
+
+            popover.set_child(Some(&content));
+        }
+    }
+
+    /// Build genre filter section for unified popover
+    fn build_genre_filter_section(&self, sender: AsyncComponentSender<Self>) -> gtk::Box {
+        let section = gtk::Box::new(gtk::Orientation::Vertical, 6);
+
+        // Header
+        let header = gtk::Label::new(Some("Genre"));
+        header.set_halign(gtk::Align::Start);
+        header.add_css_class("heading");
+        section.append(&header);
+
+        // Scrolled window for genres
+        let scrolled = gtk::ScrolledWindow::new();
+        scrolled.set_max_content_height(200);
+        scrolled.set_propagate_natural_height(true);
+        scrolled.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+
+        let genre_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+
+        if self.available_genres.is_empty() {
+            let no_genres = gtk::Label::new(Some("No genres available"));
+            no_genres.add_css_class("dim-label");
+            genre_box.append(&no_genres);
+        } else {
+            for genre in &self.available_genres {
+                let check_button = gtk::CheckButton::with_label(genre);
+                check_button.set_active(self.selected_genres.contains(genre));
+                check_button.add_css_class("flat");
+
+                let genre_clone = genre.clone();
+                let sender_clone = sender.clone();
+                check_button.connect_toggled(move |_| {
+                    sender_clone.input(LibraryPageInput::ToggleGenreFilter(genre_clone.clone()));
+                });
+
+                genre_box.append(&check_button);
+            }
+        }
+
+        scrolled.set_child(Some(&genre_box));
+        section.append(&scrolled);
+
+        section
+    }
+
+    /// Build year range filter section for unified popover
+    fn build_year_filter_section(&self, sender: AsyncComponentSender<Self>) -> gtk::Box {
+        let section = gtk::Box::new(gtk::Orientation::Vertical, 6);
+
+        // Header
+        let header = gtk::Label::new(Some("Year Range"));
+        header.set_halign(gtk::Align::Start);
+        header.add_css_class("heading");
+        section.append(&header);
+
+        // Min/Max year controls
+        let year_controls = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+
+        // Min year
+        let min_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let min_label = gtk::Label::new(Some("From:"));
+        min_label.set_halign(gtk::Align::Start);
+        min_label.add_css_class("dim-label");
+        min_box.append(&min_label);
+
+        let min_entry = gtk::SpinButton::with_range(
+            self.min_year.unwrap_or(1900) as f64,
+            self.max_year.unwrap_or(2100) as f64,
+            1.0,
+        );
+        if let Some(year) = self.selected_min_year {
+            min_entry.set_value(year as f64);
+        } else if let Some(year) = self.min_year {
+            min_entry.set_value(year as f64);
+        }
+
+        let sender_clone = sender.clone();
+        let max_year = self.selected_max_year;
+        min_entry.connect_value_changed(move |spin| {
+            let min = Some(spin.value_as_int());
+            sender_clone.input(LibraryPageInput::SetYearRange { min, max: max_year });
+        });
+
+        min_box.append(&min_entry);
+        year_controls.append(&min_box);
+
+        // Max year
+        let max_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let max_label = gtk::Label::new(Some("To:"));
+        max_label.set_halign(gtk::Align::Start);
+        max_label.add_css_class("dim-label");
+        max_box.append(&max_label);
+
+        let max_entry = gtk::SpinButton::with_range(
+            self.min_year.unwrap_or(1900) as f64,
+            self.max_year.unwrap_or(2100) as f64,
+            1.0,
+        );
+        if let Some(year) = self.selected_max_year {
+            max_entry.set_value(year as f64);
+        } else if let Some(year) = self.max_year {
+            max_entry.set_value(year as f64);
+        }
+
+        let sender_clone = sender.clone();
+        let min_year = self.selected_min_year;
+        max_entry.connect_value_changed(move |spin| {
+            let max = Some(spin.value_as_int());
+            sender_clone.input(LibraryPageInput::SetYearRange { min: min_year, max });
+        });
+
+        max_box.append(&max_entry);
+        year_controls.append(&max_box);
+
+        section.append(&year_controls);
+
+        section
+    }
+
+    /// Build rating filter section for unified popover
+    fn build_rating_filter_section(&self, sender: AsyncComponentSender<Self>) -> gtk::Box {
+        let section = gtk::Box::new(gtk::Orientation::Vertical, 6);
+
+        // Header
+        let header = gtk::Label::new(Some("Minimum Rating"));
+        header.set_halign(gtk::Align::Start);
+        header.add_css_class("heading");
+        section.append(&header);
+
+        // Rating scale
+        let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 10.0, 0.5);
+        scale.set_draw_value(true);
+        scale.set_value_pos(gtk::PositionType::Right);
+
+        if let Some(rating) = self.min_rating {
+            scale.set_value(rating as f64);
+        } else {
+            scale.set_value(0.0);
+        }
+
+        let sender_clone = sender.clone();
+        scale.connect_value_changed(move |scale| {
+            let value = scale.value() as f32;
+            let rating = if value > 0.0 { Some(value) } else { None };
+            sender_clone.input(LibraryPageInput::SetRatingFilter(rating));
+        });
+
+        section.append(&scale);
+
+        section
+    }
+
+    /// Build watch status filter section for unified popover
+    fn build_watch_status_filter_section(&self, sender: AsyncComponentSender<Self>) -> gtk::Box {
+        let section = gtk::Box::new(gtk::Orientation::Vertical, 6);
+
+        // Header
+        let header = gtk::Label::new(Some("Watch Status"));
+        header.set_halign(gtk::Align::Start);
+        header.add_css_class("heading");
+        section.append(&header);
+
+        // Radio buttons
+        let all_radio = gtk::CheckButton::with_label("All");
+        all_radio.set_active(self.watch_status_filter == WatchStatus::All);
+
+        let watched_radio = gtk::CheckButton::with_label("Watched");
+        watched_radio.set_group(Some(&all_radio));
+        watched_radio.set_active(self.watch_status_filter == WatchStatus::Watched);
+
+        let unwatched_radio = gtk::CheckButton::with_label("Unwatched");
+        unwatched_radio.set_group(Some(&all_radio));
+        unwatched_radio.set_active(self.watch_status_filter == WatchStatus::Unwatched);
+
+        let sender_clone = sender.clone();
+        all_radio.connect_toggled(move |btn| {
+            if btn.is_active() {
+                sender_clone.input(LibraryPageInput::SetWatchStatusFilter(WatchStatus::All));
+            }
+        });
+
+        let sender_clone = sender.clone();
+        watched_radio.connect_toggled(move |btn| {
+            if btn.is_active() {
+                sender_clone.input(LibraryPageInput::SetWatchStatusFilter(WatchStatus::Watched));
+            }
+        });
+
+        let sender_clone = sender.clone();
+        unwatched_radio.connect_toggled(move |btn| {
+            if btn.is_active() {
+                sender_clone.input(LibraryPageInput::SetWatchStatusFilter(
+                    WatchStatus::Unwatched,
+                ));
+            }
+        });
+
+        section.append(&all_radio);
+        section.append(&watched_radio);
+        section.append(&unwatched_radio);
+
+        section
     }
 }
