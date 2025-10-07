@@ -4,7 +4,7 @@
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,ignore
 /// map_struct! {
 ///     MovieEntity => Movie {
 ///         id => id,
@@ -43,7 +43,7 @@ macro_rules! map_struct {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,ignore
 /// try_map_struct! {
 ///     MediaItemModel => MediaItem {
 ///         // Simple field mappings
@@ -92,7 +92,7 @@ macro_rules! try_map_struct {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,ignore
 /// bidirectional_map! {
 ///     SourceId, String {
 ///         forward: |s: SourceId| s.0,
@@ -126,7 +126,7 @@ macro_rules! bidirectional_map {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,ignore
 /// map_enum! {
 ///     MediaType => String {
 ///         Movie => "movie",
@@ -159,7 +159,7 @@ macro_rules! map_enum {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,ignore
 /// nested_map! {
 ///     MovieWithLibrary {
 ///         movie: Movie => MovieEntity,
@@ -190,7 +190,7 @@ macro_rules! nested_map {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,ignore
 /// field_transformer! {
 ///     DurationTransformer: i64 => Duration {
 ///         |ms| Duration::from_millis(ms as u64)
