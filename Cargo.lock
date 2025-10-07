@@ -4061,7 +4061,7 @@ dependencies = [
 
 [[package]]
 name = "reel"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "anyhow",
  "async-stream",
