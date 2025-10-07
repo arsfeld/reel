@@ -16,7 +16,7 @@
       lockFile = ../Cargo.lock;
     };
 
-    nativeBuildInputs = rustBuildInputs;
+    nativeBuildInputs = rustBuildInputs ++ [ pkgs.mold pkgs.clang ];
 
     inherit buildInputs;
 
@@ -51,7 +51,7 @@
       lockFile = ../Cargo.lock;
     };
 
-    nativeBuildInputs = rustBuildInputs;
+    nativeBuildInputs = rustBuildInputs ++ [ pkgs.mold pkgs.clang ];
 
     inherit buildInputs;
 
