@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{HeaderMap, HeaderValue};
 use std::time::Duration;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use super::errors::PlexApiError;
 use super::retry::RetryPolicy;
@@ -23,7 +23,9 @@ use super::types::PlexIdentityResponse;
 ///
 /// ### Usage Examples
 ///
-/// ```rust
+/// ```rust,ignore
+/// use reqwest::header::{HeaderMap, HeaderValue};
+///
 /// // Standard API call with default headers
 /// let response = self.client
 ///     .get(&url)
