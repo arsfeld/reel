@@ -70,24 +70,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         continue-on-error: true
 
-      - name: Generate release notes
-        id: generate_notes
+      - name: Extract release notes from tag
+        id: extract_notes
         if: steps.check_release.outputs.exists == 'false'
         run: |
-          # Get the previous tag
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${{ steps.get_version.outputs.version }}^ 2>/dev/null || echo "")
+          # Get release notes from annotated tag
+          # The notes are generated locally with Claude CLI and stored in the tag annotation
+          TAG_MESSAGE=$(git tag -l --format='%(contents)' ${{ steps.get_version.outputs.version }})
 
-          # Get commit messages between tags
-          if [ -n "$PREVIOUS_TAG" ]; then
-            COMMITS=$(git log --pretty=format:"- %s" $PREVIOUS_TAG..${{ steps.get_version.outputs.version }})
+          # Check if we got substantial notes (more than just "Release vX.Y.Z")
+          if [ -n "$TAG_MESSAGE" ] && [ "$(echo "$TAG_MESSAGE" | wc -l)" -gt 1 ]; then
+            echo "Using release notes from tag annotation"
+            echo "notes<<EOF" >> $GITHUB_OUTPUT
+            echo "$TAG_MESSAGE" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           else
-            COMMITS=$(git log --pretty=format:"- %s" --max-count=20)
+            echo "No detailed notes in tag, using simple commit log"
+            # Fallback to simple commit list if tag has no detailed notes
+            PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${{ steps.get_version.outputs.version }}^ 2>/dev/null || echo "")
+            if [ -n "$PREVIOUS_TAG" ]; then
+              COMMITS=$(git log --pretty=format:"- %s" $PREVIOUS_TAG..${{ steps.get_version.outputs.version }})
+            else
+              COMMITS=$(git log --pretty=format:"- %s" --max-count=20)
+            fi
+            echo "notes<<EOF" >> $GITHUB_OUTPUT
+            echo "## Changes" >> $GITHUB_OUTPUT
+            echo "$COMMITS" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           fi
-
-          # Save to output (escape newlines for GitHub Actions)
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          echo "$COMMITS" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
         continue-on-error: true
 
       - name: Build release body
@@ -97,9 +107,11 @@ jobs:
           cat > release_body.md << 'RELEASE_BODY'
           ${{ steps.check_prerelease.outputs.is_prerelease == 'true' && '
           > ⚠️ **This is a prerelease version** - It may contain bugs and is intended for testing purposes. Use stable releases for production.
+
           ' || '' }}
-          ## Changes
-          ${{ steps.generate_notes.outputs.notes || '- Initial release' }}
+          ${{ steps.extract_notes.outputs.notes || '## Changes
+
+          - Initial release' }}
 
           ## Downloads
 
@@ -154,7 +166,7 @@ jobs:
         with:
           tag_name: ${{ steps.get_version.outputs.version }}
           name: Reel ${{ steps.get_version.outputs.version }}${{ steps.check_prerelease.outputs.is_prerelease == 'true' && ' (Prerelease)' || '' }}
-          draft: true
+          draft: ${{ steps.check_prerelease.outputs.is_prerelease == 'true' }}
           prerelease: ${{ steps.check_prerelease.outputs.is_prerelease == 'true' }}
           body_path: ${{ steps.check_release.outputs.exists == 'false' && 'release_body.md' || '' }}
 
