@@ -580,6 +580,22 @@ pkgs.mkShell {
     # Set RUSTFLAGS - temporarily disable warnings as errors for development
     # export RUSTFLAGS="-D warnings"
 
+    # Set library paths for mold linker on Linux
+    # Use target-specific RUSTFLAGS to ensure they merge with .cargo/config.toml
+    ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+      # Build library search paths for all buildInputs
+      LIB_PATHS="${pkgs.lib.makeLibraryPath buildInputs}"
+      LINK_ARGS=""
+      # Split colon-separated paths and create individual -L flags for each
+      for lib in $(echo "$LIB_PATHS" | tr ':' ' '); do
+        LINK_ARGS="$LINK_ARGS -C link-arg=-L$lib"
+      done
+
+      # Set target-specific RUSTFLAGS which merge with config file rustflags
+      export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$LINK_ARGS"
+      export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$LINK_ARGS"
+    ''}
+
     # Set up GStreamer plugin paths - include core gstreamer plugins
     GST_PATHS="${pkgs.gst_all_1.gstreamer.out}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-ugly}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-libav}/lib/gstreamer-1.0:${pkgs.gst_all_1.gst-plugins-rs}/lib/gstreamer-1.0"
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
