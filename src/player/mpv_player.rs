@@ -650,10 +650,11 @@ impl MpvPlayer {
             // Render the current frame
             if let Some(MpvRenderContextPtr(mpv_gl)) = &*inner_render.mpv_gl.lock().unwrap() {
                 unsafe {
-                    let (width, height) = (gl_area.width(), gl_area.height());
+                    // Get logical dimensions
+                    let (logical_width, logical_height) = (gl_area.width(), gl_area.height());
 
                     // Skip rendering if area has no size
-                    if width <= 0 || height <= 0 {
+                    if logical_width <= 0 || logical_height <= 0 {
                         return glib::Propagation::Stop;
                     }
 
@@ -728,6 +729,23 @@ impl MpvPlayer {
                         h: height,
                         internal_format: 0,
                     };
+
+                    // Set OpenGL viewport to match the render area
+                    // This ensures GL operations use the full area
+                    static mut GL_VIEWPORT: Option<unsafe extern "C" fn(i32, i32, i32, i32)> = None;
+                    let gl_viewport_ptr = &raw mut GL_VIEWPORT;
+                    if (*gl_viewport_ptr).is_none() {
+                        let gl_viewport = libc::dlsym(
+                            libc::RTLD_DEFAULT,
+                            b"glViewport\0".as_ptr() as *const libc::c_char,
+                        );
+                        if !gl_viewport.is_null() {
+                            *gl_viewport_ptr = Some(std::mem::transmute(gl_viewport));
+                        }
+                    }
+                    if let Some(viewport) = *gl_viewport_ptr {
+                        viewport(0, 0, width, height);
+                    }
 
                     let mut params = vec![
                         mpv_render_param {
