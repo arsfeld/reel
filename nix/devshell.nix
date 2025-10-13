@@ -585,15 +585,15 @@ pkgs.mkShell {
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
       # Build library search paths for all buildInputs
       LIB_PATHS="${pkgs.lib.makeLibraryPath buildInputs}"
-      LINK_ARGS=""
+      LINK_ARGS=()
       # Split colon-separated paths and create individual -L flags for each
-      for lib in $(echo "$LIB_PATHS" | tr ':' ' '); do
-        LINK_ARGS="$LINK_ARGS -C link-arg=-L$lib"
+      for lib in ''${LIB_PATHS//:/ }; do
+        LINK_ARGS+=("-C link-arg=-L$lib")
       done
 
       # Set target-specific RUSTFLAGS which merge with config file rustflags
-      export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$LINK_ARGS"
-      export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$LINK_ARGS"
+      export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="''${LINK_ARGS[*]}"
+      export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="''${LINK_ARGS[*]}"
     ''}
 
     # Set up GStreamer plugin paths - include core gstreamer plugins
