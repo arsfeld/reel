@@ -19,6 +19,7 @@ Generated/
 # IDE
 .vscode/
 .idea/
+.code/
 *.swp
 *.swo
 
