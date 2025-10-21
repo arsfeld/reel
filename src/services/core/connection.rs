@@ -1,5 +1,6 @@
 use crate::db::DatabaseConnection;
-use crate::models::{ServerConnection, ServerConnections, SourceId};
+use crate::models::{Credentials, ServerConnection, ServerConnections, SourceId};
+use crate::services::core::auth::AuthService;
 use crate::services::core::connection_cache::{ConnectionCache, ConnectionState, ConnectionType};
 use anyhow::Result;
 use std::sync::Arc;
@@ -51,17 +52,31 @@ impl ConnectionService {
                 AuthTokenRepository, AuthTokenRepositoryImpl,
             };
 
-            let auth_repo = AuthTokenRepositoryImpl::new(db.clone());
-            // Try to get the primary auth token for this source (Plex uses "auth", Jellyfin uses "access")
-            let token = auth_repo
+            let repo = AuthTokenRepositoryImpl::new(db.clone());
+
+            // Legacy support: some tokens may still be stored under "auth"
+            if let Some(token) = repo
                 .find_by_source_and_type(source_id.as_ref(), "auth")
                 .await?
-                .or_else(|| {
-                    // Future: try "access" for Jellyfin
-                    None
-                });
-
-            token.map(|t| t.token)
+            {
+                Some(token.token)
+            } else if let Some(token) = repo
+                .find_by_source_and_type(source_id.as_ref(), "token")
+                .await?
+            {
+                Some(token.token)
+            } else if let Some(token) = repo
+                .find_by_source_and_type(source_id.as_ref(), "access")
+                .await?
+            {
+                Some(token.token)
+            } else {
+                match AuthService::load_credentials(db, source_id).await? {
+                    Some(Credentials::Token { token }) => Some(token),
+                    Some(Credentials::ApiKey { key }) => Some(key),
+                    _ => None,
+                }
+            }
         };
 
         // Get stored connections from JSON column
