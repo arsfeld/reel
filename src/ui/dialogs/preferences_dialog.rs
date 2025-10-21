@@ -21,9 +21,29 @@ pub struct PreferencesDialog {
     auto_clean_cache: bool,
 }
 
+impl PreferencesDialog {
+    fn backend_subtitle(&self) -> String {
+        if cfg!(target_os = "macos") {
+            "GStreamer is required on macOS; playback always uses the GStreamer engine.".to_string()
+        } else {
+            let active = if self.default_player.eq_ignore_ascii_case("mpv") {
+                "MPV"
+            } else {
+                "GStreamer"
+            };
+
+            format!(
+                "Choose your preferred video player. Currently active: {}. Changing this restarts the stream with the new engine.",
+                active
+            )
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum PreferencesDialogInput {
     SetDefaultPlayer(String),
+    HydrateDefaultPlayer(String),
     ReloadConfig,
     Close,
 }
@@ -65,7 +85,8 @@ impl AsyncComponent for PreferencesDialog {
                     // Default Player Backend - The only visible setting
                     add = &adw::ActionRow {
                         set_title: "Default Player Backend",
-                        set_subtitle: "Choose your preferred video player",
+                        #[track(model.changed(PreferencesDialog::default_player()))]
+                        set_subtitle: &model.backend_subtitle(),
 
                         add_suffix = &gtk::Box {
                             set_orientation: gtk::Orientation::Horizontal,
@@ -146,12 +167,18 @@ impl AsyncComponent for PreferencesDialog {
                     }
                 });
             }
+            PreferencesDialogInput::HydrateDefaultPlayer(player) => {
+                self.set_default_player(player);
+                tracing::info!("Preferences dialog hydrated from config");
+            }
             PreferencesDialogInput::ReloadConfig => {
-                // Reload config from ConfigService
-                let _config = relm4::spawn_local(async move { CONFIG_SERVICE.get_config().await });
-
-                // This will be handled asynchronously - for now just log
-                tracing::info!("Reloading config from service");
+                let sender_clone = sender.clone();
+                relm4::spawn_local(async move {
+                    let config = CONFIG_SERVICE.get_config().await;
+                    sender_clone.input(PreferencesDialogInput::HydrateDefaultPlayer(
+                        config.playback.player_backend,
+                    ));
+                });
             }
             PreferencesDialogInput::Close => {
                 root.close();
