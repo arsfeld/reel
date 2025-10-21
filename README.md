@@ -41,7 +41,7 @@ Reel is a native Linux media player that brings your Plex and Jellyfin libraries
 |---------|-------------|
 | **📴 Offline-First** | Full library metadata synced to local SQLite - browse your entire collection without internet (downloads coming soon) |
 | **🦀 Pure Rust + Relm4** | Reactive UI with AsyncComponents, Factory patterns, and Worker components for background tasks |
-| **🔌 Multi-Backend** | Simultaneous Plex and Jellyfin with connection monitoring, PIN profiles, and keyring credential storage |
+| **🔌 Multi-Backend** | Simultaneous Plex and Jellyfin with connection monitoring, PIN profiles, and database credential storage |
 | **💾 Intelligent Cache** | Database-driven chunk cache with progressive streaming, smart cleanup, and replay of watched content |
 | **🔍 Full-Text Search** | Tantivy-powered instant search across all media with lazy-loaded cast/crew metadata |
 | **🎥 Dual Players** | MPV (Linux default) and GStreamer (macOS/fallback) with skip intro/credits and progress sync |
@@ -285,7 +285,7 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 - **Video Playback**: MPV (Linux default) via libmpv2, GStreamer (macOS default, fallback) via [gstreamer-rs](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
 - **Caching**: Three-tier (Memory LRU → SQLite → Backend API)
 - **Serialization**: [Serde](https://serde.rs/)
-- **Security**: System keyring via [keyring-rs](https://github.com/hwchen/keyring-rs)
+- **Security**: Encrypted SQLite credential storage with legacy keyring migration support
 
 ## 🤝 Contributing
 

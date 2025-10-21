@@ -32,7 +32,6 @@ Before submitting to Flathub, ensure you have:
 - ✅ `--socket=wayland` - Wayland display protocol
 - ✅ `--socket=pulseaudio` - Audio playback
 - ✅ `--device=dri` - Hardware-accelerated video rendering
-- ✅ `--talk-name=org.freedesktop.secrets` - Keyring for credential storage
 
 ### Architecture Support
 - ✅ `flathub.json` specifies x86_64 and aarch64 support

@@ -11,8 +11,7 @@
     "--socket=fallback-x11",
     "--socket=wayland",
     "--socket=pulseaudio",
-    "--device=dri",
-    "--talk-name=org.freedesktop.secrets"
+    "--device=dri"
   ],
   "build-options": {
     "append-path": "/usr/lib/sdk/rust-stable/bin",
