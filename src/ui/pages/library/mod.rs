@@ -369,11 +369,13 @@ impl AsyncComponent for LibraryPage {
                     set_orientation: gtk::Orientation::Horizontal,
                     set_spacing: 0,
                     set_vexpand: true,
+                    set_hexpand: true,
 
                     // Scrolled window with media content
                     #[name = "scrolled_window"]
                     gtk::ScrolledWindow {
                     set_vexpand: true,
+                    set_hexpand: true,
                     set_hscrollbar_policy: gtk::PolicyType::Never,
                     set_vscrollbar_policy: gtk::PolicyType::Automatic,
 
