@@ -9,6 +9,7 @@ use std::ffi::{CStr, CString, c_void};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -29,6 +30,10 @@ struct OpenGLFunctions {
 
 unsafe impl Send for OpenGLFunctions {}
 unsafe impl Sync for OpenGLFunctions {}
+
+static GL_GET_INTEGERV_FN: OnceLock<Option<unsafe extern "C" fn(u32, *mut i32)>> = OnceLock::new();
+static GL_VIEWPORT_FN: OnceLock<Option<unsafe extern "C" fn(i32, i32, i32, i32)>> = OnceLock::new();
+static GL_FLUSH_FN: OnceLock<Option<unsafe extern "C" fn()>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub enum PlayerState {
@@ -272,6 +277,12 @@ impl MpvPlayer {
                 gl_area_realized: Arc::new(AtomicBool::new(false)),
             }),
         })
+    }
+
+    fn load_gl_function_ptr(name: &str) -> Option<*mut c_void> {
+        let cname = CString::new(name).ok()?;
+        let ptr = unsafe { Self::get_proc_address_cached(ptr::null_mut(), cname.as_ptr()) };
+        (!ptr.is_null()).then_some(ptr)
     }
 
     // Thread-safe proc address function that doesn't access GLArea
@@ -650,10 +661,18 @@ impl MpvPlayer {
             // Render the current frame
             if let Some(MpvRenderContextPtr(mpv_gl)) = &*inner_render.mpv_gl.lock().unwrap() {
                 unsafe {
-                    let (width, height) = (gl_area.width(), gl_area.height());
+                    // Get logical and pixel dimensions
+                    let (logical_width, logical_height) = (gl_area.width(), gl_area.height());
+                    let scale_factor = gl_area.scale_factor();
+                    let (pixel_width, pixel_height) =
+                        (logical_width * scale_factor, logical_height * scale_factor);
 
                     // Skip rendering if area has no size
-                    if width <= 0 || height <= 0 {
+                    if logical_width <= 0
+                        || logical_height <= 0
+                        || pixel_width <= 0
+                        || pixel_height <= 0
+                    {
                         return glib::Propagation::Stop;
                     }
 
@@ -668,66 +687,54 @@ impl MpvPlayer {
                     gl_area.attach_buffers();
 
                     // Get or cache the FBO
-                    let fbo = if *inner_render.cached_fbo.lock().unwrap() < 0 {
-                        // Query FBO only once and cache it
-                        static mut GL_GET_INTEGERV: Option<unsafe extern "C" fn(u32, *mut i32)> =
-                            None;
-
-                        let gl_integerv_ptr = &raw mut GL_GET_INTEGERV;
-                        if (*gl_integerv_ptr).is_none() {
-                            #[cfg(target_os = "macos")]
+                    let fbo = {
+                        let mut cached_fbo = inner_render.cached_fbo.lock().unwrap();
+                        if *cached_fbo < 0 {
+                            let mut current_fbo = 0i32;
+                            if let Some(&get_integerv) = GL_GET_INTEGERV_FN
+                                .get_or_init(|| {
+                                    Self::load_gl_function_ptr("glGetIntegerv").map(|ptr| unsafe {
+                                        std::mem::transmute::<
+                                            *mut c_void,
+                                            unsafe extern "C" fn(u32, *mut i32),
+                                        >(ptr)
+                                    })
+                                })
+                                .as_ref()
                             {
-                                // On macOS, get glGetIntegerv directly
-                                let gl_get_integerv = libc::dlsym(
-                                    libc::RTLD_DEFAULT,
-                                    b"glGetIntegerv\0".as_ptr() as *const i8,
-                                );
-                                if !gl_get_integerv.is_null() {
-                                    *gl_integerv_ptr = Some(std::mem::transmute(gl_get_integerv));
-                                }
+                                const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
+                                get_integerv(GL_FRAMEBUFFER_BINDING, &mut current_fbo);
                             }
-
-                            #[cfg(not(target_os = "macos"))]
-                            {
-                                let egl_get_proc = libc::dlsym(
-                                    libc::RTLD_DEFAULT,
-                                    b"eglGetProcAddress\0".as_ptr() as *const libc::c_char,
-                                );
-                                if !egl_get_proc.is_null() {
-                                    type EglGetProcFn =
-                                        unsafe extern "C" fn(*const libc::c_char) -> *const c_void;
-                                    let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
-                                    let gl_get_integerv = get_proc(
-                                        b"glGetIntegerv\0".as_ptr() as *const libc::c_char
-                                    );
-                                    if !gl_get_integerv.is_null() {
-                                        *gl_integerv_ptr =
-                                            Some(std::mem::transmute(gl_get_integerv));
-                                    }
-                                }
-                            }
+                            *cached_fbo = current_fbo;
+                            current_fbo
+                        } else {
+                            *cached_fbo
                         }
-
-                        let mut current_fbo = 0i32;
-                        if let Some(get_integerv) = *gl_integerv_ptr {
-                            const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
-                            get_integerv(GL_FRAMEBUFFER_BINDING, &mut current_fbo);
-                        }
-
-                        *inner_render.cached_fbo.lock().unwrap() = current_fbo;
-                        current_fbo
-                    } else {
-                        *inner_render.cached_fbo.lock().unwrap()
                     };
 
                     let flip_y = 1i32; // GTK4 needs Y-flipping
 
                     let opengl_fbo = mpv_opengl_fbo {
                         fbo,
-                        w: width,
-                        h: height,
+                        w: pixel_width,
+                        h: pixel_height,
                         internal_format: 0,
                     };
+
+                    // Set OpenGL viewport to match the render area
+                    if let Some(&viewport) = GL_VIEWPORT_FN
+                        .get_or_init(|| {
+                            Self::load_gl_function_ptr("glViewport").map(|ptr| unsafe {
+                                std::mem::transmute::<
+                                    *mut c_void,
+                                    unsafe extern "C" fn(i32, i32, i32, i32),
+                                >(ptr)
+                            })
+                        })
+                        .as_ref()
+                    {
+                        viewport(0, 0, pixel_width, pixel_height);
+                    }
 
                     let mut params = vec![
                         mpv_render_param {
@@ -750,19 +757,14 @@ impl MpvPlayer {
                         error!("mpv_render_context_render failed with error: {}", result);
                     } else {
                         // Only flush if we actually rendered something
-                        static mut GL_FLUSH: Option<unsafe extern "C" fn()> = None;
-                        let gl_flush_ptr = &raw mut GL_FLUSH;
-                        if (*gl_flush_ptr).is_none() {
-                            let gl_flush = libc::dlsym(
-                                libc::RTLD_DEFAULT,
-                                b"glFlush\0".as_ptr() as *const libc::c_char,
-                            );
-                            if !gl_flush.is_null() {
-                                *gl_flush_ptr = Some(std::mem::transmute(gl_flush));
-                            }
-                        }
-
-                        if let Some(flush) = *gl_flush_ptr {
+                        if let Some(&flush) = GL_FLUSH_FN
+                            .get_or_init(|| {
+                                Self::load_gl_function_ptr("glFlush").map(|ptr| unsafe {
+                                    std::mem::transmute::<*mut c_void, unsafe extern "C" fn()>(ptr)
+                                })
+                            })
+                            .as_ref()
+                        {
                             flush();
                         }
 
