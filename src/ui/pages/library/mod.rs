@@ -1468,4 +1468,24 @@ impl AsyncComponent for LibraryPage {
             }
         }
     }
+
+    fn shutdown(&mut self, widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        // Disconnect scroll handler to prevent signals firing after component is destroyed
+        if let Some(handler_id) = self.scroll_handler_id.take() {
+            let adjustment = widgets.scrolled_window.vadjustment();
+            adjustment.disconnect(handler_id);
+            debug!("Disconnected scroll handler on library page shutdown");
+        }
+
+        // Clean up any active debounce timer
+        if let Some(handle) = self.scroll_debounce_handle.take() {
+            handle.remove();
+            debug!("Removed scroll debounce timer on library page shutdown");
+        }
+
+        // Unsubscribe from MessageBroker
+        relm4::spawn(async move {
+            BROKER.unsubscribe("LibraryPage").await;
+        });
+    }
 }
