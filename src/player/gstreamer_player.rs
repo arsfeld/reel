@@ -9,7 +9,7 @@ use gstreamer::glib;
 use gstreamer::prelude::*;
 use gtk4::{self, prelude::*};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace, warn};
 
@@ -31,6 +31,8 @@ pub struct GStreamerPlayer {
     video_widget: Arc<Mutex<Option<gtk4::Widget>>>,
     stream_manager: StreamManager,
     pipeline_ready: Arc<Mutex<bool>>,
+    seek_pending: Arc<Mutex<Option<(f64, Instant)>>>,
+    last_seek_target: Arc<Mutex<Option<f64>>>,
 }
 
 impl GStreamerPlayer {
@@ -60,6 +62,8 @@ impl GStreamerPlayer {
             video_widget: Arc::new(Mutex::new(None)),
             stream_manager: StreamManager::new(),
             pipeline_ready: Arc::new(Mutex::new(false)),
+            seek_pending: Arc::new(Mutex::new(None)),
+            last_seek_target: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -805,6 +809,19 @@ impl GStreamerPlayer {
         }
 
         let position_ns = position.as_nanos() as i64;
+        let position_secs = position.as_secs_f64();
+
+        // Update the last seek target for position tracking
+        {
+            let mut last_target = self.last_seek_target.lock().unwrap();
+            *last_target = Some(position_secs);
+        }
+
+        // Store the pending seek position
+        {
+            let mut pending = self.seek_pending.lock().unwrap();
+            *pending = Some((position_secs, Instant::now()));
+        }
 
         if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             // Remember if we were playing to resume after seek
@@ -940,13 +957,30 @@ impl GStreamerPlayer {
     }
 
     pub async fn get_position(&self) -> Option<Duration> {
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            playbin
-                .query_position::<gst::ClockTime>()
-                .map(|pos| Duration::from_nanos(pos.nseconds()))
-        } else {
-            None
+        // If we have a pending seek, return that as the effective position
+        // This prevents showing stale values immediately after seeking
+        {
+            let last_target = self.last_seek_target.lock().unwrap();
+            if let Some(target_pos) = *last_target {
+                // Check if the seek is recent (within 200ms)
+                if let Some((_, timestamp)) = *self.seek_pending.lock().unwrap() {
+                    if timestamp.elapsed() < Duration::from_millis(200) {
+                        return Some(Duration::from_secs_f64(target_pos.max(0.0)));
+                    }
+                }
+            }
         }
+
+        // Otherwise return the actual position from GStreamer
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            if let Some(pos) = playbin.query_position::<gst::ClockTime>() {
+                // Clear the last seek target since we're at the actual position now
+                let mut last_target = self.last_seek_target.lock().unwrap();
+                *last_target = None;
+                return Some(Duration::from_nanos(pos.nseconds()));
+            }
+        }
+        None
     }
 
     pub async fn get_duration(&self) -> Option<Duration> {
