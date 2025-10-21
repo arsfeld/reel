@@ -64,6 +64,19 @@
   </content_rating>
   
   <releases>
+    <release version="0.7.5" date="2025-10-06">
+      <description>
+        <p>Latest stable release with enhanced features and reliability:</p>
+        <ul>
+          <li>Improved Plex and Jellyfin backend support</li>
+          <li>Enhanced offline-first architecture with SQLite caching</li>
+          <li>Dual playback engine support (MPV and GStreamer)</li>
+          <li>Better synchronization and connection monitoring</li>
+          <li>UI refinements and bug fixes</li>
+          <li>Improved error handling and stability</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2025-08-20">
       <description>
         <p>First major release with comprehensive Plex support:</p>

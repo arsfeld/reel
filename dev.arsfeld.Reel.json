@@ -12,7 +12,6 @@
     "--socket=wayland",
     "--socket=pulseaudio",
     "--device=dri",
-    "--filesystem=xdg-pictures:ro",
     "--talk-name=org.freedesktop.secrets"
   ],
   "build-options": {
@@ -35,18 +34,6 @@
   ],
   "modules": [
     {
-      "name": "blueprint-compiler",
-      "buildsystem": "meson",
-      "cleanup": ["*"],
-      "sources": [
-        {
-          "type": "git",
-          "url": "https://gitlab.gnome.org/GNOME/blueprint-compiler",
-          "tag": "v0.18.0"
-        }
-      ]
-    },
-    {
       "name": "reel",
       "buildsystem": "simple",
       "build-commands": [
@@ -56,13 +43,14 @@
         "install -Dm755 target/release/reel /app/bin/reel",
         "install -Dm644 data/dev.arsfeld.Reel.desktop /app/share/applications/dev.arsfeld.Reel.desktop",
         "install -Dm644 data/dev.arsfeld.Reel.metainfo.xml /app/share/metainfo/dev.arsfeld.Reel.metainfo.xml",
-        "install -Dm644 data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg /app/share/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg"
+        "install -Dm644 data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg /app/share/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg",
+        "install -Dm644 LICENSE /app/share/licenses/dev.arsfeld.Reel/LICENSE"
       ],
       "sources": [
         {
           "type": "git",
           "url": "https://github.com/arsfeld/reel.git",
-          "tag": "v0.1.0"
+          "tag": "v0.7.5"
         },
         "cargo-sources.json"
       ]

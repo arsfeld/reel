@@ -168,8 +168,27 @@ nix run github:arsfeld/reel
 
 ### 📦 Flatpak
 
+Flatpak support is available! You can build and install Reel using Flatpak for universal Linux compatibility.
+
+#### Building Flatpak Locally
+
+```bash
+# Build and install using the included script
+./scripts/build-flatpak.sh
+
+# Or manually:
+flatpak-builder --user --install --force-clean build-dir dev.arsfeld.Reel.json
+
+# Run the application
+flatpak run dev.arsfeld.Reel
+```
+
+#### Flathub Submission
+
+Reel is being prepared for official Flathub distribution. See [docs/FLATHUB_SUBMISSION.md](docs/FLATHUB_SUBMISSION.md) for submission guidelines and requirements.
+
 > [!NOTE]
-> 🚧 **Coming Soon** - Flatpak packaging is planned to make Reel available across all Linux distributions.
+> 📦 **Flathub Coming Soon** - Once submitted and approved, Reel will be available for easy installation via Flathub on all Linux distributions.
 
 ## 🏗️ Architecture
 
