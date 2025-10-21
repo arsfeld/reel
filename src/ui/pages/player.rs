@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::models::{ChapterMarker, MediaItemId, PlaylistContext};
 use crate::player::{PlayerController, PlayerHandle, PlayerState};
 use crate::services::commands::Command;
+use crate::services::config_service::CONFIG_SERVICE;
 use crate::ui::shared::broker::{BROKER, BrokerMessage, ConfigMessage};
 use adw::prelude::*;
 use gtk::glib::{self, SourceId};
@@ -130,6 +131,206 @@ impl PlayerPage {
     const DEFAULT_WINDOW_EVENT_DEBOUNCE_MS: u64 = 50; // milliseconds
     const CONTROL_FADE_ANIMATION_MS: u64 = 200; // milliseconds for fade transition
 
+    #[cfg(all(feature = "mpv", not(target_os = "macos")))]
+    fn backend_prefers_mpv(selected_backend: &str) -> bool {
+        selected_backend.is_empty() || selected_backend.eq_ignore_ascii_case("mpv")
+    }
+
+    #[cfg(not(all(feature = "mpv", not(target_os = "macos"))))]
+    fn backend_prefers_mpv(_selected_backend: &str) -> bool {
+        false
+    }
+
+    fn mpv_upscaling_mode_from_config(config: &Config) -> crate::player::UpscalingMode {
+        match config.playback.mpv_upscaling_mode.as_str() {
+            "High Quality" | "high_quality" => crate::player::UpscalingMode::HighQuality,
+            "FSR" | "fsr" => crate::player::UpscalingMode::FSR,
+            "Anime" | "anime" => crate::player::UpscalingMode::Anime,
+            "custom" => crate::player::UpscalingMode::Custom,
+            _ => crate::player::UpscalingMode::None,
+        }
+    }
+
+    fn attach_player_controller(
+        &mut self,
+        handle: PlayerHandle,
+        controller: PlayerController,
+        sender: &AsyncComponentSender<Self>,
+    ) {
+        info!("Player controller initialized successfully");
+
+        if let Some(mut error_receiver) = handle.take_error_receiver() {
+            let sender_clone = sender.clone();
+            glib::spawn_future_local(async move {
+                while let Some(error_msg) = error_receiver.recv().await {
+                    error!("Player error received: {}", error_msg);
+                    sender_clone
+                        .output(PlayerOutput::ShowToast(error_msg.clone()))
+                        .unwrap();
+                    sender_clone.input(PlayerInput::ShowError(error_msg));
+                }
+            });
+        }
+
+        glib::spawn_future_local(async move {
+            controller.run().await;
+        });
+
+        let placeholder = self.video_placeholder.take();
+        if placeholder.is_none() {
+            while let Some(child) = self.video_container.first_child() {
+                self.video_container.remove(&child);
+            }
+        }
+
+        let video_container = self.video_container.clone();
+        let handle_for_widget = handle.clone();
+        glib::spawn_future_local(async move {
+            if let Ok(video_widget) = handle_for_widget.create_video_widget().await {
+                if let Some(placeholder) = placeholder {
+                    video_container.remove(&placeholder);
+                }
+
+                video_widget.set_vexpand(true);
+                video_widget.set_hexpand(true);
+                video_widget.set_valign(gtk::Align::Fill);
+                video_widget.set_halign(gtk::Align::Fill);
+
+                video_container.append(&video_widget);
+                info!("Video widget successfully attached to container");
+            }
+        });
+
+        if self.is_mpv_backend {
+            let saved_mode = self.current_upscaling_mode;
+            let handle_for_upscaling = handle.clone();
+            glib::spawn_future_local(async move {
+                if let Err(err) = handle_for_upscaling.set_upscaling_mode(saved_mode).await {
+                    warn!("Failed to apply MPV upscaling mode: {}", err);
+                }
+            });
+        }
+
+        self.player = Some(handle);
+    }
+
+    async fn rebuild_player_backend(
+        &mut self,
+        config: &Config,
+        sender: &AsyncComponentSender<Self>,
+        reason: &str,
+    ) {
+        let backend_label = &config.playback.player_backend;
+        info!(
+            "Rebuilding player backend due to {} (requested={})",
+            reason, backend_label
+        );
+
+        self.is_mpv_backend = Self::backend_prefers_mpv(backend_label);
+        self.current_upscaling_mode = Self::mpv_upscaling_mode_from_config(config);
+        self.error_message = None;
+
+        if let Some(existing_player) = self.player.take() {
+            let handle = existing_player.clone();
+            glib::spawn_future_local(async move {
+                if let Err(err) = handle.stop().await {
+                    warn!(
+                        "Failed to stop previous player during backend switch: {}",
+                        err
+                    );
+                }
+            });
+        }
+
+        let active_media = self.media_item_id.clone();
+        let active_context = self.playlist_context.clone();
+
+        match PlayerController::new(config) {
+            Ok((handle, controller)) => {
+                self.attach_player_controller(handle, controller, sender);
+
+                let backend_display = if self.is_mpv_backend {
+                    "MPV"
+                } else {
+                    "GStreamer"
+                };
+
+                sender
+                    .output(PlayerOutput::ShowToast(format!(
+                        "Switched playback backend to {}",
+                        backend_display
+                    )))
+                    .ok();
+
+                if let Some(media_id) = active_media {
+                    if let Some(context) = active_context {
+                        sender.input(PlayerInput::LoadMediaWithContext { media_id, context });
+                    } else {
+                        sender.input(PlayerInput::LoadMedia(media_id));
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to rebuild player backend: {}", e);
+                self.error_message = Some(format!("Failed to initialize player: {}", e));
+                self.player_state = PlayerState::Error;
+            }
+        }
+    }
+
+    async fn handle_config_update(&mut self, config: &Config, sender: &AsyncComponentSender<Self>) {
+        self.config_auto_resume = config.playback.auto_resume;
+        self.config_resume_threshold_seconds = config.playback.resume_threshold_seconds as u64;
+        self.config_progress_update_interval_seconds =
+            config.playback.progress_update_interval_seconds as u64;
+        self.config_skip_intro_enabled = config.playback.skip_intro_enabled;
+        self.config_skip_credits_enabled = config.playback.skip_credits_enabled;
+        self.config_auto_skip_intro = config.playback.auto_skip_intro;
+        self.config_auto_skip_credits = config.playback.auto_skip_credits;
+        self.config_minimum_marker_duration_seconds =
+            config.playback.minimum_marker_duration_seconds as u64;
+
+        let prefer_mpv = Self::backend_prefers_mpv(&config.playback.player_backend);
+        if prefer_mpv != self.is_mpv_backend {
+            self.rebuild_player_backend(config, sender, "config update")
+                .await;
+            return;
+        }
+
+        if self.is_mpv_backend {
+            let new_mode = Self::mpv_upscaling_mode_from_config(config);
+            if new_mode != self.current_upscaling_mode {
+                self.current_upscaling_mode = new_mode;
+                if let Some(ref player) = self.player {
+                    let player_handle = player.clone();
+                    glib::spawn_future_local(async move {
+                        if let Err(err) = player_handle.set_upscaling_mode(new_mode).await {
+                            warn!("Failed to update MPV upscaling mode: {}", err);
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    async fn ensure_backend_alignment(
+        &mut self,
+        backend: &str,
+        sender: &AsyncComponentSender<Self>,
+    ) {
+        let prefer_mpv = Self::backend_prefers_mpv(backend);
+        if prefer_mpv != self.is_mpv_backend {
+            let config = CONFIG_SERVICE.get_config().await;
+            self.rebuild_player_backend(&config, sender, "backend change event")
+                .await;
+        } else {
+            info!(
+                "Player backend already using requested engine: {}",
+                if prefer_mpv { "mpv" } else { "gstreamer" }
+            );
+        }
+    }
+
     /// Transition to the Hidden state
     fn transition_to_hidden(&mut self, _sender: AsyncComponentSender<Self>, from_timer: bool) {
         // Don't hide controls if a popover is open
@@ -142,7 +343,7 @@ impl PlayerPage {
             && let ControlState::Visible { timer_id } = &mut self.control_state
             && let Some(timer) = timer_id.take()
         {
-            timer.remove();
+            let _ = timer.remove();
         }
 
         self.control_state = ControlState::Hidden;
@@ -163,7 +364,7 @@ impl PlayerPage {
         if let ControlState::Visible { timer_id } = &mut self.control_state
             && let Some(timer) = timer_id.take()
         {
-            timer.remove();
+            let _ = timer.remove();
         }
 
         // Show cursor
@@ -192,7 +393,7 @@ impl PlayerPage {
         if let ControlState::Visible { timer_id } = &mut self.control_state
             && let Some(timer) = timer_id.take()
         {
-            timer.remove();
+            let _ = timer.remove();
         }
 
         self.control_state = ControlState::Hovering;
@@ -795,6 +996,30 @@ impl std::fmt::Debug for PlayerCommandOutput {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::PlayerPage;
+
+    #[test]
+    fn gstreamer_selection_is_never_mpv() {
+        assert!(!PlayerPage::backend_prefers_mpv("gstreamer"));
+    }
+
+    #[cfg(all(feature = "mpv", not(target_os = "macos")))]
+    #[test]
+    fn mpv_selection_detects_mpv() {
+        assert!(PlayerPage::backend_prefers_mpv("mpv"));
+        assert!(PlayerPage::backend_prefers_mpv("MPV"));
+        assert!(PlayerPage::backend_prefers_mpv(""));
+    }
+
+    #[cfg(any(not(feature = "mpv"), target_os = "macos"))]
+    #[test]
+    fn mpv_selection_forced_false_when_unavailable() {
+        assert!(!PlayerPage::backend_prefers_mpv("mpv"));
+    }
+}
+
 #[relm4::component(pub async)]
 impl AsyncComponent for PlayerPage {
     type Init = (
@@ -1233,8 +1458,8 @@ impl AsyncComponent for PlayerPage {
         let zoom_menu_button = gtk::MenuButton::new();
         let zoom_label = gtk::Label::new(Some("Fit"));
 
-        // Load config once at initialization
-        let config = Config::load().unwrap_or_default();
+        // Load config via the shared ConfigService so runtime updates stay in sync
+        let config = CONFIG_SERVICE.get_config().await;
 
         let mut model = Self {
             media_item_id,
@@ -1283,14 +1508,8 @@ impl AsyncComponent for PlayerPage {
             auto_play_triggered: false,
             auto_play_timeout: None,
             quality_menu_button: quality_menu_button.clone(),
-            current_upscaling_mode: match config.playback.mpv_upscaling_mode.as_str() {
-                "High Quality" => crate::player::UpscalingMode::HighQuality,
-                "FSR" => crate::player::UpscalingMode::FSR,
-                "Anime" => crate::player::UpscalingMode::Anime,
-                _ => crate::player::UpscalingMode::None,
-            },
-            is_mpv_backend: config.playback.player_backend == "mpv"
-                || config.playback.player_backend.is_empty(),
+            current_upscaling_mode: Self::mpv_upscaling_mode_from_config(&config),
+            is_mpv_backend: Self::backend_prefers_mpv(&config.playback.player_backend),
             zoom_menu_button: zoom_menu_button.clone(),
             current_zoom_mode: crate::player::ZoomMode::default(),
             zoom_label: zoom_label.clone(),
@@ -1320,65 +1539,8 @@ impl AsyncComponent for PlayerPage {
         // Initialize the player controller
         match PlayerController::new(&config) {
             Ok((handle, controller)) => {
-                info!("Player controller initialized successfully");
-
-                // Set up error monitoring
-                if let Some(mut error_receiver) = handle.take_error_receiver() {
-                    let sender_clone = sender.clone();
-                    glib::spawn_future_local(async move {
-                        while let Some(error_msg) = error_receiver.recv().await {
-                            error!("Player error received: {}", error_msg);
-                            // Send toast notification
-                            sender_clone
-                                .output(PlayerOutput::ShowToast(error_msg.clone()))
-                                .unwrap();
-                            // Show error in player UI
-                            sender_clone.input(PlayerInput::ShowError(error_msg));
-                        }
-                    });
-                }
-
-                // Spawn the controller task on the main thread's executor
-                // This is needed because Player contains raw pointers that are not Send
-                glib::spawn_future_local(async move {
-                    controller.run().await;
-                });
-
-                // Create video widget synchronously on main thread
-                // Note: We need to spawn this as a local future too
-                let handle_clone = handle.clone();
-                let video_container_clone = model.video_container.clone();
-                let placeholder_clone = model.video_placeholder.take();
-                glib::spawn_future_local(async move {
-                    if let Ok(video_widget) = handle_clone.create_video_widget().await {
-                        // Remove placeholder if it exists
-                        if let Some(placeholder) = placeholder_clone {
-                            video_container_clone.remove(&placeholder);
-                        }
-
-                        // Set proper expansion for the video widget
-                        video_widget.set_vexpand(true);
-                        video_widget.set_hexpand(true);
-                        video_widget.set_valign(gtk::Align::Fill);
-                        video_widget.set_halign(gtk::Align::Fill);
-
-                        // Add the video widget
-                        video_container_clone.append(&video_widget);
-
-                        info!("Video widget successfully attached to container");
-                    }
-                });
-
-                model.player = Some(handle.clone());
-
-                // Apply saved upscaling mode if MPV backend
-                if model.is_mpv_backend {
-                    let saved_mode = model.current_upscaling_mode;
-                    let handle_for_upscaling = handle;
-                    glib::spawn_future_local(async move {
-                        let _ = handle_for_upscaling.set_upscaling_mode(saved_mode).await;
-                    });
-                }
+                model.attach_player_controller(handle, controller, &sender);
+                model.error_message = None;
             }
             Err(e) => {
                 error!("Failed to initialize player controller: {}", e);
@@ -1704,6 +1866,12 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::LoadMedia(id) => {
                 self.media_item_id = Some(id.clone());
                 self.player_state = PlayerState::Loading;
+
+                // Reset scrubber UI to prevent showing previous video's position
+                self.seek_bar.set_value(0.0);
+                self.position_label.set_text("0:00");
+                self.duration_label.set_text("--:--");
+
                 // Clear context when loading without context
                 self.playlist_context = None;
                 // No navigation available for single items
@@ -1716,7 +1884,7 @@ impl AsyncComponent for PlayerPage {
                 // Reset auto-play state
                 self.auto_play_triggered = false;
                 if let Some(timeout) = self.auto_play_timeout.take() {
-                    timeout.remove();
+                    let _ = timeout.remove();
                 }
                 // Clear skip button state
                 self.intro_marker = None;
@@ -1724,10 +1892,10 @@ impl AsyncComponent for PlayerPage {
                 self.skip_intro_visible = false;
                 self.skip_credits_visible = false;
                 if let Some(timer) = self.skip_intro_hide_timer.take() {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
                 if let Some(timer) = self.skip_credits_hide_timer.take() {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
 
                 // Load marker data from database and fetch from backend if missing
@@ -1964,6 +2132,11 @@ impl AsyncComponent for PlayerPage {
                 self.media_item_id = Some(media_id.clone());
                 self.player_state = PlayerState::Loading;
 
+                // Reset scrubber UI to prevent showing previous video's position
+                self.seek_bar.set_value(0.0);
+                self.position_label.set_text("0:00");
+                self.duration_label.set_text("--:--");
+
                 // Update navigation state based on context
                 self.can_go_previous = context.has_previous();
                 self.can_go_next = context.has_next();
@@ -1977,7 +2150,7 @@ impl AsyncComponent for PlayerPage {
                 // Reset auto-play state
                 self.auto_play_triggered = false;
                 if let Some(timeout) = self.auto_play_timeout.take() {
-                    timeout.remove();
+                    let _ = timeout.remove();
                 }
                 // Clear skip button state
                 self.intro_marker = None;
@@ -1985,10 +2158,10 @@ impl AsyncComponent for PlayerPage {
                 self.skip_intro_visible = false;
                 self.skip_credits_visible = false;
                 if let Some(timer) = self.skip_intro_hide_timer.take() {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
                 if let Some(timer) = self.skip_credits_hide_timer.take() {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
 
                 // Load marker data from database and fetch from backend if missing
@@ -2351,7 +2524,7 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::MouseEnterWindow => {
                 // Handle window enter with debouncing
                 if let Some(timer) = self.window_event_debounce.take() {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
 
                 // Process immediately for now (can add debouncing later if needed)
@@ -2365,7 +2538,7 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::MouseLeaveWindow => {
                 // Handle window leave with debouncing
                 if let Some(timer) = self.window_event_debounce.take() {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
 
                 // Don't hide if a popover is open
@@ -2695,7 +2868,7 @@ impl AsyncComponent for PlayerPage {
                                 // Start auto-hide timer when button becomes visible
                                 // Cancel any existing timer
                                 if let Some(timer) = self.skip_intro_hide_timer.take() {
-                                    timer.remove();
+                                    let _ = timer.remove();
                                 }
 
                                 // Start 5 second auto-hide timer
@@ -2744,7 +2917,7 @@ impl AsyncComponent for PlayerPage {
                                 // Start auto-hide timer when button becomes visible
                                 // Cancel any existing timer
                                 if let Some(timer) = self.skip_credits_hide_timer.take() {
-                                    timer.remove();
+                                    let _ = timer.remove();
                                 }
 
                                 // Start 5 second auto-hide timer
@@ -2766,13 +2939,13 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::HideSkipIntro => {
                 self.skip_intro_visible = false;
                 if let Some(timer) = self.skip_intro_hide_timer.take() {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
             }
             PlayerInput::HideSkipCredits => {
                 self.skip_credits_visible = false;
                 if let Some(timer) = self.skip_credits_hide_timer.take() {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
             }
             PlayerInput::SkipIntro => {
@@ -2782,7 +2955,7 @@ impl AsyncComponent for PlayerPage {
                     // Hide the button immediately
                     self.skip_intro_visible = false;
                     if let Some(timer) = self.skip_intro_hide_timer.take() {
-                        timer.remove();
+                        let _ = timer.remove();
                     }
                 }
             }
@@ -2793,7 +2966,7 @@ impl AsyncComponent for PlayerPage {
                     // Hide the button immediately
                     self.skip_credits_visible = false;
                     if let Some(timer) = self.skip_credits_hide_timer.take() {
-                        timer.remove();
+                        let _ = timer.remove();
                     }
                 }
             }
@@ -2806,71 +2979,10 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::BrokerMsg(msg) => {
                 match msg {
                     BrokerMessage::Config(ConfigMessage::Updated { config }) => {
-                        // Update cached config values
-                        self.config_auto_resume = config.playback.auto_resume;
-                        self.config_resume_threshold_seconds =
-                            config.playback.resume_threshold_seconds as u64;
-                        self.config_progress_update_interval_seconds =
-                            config.playback.progress_update_interval_seconds as u64;
-                        self.config_skip_intro_enabled = config.playback.skip_intro_enabled;
-                        self.config_skip_credits_enabled = config.playback.skip_credits_enabled;
-                        self.config_auto_skip_intro = config.playback.auto_skip_intro;
-                        self.config_auto_skip_credits = config.playback.auto_skip_credits;
-                        self.config_minimum_marker_duration_seconds =
-                            config.playback.minimum_marker_duration_seconds as u64;
-
-                        // Handle player backend changes
-                        let new_backend = &config.playback.player_backend;
-                        let current_backend = if self.is_mpv_backend {
-                            "mpv"
-                        } else {
-                            "gstreamer"
-                        };
-
-                        if new_backend != current_backend {
-                            info!(
-                                "Player backend changed from {} to {}, will take effect on next media load",
-                                current_backend, new_backend
-                            );
-                            // Note: We don't restart the current playback, the new backend will be used for the next media load
-                        }
-
-                        // Update upscaling mode if using MPV
-                        if self.is_mpv_backend {
-                            let new_mode = match config.playback.mpv_upscaling_mode.as_str() {
-                                "high_quality" => crate::player::UpscalingMode::HighQuality,
-                                "fsr" => crate::player::UpscalingMode::FSR,
-                                "anime" => crate::player::UpscalingMode::Anime,
-                                "custom" => crate::player::UpscalingMode::Custom,
-                                _ => crate::player::UpscalingMode::None,
-                            };
-
-                            if new_mode != self.current_upscaling_mode {
-                                self.current_upscaling_mode = new_mode;
-                                if let Some(ref player) = self.player {
-                                    let player_handle = player.clone();
-                                    glib::spawn_future_local(async move {
-                                        let _ = player_handle.set_upscaling_mode(new_mode).await;
-                                    });
-                                    info!("Updated upscaling mode to: {:?}", new_mode);
-                                }
-                            }
-                        }
+                        self.handle_config_update(config.as_ref(), &sender).await;
                     }
                     BrokerMessage::Config(ConfigMessage::PlayerBackendChanged { backend }) => {
-                        // Handle specific player backend change
-                        let current_backend = if self.is_mpv_backend {
-                            "mpv"
-                        } else {
-                            "gstreamer"
-                        };
-
-                        if backend != current_backend {
-                            info!(
-                                "Player backend changed to {}, will take effect on next media load",
-                                backend
-                            );
-                        }
+                        self.ensure_backend_alignment(&backend, &sender).await;
                     }
                     _ => {
                         // Ignore other broker messages
@@ -2898,7 +3010,7 @@ impl AsyncComponent for PlayerPage {
 
                 // Schedule retry after delay
                 if let Some(timer) = self.retry_timer.take() {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
 
                 let sender_clone = sender.clone();
@@ -2925,7 +3037,7 @@ impl AsyncComponent for PlayerPage {
                 self.error_message = None;
                 self.retry_count = 0;
                 if let Some(timer) = self.retry_timer.take() {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
             }
             PlayerInput::ShowError(msg) => {
@@ -2944,14 +3056,14 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::NavigateBack => {
                 // Clear any timers and show cursor before navigating back
                 if let Some(timer) = self.cursor_timer.take() {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
 
                 // Cancel any state timer
                 if let ControlState::Visible { timer_id } = &mut self.control_state
                     && let Some(timer) = timer_id.take()
                 {
-                    timer.remove();
+                    let _ = timer.remove();
                 }
 
                 // Show cursor before navigating
@@ -3328,29 +3440,29 @@ impl AsyncComponent for PlayerPage {
 
         // Clean up any active timers
         if let Some(timer) = self.cursor_timer.take() {
-            timer.remove();
+            let _ = timer.remove();
         }
 
         // Cancel any visible state timer
         if let ControlState::Visible { timer_id } = &mut self.control_state
             && let Some(timer) = timer_id.take()
         {
-            timer.remove();
+            let _ = timer.remove();
         }
 
         // Clean up window event debounce timer
         if let Some(timer) = self.window_event_debounce.take() {
-            timer.remove();
+            let _ = timer.remove();
         }
 
         // Clean up retry timer
         if let Some(timer) = self.retry_timer.take() {
-            timer.remove();
+            let _ = timer.remove();
         }
 
         // Clean up auto-play timeout
         if let Some(timer) = self.auto_play_timeout.take() {
-            timer.remove();
+            let _ = timer.remove();
         }
 
         // Release sleep inhibition
