@@ -2938,15 +2938,13 @@ impl AsyncComponent for PlayerPage {
             }
             PlayerInput::HideSkipIntro => {
                 self.skip_intro_visible = false;
-                if let Some(timer) = self.skip_intro_hide_timer.take() {
-                    let _ = timer.remove();
-                }
+                // Clear the timer without calling remove() - it already fired and was removed by GLib
+                self.skip_intro_hide_timer.take();
             }
             PlayerInput::HideSkipCredits => {
                 self.skip_credits_visible = false;
-                if let Some(timer) = self.skip_credits_hide_timer.take() {
-                    let _ = timer.remove();
-                }
+                // Clear the timer without calling remove() - it already fired and was removed by GLib
+                self.skip_credits_hide_timer.take();
             }
             PlayerInput::SkipIntro => {
                 if let Some(ref intro) = self.intro_marker {

@@ -4,7 +4,7 @@ title: Fix GLib SourceId removal panic in Relm4 player timers
 status: In Progress
 assignee: []
 created_date: '2025-10-21 03:34'
-updated_date: '2025-10-21 03:43'
+updated_date: '2025-10-23 01:37'
 labels:
   - bug
   - player
@@ -81,4 +81,89 @@ Replaced all instances of `timer.remove()` with `let _ = timer.remove();` to saf
 - All 6 integration tests passed
 - Code compiles without errors
 - No regressions detected
+
+## New Crash Report (2025-10-23 01:21:48)
+
+The issue is still occurring despite the attempted fix. New crash details:
+
+```
+(reel:3286691): GLib-CRITICAL **: 21:21:48.754: Source ID 69976 was not found when attempting to remove it
+
+thread 'main' panicked at /home/arosenfeld/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/glib-0.21.3/src/source.rs:41:14:
+called `Result::unwrap()` on an `Err` value: BoolError { message: "Failed to remove source", filename: "/home/arosenfeld/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/glib-0.21.3/src/source.rs", function: "glib::source::SourceId::remove", line: 37 }
+```
+
+Followed by secondary panic:
+```
+thread 'main' panicked at /home/arosenfeld/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/relm4-0.10.0/src/channel/component.rs:66:34:
+The runtime of the component was shutdown. Maybe you accidentally dropped a controller?: UpdatePosition
+```
+
+**Analysis**: There's still code calling `.unwrap()` on the `remove()` result somewhere. The previous fix may not have been applied to all timer locations, or there's a different code path triggering this. The PlayerController is trying to send UpdatePosition messages after the component runtime shutdown.
+
+**Next Steps**: Need to search for all remaining `timer.remove()` calls that aren't using `let _ =` pattern, or investigate if this is coming from a different component/timer source.
+
+## Additional Crash Report (2025-10-23 01:24:05)
+
+The crash continues to occur. New instance details:
+
+```
+2025-10-23T01:24:05.274696Z  INFO reel::services::core::sync: Fetching episodes for show 128386 season 1
+
+(reel:3299698): GLib-CRITICAL **: 21:24:05.755: Source ID 2848 was not found when attempting to remove it
+
+thread 'main' panicked at /home/arosenfeld/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/glib-0.21.3/src/source.rs:41:14:
+called `Result::unwrap()` on an `Err` value: BoolError { message: "Failed to remove source", filename: "/home/arosenfeld/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/glib-0.21.3/src/source.rs", function: "glib::source::SourceId::remove", line: 37 }
+```
+
+**Stack trace key location**: `src/ui/pages/player.rs:2942:35`
+
+**Secondary panics**:
+1. Mouse motion event handler: Component runtime shutdown, MouseMove message rejected
+2. MediaUpdated broker message: `called Result::unwrap() on an Err value: BrokerMsg(Data(MediaUpdated { media_id: "128429" }))` at player.rs:1841:69
+
+**Critical observation**: The previous fix using `let _ = timer.remove();` pattern did NOT resolve the issue. The stack trace still shows the panic is coming from glib's internal `SourceId::remove()` being called with `.unwrap()`. This suggests:
+
+1. There may be timer removal code paths that weren't updated in the previous fix
+2. The issue might be in a different component's timer management
+3. There could be a race condition where timers are being removed from multiple places simultaneously
+
+**Action needed**: Comprehensive audit of ALL timer.remove() calls across the player.rs file and related components, not just the skip-intro/skip-credits timers.
+
+## Final Solution (2025-10-22)
+
+**Root Cause Identified**: The panic occurs when timer handlers try to remove GLib sources that have already been auto-removed.
+
+When a glib timer is created with `ControlFlow::Break`, GLib automatically removes the source when the timer fires. The handlers `HideSkipIntro` and `HideSkipCredits` are called BY those timers, meaning the source is already removed before the handler executes. Attempting to call `timer.remove()` on an already-removed source causes GLib to panic.
+
+**The Fix**:
+In `src/ui/pages/player.rs`, modified two handler functions:
+
+1. `PlayerInput::HideSkipIntro` (line 2939-2943)
+2. `PlayerInput::HideSkipCredits` (line 2944-2948)
+
+Changed from:
+```rust
+if let Some(timer) = self.skip_intro_hide_timer.take() {
+    let _ = timer.remove();
+}
+```
+
+To:
+```rust
+// Clear the timer without calling remove() - it already fired and was removed by GLib
+self.skip_intro_hide_timer.take();
+```
+
+**Why This Works**:
+- The timer that triggered the handler has already fired with `ControlFlow::Break`
+- GLib automatically removed the source when it fired
+- We only need to clear our `Option<SourceId>` reference, not manually remove the already-gone source
+- All OTHER timer removal sites are correct (they cancel timers before they fire)
+
+**Testing**:
+- ✅ Builds successfully (0 errors, warnings only)
+- ✅ All 248 unit tests passed
+- ✅ All 6 integration tests passed
+- Ready for manual playback testing with skip-intro/skip-credits functionality
 <!-- SECTION:NOTES:END -->
