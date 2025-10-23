@@ -283,9 +283,14 @@ impl SyncService {
                 "Starting episode sync for TV shows in library {}",
                 library.title
             );
-            let shows =
-                MediaService::get_media_items(db, &library.id.clone().into(), None, 0, 1000)
-                    .await?;
+            let shows = MediaService::get_media_items(
+                db,
+                &library.id.clone().into(),
+                Some(crate::models::MediaType::Show),
+                0,
+                10000,
+            )
+            .await?;
             info!(
                 "Found {} shows in library to sync episodes for",
                 shows.len()
