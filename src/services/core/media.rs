@@ -135,8 +135,11 @@ impl MediaService {
                 .collect()
         };
 
+        // Enrich with playback progress data (watch status, position, etc.)
+        let enriched_items = Self::enrich_with_playback_progress(db, items).await?;
+
         // Convert to domain models
-        items
+        enriched_items
             .into_iter()
             .map(|model| model.try_into())
             .collect::<Result<Vec<MediaItem>, _>>()
@@ -158,6 +161,10 @@ impl MediaService {
 
         match model {
             Some(m) => {
+                // Enrich with playback progress data
+                let mut enriched_models = Self::enrich_with_playback_progress(db, vec![m]).await?;
+                let enriched_model = enriched_models.remove(0);
+
                 // Load people (cast/crew) from people tables
                 let people_repo = PeopleRepositoryImpl::new(db.clone());
                 let people_with_relations =
@@ -183,7 +190,7 @@ impl MediaService {
                 }
 
                 // Convert model to MediaItem and inject people data
-                let mut item: MediaItem = m.try_into()?;
+                let mut item: MediaItem = enriched_model.try_into()?;
                 match &mut item {
                     MediaItem::Movie(movie) => {
                         movie.cast = cast;
@@ -602,7 +609,10 @@ impl MediaService {
             .await
             .context("Failed to get recently added media")?;
 
-        models
+        // Enrich with playback progress data
+        let enriched_models = Self::enrich_with_playback_progress(db, models).await?;
+
+        enriched_models
             .into_iter()
             .map(|model| model.try_into())
             .collect::<Result<Vec<MediaItem>, _>>()
@@ -653,14 +663,88 @@ impl MediaService {
             .context("Failed to get in-progress items")?;
 
         // Fetch the full media items
-        let mut items = Vec::new();
+        let mut models = Vec::new();
         for progress in progress_items.into_iter().take(limit as usize) {
             if let Some(model) = media_repo.find_by_id(&progress.media_id).await? {
-                items.push(model.try_into()?);
+                models.push(model);
             }
         }
 
+        // Enrich with playback progress data
+        let enriched_models = Self::enrich_with_playback_progress(db, models).await?;
+
+        // Convert to MediaItem
+        let mut items = Vec::new();
+        for model in enriched_models {
+            items.push(model.try_into()?);
+        }
+
         Ok(items)
+    }
+
+    /// Enrich media item models with playback progress data from the database.
+    /// This ensures that watch status comes from playback_progress table (source of truth)
+    /// rather than from metadata JSON (backend cache that may be stale).
+    async fn enrich_with_playback_progress(
+        db: &DatabaseConnection,
+        mut models: Vec<crate::db::entities::media_items::Model>,
+    ) -> Result<Vec<crate::db::entities::media_items::Model>> {
+        use std::collections::HashMap;
+
+        if models.is_empty() {
+            return Ok(models);
+        }
+
+        // Batch load playback progress for all media items
+        let playback_repo = PlaybackRepositoryImpl::new(db.clone());
+        let media_ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
+
+        // Build a map of media_id -> playback progress
+        let mut progress_map: HashMap<String, crate::db::entities::PlaybackProgressModel> =
+            HashMap::new();
+        for media_id in media_ids {
+            if let Some(progress) = playback_repo.find_by_media_id(&media_id).await? {
+                progress_map.insert(media_id, progress);
+            }
+        }
+
+        // Enrich each model's metadata with actual playback progress
+        for model in &mut models {
+            if let Some(progress) = progress_map.get(&model.id) {
+                // Get existing metadata or create new
+                let mut metadata = model
+                    .metadata
+                    .as_ref()
+                    .and_then(|v| v.as_object().cloned())
+                    .unwrap_or_default();
+
+                // Override watch status with actual data from playback_progress table
+                metadata.insert("watched".to_string(), serde_json::json!(progress.watched));
+                metadata.insert(
+                    "view_count".to_string(),
+                    serde_json::json!(progress.view_count),
+                );
+
+                if let Some(last_watched) = progress.last_watched_at {
+                    metadata.insert(
+                        "last_watched_at".to_string(),
+                        serde_json::json!(last_watched.and_utc().to_rfc3339()),
+                    );
+                }
+
+                if progress.position_ms > 0 {
+                    metadata.insert(
+                        "playback_position_ms".to_string(),
+                        serde_json::json!(progress.position_ms as u64),
+                    );
+                }
+
+                // Update model with enriched metadata
+                model.metadata = Some(serde_json::Value::Object(metadata));
+            }
+        }
+
+        Ok(models)
     }
 
     /// Get episodes for a show, optionally filtered by season
@@ -683,9 +767,12 @@ impl MediaService {
                 .context("Failed to get episodes from database")?
         };
 
+        // Enrich with playback progress data (watch status, position, etc.)
+        let enriched_models = Self::enrich_with_playback_progress(db, models).await?;
+
         // Convert models to MediaItem::Episode
         let mut episodes = Vec::new();
-        for model in models {
+        for model in enriched_models {
             match MediaItem::try_from(model) {
                 Ok(item) => episodes.push(item),
                 Err(e) => {
@@ -831,10 +918,21 @@ impl MediaService {
         // Get all episodes for the show
         let episodes = Self::get_episodes_for_show(db, show_id, None).await?;
 
+        tracing::info!(
+            "mark_show_watched: show_id={}, found {} episodes",
+            show_id.as_ref(),
+            episodes.len()
+        );
+
         // Mark each episode as watched
         for item in episodes {
             if let MediaItem::Episode(episode) = item {
-                let media_id = MediaItemId::new(episode.id);
+                let media_id = MediaItemId::new(&episode.id);
+                tracing::info!(
+                    "Marking episode as watched: id={}, title={}",
+                    episode.id,
+                    episode.title
+                );
                 Self::mark_watched(db, &media_id).await?;
             }
         }
@@ -867,10 +965,22 @@ impl MediaService {
         // Get all episodes for the season
         let episodes = Self::get_episodes_for_show(db, show_id, Some(season_number)).await?;
 
+        tracing::info!(
+            "mark_season_watched: show_id={}, season={}, found {} episodes",
+            show_id.as_ref(),
+            season_number,
+            episodes.len()
+        );
+
         // Mark each episode as watched
         for item in episodes {
             if let MediaItem::Episode(episode) = item {
-                let media_id = MediaItemId::new(episode.id);
+                let media_id = MediaItemId::new(&episode.id);
+                tracing::info!(
+                    "Marking episode as watched: id={}, title={}",
+                    episode.id,
+                    episode.title
+                );
                 Self::mark_watched(db, &media_id).await?;
             }
         }
