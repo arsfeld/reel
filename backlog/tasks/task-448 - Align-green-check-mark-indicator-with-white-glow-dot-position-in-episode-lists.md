@@ -1,10 +1,10 @@
 ---
 id: task-448
 title: Align green check mark indicator with white glow dot position in episode lists
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-10-23 01:49'
-updated_date: '2025-10-23 01:55'
+updated_date: '2025-10-23 02:20'
 labels:
   - ui
   - visual

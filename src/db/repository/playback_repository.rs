@@ -295,12 +295,32 @@ impl PlaybackRepository for PlaybackRepositoryImpl {
         };
 
         if let Some(p) = progress {
+            // Update existing progress entry
             let mut active_model: PlaybackProgressActiveModel = p.clone().into();
             active_model.watched = Set(true);
             active_model.view_count = Set(p.view_count + 1);
             active_model.last_watched_at = Set(Some(chrono::Utc::now().naive_utc()));
             active_model.updated_at = Set(chrono::Utc::now().naive_utc());
             active_model.update(self.base.db.as_ref()).await?;
+        } else {
+            // Create new progress entry for unwatched media
+            let now = chrono::Utc::now().naive_utc();
+            let active_model = PlaybackProgressActiveModel {
+                id: NotSet,
+                media_id: Set(media_id.to_string()),
+                user_id: Set(user_id.map(|s| s.to_string())),
+                position_ms: Set(0),
+                duration_ms: Set(0),
+                watched: Set(true),
+                view_count: Set(1),
+                last_watched_at: Set(Some(now)),
+                updated_at: Set(now),
+                play_queue_id: Set(None),
+                play_queue_version: Set(None),
+                play_queue_item_id: Set(None),
+                source_id: Set(None),
+            };
+            active_model.insert(self.base.db.as_ref()).await?;
         }
 
         Ok(())

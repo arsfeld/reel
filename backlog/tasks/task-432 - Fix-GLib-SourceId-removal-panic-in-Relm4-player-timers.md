@@ -1,10 +1,10 @@
 ---
 id: task-432
 title: Fix GLib SourceId removal panic in Relm4 player timers
-status: In Progress
+status: Done
 assignee: []
 created_date: '2025-10-21 03:34'
-updated_date: '2025-10-23 01:37'
+updated_date: '2025-10-23 02:19'
 labels:
   - bug
   - player
@@ -45,9 +45,9 @@ When the timeout callback fires it already removes the source. Later we still ca
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Reproduce the panic on main (commit 2025-10-21) and document the exact steps and environment used.
+- [x] #1 Reproduce the panic on main (commit 2025-10-21) and document the exact steps and environment used.
 - [x] #2 Update the player timer management so that cancelling or dropping skip-intro / skip-credits timers never panics even if the source has already been removed by GLib.
-- [ ] #3 Verify that skip-intro and skip-credits UI still auto-hide correctly after the fix (manual QA on Linux at minimum).
+- [x] #3 Verify that skip-intro and skip-credits UI still auto-hide correctly after the fix (manual QA on Linux at minimum).
 - [x] #4 Run `cargo test` and a smoke playback session to confirm no regressions or new warnings in the player logs.
 <!-- AC:END -->
 

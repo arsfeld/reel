@@ -4,7 +4,7 @@ title: Add watch status buttons to movie and show detail pages
 status: Done
 assignee: []
 created_date: '2025-10-23 02:06'
-updated_date: '2025-10-23 02:14'
+updated_date: '2025-10-23 02:52'
 labels:
   - feature
   - ui
@@ -87,10 +87,15 @@ Successfully added watch status buttons to movie and show detail pages using the
 - Added new input variants: `ToggleShowWatched` and `ToggleSeasonWatched`
 - Added two new action buttons in the hero section:
   - "Mark Show as Watched/Unwatched" - marks all episodes in the show
-  - "Mark Season" - marks all episodes in the current season
+  - "Mark Season as Watched/Unwatched" - marks all episodes in the current season
 - Updated `ToggleEpisodeWatched` to use `MarkWatchedCommand`/`MarkUnwatchedCommand`
 - Added handling for `MediaUpdated` broker messages to refresh the show details when show/season watch status changes
 - All commands properly broadcast updates via MessageBroker
+
+#### 3. Database Repository Fix (`src/db/repository/playback_repository.rs`)
+- Fixed bug in `mark_watched()` where it only updated existing playback progress entries
+- Now creates new entries for media that has never been watched before
+- This was causing silent failures when marking unwatched episodes/movies
 
 ### Technical Details
 
@@ -99,7 +104,16 @@ All watch status changes now:
 2. Broadcast events via MessageBroker for reactive UI updates
 3. Update both local database and backend servers (Plex/Jellyfin)
 4. Handle errors gracefully with logging
-5. Trigger UI refreshes automatically when watch status changes
+5. Create playback progress entries if they don't exist
 
-The implementation follows the existing patterns established in task-447 and integrates seamlessly with the context menu functionality.
+### Known Issue - Follow-up Required
+
+**Data Loading Architecture Issue (task-457):**
+- Watch status is correctly saved to `playback_progress` table ✓
+- BUT episodes/movies load watch status from `media_items.metadata` JSON (backend data) ✗
+- This means UI doesn't show the updated watch status until a full sync from backend
+- Need to update data loading to join with `playback_progress` table
+- See task-457 for detailed analysis and solution approach
+
+The buttons and commands work correctly, but the UI won't reflect changes until the backend sync completes and updates the metadata JSON.
 <!-- SECTION:NOTES:END -->

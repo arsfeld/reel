@@ -37,6 +37,7 @@ pub struct ShowDetailsPage {
     backdrop_texture: Option<gtk::gdk::Texture>,
     image_loader: WorkerController<ImageLoader>,
     episode_pictures: HashMap<usize, gtk::Picture>,
+    episode_popovers: HashMap<usize, gtk::PopoverMenu>,
     person_textures: HashMap<String, gtk::gdk::Texture>,
     full_metadata_loaded: bool,
 }
@@ -326,17 +327,17 @@ impl AsyncComponent for ShowDetailsPage {
                                             set_icon_name: if model.show.as_ref()
                                                 .map(|s| s.watched_episode_count == s.total_episode_count && s.total_episode_count > 0)
                                                 .unwrap_or(false) {
-                                                "object-select-symbolic"
+                                                "view-list-symbolic"
                                             } else {
-                                                "media-record-symbolic"
+                                                "media-playlist-consecutive-symbolic"
                                             },
                                             #[watch]
                                             set_label: if model.show.as_ref()
                                                 .map(|s| s.watched_episode_count == s.total_episode_count && s.total_episode_count > 0)
                                                 .unwrap_or(false) {
-                                                "Mark as Unwatched"
+                                                "Mark Show as Unwatched"
                                             } else {
-                                                "Mark as Watched"
+                                                "Mark Show as Watched"
                                             },
                                         },
 
@@ -355,15 +356,15 @@ impl AsyncComponent for ShowDetailsPage {
                                         adw::ButtonContent {
                                             #[watch]
                                             set_icon_name: if model.episodes.iter().filter(|ep| !ep.watched).count() == 0 && !model.episodes.is_empty() {
-                                                "object-select-symbolic"
+                                                "folder-open-symbolic"
                                             } else {
-                                                "media-record-symbolic"
+                                                "folder-symbolic"
                                             },
                                             #[watch]
                                             set_label: if model.episodes.iter().filter(|ep| !ep.watched).count() == 0 && !model.episodes.is_empty() {
-                                                "Mark as Unwatched"
+                                                "Mark Season as Unwatched"
                                             } else {
-                                                "Mark as Watched"
+                                                "Mark Season as Watched"
                                             },
                                         },
 
@@ -512,6 +513,7 @@ impl AsyncComponent for ShowDetailsPage {
             backdrop_texture: None,
             image_loader,
             episode_pictures: HashMap::new(),
+            episode_popovers: HashMap::new(),
             person_textures: HashMap::new(),
             full_metadata_loaded: false,
         };
@@ -627,19 +629,31 @@ impl AsyncComponent for ShowDetailsPage {
                     let all_watched = show.watched_episode_count == show.total_episode_count
                         && show.total_episode_count > 0;
 
+                    tracing::info!(
+                        "ToggleShowWatched clicked: show_id={}, all_watched={}, watched_count={}, total_count={}",
+                        show.id,
+                        all_watched,
+                        show.watched_episode_count,
+                        show.total_episode_count
+                    );
+
                     relm4::spawn(async move {
                         let result = if all_watched {
                             // Mark show as unwatched
+                            tracing::info!("Executing MarkShowUnwatchedCommand");
                             let cmd = MarkShowUnwatchedCommand { db, show_id };
                             Command::execute(&cmd).await
                         } else {
                             // Mark show as watched
+                            tracing::info!("Executing MarkShowWatchedCommand");
                             let cmd = MarkShowWatchedCommand { db, show_id };
                             Command::execute(&cmd).await
                         };
 
                         if let Err(e) = result {
                             error!("Failed to toggle show watch status: {}", e);
+                        } else {
+                            tracing::info!("Successfully toggled show watch status");
                         }
                     });
                 }
@@ -654,9 +668,21 @@ impl AsyncComponent for ShowDetailsPage {
                     let season_watched = self.episodes.iter().filter(|ep| !ep.watched).count() == 0
                         && !self.episodes.is_empty();
 
+                    tracing::info!(
+                        "ToggleSeasonWatched clicked: show_id={}, season={}, season_watched={}, episode_count={}",
+                        show.id,
+                        season_number,
+                        season_watched,
+                        self.episodes.len()
+                    );
+
                     relm4::spawn(async move {
                         let result = if season_watched {
                             // Mark season as unwatched
+                            tracing::info!(
+                                "Executing MarkSeasonUnwatchedCommand for season {}",
+                                season_number
+                            );
                             let cmd = MarkSeasonUnwatchedCommand {
                                 db,
                                 show_id,
@@ -665,6 +691,10 @@ impl AsyncComponent for ShowDetailsPage {
                             Command::execute(&cmd).await
                         } else {
                             // Mark season as watched
+                            tracing::info!(
+                                "Executing MarkSeasonWatchedCommand for season {}",
+                                season_number
+                            );
                             let cmd = MarkSeasonWatchedCommand {
                                 db,
                                 show_id,
@@ -675,6 +705,8 @@ impl AsyncComponent for ShowDetailsPage {
 
                         if let Err(e) = result {
                             error!("Failed to toggle season watch status: {}", e);
+                        } else {
+                            tracing::info!("Successfully toggled season watch status");
                         }
                     });
                 }
@@ -780,6 +812,12 @@ impl AsyncComponent for ShowDetailsPage {
 
                             self.show = Some(show.clone());
                             self.loading = false;
+
+                            tracing::info!(
+                                "Show loaded: watched_count={}, total_count={}",
+                                show.watched_episode_count,
+                                show.total_episode_count
+                            );
 
                             // Check if we need to load full cast (if cast count <= 3, likely only preview)
                             // Only attempt once to avoid infinite loop if show really has ≤3 cast members
@@ -898,12 +936,13 @@ impl AsyncComponent for ShowDetailsPage {
                         // Debug log each episode
                         for (index, episode) in episodes.iter().enumerate() {
                             tracing::debug!(
-                                "Episode {}: ID={}, Title='{}', Season={}, Episode={}",
+                                "Episode {}: ID={}, Title='{}', Season={}, Episode={}, Watched={}",
                                 index,
                                 episode.id,
                                 episode.title,
                                 episode.season_number,
-                                episode.episode_number
+                                episode.episode_number,
+                                episode.watched
                             );
                         }
 
@@ -1112,13 +1151,19 @@ impl ShowDetailsPage {
             self.episodes.len()
         );
 
-        // Clear existing children and picture references
+        // Clear existing children and unparent popovers to prevent GTK warnings
         let mut child_count = 0;
         while let Some(child) = self.episode_grid.first_child() {
             self.episode_grid.remove(&child);
             child_count += 1;
         }
         tracing::debug!("Cleared {} existing children from grid", child_count);
+
+        // Unparent all popovers before clearing
+        for (_, popover) in self.episode_popovers.drain() {
+            popover.unparent();
+        }
+
         self.episode_pictures.clear();
 
         // Dynamically adjust FlowBox to show all episodes in a single row
@@ -1135,7 +1180,7 @@ impl ShowDetailsPage {
 
         // Add episode cards
         for (index, episode) in self.episodes.iter().enumerate() {
-            let (card, picture) = create_episode_card(episode, index, sender.clone());
+            let (card, picture, popover) = create_episode_card(episode, index, sender.clone());
             self.episode_grid.append(&card);
             tracing::debug!(
                 "Added episode card {} to grid: '{}' (S{}E{})",
@@ -1145,8 +1190,9 @@ impl ShowDetailsPage {
                 episode.episode_number
             );
 
-            // Store picture reference for later updates
+            // Store picture and popover references for later updates and cleanup
             self.episode_pictures.insert(index, picture.clone());
+            self.episode_popovers.insert(index, popover);
 
             // Send image load request to the worker
             if let Some(thumbnail_url) = &episode.thumbnail_url {
@@ -1239,9 +1285,9 @@ async fn find_season_with_next_unwatched(
 
 fn create_episode_card(
     episode: &Episode,
-    _index: usize,
+    index: usize,
     sender: AsyncComponentSender<ShowDetailsPage>,
-) -> (gtk::Box, gtk::Picture) {
+) -> (gtk::Box, gtk::Picture, gtk::PopoverMenu) {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
@@ -1252,10 +1298,75 @@ fn create_episode_card(
     // Make the card clickable
     let click_controller = gtk::GestureClick::new();
     let episode_id = MediaItemId::new(&episode.id);
+    let sender_clone = sender.clone();
     click_controller.connect_released(move |_, _, _, _| {
-        sender.input(ShowDetailsInput::PlayEpisode(episode_id.clone()));
+        sender_clone.input(ShowDetailsInput::PlayEpisode(episode_id.clone()));
     });
     card.add_controller(click_controller);
+
+    // Create context menu
+    let menu = gtk::gio::Menu::new();
+
+    // Add "Play Episode" action
+    menu.append(Some("Play Episode"), Some("episode.play"));
+
+    // Add watch status toggle
+    if episode.watched {
+        menu.append(Some("Mark as Unwatched"), Some("episode.mark_unwatched"));
+    } else {
+        menu.append(Some("Mark as Watched"), Some("episode.mark_watched"));
+    }
+
+    // Create popover menu
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    popover.set_parent(&card);
+    popover.set_has_arrow(false);
+
+    // Create action group for menu actions
+    let action_group = gtk::gio::SimpleActionGroup::new();
+
+    // Play action
+    let play_action = gtk::gio::SimpleAction::new("play", None);
+    let sender_clone = sender.clone();
+    let episode_id_clone = MediaItemId::new(&episode.id);
+    play_action.connect_activate(move |_, _| {
+        sender_clone.input(ShowDetailsInput::PlayEpisode(episode_id_clone.clone()));
+    });
+    action_group.add_action(&play_action);
+
+    // Mark Watched action
+    let mark_watched_action = gtk::gio::SimpleAction::new("mark_watched", None);
+    let sender_clone = sender.clone();
+    mark_watched_action.connect_activate(move |_, _| {
+        sender_clone.input(ShowDetailsInput::ToggleEpisodeWatched(index));
+    });
+    action_group.add_action(&mark_watched_action);
+
+    // Mark Unwatched action
+    let mark_unwatched_action = gtk::gio::SimpleAction::new("mark_unwatched", None);
+    let sender_clone = sender.clone();
+    mark_unwatched_action.connect_activate(move |_, _| {
+        sender_clone.input(ShowDetailsInput::ToggleEpisodeWatched(index));
+    });
+    action_group.add_action(&mark_unwatched_action);
+
+    // Insert action group into the card
+    card.insert_action_group("episode", Some(&action_group));
+
+    // Add right-click gesture
+    let right_click = gtk::GestureClick::new();
+    right_click.set_button(3); // Right mouse button
+    let popover_clone = popover.clone();
+    right_click.connect_released(move |gesture, _, x, y| {
+        // Get the widget that was clicked
+        if let Some(_widget) = gesture.widget() {
+            // Calculate the position relative to the widget
+            let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+            popover_clone.set_pointing_to(Some(&rect));
+            popover_clone.popup();
+        }
+    });
+    card.add_controller(right_click);
 
     // Add hover effects
     card.set_cursor_from_name(Some("pointer"));
@@ -1378,5 +1489,5 @@ fn create_episode_card(
     card.append(&overlay);
     card.append(&info_box);
 
-    (card, picture)
+    (card, picture, popover)
 }
