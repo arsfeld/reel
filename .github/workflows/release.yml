@@ -72,7 +72,6 @@ jobs:
 
       - name: Extract release notes from tag
         id: extract_notes
-        if: steps.check_release.outputs.exists == 'false'
         run: |
           # Get release notes from annotated tag
           # The notes are generated locally with Claude CLI and stored in the tag annotation
@@ -102,7 +101,6 @@ jobs:
 
       - name: Build release body
         id: build_body
-        if: steps.check_release.outputs.exists == 'false'
         run: |
           cat > release_body.md << 'RELEASE_BODY'
           ${{ steps.check_prerelease.outputs.is_prerelease == 'true' && '
@@ -168,7 +166,7 @@ jobs:
           name: Reel ${{ steps.get_version.outputs.version }}${{ steps.check_prerelease.outputs.is_prerelease == 'true' && ' (Prerelease)' || '' }}
           draft: ${{ steps.check_prerelease.outputs.is_prerelease == 'true' }}
           prerelease: ${{ steps.check_prerelease.outputs.is_prerelease == 'true' }}
-          body_path: ${{ steps.check_release.outputs.exists == 'false' && 'release_body.md' || '' }}
+          body_path: release_body.md
 
   build-linux:
     needs: create-release
