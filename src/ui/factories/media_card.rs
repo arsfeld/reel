@@ -19,6 +19,8 @@ pub struct MediaCard {
     item: MediaItemModel,
     #[do_not_track]
     item_id: MediaItemId,
+    #[do_not_track]
+    parent_show_id: Option<MediaItemId>, // For episodes, ID of parent show
     show_progress: bool,
     show_media_type_icon: bool,
     hover: bool,
@@ -29,6 +31,8 @@ pub struct MediaCard {
     watched: bool,
     #[do_not_track]
     texture: Option<gtk::gdk::Texture>,
+    #[do_not_track]
+    popover: Option<gtk::PopoverMenu>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +49,9 @@ pub enum MediaCardInput {
 pub enum MediaCardOutput {
     Clicked(MediaItemId),
     Play(MediaItemId),
+    GoToShow(MediaItemId), // Navigate to parent show (for episodes)
+    MarkWatched(MediaItemId),
+    MarkUnwatched(MediaItemId),
 }
 
 #[relm4::factory(pub)]
@@ -177,8 +184,122 @@ impl FactoryComponent for MediaCard {
         }
     }
 
+    fn init_widgets(
+        &mut self,
+        _index: &DynamicIndex,
+        root: Self::Root,
+        _returned_widget: &<Self::ParentWidget as relm4::factory::FactoryView>::ReturnedWidget,
+        sender: FactorySender<Self>,
+    ) -> Self::Widgets {
+        // Set up context menu BEFORE calling view_output! (which consumes root)
+
+        // Create context menu
+        let menu = gtk::gio::Menu::new();
+
+        // Add "Play" action for all media types
+        menu.append(Some("Play"), Some("card.play"));
+
+        // Add "Go to Show" for episodes
+        if self.item.media_type == "episode" && self.parent_show_id.is_some() {
+            menu.append(Some("Go to Show"), Some("card.go_to_show"));
+        }
+
+        // Add watch status toggle
+        if self.watched {
+            menu.append(Some("Mark as Unwatched"), Some("card.mark_unwatched"));
+        } else {
+            menu.append(Some("Mark as Watched"), Some("card.mark_watched"));
+        }
+
+        // Create popover menu
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        popover.set_parent(&root);
+        popover.set_has_arrow(false);
+
+        // Store popover reference for cleanup in shutdown
+        self.popover = Some(popover.clone());
+
+        // Create action group for menu actions
+        let action_group = gtk::gio::SimpleActionGroup::new();
+
+        // Play action
+        let play_action = gtk::gio::SimpleAction::new("play", None);
+        let sender_clone = sender.clone();
+        let item_id = self.item_id.clone();
+        play_action.connect_activate(move |_, _| {
+            sender_clone
+                .output(MediaCardOutput::Play(item_id.clone()))
+                .unwrap();
+        });
+        action_group.add_action(&play_action);
+
+        // Go to Show action (if episode)
+        if let Some(parent_id) = &self.parent_show_id {
+            let go_to_show_action = gtk::gio::SimpleAction::new("go_to_show", None);
+            let sender_clone = sender.clone();
+            let parent_id_clone = parent_id.clone();
+            go_to_show_action.connect_activate(move |_, _| {
+                sender_clone
+                    .output(MediaCardOutput::GoToShow(parent_id_clone.clone()))
+                    .unwrap();
+            });
+            action_group.add_action(&go_to_show_action);
+        }
+
+        // Mark Watched action
+        let mark_watched_action = gtk::gio::SimpleAction::new("mark_watched", None);
+        let sender_clone = sender.clone();
+        let item_id_clone = self.item_id.clone();
+        mark_watched_action.connect_activate(move |_, _| {
+            sender_clone
+                .output(MediaCardOutput::MarkWatched(item_id_clone.clone()))
+                .unwrap();
+        });
+        action_group.add_action(&mark_watched_action);
+
+        // Mark Unwatched action
+        let mark_unwatched_action = gtk::gio::SimpleAction::new("mark_unwatched", None);
+        let sender_clone = sender.clone();
+        let item_id_clone = self.item_id.clone();
+        mark_unwatched_action.connect_activate(move |_, _| {
+            sender_clone
+                .output(MediaCardOutput::MarkUnwatched(item_id_clone.clone()))
+                .unwrap();
+        });
+        action_group.add_action(&mark_unwatched_action);
+
+        // Insert action group
+        root.insert_action_group("card", Some(&action_group));
+
+        // Add right-click gesture
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(3); // Right mouse button
+        let popover_clone = popover.clone();
+        gesture.connect_released(move |gesture, _, x, y| {
+            // Get the widget that was clicked
+            if let Some(_widget) = gesture.widget() {
+                // Calculate the position relative to the widget
+                let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+                popover_clone.set_pointing_to(Some(&rect));
+                popover_clone.popup();
+            }
+        });
+        root.add_controller(gesture);
+
+        // Now call view_output! which will consume root
+        let widgets = view_output!();
+        widgets
+    }
+
     fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
         let item_id = MediaItemId::new(init.item.id.clone());
+
+        // For episodes, get parent show ID for "Go to Show" context menu action
+        let parent_show_id = init
+            .item
+            .parent_id
+            .as_ref()
+            .map(|id| MediaItemId::new(id.clone()));
 
         // Debug: Creating card for item with appropriate initial state
 
@@ -190,6 +311,7 @@ impl FactoryComponent for MediaCard {
         Self {
             item: init.item,
             item_id,
+            parent_show_id,
             show_progress: init.show_progress,
             show_media_type_icon: init.show_media_type_icon,
             hover: false,
@@ -199,6 +321,7 @@ impl FactoryComponent for MediaCard {
             load_failed: false,
             watched: init.watched,
             texture: None,
+            popover: None,
             tracker: 0,
         }
     }
@@ -237,6 +360,14 @@ impl FactoryComponent for MediaCard {
                     .output(MediaCardOutput::Play(self.item_id.clone()))
                     .unwrap();
             }
+        }
+    }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        // Properly unparent the popover before the button is finalized
+        // This prevents GTK warnings about finalizing buttons with children
+        if let Some(popover) = self.popover.take() {
+            popover.unparent();
         }
     }
 }
