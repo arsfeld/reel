@@ -311,15 +311,14 @@ impl AsyncComponent for ShowDetailsPage {
                                     set_margin_top: 16,
 
                                     gtk::Button {
-                                        add_css_class: "action-button-secondary",
-                                        add_css_class: "interactive-element",
+                                        add_css_class: "pill",
                                         #[watch]
                                         set_tooltip_text: Some(if model.show.as_ref()
                                             .map(|s| s.watched_episode_count == s.total_episode_count && s.total_episode_count > 0)
                                             .unwrap_or(false) {
-                                            "Mark show as unwatched"
+                                            "Mark all episodes as unwatched"
                                         } else {
-                                            "Mark show as watched"
+                                            "Mark all episodes as watched"
                                         }),
 
                                         adw::ButtonContent {
@@ -335,9 +334,9 @@ impl AsyncComponent for ShowDetailsPage {
                                             set_label: if model.show.as_ref()
                                                 .map(|s| s.watched_episode_count == s.total_episode_count && s.total_episode_count > 0)
                                                 .unwrap_or(false) {
-                                                "Mark Show Unwatched"
+                                                "Unwatch Show"
                                             } else {
-                                                "Mark Show Watched"
+                                                "Watch Show"
                                             },
                                         },
 
@@ -345,13 +344,27 @@ impl AsyncComponent for ShowDetailsPage {
                                     },
 
                                     gtk::Button {
-                                        add_css_class: "action-button-secondary",
-                                        add_css_class: "interactive-element",
-                                        set_tooltip_text: Some("Mark season as watched/unwatched"),
+                                        add_css_class: "pill",
+                                        #[watch]
+                                        set_tooltip_text: Some(if model.episodes.iter().filter(|ep| !ep.watched).count() == 0 && !model.episodes.is_empty() {
+                                            "Mark this season as unwatched"
+                                        } else {
+                                            "Mark this season as watched"
+                                        }),
 
                                         adw::ButtonContent {
-                                            set_icon_name: "view-list-symbolic",
-                                            set_label: "Mark Season",
+                                            #[watch]
+                                            set_icon_name: if model.episodes.iter().filter(|ep| !ep.watched).count() == 0 && !model.episodes.is_empty() {
+                                                "object-select-symbolic"
+                                            } else {
+                                                "media-record-symbolic"
+                                            },
+                                            #[watch]
+                                            set_label: if model.episodes.iter().filter(|ep| !ep.watched).count() == 0 && !model.episodes.is_empty() {
+                                                "Unwatch Season"
+                                            } else {
+                                                "Watch Season"
+                                            },
                                         },
 
                                         connect_clicked => ShowDetailsInput::ToggleSeasonWatched,
