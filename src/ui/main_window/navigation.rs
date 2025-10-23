@@ -54,6 +54,22 @@ fn navigate_back(window: &mut MainWindow, sender: &AsyncComponentSender<MainWind
                         tracing::error!("Failed to stop player");
                     });
             }
+
+            // Use the stored previous page to navigate back to the correct location
+            if let Some(previous_page) = window.previous_page_before_player.take() {
+                tracing::info!("Navigating back from player to: {}", previous_page);
+
+                // Pop the player page
+                window.navigation_view.pop();
+
+                // Clear the stored previous page
+                window.previous_page_before_player = None;
+
+                // Clear any custom header content when going back
+                sender.input(MainWindowInput::ClearHeaderContent);
+
+                return;
+            }
         }
 
         window.navigation_view.pop();
@@ -716,6 +732,13 @@ pub fn navigate_to_player(
 ) {
     tracing::info!("Navigating to player for media: {}", media_id);
 
+    // Save the current page so we can return to it
+    if let Some(current_page) = window.navigation_view.visible_page() {
+        let page_title = current_page.title().to_string();
+        tracing::info!("Saving previous page before player: {}", page_title);
+        window.previous_page_before_player = Some(page_title);
+    }
+
     // Save current window state before entering player
     let (width, height) = root.default_size();
     window.saved_window_size = Some((width, height));
@@ -797,6 +820,13 @@ pub fn navigate_to_player_with_context(
     root: &adw::ApplicationWindow,
 ) {
     tracing::info!("Navigating to player with context for media: {}", media_id);
+
+    // Save the current page so we can return to it
+    if let Some(current_page) = window.navigation_view.visible_page() {
+        let page_title = current_page.title().to_string();
+        tracing::info!("Saving previous page before player: {}", page_title);
+        window.previous_page_before_player = Some(page_title);
+    }
 
     // Save current window state before entering player
     let (width, height) = root.default_size();
