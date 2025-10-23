@@ -80,7 +80,7 @@ if bash scripts/generate-release-notes.sh > "$NOTES_FILE" 2>&1; then
 
   # Create annotated tag with the generated notes
   echo "Creating release tag with generated notes..."
-  git tag -a "v$NEW_VERSION" -F "$NOTES_FILE"
+  git tag -a "v$NEW_VERSION" -F "$NOTES_FILE" --cleanup=verbatim
 
   rm "$NOTES_FILE"
 else
@@ -92,7 +92,7 @@ else
   echo ""
   echo "Install at least one AI CLI tool (Claude, Gemini, or Codex)"
   echo "Creating tag with default message..."
-  git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+  git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION" --cleanup=verbatim
 fi
 
 # Show what will be pushed
