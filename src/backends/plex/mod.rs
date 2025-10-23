@@ -1500,7 +1500,19 @@ impl MediaBackend for PlexBackend {
     }
 }
 
-impl PlexBackend {}
+impl PlexBackend {
+    /// Mark a media item as watched
+    pub async fn mark_watched(&self, item_id: &str) -> Result<()> {
+        let api = self.get_api().await?;
+        api.mark_watched(item_id).await
+    }
+
+    /// Mark a media item as unwatched
+    pub async fn mark_unwatched(&self, item_id: &str) -> Result<()> {
+        let api = self.get_api().await?;
+        api.mark_unwatched(item_id).await
+    }
+}
 
 impl fmt::Debug for PlexBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

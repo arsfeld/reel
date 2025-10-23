@@ -240,10 +240,6 @@ impl MediaService {
                     Some(existing_episode) => {
                         // Found an existing episode with same parent/season/episode
                         // Update it and preserve its ID to maintain playback progress references
-                        debug!(
-                            "Found existing episode by natural key: {} S{}E{} - updating (old_id={}, new_id={})",
-                            parent_id, season_num, episode_num, existing_episode.id, entity.id
-                        );
                         entity.id = existing_episode.id.clone();
                         Some(existing_episode)
                     }
@@ -456,10 +452,6 @@ impl MediaService {
                         .await?
                     {
                         Some(existing_episode) => {
-                            debug!(
-                                "Found existing episode by natural key: {} S{}E{} - updating (old_id={}, new_id={})",
-                                parent_id, season_num, episode_num, existing_episode.id, entity.id
-                            );
                             entity.id = existing_episode.id.clone();
                             Some(existing_episode)
                         }
@@ -773,6 +765,134 @@ impl MediaService {
                     warn!("Failed to sync playback progress to backend: {}", e);
                 }
             });
+        }
+
+        Ok(())
+    }
+
+    /// Mark a media item as watched
+    pub async fn mark_watched(db: &DatabaseConnection, media_id: &MediaItemId) -> Result<()> {
+        let repo = PlaybackRepositoryImpl::new(db.clone());
+
+        // Mark as watched in database (None for user_id for single-user system)
+        repo.mark_watched(media_id.as_ref(), None).await?;
+
+        // Sync to backend in fire-and-forget manner
+        let media_id_str = media_id.to_string();
+        if let Some(colon_pos) = media_id_str.find(':') {
+            let source_id = media_id_str[..colon_pos].to_string();
+            let media_id_clone = media_id.clone();
+            let db_clone = db.clone();
+
+            tokio::spawn(async move {
+                use crate::services::core::backend::BackendService;
+
+                if let Err(e) =
+                    BackendService::mark_watched(&db_clone, &source_id, &media_id_clone).await
+                {
+                    warn!("Failed to sync watch status to backend: {}", e);
+                }
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Mark a media item as unwatched
+    pub async fn mark_unwatched(db: &DatabaseConnection, media_id: &MediaItemId) -> Result<()> {
+        let repo = PlaybackRepositoryImpl::new(db.clone());
+
+        // Mark as unwatched in database (None for user_id for single-user system)
+        repo.mark_unwatched(media_id.as_ref(), None).await?;
+
+        // Sync to backend in fire-and-forget manner
+        let media_id_str = media_id.to_string();
+        if let Some(colon_pos) = media_id_str.find(':') {
+            let source_id = media_id_str[..colon_pos].to_string();
+            let media_id_clone = media_id.clone();
+            let db_clone = db.clone();
+
+            tokio::spawn(async move {
+                use crate::services::core::backend::BackendService;
+
+                if let Err(e) =
+                    BackendService::mark_unwatched(&db_clone, &source_id, &media_id_clone).await
+                {
+                    warn!("Failed to sync watch status to backend: {}", e);
+                }
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Mark all episodes in a show as watched
+    pub async fn mark_show_watched(db: &DatabaseConnection, show_id: &ShowId) -> Result<()> {
+        // Get all episodes for the show
+        let episodes = Self::get_episodes_for_show(db, show_id, None).await?;
+
+        // Mark each episode as watched
+        for item in episodes {
+            if let MediaItem::Episode(episode) = item {
+                let media_id = MediaItemId::new(episode.id);
+                Self::mark_watched(db, &media_id).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Mark all episodes in a show as unwatched
+    pub async fn mark_show_unwatched(db: &DatabaseConnection, show_id: &ShowId) -> Result<()> {
+        // Get all episodes for the show
+        let episodes = Self::get_episodes_for_show(db, show_id, None).await?;
+
+        // Mark each episode as unwatched
+        for item in episodes {
+            if let MediaItem::Episode(episode) = item {
+                let media_id = MediaItemId::new(episode.id);
+                Self::mark_unwatched(db, &media_id).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Mark all episodes in a season as watched
+    pub async fn mark_season_watched(
+        db: &DatabaseConnection,
+        show_id: &ShowId,
+        season_number: u32,
+    ) -> Result<()> {
+        // Get all episodes for the season
+        let episodes = Self::get_episodes_for_show(db, show_id, Some(season_number)).await?;
+
+        // Mark each episode as watched
+        for item in episodes {
+            if let MediaItem::Episode(episode) = item {
+                let media_id = MediaItemId::new(episode.id);
+                Self::mark_watched(db, &media_id).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Mark all episodes in a season as unwatched
+    pub async fn mark_season_unwatched(
+        db: &DatabaseConnection,
+        show_id: &ShowId,
+        season_number: u32,
+    ) -> Result<()> {
+        // Get all episodes for the season
+        let episodes = Self::get_episodes_for_show(db, show_id, Some(season_number)).await?;
+
+        // Mark each episode as unwatched
+        for item in episodes {
+            if let MediaItem::Episode(episode) = item {
+                let media_id = MediaItemId::new(episode.id);
+                Self::mark_unwatched(db, &media_id).await?;
+            }
         }
 
         Ok(())

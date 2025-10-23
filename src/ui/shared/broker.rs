@@ -72,6 +72,10 @@ pub enum DataMessage {
         current: usize,
         total: usize,
     },
+    PlaybackProgressUpdated {
+        media_id: String,
+        watched: bool,
+    },
 }
 
 #[derive(Debug, Clone)]

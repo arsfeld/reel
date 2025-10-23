@@ -28,6 +28,8 @@ pub enum SectionRowInput {
 pub enum SectionRowOutput {
     MediaSelected(MediaItemId),
     MediaPlayRequested(MediaItemId),
+    MarkWatched(MediaItemId),
+    MarkUnwatched(MediaItemId),
     LoadMore,
 }
 
@@ -115,6 +117,9 @@ impl FactoryComponent for SectionRow {
             .forward(sender.output_sender(), |output| match output {
                 MediaCardOutput::Clicked(id) => SectionRowOutput::MediaSelected(id),
                 MediaCardOutput::Play(id) => SectionRowOutput::MediaPlayRequested(id),
+                MediaCardOutput::GoToShow(id) => SectionRowOutput::MediaSelected(id),
+                MediaCardOutput::MarkWatched(id) => SectionRowOutput::MarkWatched(id),
+                MediaCardOutput::MarkUnwatched(id) => SectionRowOutput::MarkUnwatched(id),
             });
 
         Self {

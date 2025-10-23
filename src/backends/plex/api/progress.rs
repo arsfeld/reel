@@ -96,4 +96,29 @@ impl PlexApi {
 
         Ok(())
     }
+
+    /// Mark media as unwatched
+    pub async fn mark_unwatched(&self, media_id: &str) -> Result<()> {
+        let url = self.build_url("/:/unscrobble");
+
+        let response = self
+            .client
+            .put(&url)
+            .headers(self.standard_headers())
+            .query(&[
+                ("key", media_id),
+                ("identifier", "com.plexapp.plugins.library"),
+            ])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "Failed to mark as unwatched: {}",
+                response.status()
+            ));
+        }
+
+        Ok(())
+    }
 }

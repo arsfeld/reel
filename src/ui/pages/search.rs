@@ -49,6 +49,10 @@ pub enum SearchPageInput {
     },
     /// Media item selected
     MediaItemSelected(MediaItemId),
+    /// Mark media item as watched
+    MarkWatched(MediaItemId),
+    /// Mark media item as unwatched
+    MarkUnwatched(MediaItemId),
     /// Image loaded from worker
     ImageLoaded {
         id: String,
@@ -196,6 +200,9 @@ impl AsyncComponent for SearchPage {
             .forward(sender.input_sender(), |output| match output {
                 MediaCardOutput::Clicked(id) => SearchPageInput::MediaItemSelected(id),
                 MediaCardOutput::Play(id) => SearchPageInput::MediaItemSelected(id),
+                MediaCardOutput::GoToShow(id) => SearchPageInput::MediaItemSelected(id),
+                MediaCardOutput::MarkWatched(id) => SearchPageInput::MarkWatched(id),
+                MediaCardOutput::MarkUnwatched(id) => SearchPageInput::MarkUnwatched(id),
             });
 
         let model = SearchPage {
@@ -385,6 +392,46 @@ impl AsyncComponent for SearchPage {
                 sender
                     .output(SearchPageOutput::NavigateToMediaItem(id))
                     .ok();
+            }
+
+            SearchPageInput::MarkWatched(media_id) => {
+                debug!("Marking item as watched: {}", media_id);
+                let db = self.db.clone();
+                let media_id_clone = media_id.clone();
+
+                sender.oneshot_command(async move {
+                    use crate::services::commands::Command;
+                    use crate::services::commands::media_commands::MarkWatchedCommand;
+
+                    let cmd = MarkWatchedCommand {
+                        db,
+                        media_id: media_id_clone,
+                    };
+
+                    if let Err(e) = cmd.execute().await {
+                        tracing::error!("Failed to mark item as watched: {}", e);
+                    }
+                });
+            }
+
+            SearchPageInput::MarkUnwatched(media_id) => {
+                debug!("Marking item as unwatched: {}", media_id);
+                let db = self.db.clone();
+                let media_id_clone = media_id.clone();
+
+                sender.oneshot_command(async move {
+                    use crate::services::commands::Command;
+                    use crate::services::commands::media_commands::MarkUnwatchedCommand;
+
+                    let cmd = MarkUnwatchedCommand {
+                        db,
+                        media_id: media_id_clone,
+                    };
+
+                    if let Err(e) = cmd.execute().await {
+                        tracing::error!("Failed to mark item as unwatched: {}", e);
+                    }
+                });
             }
 
             SearchPageInput::ImageLoaded { id, texture } => {

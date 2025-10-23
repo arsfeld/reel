@@ -1,6 +1,10 @@
-use crate::models::{Episode, MediaItem, MediaItemId, PlaylistContext, Show};
+use crate::models::{Episode, MediaItem, MediaItemId, PlaylistContext, Show, ShowId};
 use crate::services::commands::Command;
-use crate::services::commands::media_commands::{GetEpisodesCommand, GetItemDetailsCommand};
+use crate::services::commands::media_commands::{
+    GetEpisodesCommand, GetItemDetailsCommand, MarkSeasonUnwatchedCommand,
+    MarkSeasonWatchedCommand, MarkShowUnwatchedCommand, MarkShowWatchedCommand,
+    MarkUnwatchedCommand, MarkWatchedCommand,
+};
 use crate::services::core::PlaylistService;
 use crate::ui::shared::broker::{BROKER, BrokerMessage};
 use crate::ui::shared::image_helpers::load_image_from_url;
@@ -22,6 +26,7 @@ pub struct ShowDetailsPage {
     show: Option<Show>,
     episodes: Vec<Episode>,
     current_season: u32,
+    season_numbers: Vec<u32>, // Maps dropdown index to actual season number
     item_id: MediaItemId,
     db: Arc<crate::db::connection::DatabaseConnection>,
     loading: bool,
@@ -52,9 +57,11 @@ impl std::fmt::Debug for ShowDetailsPage {
 #[derive(Debug)]
 pub enum ShowDetailsInput {
     LoadShow(MediaItemId),
-    SelectSeason(u32),
+    SelectSeason(u32), // Season dropdown index (not season number)
     PlayEpisode(MediaItemId),
     ToggleEpisodeWatched(usize),
+    ToggleShowWatched,
+    ToggleSeasonWatched,
     LoadEpisodes,
     ImageLoaded {
         id: String,
@@ -297,10 +304,65 @@ impl AsyncComponent for ShowDetailsPage {
                                     },
                                 },
 
+                                // Action buttons for show watch status
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Horizontal,
+                                    set_spacing: 12,
+                                    set_margin_top: 16,
+
+                                    gtk::Button {
+                                        add_css_class: "action-button-secondary",
+                                        add_css_class: "interactive-element",
+                                        #[watch]
+                                        set_tooltip_text: Some(if model.show.as_ref()
+                                            .map(|s| s.watched_episode_count == s.total_episode_count && s.total_episode_count > 0)
+                                            .unwrap_or(false) {
+                                            "Mark show as unwatched"
+                                        } else {
+                                            "Mark show as watched"
+                                        }),
+
+                                        adw::ButtonContent {
+                                            #[watch]
+                                            set_icon_name: if model.show.as_ref()
+                                                .map(|s| s.watched_episode_count == s.total_episode_count && s.total_episode_count > 0)
+                                                .unwrap_or(false) {
+                                                "object-select-symbolic"
+                                            } else {
+                                                "media-record-symbolic"
+                                            },
+                                            #[watch]
+                                            set_label: if model.show.as_ref()
+                                                .map(|s| s.watched_episode_count == s.total_episode_count && s.total_episode_count > 0)
+                                                .unwrap_or(false) {
+                                                "Mark Show Unwatched"
+                                            } else {
+                                                "Mark Show Watched"
+                                            },
+                                        },
+
+                                        connect_clicked => ShowDetailsInput::ToggleShowWatched,
+                                    },
+
+                                    gtk::Button {
+                                        add_css_class: "action-button-secondary",
+                                        add_css_class: "interactive-element",
+                                        set_tooltip_text: Some("Mark season as watched/unwatched"),
+
+                                        adw::ButtonContent {
+                                            set_icon_name: "view-list-symbolic",
+                                            set_label: "Mark Season",
+                                        },
+
+                                        connect_clicked => ShowDetailsInput::ToggleSeasonWatched,
+                                    },
+                                },
+
                                 // Season selector
                                 gtk::Box {
                                     set_orientation: gtk::Orientation::Horizontal,
                                     set_spacing: 12,
+                                    set_margin_top: 12,
 
                                     gtk::Label {
                                         set_label: "Season:",
@@ -394,9 +456,8 @@ impl AsyncComponent for ShowDetailsPage {
             let sender = sender.clone();
             season_dropdown.connect_selected_notify(move |dropdown| {
                 let selected = dropdown.selected();
-                // Use checked_add to prevent overflow, default to season 1 if overflow occurs
-                let season_num = selected.checked_add(1).unwrap_or(1);
-                sender.input(ShowDetailsInput::SelectSeason(season_num));
+                // Send the dropdown index directly
+                sender.input(ShowDetailsInput::SelectSeason(selected));
             });
         }
 
@@ -427,6 +488,7 @@ impl AsyncComponent for ShowDetailsPage {
             show: None,
             episodes: Vec::new(),
             current_season: 1,
+            season_numbers: Vec::new(),
             item_id: init.0.clone(),
             db: init.1,
             loading: true,
@@ -474,18 +536,28 @@ impl AsyncComponent for ShowDetailsPage {
                 self.item_id = item_id;
                 self.show = None;
                 self.episodes.clear();
+                self.season_numbers.clear();
                 self.loading = true;
                 self.poster_texture = None;
                 self.backdrop_texture = None;
                 sender.oneshot_command(async { ShowDetailsCommand::LoadDetails });
             }
-            ShowDetailsInput::SelectSeason(season_num) => {
-                self.current_season = season_num;
-                if let Some(show) = &self.show {
-                    let show_id = show.id.clone();
-                    sender.oneshot_command(async move {
-                        ShowDetailsCommand::LoadEpisodes(show_id, season_num)
-                    });
+            ShowDetailsInput::SelectSeason(season_index) => {
+                // Look up the actual season number from the stored mapping
+                if let Some(&season_num) = self.season_numbers.get(season_index as usize) {
+                    self.current_season = season_num;
+                    if let Some(show) = &self.show {
+                        let show_id = show.id.clone();
+                        sender.oneshot_command(async move {
+                            ShowDetailsCommand::LoadEpisodes(show_id, season_num)
+                        });
+                    }
+                } else {
+                    tracing::warn!(
+                        "Invalid season index {} (only {} seasons available)",
+                        season_index,
+                        self.season_numbers.len()
+                    );
                 }
             }
             ShowDetailsInput::PlayEpisode(episode_id) => {
@@ -513,46 +585,85 @@ impl AsyncComponent for ShowDetailsPage {
                 });
             }
             ShowDetailsInput::ToggleEpisodeWatched(index) => {
-                if let Some(episode) = self.episodes.get_mut(index) {
-                    episode.watched = !episode.watched;
-
-                    // Update database with watched status
+                if let Some(episode) = self.episodes.get(index) {
                     let db = (*self.db).clone();
-                    let media_id = episode.id.clone();
+                    let media_id = MediaItemId::new(&episode.id);
                     let watched = episode.watched;
-                    let show_id = self.show.as_ref().map(|s| s.id.clone());
 
                     relm4::spawn(async move {
-                        use crate::db::repository::{
-                            MediaRepository, MediaRepositoryImpl, PlaybackRepository,
-                            PlaybackRepositoryImpl,
+                        let result = if watched {
+                            // Mark as unwatched
+                            let cmd = MarkUnwatchedCommand { db, media_id };
+                            Command::execute(&cmd).await
+                        } else {
+                            // Mark as watched
+                            let cmd = MarkWatchedCommand { db, media_id };
+                            Command::execute(&cmd).await
                         };
 
-                        let playback_repo = PlaybackRepositoryImpl::new(db.clone());
-                        if watched {
-                            if let Err(e) = playback_repo
-                                .mark_watched(&media_id.to_string(), None)
-                                .await
-                            {
-                                error!("Failed to mark episode as watched: {}", e);
-                            }
-                        } else if let Err(e) = playback_repo
-                            .mark_unwatched(&media_id.to_string(), None)
-                            .await
-                        {
-                            error!("Failed to mark episode as unwatched: {}", e);
-                        }
-
-                        // Update the show's watched episode count
-                        if let Some(show_id) = show_id {
-                            let media_repo = MediaRepositoryImpl::new(db);
-                            if let Err(e) = media_repo.update_show_watched_count(&show_id).await {
-                                error!("Failed to update show watched count: {}", e);
-                            }
+                        if let Err(e) = result {
+                            error!("Failed to toggle episode watch status: {}", e);
                         }
                     });
+                }
+            }
+            ShowDetailsInput::ToggleShowWatched => {
+                if let Some(show) = &self.show {
+                    let db = (*self.db).clone();
+                    let show_id = ShowId::new(show.id.clone());
+                    let all_watched = show.watched_episode_count == show.total_episode_count
+                        && show.total_episode_count > 0;
 
-                    self.update_episode_grid(&sender);
+                    relm4::spawn(async move {
+                        let result = if all_watched {
+                            // Mark show as unwatched
+                            let cmd = MarkShowUnwatchedCommand { db, show_id };
+                            Command::execute(&cmd).await
+                        } else {
+                            // Mark show as watched
+                            let cmd = MarkShowWatchedCommand { db, show_id };
+                            Command::execute(&cmd).await
+                        };
+
+                        if let Err(e) = result {
+                            error!("Failed to toggle show watch status: {}", e);
+                        }
+                    });
+                }
+            }
+            ShowDetailsInput::ToggleSeasonWatched => {
+                if let Some(show) = &self.show {
+                    let db = (*self.db).clone();
+                    let show_id = ShowId::new(show.id.clone());
+                    let season_number = self.current_season;
+
+                    // Determine if current season is fully watched by checking episodes
+                    let season_watched = self.episodes.iter().filter(|ep| !ep.watched).count() == 0
+                        && !self.episodes.is_empty();
+
+                    relm4::spawn(async move {
+                        let result = if season_watched {
+                            // Mark season as unwatched
+                            let cmd = MarkSeasonUnwatchedCommand {
+                                db,
+                                show_id,
+                                season_number,
+                            };
+                            Command::execute(&cmd).await
+                        } else {
+                            // Mark season as watched
+                            let cmd = MarkSeasonWatchedCommand {
+                                db,
+                                show_id,
+                                season_number,
+                            };
+                            Command::execute(&cmd).await
+                        };
+
+                        if let Err(e) = result {
+                            error!("Failed to toggle season watch status: {}", e);
+                        }
+                    });
                 }
             }
             ShowDetailsInput::LoadEpisodes => {
@@ -598,6 +709,22 @@ impl AsyncComponent for ShowDetailsPage {
                             sender.input(ShowDetailsInput::LoadEpisodes);
                         }
                     }
+                    crate::ui::shared::broker::DataMessage::MediaUpdated { media_id } => {
+                        // Check if the updated media is this show
+                        if self
+                            .show
+                            .as_ref()
+                            .map(|s| s.id == media_id)
+                            .unwrap_or(false)
+                        {
+                            tracing::debug!(
+                                "Show/Season updated for {}, reloading show details and episodes",
+                                media_id
+                            );
+                            // Reload show details to update watched counts and episode list
+                            sender.oneshot_command(async { ShowDetailsCommand::LoadDetails });
+                        }
+                    }
                     _ => {}
                 },
                 _ => {}
@@ -633,6 +760,11 @@ impl AsyncComponent for ShowDetailsPage {
                                     season.episode_count
                                 );
                             }
+                            // Store the season numbers mapping for dropdown index -> season number
+                            self.season_numbers =
+                                show.seasons.iter().map(|s| s.season_number).collect();
+                            tracing::debug!("Season numbers mapping: {:?}", self.season_numbers);
+
                             self.show = Some(show.clone());
                             self.loading = false;
 
@@ -1171,7 +1303,7 @@ fn create_episode_card(
             .valign(gtk::Align::Start)
             .margin_top(8)
             .margin_end(8)
-            .pixel_size(20)
+            .pixel_size(16)
             .build();
         overlay.add_overlay(&check);
     } else {

@@ -215,6 +215,80 @@ impl BackendService {
         backend.update_progress(media_id, position, duration).await
     }
 
+    /// Mark a media item as watched on the backend
+    pub async fn mark_watched(
+        db: &DatabaseConnection,
+        source_id: &str,
+        media_id: &MediaItemId,
+    ) -> Result<()> {
+        use crate::backends::jellyfin::JellyfinBackend;
+        use crate::backends::plex::PlexBackend;
+
+        // Load source configuration
+        let source_repo = SourceRepositoryImpl::new(db.clone());
+        let source_entity = source_repo
+            .find_by_id(source_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
+
+        // Create backend and mark as watched
+        let backend = Self::create_backend_for_source(db, &source_entity).await?;
+
+        // Extract the actual backend item ID (remove source prefix)
+        let media_id_str = media_id.to_string();
+        let item_id = if let Some(colon_pos) = media_id_str.find(':') {
+            &media_id_str[colon_pos + 1..]
+        } else {
+            media_id_str.as_str()
+        };
+
+        // Call backend-specific mark_watched method
+        if let Some(plex) = backend.as_any().downcast_ref::<PlexBackend>() {
+            plex.mark_watched(item_id).await?;
+        } else if let Some(jellyfin) = backend.as_any().downcast_ref::<JellyfinBackend>() {
+            jellyfin.mark_watched(item_id).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Mark a media item as unwatched on the backend
+    pub async fn mark_unwatched(
+        db: &DatabaseConnection,
+        source_id: &str,
+        media_id: &MediaItemId,
+    ) -> Result<()> {
+        use crate::backends::jellyfin::JellyfinBackend;
+        use crate::backends::plex::PlexBackend;
+
+        // Load source configuration
+        let source_repo = SourceRepositoryImpl::new(db.clone());
+        let source_entity = source_repo
+            .find_by_id(source_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
+
+        // Create backend and mark as unwatched
+        let backend = Self::create_backend_for_source(db, &source_entity).await?;
+
+        // Extract the actual backend item ID (remove source prefix)
+        let media_id_str = media_id.to_string();
+        let item_id = if let Some(colon_pos) = media_id_str.find(':') {
+            &media_id_str[colon_pos + 1..]
+        } else {
+            media_id_str.as_str()
+        };
+
+        // Call backend-specific mark_unwatched method
+        if let Some(plex) = backend.as_any().downcast_ref::<PlexBackend>() {
+            plex.mark_unwatched(item_id).await?;
+        } else if let Some(jellyfin) = backend.as_any().downcast_ref::<JellyfinBackend>() {
+            jellyfin.mark_unwatched(item_id).await?;
+        }
+
+        Ok(())
+    }
+
     /// Fetch intro and credits markers from the backend
     /// Returns tuple of (intro_marker, credits_marker) where each is Option<(start_ms, end_ms)>
     pub async fn fetch_markers(

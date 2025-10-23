@@ -24,6 +24,10 @@ pub enum LibraryPageInput {
     RenderBatch,
     /// Media item selected
     MediaItemSelected(MediaItemId),
+    /// Mark media item as watched
+    MarkWatched(MediaItemId),
+    /// Mark media item as unwatched
+    MarkUnwatched(MediaItemId),
     /// Change sort order
     SetSortBy(SortBy),
     /// Toggle sort order (ascending/descending)

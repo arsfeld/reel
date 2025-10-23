@@ -54,7 +54,18 @@ impl Command<()> for UpdatePlaybackProgressCommand {
             self.duration_ms,
             self.watched,
         )
-        .await
+        .await?;
+
+        // Broadcast playback progress update to all interested components
+        use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage};
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::PlaybackProgressUpdated {
+                media_id: self.media_id.to_string(),
+                watched: self.watched,
+            }))
+            .await;
+
+        Ok(())
     }
 }
 
@@ -111,6 +122,148 @@ impl Command<()> for LoadFullShowMetadataCommand {
     async fn execute(&self) -> Result<()> {
         use crate::services::core::backend::BackendService;
         BackendService::load_full_show_metadata(&self.db, &self.show_id).await
+    }
+}
+
+/// Mark a media item as watched
+pub struct MarkWatchedCommand {
+    pub db: DatabaseConnection,
+    pub media_id: MediaItemId,
+}
+
+#[async_trait]
+impl Command<()> for MarkWatchedCommand {
+    async fn execute(&self) -> Result<()> {
+        MediaService::mark_watched(&self.db, &self.media_id).await?;
+
+        // Broadcast watch status update to all interested components
+        use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage};
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::PlaybackProgressUpdated {
+                media_id: self.media_id.to_string(),
+                watched: true,
+            }))
+            .await;
+
+        Ok(())
+    }
+}
+
+/// Mark a media item as unwatched
+pub struct MarkUnwatchedCommand {
+    pub db: DatabaseConnection,
+    pub media_id: MediaItemId,
+}
+
+#[async_trait]
+impl Command<()> for MarkUnwatchedCommand {
+    async fn execute(&self) -> Result<()> {
+        MediaService::mark_unwatched(&self.db, &self.media_id).await?;
+
+        // Broadcast watch status update to all interested components
+        use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage};
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::PlaybackProgressUpdated {
+                media_id: self.media_id.to_string(),
+                watched: false,
+            }))
+            .await;
+
+        Ok(())
+    }
+}
+
+/// Mark all episodes in a show as watched
+pub struct MarkShowWatchedCommand {
+    pub db: DatabaseConnection,
+    pub show_id: ShowId,
+}
+
+#[async_trait]
+impl Command<()> for MarkShowWatchedCommand {
+    async fn execute(&self) -> Result<()> {
+        MediaService::mark_show_watched(&self.db, &self.show_id).await?;
+
+        // Broadcast general update since multiple items affected
+        use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage};
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::MediaUpdated {
+                media_id: self.show_id.to_string(),
+            }))
+            .await;
+
+        Ok(())
+    }
+}
+
+/// Mark all episodes in a show as unwatched
+pub struct MarkShowUnwatchedCommand {
+    pub db: DatabaseConnection,
+    pub show_id: ShowId,
+}
+
+#[async_trait]
+impl Command<()> for MarkShowUnwatchedCommand {
+    async fn execute(&self) -> Result<()> {
+        MediaService::mark_show_unwatched(&self.db, &self.show_id).await?;
+
+        // Broadcast general update since multiple items affected
+        use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage};
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::MediaUpdated {
+                media_id: self.show_id.to_string(),
+            }))
+            .await;
+
+        Ok(())
+    }
+}
+
+/// Mark all episodes in a season as watched
+pub struct MarkSeasonWatchedCommand {
+    pub db: DatabaseConnection,
+    pub show_id: ShowId,
+    pub season_number: u32,
+}
+
+#[async_trait]
+impl Command<()> for MarkSeasonWatchedCommand {
+    async fn execute(&self) -> Result<()> {
+        MediaService::mark_season_watched(&self.db, &self.show_id, self.season_number).await?;
+
+        // Broadcast general update since multiple items affected
+        use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage};
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::MediaUpdated {
+                media_id: self.show_id.to_string(),
+            }))
+            .await;
+
+        Ok(())
+    }
+}
+
+/// Mark all episodes in a season as unwatched
+pub struct MarkSeasonUnwatchedCommand {
+    pub db: DatabaseConnection,
+    pub show_id: ShowId,
+    pub season_number: u32,
+}
+
+#[async_trait]
+impl Command<()> for MarkSeasonUnwatchedCommand {
+    async fn execute(&self) -> Result<()> {
+        MediaService::mark_season_unwatched(&self.db, &self.show_id, self.season_number).await?;
+
+        // Broadcast general update since multiple items affected
+        use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage};
+        BROKER
+            .broadcast(BrokerMessage::Data(DataMessage::MediaUpdated {
+                media_id: self.show_id.to_string(),
+            }))
+            .await;
+
+        Ok(())
     }
 }
 

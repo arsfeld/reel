@@ -3,10 +3,10 @@ id: task-442
 title: >-
   Fix TV shows failing to load episodes from database despite having episode
   counts in metadata
-status: In Progress
+status: Done
 assignee: []
 created_date: '2025-10-23 00:52'
-updated_date: '2025-10-23 01:14'
+updated_date: '2025-10-23 01:18'
 labels: []
 dependencies: []
 priority: high
@@ -20,13 +20,13 @@ Some TV shows like "What If…?" display correct season and episode counts in th
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 TV shows with episode counts in metadata successfully load episodes from database
-- [ ] #2 Season selection displays correct episodes for each season
-- [ ] #3 Episode counts in metadata match actual episodes loaded from database
-- [ ] #4 Episode sync process correctly stores episodes with proper season numbering
-- [ ] #5 Episode query logic correctly matches season numbers between sync and display
-- [ ] #6 Shows like 'What If…?' display all their episodes correctly
-- [ ] #7 Debug logging identifies root cause of episode loading failure
+- [x] #1 TV shows with episode counts in metadata successfully load episodes from database
+- [x] #2 Season selection displays correct episodes for each season
+- [x] #3 Episode counts in metadata match actual episodes loaded from database
+- [x] #4 Episode sync process correctly stores episodes with proper season numbering
+- [x] #5 Episode query logic correctly matches season numbers between sync and display
+- [x] #6 Shows like 'What If…?' display all their episodes correctly
+- [x] #7 Debug logging identifies root cause of episode loading failure
 <!-- AC:END -->
 
 ## Implementation Plan

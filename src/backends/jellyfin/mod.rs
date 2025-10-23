@@ -254,6 +254,24 @@ impl JellyfinBackend {
             media_id_str.to_string()
         }
     }
+
+    /// Mark a media item as watched
+    pub async fn mark_watched(&self, item_id: &str) -> Result<()> {
+        let api_guard = self.api.read().await;
+        let api = api_guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("Jellyfin API not initialized"))?;
+        api.mark_watched(item_id).await
+    }
+
+    /// Mark a media item as unwatched
+    pub async fn mark_unwatched(&self, item_id: &str) -> Result<()> {
+        let api_guard = self.api.read().await;
+        let api = api_guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("Jellyfin API not initialized"))?;
+        api.mark_unwatched(item_id).await
+    }
 }
 
 #[async_trait]
