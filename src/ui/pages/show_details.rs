@@ -2,6 +2,7 @@ use crate::models::{Episode, MediaItem, MediaItemId, PlaylistContext, Show};
 use crate::services::commands::Command;
 use crate::services::commands::media_commands::{GetEpisodesCommand, GetItemDetailsCommand};
 use crate::services::core::PlaylistService;
+use crate::ui::shared::broker::{BROKER, BrokerMessage};
 use crate::ui::shared::image_helpers::load_image_from_url;
 use crate::ui::shared::person_card::create_person_card;
 use crate::workers::image_loader::{
@@ -62,6 +63,7 @@ pub enum ShowDetailsInput {
     ImageLoadFailed {
         id: String,
     },
+    BrokerMsg(crate::ui::shared::broker::BrokerMessage),
 }
 
 #[derive(Debug)]
@@ -376,10 +378,10 @@ impl AsyncComponent for ShowDetailsPage {
             .orientation(gtk::Orientation::Horizontal)
             .column_spacing(12)
             .row_spacing(12)
-            .homogeneous(false) // Changed to false to allow proper sizing
+            .homogeneous(false)
             .selection_mode(gtk::SelectionMode::None)
-            .min_children_per_line(100) // Force single row by setting high min
-            .max_children_per_line(100) // Match max to min
+            .min_children_per_line(1) // Will be updated dynamically based on episode count
+            .max_children_per_line(100) // Will be updated dynamically based on episode count
             .valign(gtk::Align::Start)
             .build();
 
@@ -440,6 +442,21 @@ impl AsyncComponent for ShowDetailsPage {
         };
 
         let widgets = view_output!();
+
+        // Subscribe to MessageBroker for playback progress updates
+        {
+            let broker_sender = sender.input_sender().clone();
+            relm4::spawn(async move {
+                let (tx, mut rx) = relm4::channel::<BrokerMessage>();
+                BROKER.subscribe("ShowDetailsPage".to_string(), tx).await;
+
+                while let Some(msg) = rx.recv().await {
+                    broker_sender
+                        .send(ShowDetailsInput::BrokerMsg(msg))
+                        .unwrap();
+                }
+            });
+        }
 
         sender.oneshot_command(async { ShowDetailsCommand::LoadDetails });
 
@@ -564,6 +581,27 @@ impl AsyncComponent for ShowDetailsPage {
                     picture.remove_css_class("loading");
                 }
             }
+            ShowDetailsInput::BrokerMsg(msg) => match msg {
+                BrokerMessage::Data(data_msg) => match data_msg {
+                    crate::ui::shared::broker::DataMessage::PlaybackProgressUpdated {
+                        media_id,
+                        watched,
+                    } => {
+                        // Check if the updated media is one of the episodes in this show
+                        if self.episodes.iter().any(|ep| ep.id.to_string() == media_id) {
+                            tracing::debug!(
+                                "Episode progress updated for {}: watched={}, reloading episodes",
+                                media_id,
+                                watched
+                            );
+                            // Reload episodes to update watch status
+                            sender.input(ShowDetailsInput::LoadEpisodes);
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            },
         }
     }
 
@@ -686,9 +724,8 @@ impl AsyncComponent for ShowDetailsPage {
                             self.season_dropdown.set_selected(season_index as u32);
                             self.current_season = season_to_select;
 
-                            // Load episodes for the selected season
-                            // Always try to load episodes, even if seasons is empty
-                            sender.input(ShowDetailsInput::LoadEpisodes);
+                            // Note: Episodes will be loaded by the season dropdown's
+                            // connect_selected_notify handler, no need to trigger explicitly
                         }
                     }
                     Err(e) => {
@@ -914,6 +951,13 @@ impl AsyncComponent for ShowDetailsPage {
             }
         }
     }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        // Unsubscribe from MessageBroker
+        relm4::spawn(async move {
+            BROKER.unsubscribe("ShowDetailsPage").await;
+        });
+    }
 }
 
 impl ShowDetailsPage {
@@ -931,6 +975,18 @@ impl ShowDetailsPage {
         }
         tracing::debug!("Cleared {} existing children from grid", child_count);
         self.episode_pictures.clear();
+
+        // Dynamically adjust FlowBox to show all episodes in a single row
+        // This matches the behavior of the homepage sections
+        let episode_count = self.episodes.len() as u32;
+        if episode_count > 0 {
+            self.episode_grid.set_min_children_per_line(episode_count);
+            self.episode_grid.set_max_children_per_line(episode_count);
+            tracing::debug!(
+                "Set episode grid to display {} episodes in single row",
+                episode_count
+            );
+        }
 
         // Add episode cards
         for (index, episode) in self.episodes.iter().enumerate() {
