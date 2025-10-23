@@ -334,9 +334,9 @@ impl AsyncComponent for ShowDetailsPage {
                                             set_label: if model.show.as_ref()
                                                 .map(|s| s.watched_episode_count == s.total_episode_count && s.total_episode_count > 0)
                                                 .unwrap_or(false) {
-                                                "Unwatch Show"
+                                                "Mark as Unwatched"
                                             } else {
-                                                "Watch Show"
+                                                "Mark as Watched"
                                             },
                                         },
 
@@ -361,9 +361,9 @@ impl AsyncComponent for ShowDetailsPage {
                                             },
                                             #[watch]
                                             set_label: if model.episodes.iter().filter(|ep| !ep.watched).count() == 0 && !model.episodes.is_empty() {
-                                                "Unwatch Season"
+                                                "Mark as Unwatched"
                                             } else {
-                                                "Watch Season"
+                                                "Mark as Watched"
                                             },
                                         },
 
