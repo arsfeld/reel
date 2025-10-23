@@ -484,9 +484,13 @@ impl MediaBackend for JellyfinBackend {
 
             // Ensure show_id and season_number are set correctly for all episodes
             for episode in &mut episodes {
-                if episode.show_id.is_none() {
-                    episode.show_id = Some(show_id.to_string());
-                }
+                // CRITICAL: Always override show_id with the composite database ID,
+                // not the simple item_id that comes from the Jellyfin API.
+                // The show_id parameter here is the full composite ID from the database
+                // (format: "source_id:library_id:show:item_id"), which is what
+                // episodes need in their parent_id field to be queryable.
+                episode.show_id = Some(show_id.to_string());
+
                 // Fix: Ensure season_number is set correctly
                 episode.season_number = season;
             }
