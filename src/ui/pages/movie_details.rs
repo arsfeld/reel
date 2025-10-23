@@ -1,6 +1,9 @@
 use crate::models::{MediaItem, MediaItemId, Movie};
 use crate::services::commands::Command;
-use crate::services::commands::media_commands::GetItemDetailsCommand;
+use crate::services::commands::media_commands::{
+    GetItemDetailsCommand, MarkUnwatchedCommand, MarkWatchedCommand,
+};
+use crate::ui::shared::broker::{BROKER, BrokerMessage};
 use crate::ui::shared::image_helpers::load_image_from_url;
 use crate::ui::shared::person_card::create_person_card;
 use adw::prelude::*;
@@ -31,6 +34,7 @@ pub struct MovieDetailsPage {
 pub enum MovieDetailsInput {
     PlayMovie,
     ToggleWatched,
+    BrokerMsg(BrokerMessage),
 }
 
 #[derive(Debug)]
@@ -408,6 +412,21 @@ impl AsyncComponent for MovieDetailsPage {
 
         let widgets = view_output!();
 
+        // Subscribe to MessageBroker for playback progress updates
+        {
+            let broker_sender = sender.input_sender().clone();
+            relm4::spawn(async move {
+                let (tx, mut rx) = relm4::channel::<BrokerMessage>();
+                BROKER.subscribe("MovieDetailsPage".to_string(), tx).await;
+
+                while let Some(msg) = rx.recv().await {
+                    broker_sender
+                        .send(MovieDetailsInput::BrokerMsg(msg))
+                        .unwrap();
+                }
+            });
+        }
+
         sender.oneshot_command(async { MovieDetailsCommand::LoadDetails });
 
         AsyncComponentParts { model, widgets }
@@ -429,28 +448,49 @@ impl AsyncComponent for MovieDetailsPage {
                     .unwrap();
             }
             MovieDetailsInput::ToggleWatched => {
-                if let Some(movie) = &mut self.movie {
-                    movie.watched = !movie.watched;
-
-                    // Update database with watched status
+                if let Some(movie) = &self.movie {
                     let db = (*self.db).clone();
                     let media_id = self.item_id.clone();
                     let watched = movie.watched;
 
                     relm4::spawn(async move {
-                        use crate::db::repository::{PlaybackRepository, PlaybackRepositoryImpl};
+                        let result = if watched {
+                            // Mark as unwatched
+                            let cmd = MarkUnwatchedCommand { db, media_id };
+                            Command::execute(&cmd).await
+                        } else {
+                            // Mark as watched
+                            let cmd = MarkWatchedCommand { db, media_id };
+                            Command::execute(&cmd).await
+                        };
 
-                        let repo = PlaybackRepositoryImpl::new(db);
-                        if watched {
-                            if let Err(e) = repo.mark_watched(media_id.as_ref(), None).await {
-                                error!("Failed to mark as watched: {}", e);
-                            }
-                        } else if let Err(e) = repo.mark_unwatched(media_id.as_ref(), None).await {
-                            error!("Failed to mark as unwatched: {}", e);
+                        if let Err(e) = result {
+                            error!("Failed to toggle watch status: {}", e);
                         }
                     });
                 }
             }
+            MovieDetailsInput::BrokerMsg(msg) => match msg {
+                BrokerMessage::Data(data_msg) => match data_msg {
+                    crate::ui::shared::broker::DataMessage::PlaybackProgressUpdated {
+                        media_id,
+                        watched,
+                    } => {
+                        // Check if the updated media is this movie
+                        if self.item_id.to_string() == media_id {
+                            tracing::debug!(
+                                "Movie progress updated for {}: watched={}, reloading details",
+                                media_id,
+                                watched
+                            );
+                            // Reload movie details to update watch status
+                            sender.oneshot_command(async { MovieDetailsCommand::LoadDetails });
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            },
         }
     }
 
@@ -809,5 +849,12 @@ impl AsyncComponent for MovieDetailsPage {
                 }
             }
         }
+    }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        // Unsubscribe from MessageBroker
+        relm4::spawn(async move {
+            BROKER.unsubscribe("MovieDetailsPage").await;
+        });
     }
 }

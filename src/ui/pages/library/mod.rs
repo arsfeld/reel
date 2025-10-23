@@ -539,6 +539,9 @@ impl AsyncComponent for LibraryPage {
             .forward(sender.input_sender(), |output| match output {
                 MediaCardOutput::Clicked(id) => LibraryPageInput::MediaItemSelected(id),
                 MediaCardOutput::Play(id) => LibraryPageInput::MediaItemSelected(id),
+                MediaCardOutput::GoToShow(id) => LibraryPageInput::MediaItemSelected(id),
+                MediaCardOutput::MarkWatched(id) => LibraryPageInput::MarkWatched(id),
+                MediaCardOutput::MarkUnwatched(id) => LibraryPageInput::MarkUnwatched(id),
             });
 
         // Create the image loader worker
@@ -1143,6 +1146,46 @@ impl AsyncComponent for LibraryPage {
                 sender
                     .output(LibraryPageOutput::NavigateToMediaItem(item_id))
                     .expect("Failed to send output");
+            }
+
+            LibraryPageInput::MarkWatched(media_id) => {
+                debug!("Marking item as watched: {}", media_id);
+                let db = self.db.clone();
+                let media_id_clone = media_id.clone();
+
+                sender.oneshot_command(async move {
+                    use crate::services::commands::Command;
+                    use crate::services::commands::media_commands::MarkWatchedCommand;
+
+                    let cmd = MarkWatchedCommand {
+                        db,
+                        media_id: media_id_clone,
+                    };
+
+                    if let Err(e) = cmd.execute().await {
+                        tracing::error!("Failed to mark item as watched: {}", e);
+                    }
+                });
+            }
+
+            LibraryPageInput::MarkUnwatched(media_id) => {
+                debug!("Marking item as unwatched: {}", media_id);
+                let db = self.db.clone();
+                let media_id_clone = media_id.clone();
+
+                sender.oneshot_command(async move {
+                    use crate::services::commands::Command;
+                    use crate::services::commands::media_commands::MarkUnwatchedCommand;
+
+                    let cmd = MarkUnwatchedCommand {
+                        db,
+                        media_id: media_id_clone,
+                    };
+
+                    if let Err(e) = cmd.execute().await {
+                        tracing::error!("Failed to mark item as unwatched: {}", e);
+                    }
+                });
             }
 
             LibraryPageInput::SetSortBy(sort_by) => {

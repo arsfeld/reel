@@ -59,6 +59,10 @@ pub enum HomePageInput {
     RetrySource(SourceId),
     /// Media item selected
     MediaItemSelected(MediaItemId),
+    /// Mark media item as watched
+    MarkWatched(MediaItemId),
+    /// Mark media item as unwatched
+    MarkUnwatched(MediaItemId),
     /// Image loaded from worker
     ImageLoaded {
         id: String,
@@ -406,6 +410,50 @@ impl AsyncComponent for HomePage {
                     .unwrap();
             }
 
+            HomePageInput::MarkWatched(media_id) => {
+                debug!("Marking item as watched: {}", media_id);
+                let db = self.db.clone();
+                let media_id_clone = media_id.clone();
+
+                sender.oneshot_command(async move {
+                    use crate::services::commands::Command;
+                    use crate::services::commands::media_commands::MarkWatchedCommand;
+
+                    let cmd = MarkWatchedCommand {
+                        db,
+                        media_id: media_id_clone,
+                    };
+
+                    if let Err(e) = cmd.execute().await {
+                        tracing::error!("Failed to mark item as watched: {}", e);
+                    }
+
+                    // Command already broadcasts via BROKER
+                });
+            }
+
+            HomePageInput::MarkUnwatched(media_id) => {
+                debug!("Marking item as unwatched: {}", media_id);
+                let db = self.db.clone();
+                let media_id_clone = media_id.clone();
+
+                sender.oneshot_command(async move {
+                    use crate::services::commands::Command;
+                    use crate::services::commands::media_commands::MarkUnwatchedCommand;
+
+                    let cmd = MarkUnwatchedCommand {
+                        db,
+                        media_id: media_id_clone,
+                    };
+
+                    if let Err(e) = cmd.execute().await {
+                        tracing::error!("Failed to mark item as unwatched: {}", e);
+                    }
+
+                    // Command already broadcasts via BROKER
+                });
+            }
+
             HomePageInput::ImageLoaded { id, texture } => {
                 trace!("Image loaded for item: {}", id);
                 // Find the section and card index for this image
@@ -452,6 +500,22 @@ impl AsyncComponent for HomePage {
                         }
                         _ => {
                             // Ignore other source messages
+                        }
+                    },
+                    BrokerMessage::Data(data_msg) => match data_msg {
+                        crate::ui::shared::broker::DataMessage::PlaybackProgressUpdated {
+                            media_id,
+                            watched,
+                        } => {
+                            debug!(
+                                "Playback progress updated for media {}: watched={}",
+                                media_id, watched
+                            );
+                            // Reload home page to update continue watching and watch status
+                            sender.input(HomePageInput::LoadData);
+                        }
+                        _ => {
+                            // Ignore other data messages
                         }
                     },
                     _ => {
@@ -701,6 +765,9 @@ impl HomePage {
                 .forward(sender_input, |output| match output {
                     MediaCardOutput::Clicked(id) => HomePageInput::MediaItemSelected(id),
                     MediaCardOutput::Play(id) => HomePageInput::MediaItemSelected(id),
+                    MediaCardOutput::GoToShow(id) => HomePageInput::MediaItemSelected(id),
+                    MediaCardOutput::MarkWatched(id) => HomePageInput::MarkWatched(id),
+                    MediaCardOutput::MarkUnwatched(id) => HomePageInput::MarkUnwatched(id),
                 });
 
             // Add items to factory and queue image loads

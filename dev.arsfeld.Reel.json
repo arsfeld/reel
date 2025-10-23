@@ -4,6 +4,14 @@
   "runtime-version": "48",
   "sdk": "org.gnome.Sdk",
   "sdk-extensions": ["org.freedesktop.Sdk.Extension.rust-stable"],
+  "add-extensions": {
+    "org.freedesktop.Platform.ffmpeg-full": {
+      "directory": "lib/ffmpeg",
+      "version": "24.08",
+      "add-ld-path": ".",
+      "autodelete": false
+    }
+  },
   "command": "reel",
   "finish-args": [
     "--share=network",
@@ -31,7 +39,142 @@
     "*.la",
     "*.a"
   ],
+  "cleanup-commands": [
+    "mkdir -p /app/lib/ffmpeg"
+  ],
   "modules": [
+    {
+      "name": "libplacebo",
+      "buildsystem": "meson",
+      "config-opts": [
+        "-Dd3d11=disabled",
+        "-Ddemos=false"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://code.videolan.org/videolan/libplacebo/-/archive/v7.349.0/libplacebo-v7.349.0.tar.gz",
+          "sha256": "79120e685a1836344b51b13b6a5661622486a84e4d4a35f6c8d01679a20fbc86"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/pallets/markupsafe/archive/refs/tags/2.1.3.tar.gz",
+          "sha256": "b209e55e953eabf4bc31e0c9f3182af03b40e5bf5afed652f72b9b7ac02c0b30",
+          "dest": "3rdparty/markupsafe"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/pallets/jinja/archive/refs/tags/3.1.2.tar.gz",
+          "sha256": "ecae76cd1a064d40eb46c5375f07953d747f4d65b68cd3fa5f02c91714b799fc",
+          "dest": "3rdparty/jinja"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/Dav1dde/glad/archive/refs/tags/v2.0.4.tar.gz",
+          "sha256": "02629644c242dcc27c58222bd2c001d5e2f3765dbbcfd796542308bddebab401",
+          "dest": "3rdparty/glad"
+        }
+      ],
+      "modules": [
+        {
+          "name": "glslang",
+          "buildsystem": "cmake-ninja",
+          "config-opts": ["-DBUILD_SHARED_LIBS=ON"],
+          "cleanup": ["/bin", "/include", "/lib/cmake"],
+          "sources": [
+            {
+              "type": "archive",
+              "url": "https://github.com/KhronosGroup/glslang/archive/15.4.0.tar.gz",
+              "sha256": "b16c78e7604b9be9f546ee35ad8b6db6f39bbbbfb19e8d038b6fe2ea5bba4ff4"
+            },
+            {
+              "type": "archive",
+              "url": "https://github.com/KhronosGroup/SPIRV-Tools/archive/refs/tags/vulkan-sdk-1.4.313.0.tar.gz",
+              "sha256": "6b60f723345ceed5291cceebbcfacf7fea9361a69332261fa08ae57e2a562005",
+              "dest": "External/spirv-tools"
+            },
+            {
+              "type": "archive",
+              "url": "https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/tags/vulkan-sdk-1.4.313.0.tar.gz",
+              "sha256": "f68be549d74afb61600a1e3a7d1da1e6b7437758c8e77d664909f88f302c5ac1",
+              "dest": "External/spirv-tools/external/spirv-headers"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "libass",
+      "config-opts": ["--disable-static"],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://github.com/libass/libass/releases/download/0.17.4/libass-0.17.4.tar.gz",
+          "sha256": "a886b3b80867f437bc55cff3280a652bfa0d37b43d2aff39ddf3c4f288b8c5a8"
+        }
+      ]
+    },
+    {
+      "name": "uchardet",
+      "buildsystem": "cmake-ninja",
+      "config-opts": [
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DBUILD_STATIC=0"
+      ],
+      "cleanup": ["/bin"],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://www.freedesktop.org/software/uchardet/releases/uchardet-0.0.8.tar.xz",
+          "sha256": "e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f0"
+        }
+      ]
+    },
+    {
+      "name": "libmpv",
+      "cleanup": [
+        "/share/bash-completion",
+        "/share/zsh",
+        "/share/doc",
+        "/share/icons",
+        "/share/applications"
+      ],
+      "buildsystem": "meson",
+      "config-opts": [
+        "-Dlibmpv=true",
+        "-Dlua=enabled",
+        "-Ddebug=false",
+        "-Dbuild-date=false",
+        "-Dalsa=disabled",
+        "-Dmanpage-build=disabled"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://github.com/mpv-player/mpv/archive/refs/tags/v0.40.0.tar.gz",
+          "sha256": "10a0f4654f62140a6dd4d380dcf0bbdbdcf6e697556863dc499c296182f081a3"
+        }
+      ],
+      "modules": [
+        {
+          "name": "luajit",
+          "no-autogen": true,
+          "cleanup": ["/bin", "/lib/*.a"],
+          "sources": [
+            {
+              "type": "git",
+              "url": "https://github.com/openresty/luajit2.git",
+              "tag": "v2.1-20250826",
+              "commit": "dcc9c9ee67e1a5d3d636bd7745e95ddb4a1c70bc"
+            },
+            {
+              "type": "shell",
+              "commands": ["sed -i 's|/usr/local|/app|' ./Makefile"]
+            }
+          ]
+        }
+      ]
+    },
     {
       "name": "reel",
       "buildsystem": "simple",

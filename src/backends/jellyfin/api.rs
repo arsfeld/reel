@@ -1006,6 +1006,51 @@ impl JellyfinApi {
         Ok(())
     }
 
+    /// Mark media as watched/played
+    pub async fn mark_watched(&self, media_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/Users/{}/PlayedItems/{}",
+            self.base_url, self.user_id, media_id
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .header("X-Emby-Authorization", self.get_auth_header())
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow!("Failed to mark as watched: {}", response.status()));
+        }
+
+        Ok(())
+    }
+
+    /// Mark media as unwatched/unplayed
+    pub async fn mark_unwatched(&self, media_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/Users/{}/PlayedItems/{}",
+            self.base_url, self.user_id, media_id
+        );
+
+        let response = self
+            .client
+            .delete(&url)
+            .header("X-Emby-Authorization", self.get_auth_header())
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "Failed to mark as unwatched: {}",
+                response.status()
+            ));
+        }
+
+        Ok(())
+    }
+
     pub async fn get_media_segments(&self, item_id: &str) -> Result<Vec<MediaSegment>> {
         let url = format!("{}/Items/{}/MediaSegments", self.base_url, item_id);
 
