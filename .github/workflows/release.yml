@@ -29,6 +29,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history and tags for proper tag annotation extraction
 
       - name: Get version
         id: get_version
