@@ -69,6 +69,8 @@ pub struct MainWindow {
     was_fullscreen: bool,
     // Current navigation state
     current_library_id: Option<LibraryId>,
+    // Track the page we were on before entering the player
+    previous_page_before_player: Option<String>,
     // Toast overlay for notifications
     toast_overlay: adw::ToastOverlay,
     // Connection type tracking for remote connection warnings
@@ -433,6 +435,7 @@ impl AsyncComponent for MainWindow {
             was_maximized: false,
             was_fullscreen: false,
             current_library_id: None,
+            previous_page_before_player: None,
             toast_overlay: adw::ToastOverlay::new(),
             connection_types: HashMap::new(),
         };
@@ -730,8 +733,8 @@ impl AsyncComponent for MainWindow {
                     root.unfullscreen();
                 }
 
-                // Pop the player page from navigation
-                self.navigation_view.pop();
+                // Don't pop here - let navigate_back handle the navigation
+                // to ensure proper cleanup and header restoration
             }
             MainWindowInput::ResizeWindow(width, height) => {
                 tracing::info!(
