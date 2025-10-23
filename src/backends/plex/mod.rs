@@ -1498,6 +1498,16 @@ impl MediaBackend for PlexBackend {
             }
         }
     }
+
+    async fn mark_watched(&self, item_id: &str) -> Result<()> {
+        let api = self.get_api().await?;
+        api.mark_watched(item_id).await
+    }
+
+    async fn mark_unwatched(&self, item_id: &str) -> Result<()> {
+        let api = self.get_api().await?;
+        api.mark_unwatched(item_id).await
+    }
 }
 
 impl PlexBackend {

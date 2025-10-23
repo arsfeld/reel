@@ -79,21 +79,27 @@ impl PlexApi {
     pub async fn mark_watched(&self, media_id: &str) -> Result<()> {
         let url = self.build_url("/:/scrobble");
 
+        debug!("Marking as watched - media_id: {}", media_id);
+
         let response = self
             .client
-            .put(&url)
+            .get(&url)
             .headers(self.standard_headers())
             .query(&[
-                ("key", media_id),
                 ("identifier", "com.plexapp.plugins.library"),
+                ("key", media_id),
             ])
             .send()
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Failed to mark as watched: {}", response.status()));
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            debug!("Scrobble failed: {} - {}", status, text);
+            return Err(anyhow!("Failed to mark as watched: {}", status));
         }
 
+        debug!("Successfully marked as watched: {}", media_id);
         Ok(())
     }
 
@@ -101,24 +107,27 @@ impl PlexApi {
     pub async fn mark_unwatched(&self, media_id: &str) -> Result<()> {
         let url = self.build_url("/:/unscrobble");
 
+        debug!("Marking as unwatched - media_id: {}", media_id);
+
         let response = self
             .client
-            .put(&url)
+            .get(&url)
             .headers(self.standard_headers())
             .query(&[
-                ("key", media_id),
                 ("identifier", "com.plexapp.plugins.library"),
+                ("key", media_id),
             ])
             .send()
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!(
-                "Failed to mark as unwatched: {}",
-                response.status()
-            ));
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            debug!("Unscrobble failed: {} - {}", status, text);
+            return Err(anyhow!("Failed to mark as unwatched: {}", status));
         }
 
+        debug!("Successfully marked as unwatched: {}", media_id);
         Ok(())
     }
 }

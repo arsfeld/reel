@@ -1,10 +1,10 @@
 ---
 id: task-454
 title: Complete flatpak manifest with yuki-iptv libmpv module configuration
-status: In Progress
+status: Done
 assignee: []
 created_date: '2025-10-23 02:29'
-updated_date: '2025-10-23 02:31'
+updated_date: '2025-10-23 03:22'
 labels:
   - flatpak
   - build
@@ -52,8 +52,8 @@ The build should complete successfully with libmpv.so installed to /app/lib/
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Flatpak build completes without linker errors
-- [ ] #2 libmpv library is found and linked successfully
-- [ ] #3 Flatpak bundle is created: reel-*.flatpak
-- [ ] #4 All modules from yuki-iptv libmpv.yml are included in manifest
+- [x] #1 Flatpak build completes without linker errors
+- [x] #2 libmpv library is found and linked successfully
+- [x] #3 Flatpak bundle is created: reel-*.flatpak
+- [x] #4 All modules from yuki-iptv libmpv.yml are included in manifest
 <!-- AC:END -->

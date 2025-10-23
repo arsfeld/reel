@@ -69,6 +69,20 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
         Ok(Vec::new())
     }
 
+    /// Mark a media item as watched on the backend server
+    async fn mark_watched(&self, _item_id: &str) -> Result<()> {
+        // Default implementation does nothing
+        // Backends should override this to sync watch status
+        Ok(())
+    }
+
+    /// Mark a media item as unwatched on the backend server
+    async fn mark_unwatched(&self, _item_id: &str) -> Result<()> {
+        // Default implementation does nothing
+        // Backends should override this to sync watch status
+        Ok(())
+    }
+
     // Marker and navigation methods removed - never used in production
 
     // get_library_items removed - never used in production

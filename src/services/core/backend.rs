@@ -221,9 +221,6 @@ impl BackendService {
         source_id: &str,
         media_id: &MediaItemId,
     ) -> Result<()> {
-        use crate::backends::jellyfin::JellyfinBackend;
-        use crate::backends::plex::PlexBackend;
-
         // Load source configuration
         let source_repo = SourceRepositoryImpl::new(db.clone());
         let source_entity = source_repo
@@ -242,12 +239,8 @@ impl BackendService {
             media_id_str.as_str()
         };
 
-        // Call backend-specific mark_watched method
-        if let Some(plex) = backend.as_any().downcast_ref::<PlexBackend>() {
-            plex.mark_watched(item_id).await?;
-        } else if let Some(jellyfin) = backend.as_any().downcast_ref::<JellyfinBackend>() {
-            jellyfin.mark_watched(item_id).await?;
-        }
+        // Call backend trait method directly (no downcasting needed)
+        backend.mark_watched(item_id).await?;
 
         Ok(())
     }
@@ -258,9 +251,6 @@ impl BackendService {
         source_id: &str,
         media_id: &MediaItemId,
     ) -> Result<()> {
-        use crate::backends::jellyfin::JellyfinBackend;
-        use crate::backends::plex::PlexBackend;
-
         // Load source configuration
         let source_repo = SourceRepositoryImpl::new(db.clone());
         let source_entity = source_repo
@@ -279,12 +269,8 @@ impl BackendService {
             media_id_str.as_str()
         };
 
-        // Call backend-specific mark_unwatched method
-        if let Some(plex) = backend.as_any().downcast_ref::<PlexBackend>() {
-            plex.mark_unwatched(item_id).await?;
-        } else if let Some(jellyfin) = backend.as_any().downcast_ref::<JellyfinBackend>() {
-            jellyfin.mark_unwatched(item_id).await?;
-        }
+        // Call backend trait method directly (no downcasting needed)
+        backend.mark_unwatched(item_id).await?;
 
         Ok(())
     }

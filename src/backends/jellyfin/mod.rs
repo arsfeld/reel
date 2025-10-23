@@ -644,4 +644,20 @@ impl MediaBackend for JellyfinBackend {
             }
         }
     }
+
+    async fn mark_watched(&self, item_id: &str) -> Result<()> {
+        let api_guard = self.api.read().await;
+        let api = api_guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("Jellyfin API not initialized"))?;
+        api.mark_watched(item_id).await
+    }
+
+    async fn mark_unwatched(&self, item_id: &str) -> Result<()> {
+        let api_guard = self.api.read().await;
+        let api = api_guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("Jellyfin API not initialized"))?;
+        api.mark_unwatched(item_id).await
+    }
 }
