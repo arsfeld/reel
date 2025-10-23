@@ -864,22 +864,48 @@ impl MediaService {
         // Mark as watched in database (None for user_id for single-user system)
         repo.mark_watched(media_id.as_ref(), None).await?;
 
-        // Sync to backend in fire-and-forget manner
-        let media_id_str = media_id.to_string();
-        if let Some(colon_pos) = media_id_str.find(':') {
-            let source_id = media_id_str[..colon_pos].to_string();
+        // Look up the media item to get its source_id
+        let media_repo = MediaRepositoryImpl::new(db.clone());
+        if let Ok(Some(media_item)) = media_repo.find_by_id(media_id.as_ref()).await {
+            let source_id = media_item.source_id.clone();
             let media_id_clone = media_id.clone();
             let db_clone = db.clone();
 
+            debug!(
+                "Spawning backend sync task for media_id: {} with source_id: {}",
+                media_id.as_ref(),
+                source_id
+            );
+
+            // Sync to backend in fire-and-forget manner
             tokio::spawn(async move {
                 use crate::services::core::backend::BackendService;
+
+                debug!(
+                    "Backend sync task running for media_id: {}",
+                    media_id_clone.as_ref()
+                );
 
                 if let Err(e) =
                     BackendService::mark_watched(&db_clone, &source_id, &media_id_clone).await
                 {
-                    warn!("Failed to sync watch status to backend: {}", e);
+                    warn!(
+                        "Failed to sync watch status to backend for {}: {}",
+                        media_id_clone.as_ref(),
+                        e
+                    );
+                } else {
+                    debug!(
+                        "Successfully synced watch status to backend for {}",
+                        media_id_clone.as_ref()
+                    );
                 }
             });
+        } else {
+            warn!(
+                "Could not find media item {} in database to sync watch status",
+                media_id.as_ref()
+            );
         }
 
         Ok(())
@@ -892,22 +918,48 @@ impl MediaService {
         // Mark as unwatched in database (None for user_id for single-user system)
         repo.mark_unwatched(media_id.as_ref(), None).await?;
 
-        // Sync to backend in fire-and-forget manner
-        let media_id_str = media_id.to_string();
-        if let Some(colon_pos) = media_id_str.find(':') {
-            let source_id = media_id_str[..colon_pos].to_string();
+        // Look up the media item to get its source_id
+        let media_repo = MediaRepositoryImpl::new(db.clone());
+        if let Ok(Some(media_item)) = media_repo.find_by_id(media_id.as_ref()).await {
+            let source_id = media_item.source_id.clone();
             let media_id_clone = media_id.clone();
             let db_clone = db.clone();
 
+            debug!(
+                "Spawning backend sync task for media_id: {} with source_id: {}",
+                media_id.as_ref(),
+                source_id
+            );
+
+            // Sync to backend in fire-and-forget manner
             tokio::spawn(async move {
                 use crate::services::core::backend::BackendService;
+
+                debug!(
+                    "Backend sync task running for media_id: {}",
+                    media_id_clone.as_ref()
+                );
 
                 if let Err(e) =
                     BackendService::mark_unwatched(&db_clone, &source_id, &media_id_clone).await
                 {
-                    warn!("Failed to sync watch status to backend: {}", e);
+                    warn!(
+                        "Failed to sync watch status to backend for {}: {}",
+                        media_id_clone.as_ref(),
+                        e
+                    );
+                } else {
+                    debug!(
+                        "Successfully synced watch status to backend for {}",
+                        media_id_clone.as_ref()
+                    );
                 }
             });
+        } else {
+            warn!(
+                "Could not find media item {} in database to sync watch status",
+                media_id.as_ref()
+            );
         }
 
         Ok(())
