@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Reel is a native, cross-platform media player application written in Rust that brings Plex and Jellyfin libraries to the desktop with a premium, Netflix-like experience. The project uses:
+Reel is a native, cross-platform media player application written in Rust that brings your Plex and Jellyfin libraries to the desktop with a premium, Netflix-like experience. The project uses:
 
 - **Language**: Rust 2021 edition with strict quality standards
 - **UI Framework**: Relm4 (reactive component-based) with libadwaita for GNOME integration
@@ -192,7 +192,7 @@ cargo test -p reel
 
 ## Important Rules
 
-1. **Never mention "claude" or "copilot" in commit messages** - Use descriptive, technical commit messages
+1. **Don't mention AI tools in regular commit messages** - Use descriptive, technical commit messages (exception: setup/configuration commits related to AI tool integration)
 2. **Do not add backward compatibility layers** - Fix the root cause
 3. **Do not use fallbacks** - They add confusion; use proper error handling
 4. **Always format code** - Run `cargo fmt` before committing
