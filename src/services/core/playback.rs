@@ -12,11 +12,13 @@ impl PlaybackService {
     /// Get playback progress for a media item
     pub async fn get_progress(
         db: &DatabaseConnection,
-        user_id: &str,
+        _user_id: &str,
         item_id: &MediaItemId,
     ) -> Result<Option<PlaybackProgressModel>> {
         let repo = PlaybackRepositoryImpl::new(db.clone());
-        repo.find_by_media_and_user(item_id.as_ref(), user_id)
+        // Use find_by_media_id for single-user system (matching update_playback_progress behavior)
+        // which uses None for user_id
+        repo.find_by_media_id(item_id.as_ref())
             .await
             .context("Failed to get playback progress")
     }
@@ -24,11 +26,12 @@ impl PlaybackService {
     /// Get PlayQueue state for a media item
     pub async fn get_playqueue_state(
         db: &DatabaseConnection,
-        user_id: &str,
+        _user_id: &str,
         item_id: &MediaItemId,
     ) -> Result<Option<(i64, i32, i64, i32)>> {
         let repo = PlaybackRepositoryImpl::new(db.clone());
-        repo.get_playqueue_state(item_id.as_ref(), Some(user_id))
+        // Use None for user_id in single-user system
+        repo.get_playqueue_state(item_id.as_ref(), None)
             .await
             .context("Failed to get PlayQueue state")
     }
