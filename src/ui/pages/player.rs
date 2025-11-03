@@ -3064,6 +3064,13 @@ impl AsyncComponent for PlayerPage {
                     let _ = timer.remove();
                 }
 
+                // Exit fullscreen mode and reset state before navigating back
+                if self.is_fullscreen {
+                    debug!("Exiting fullscreen before navigating back from player");
+                    self.window.unfullscreen();
+                    self.is_fullscreen = false;
+                }
+
                 // Show cursor before navigating
                 if let Some(surface) = self.window.surface()
                     && let Some(cursor) = gtk::gdk::Cursor::from_name("default", None)
