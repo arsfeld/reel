@@ -511,8 +511,8 @@ impl AsyncComponent for HomePage {
                                 "Playback progress updated for media {}: watched={}",
                                 media_id, watched
                             );
-                            // Reload home page to update continue watching and watch status
-                            sender.input(HomePageInput::LoadData);
+                            // Don't reload during active playback to avoid UI flicker
+                            // Progress will be updated when user navigates back after playback
                         }
                         _ => {
                             // Ignore other data messages

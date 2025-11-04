@@ -746,12 +746,12 @@ impl AsyncComponent for ShowDetailsPage {
                         // Check if the updated media is one of the episodes in this show
                         if self.episodes.iter().any(|ep| ep.id.to_string() == media_id) {
                             tracing::debug!(
-                                "Episode progress updated for {}: watched={}, reloading episodes",
+                                "Episode progress updated for {}: watched={}",
                                 media_id,
                                 watched
                             );
-                            // Reload episodes to update watch status
-                            sender.input(ShowDetailsInput::LoadEpisodes);
+                            // Don't reload during active playback to avoid UI flicker
+                            // Progress will be updated when user navigates back after playback
                         }
                     }
                     crate::ui::shared::broker::DataMessage::MediaUpdated { media_id } => {

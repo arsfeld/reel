@@ -479,12 +479,12 @@ impl AsyncComponent for MovieDetailsPage {
                         // Check if the updated media is this movie
                         if self.item_id.to_string() == media_id {
                             tracing::debug!(
-                                "Movie progress updated for {}: watched={}, reloading details",
+                                "Movie progress updated for {}: watched={}",
                                 media_id,
                                 watched
                             );
-                            // Reload movie details to update watch status
-                            sender.oneshot_command(async { MovieDetailsCommand::LoadDetails });
+                            // Don't reload during active playback to avoid UI flicker
+                            // Progress will be updated when user navigates back after playback
                         }
                     }
                     _ => {}
