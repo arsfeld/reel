@@ -75,6 +75,11 @@ pub trait MediaRepository: Repository<MediaItemModel> {
     /// Delete all media items for a source
     async fn delete_by_source(&self, source_id: &str) -> Result<()>;
 
+    /// Delete media items by a list of IDs
+    /// Also cleans up related playback progress records
+    /// Returns the number of items deleted
+    async fn delete_by_ids(&self, ids: Vec<String>) -> Result<u64>;
+
     /// Get all episodes for a show in playback order
     async fn find_episode_playlist(&self, show_id: &str) -> Result<Vec<MediaItemModel>>;
 
@@ -543,6 +548,37 @@ impl MediaRepository for MediaRepositoryImpl {
             source_id
         );
         Ok(())
+    }
+
+    /// Delete media items by a list of IDs
+    /// Also cleans up related playback progress records
+    async fn delete_by_ids(&self, ids: Vec<String>) -> Result<u64> {
+        use crate::db::entities::playback_progress;
+        use sea_orm::DeleteResult;
+
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        // First delete related playback progress records
+        // (not cascade deleted by DB constraint)
+        let _progress_delete: DeleteResult = playback_progress::Entity::delete_many()
+            .filter(playback_progress::Column::MediaId.is_in(ids.clone()))
+            .exec(self.base.db.as_ref())
+            .await?;
+
+        // Delete the media items
+        let delete_result: DeleteResult = MediaItem::delete_many()
+            .filter(media_items::Column::Id.is_in(ids.clone()))
+            .exec(self.base.db.as_ref())
+            .await?;
+
+        tracing::info!(
+            "Deleted {} media items and their related data",
+            delete_result.rows_affected
+        );
+
+        Ok(delete_result.rows_affected)
     }
 
     async fn find_episode_playlist(&self, show_id: &str) -> Result<Vec<MediaItemModel>> {

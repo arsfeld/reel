@@ -246,6 +246,9 @@ impl SyncService {
             }
         };
 
+        // Sync deletion: remove items that no longer exist on the backend
+        Self::sync_deletions(db, &library.id, &library.library_type, &items).await?;
+
         // Save items in batches
         let batch_size = 100;
         for chunk in items.chunks(batch_size) {
@@ -528,6 +531,15 @@ impl SyncService {
 
                     let episode_count = episodes_media.len();
                     if episode_count > 0 {
+                        // Sync episode deletions for this season
+                        Self::sync_episode_deletions(
+                            db,
+                            show_id.as_str(),
+                            season_number as i32,
+                            &episodes_media,
+                        )
+                        .await?;
+
                         MediaService::save_media_items_batch(
                             db,
                             episodes_media,
@@ -577,6 +589,152 @@ impl SyncService {
         );
 
         Ok(total_episodes_synced)
+    }
+
+    /// Sync episode deletions: remove episodes that no longer exist on the backend
+    async fn sync_episode_deletions(
+        db: &DatabaseConnection,
+        show_id: &str,
+        season_number: i32,
+        fetched_episodes: &[MediaItem],
+    ) -> Result<()> {
+        use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
+        use std::collections::HashSet;
+
+        // Get all episode IDs from the backend for this season
+        let backend_episode_ids: HashSet<String> = fetched_episodes
+            .iter()
+            .filter_map(|item| match item {
+                MediaItem::Episode(e) => Some(e.id.to_string()),
+                _ => None,
+            })
+            .collect();
+
+        // Get all local episodes for this show and season
+        let media_repo = MediaRepositoryImpl::new(db.clone());
+        let local_episodes = media_repo
+            .find_episodes_by_season(show_id, season_number)
+            .await?;
+
+        // Find episodes that are in local DB but not in backend
+        let mut stale_episode_ids: Vec<String> = Vec::new();
+        for local_episode in &local_episodes {
+            if !backend_episode_ids.contains(&local_episode.id) {
+                info!(
+                    "Episode '{}' (ID: {}) no longer exists on backend for show {}, season {}, marking for deletion",
+                    local_episode.title, local_episode.id, show_id, season_number
+                );
+                stale_episode_ids.push(local_episode.id.clone());
+            }
+        }
+
+        // Delete stale episodes if any
+        if !stale_episode_ids.is_empty() {
+            info!(
+                "Deleting {} stale episodes from show {} season {}",
+                stale_episode_ids.len(),
+                show_id,
+                season_number
+            );
+            let deleted_count = media_repo.delete_by_ids(stale_episode_ids).await?;
+            info!(
+                "Successfully deleted {} episodes from show {} season {}",
+                deleted_count, show_id, season_number
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Sync deletions: remove items that no longer exist on the backend
+    async fn sync_deletions(
+        db: &DatabaseConnection,
+        library_id: &str,
+        library_type: &crate::models::LibraryType,
+        fetched_items: &[MediaItem],
+    ) -> Result<()> {
+        use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
+        use std::collections::HashSet;
+
+        // Determine the media type to filter by
+        let media_type = match library_type {
+            crate::models::LibraryType::Movies => "movie",
+            crate::models::LibraryType::Shows => "show",
+            _ => {
+                // Skip deletion sync for unsupported library types
+                return Ok(());
+            }
+        };
+
+        // Get all item IDs from the backend
+        let backend_ids: HashSet<String> = fetched_items
+            .iter()
+            .map(|item| match item {
+                MediaItem::Movie(m) => m.id.to_string(),
+                MediaItem::Show(s) => s.id.to_string(),
+                MediaItem::Episode(e) => e.id.to_string(),
+                _ => String::new(),
+            })
+            .filter(|id| !id.is_empty())
+            .collect();
+
+        info!(
+            "Backend has {} {} items for library {}",
+            backend_ids.len(),
+            media_type,
+            library_id
+        );
+
+        // Get all local items for this library and type
+        let media_repo = MediaRepositoryImpl::new(db.clone());
+        let local_items = media_repo
+            .find_by_library_and_type(library_id, media_type)
+            .await?;
+
+        info!(
+            "Local database has {} {} items for library {}",
+            local_items.len(),
+            media_type,
+            library_id
+        );
+
+        // Find items that are in local DB but not in backend
+        let mut stale_ids: Vec<String> = Vec::new();
+        for local_item in &local_items {
+            if !backend_ids.contains(&local_item.id) {
+                info!(
+                    "Item '{}' (ID: {}) no longer exists on backend, marking for deletion",
+                    local_item.title, local_item.id
+                );
+                stale_ids.push(local_item.id.clone());
+            }
+        }
+
+        // Delete stale items if any
+        if !stale_ids.is_empty() {
+            info!(
+                "Deleting {} stale {} items from library {}",
+                stale_ids.len(),
+                media_type,
+                library_id
+            );
+            let deleted_count = media_repo.delete_by_ids(stale_ids).await?;
+            info!(
+                "Successfully deleted {} items from library {}",
+                deleted_count, library_id
+            );
+
+            // Broadcast data updated event so UI refreshes
+            BROKER
+                .broadcast(BrokerMessage::Data(DataMessage::LoadComplete {
+                    source: library_id.to_string(),
+                }))
+                .await;
+        } else {
+            info!("No stale items to delete for library {}", library_id);
+        }
+
+        Ok(())
     }
 
     /// Get sync status for a source
