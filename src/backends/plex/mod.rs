@@ -516,10 +516,40 @@ impl PlexBackend {
                     status.canonical_reason().unwrap_or("Unknown")
                 );
                 if status.as_u16() == 401 {
-                    tracing::error!(
-                        "401 Unauthorized on connection {}. This suggests auth token issue.",
+                    tracing::warn!(
+                        "401 Unauthorized on connection {}. Attempting to refresh token and retry.",
                         url
                     );
+
+                    // Try to refresh the token
+                    if let Ok(true) = PlexAuth::refresh_token(&token).await {
+                        tracing::info!("Token refresh successful, retrying connection to {}", url);
+
+                        // Retry the connection with refreshed token
+                        let url_with_token = format!("{}/identity?X-Plex-Token={}", url, token);
+                        match client
+                            .get(&url_with_token)
+                            .headers(create_standard_headers(Some(&token)))
+                            .send()
+                            .await
+                        {
+                            Ok(resp) if resp.status().is_success() => {
+                                tracing::info!(
+                                    "✓ Connection to {} succeeded after token refresh",
+                                    url
+                                );
+                                return true;
+                            }
+                            _ => {
+                                tracing::error!(
+                                    "Connection to {} still fails after token refresh",
+                                    url
+                                );
+                            }
+                        }
+                    } else {
+                        tracing::error!("Token refresh failed for connection {}", url);
+                    }
                 }
                 false
             }
@@ -903,7 +933,24 @@ impl MediaBackend for PlexBackend {
             return Ok(None);
         }
 
-        // Get user info with the saved token
+        // Refresh the token to prevent expiration and ensure local connections work
+        tracing::info!("Refreshing Plex authentication token");
+        match PlexAuth::refresh_token(&token).await {
+            Ok(true) => {
+                tracing::info!("Token refresh successful");
+            }
+            Ok(false) => {
+                tracing::warn!("Token refresh returned false, token may be invalid");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Token refresh failed: {}, will attempt validation anyway",
+                    e
+                );
+            }
+        }
+
+        // Get user info with the saved token (after refresh)
         let plex_user = match PlexAuth::get_user(&token).await {
             Ok(user) => user,
             Err(e) => {
@@ -914,7 +961,9 @@ impl MediaBackend for PlexBackend {
                 if error_str.contains("Authentication failed")
                     || error_str.contains("Invalid or expired token")
                 {
-                    tracing::info!("Token appears to be invalid, removing from storage");
+                    tracing::info!(
+                        "Token appears to be invalid even after refresh attempt, removing from storage"
+                    );
 
                     // Try to delete from keyring
                     if let Ok(entry) = keyring::Entry::new("dev.arsfeld.Reel", &self.backend_id) {
