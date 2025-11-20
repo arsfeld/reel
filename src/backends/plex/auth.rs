@@ -150,6 +150,48 @@ impl PlexAuth {
         }
     }
 
+    /// Refresh/ping the authentication token to prevent expiration
+    ///
+    /// This calls the Plex.tv ping endpoint which refreshes the authentication token
+    /// server-side, preventing it from expiring and ensuring both relay and local
+    /// connections remain authenticated.
+    ///
+    /// # Arguments
+    /// * `auth_token` - The authentication token to refresh
+    ///
+    /// # Returns
+    /// Ok(true) if the ping was successful, Ok(false) if it failed
+    pub async fn refresh_token(auth_token: &str) -> Result<bool> {
+        let client = reqwest::Client::new();
+
+        let response = match client
+            .get(format!("{}/api/v2/ping", PLEX_TV_URL))
+            .headers(create_standard_headers(Some(auth_token)))
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                debug!("Network error while refreshing token: {}", e);
+                return Err(anyhow!("Network error while refreshing token: {}", e));
+            }
+        };
+
+        // Check for authentication errors
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            debug!("Token refresh failed: Invalid or expired token");
+            return Ok(false);
+        }
+
+        if !response.status().is_success() {
+            debug!("Token refresh failed with status: {}", response.status());
+            return Ok(false);
+        }
+
+        info!("Successfully refreshed Plex authentication token");
+        Ok(true)
+    }
+
     /// Get user information with the auth token
     pub async fn get_user(auth_token: &str) -> Result<PlexUser> {
         let client = reqwest::Client::new();
