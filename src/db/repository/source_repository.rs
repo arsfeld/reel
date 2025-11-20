@@ -96,6 +96,8 @@ impl Repository<SourceModel> for SourceRepositoryImpl {
             last_connection_test: Set(entity.last_connection_test),
             connection_failure_count: Set(entity.connection_failure_count),
             connection_quality: Set(entity.connection_quality),
+            auth_status: Set(entity.auth_status.clone()),
+            last_auth_check: Set(entity.last_auth_check),
             created_at: Set(chrono::Utc::now().naive_utc()),
             updated_at: Set(chrono::Utc::now().naive_utc()),
         };

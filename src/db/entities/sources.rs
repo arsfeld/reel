@@ -18,6 +18,8 @@ pub struct Model {
     pub last_connection_test: Option<DateTime>, // When connections were last tested
     pub connection_failure_count: i32,          // Number of consecutive connection failures
     pub connection_quality: Option<String>,     // "local", "remote", or "relay"
+    pub auth_status: String,                    // "authenticated", "auth_required", or "unknown"
+    pub last_auth_check: Option<DateTime>,      // When authentication was last checked
     pub created_at: DateTime,
     pub updated_at: DateTime,
 }
@@ -64,5 +66,13 @@ impl Model {
 
     pub fn is_local(&self) -> bool {
         self.source_type == "local"
+    }
+
+    pub fn get_auth_status(&self) -> crate::models::AuthStatus {
+        crate::models::AuthStatus::from(self.auth_status.clone())
+    }
+
+    pub fn needs_reauthentication(&self) -> bool {
+        self.get_auth_status() == crate::models::AuthStatus::AuthRequired
     }
 }
