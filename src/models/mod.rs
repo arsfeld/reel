@@ -46,6 +46,39 @@ pub enum MediaType {
     Photo,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuthStatus {
+    Authenticated,
+    AuthRequired,
+    Unknown,
+}
+
+impl Default for AuthStatus {
+    fn default() -> Self {
+        AuthStatus::Unknown
+    }
+}
+
+impl From<String> for AuthStatus {
+    fn from(s: String) -> Self {
+        match s.to_lowercase().as_str() {
+            "authenticated" => AuthStatus::Authenticated,
+            "authrequired" | "auth_required" => AuthStatus::AuthRequired,
+            _ => AuthStatus::Unknown,
+        }
+    }
+}
+
+impl From<AuthStatus> for String {
+    fn from(status: AuthStatus) -> Self {
+        match status {
+            AuthStatus::Authenticated => "authenticated".to_string(),
+            AuthStatus::AuthRequired => "auth_required".to_string(),
+            AuthStatus::Unknown => "unknown".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Movie {
     pub id: String,

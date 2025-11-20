@@ -278,6 +278,8 @@ impl AuthService {
             last_connection_test: None,
             connection_failure_count: 0,
             connection_quality: None,
+            auth_status: "authenticated".to_string(),
+            last_auth_check: Some(chrono::Utc::now().naive_utc()),
             created_at: chrono::Utc::now().naive_utc(),
             updated_at: chrono::Utc::now().naive_utc(),
         };
