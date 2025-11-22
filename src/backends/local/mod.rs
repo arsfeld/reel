@@ -8,8 +8,8 @@ use tokio::sync::RwLock;
 
 use super::traits::MediaBackend;
 use crate::models::{
-    Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season, Show, ShowId, StreamInfo,
-    User,
+    AuthenticationResult, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season,
+    Show, ShowId, StreamInfo, User,
 };
 // Stateful services removed during Relm4 migration
 // use crate::services::{AuthManager, DataService};
@@ -33,17 +33,17 @@ impl MediaBackend for LocalBackend {
         self
     }
 
-    async fn initialize(&self) -> Result<Option<User>> {
+    async fn initialize(&self) -> Result<AuthenticationResult> {
         // Local backend doesn't need authentication
         // Check if we have configured directories
         let dirs = self.media_directories.read().await;
         if dirs.is_empty() {
-            // No directories configured yet
-            return Ok(None);
+            // No directories configured yet - needs configuration
+            return Ok(AuthenticationResult::AuthRequired);
         }
 
-        // Return a local user
-        Ok(Some(User {
+        // Return a local user - local backend is always "authenticated"
+        Ok(AuthenticationResult::Authenticated(User {
             id: "local".to_string(),
             username: "Local Media".to_string(),
             email: None,

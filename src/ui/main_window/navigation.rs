@@ -324,6 +324,18 @@ fn navigate_sources(window: &mut MainWindow, sender: &AsyncComponentSender<MainW
                         tracing::info!("Opening auth dialog for adding source");
                         MainWindowInput::Navigate("auth_dialog".to_string())
                     }
+                    crate::ui::pages::sources::SourcesPageOutput::OpenReauthDialog {
+                        source_id,
+                        source_name,
+                        source_type,
+                    } => {
+                        tracing::info!("Opening re-auth dialog for source: {}", source_id);
+                        MainWindowInput::OpenReauthDialog {
+                            source_id,
+                            source_name,
+                            source_type,
+                        }
+                    }
                     crate::ui::pages::sources::SourcesPageOutput::SyncSource(source_id) => {
                         tracing::info!("Source page requesting sync for: {:?}", source_id);
                         MainWindowInput::SyncSource(source_id)

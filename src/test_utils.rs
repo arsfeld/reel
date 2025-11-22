@@ -127,12 +127,14 @@ pub mod mock_backend {
 
     #[async_trait]
     impl MediaBackend for MockBackend {
-        async fn initialize(&self) -> Result<Option<User>> {
+        async fn initialize(&self) -> Result<AuthenticationResult> {
             if self.should_fail.load(std::sync::atomic::Ordering::SeqCst) {
-                anyhow::bail!("Mock initialization failure");
+                return Ok(AuthenticationResult::NetworkError(
+                    "Mock initialization failure".to_string(),
+                ));
             }
 
-            Ok(Some(User {
+            Ok(AuthenticationResult::Authenticated(User {
                 id: "mock_user".to_string(),
                 username: "Mock User".to_string(),
                 email: Some("mock@example.com".to_string()),

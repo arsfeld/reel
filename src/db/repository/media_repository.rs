@@ -1288,6 +1288,8 @@ mod tests {
             last_connection_test: Set(None),
             connection_failure_count: Set(0),
             connection_quality: Set(None),
+            auth_status: Set("authenticated".to_string()),
+            last_auth_check: Set(None),
             created_at: Set(Utc::now().naive_utc()),
             updated_at: Set(Utc::now().naive_utc()),
         };

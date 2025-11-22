@@ -139,6 +139,9 @@ pub struct Source {
     pub last_sync: Option<DateTime<Utc>>,
     #[serde(default)]
     pub library_count: usize,
+    #[serde(default)]
+    pub auth_status: crate::models::AuthStatus,
+    pub last_auth_check: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -187,7 +190,13 @@ impl Source {
             enabled: true,
             last_sync: None,
             library_count: 0,
+            auth_status: crate::models::AuthStatus::Unknown,
+            last_auth_check: None,
         }
+    }
+
+    pub fn needs_reauthentication(&self) -> bool {
+        self.auth_status == crate::models::AuthStatus::AuthRequired
     }
 
     pub fn is_online(&self) -> bool {
@@ -237,6 +246,10 @@ impl From<crate::db::entities::SourceModel> for Source {
                 .last_sync
                 .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
             library_count: 0, // Will be loaded separately
+            auth_status: crate::models::AuthStatus::from(model.auth_status),
+            last_auth_check: model
+                .last_auth_check
+                .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
         }
     }
 }

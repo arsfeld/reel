@@ -100,6 +100,15 @@ pub enum MainWindowInput {
     },
     ToggleSidebar,
     SyncSource(SourceId),
+    OpenReauthDialog {
+        source_id: SourceId,
+        source_name: String,
+        source_type: String,
+    },
+    ReauthCompleted {
+        source_id: SourceId,
+        success: bool,
+    },
     RestoreWindowChrome,
     ResizeWindow(i32, i32),
     SetHeaderStartContent(Option<gtk::Widget>),
@@ -110,6 +119,10 @@ pub enum MainWindowInput {
     ConnectionStatusChanged {
         source_id: SourceId,
         status: ConnectionStatus,
+    },
+    AuthStatusChanged {
+        source_id: SourceId,
+        needs_auth: bool,
     },
     ConfigUpdated,
 }
@@ -375,9 +388,9 @@ impl AsyncComponent for MainWindow {
                     }
                 });
 
-        // Initialize the auth dialog with parent window
+        // Initialize the auth dialog with parent window (no reauth mode)
         let auth_dialog = AuthDialog::builder()
-            .launch((db.clone(), Some(root.clone().upcast())))
+            .launch((db.clone(), Some(root.clone().upcast()), None))
             .forward(sender.input_sender(), |output| match output {
                 AuthDialogOutput::SourceAdded(source_id) => {
                     tracing::info!("Source added: {:?}", source_id);
@@ -664,6 +677,114 @@ impl AsyncComponent for MainWindow {
                     self.split_view.set_show_content(true);
                 }
             }
+            MainWindowInput::OpenReauthDialog {
+                source_id,
+                source_name,
+                source_type,
+            } => {
+                tracing::info!("Opening re-auth dialog for source: {}", source_id);
+
+                // Create a ReauthMode instance
+                use crate::ui::dialogs::auth_dialog::ReauthMode;
+                let reauth_mode = ReauthMode {
+                    source_id: source_id.clone(),
+                    source_name,
+                    source_type,
+                };
+
+                // Create a new AuthDialog with reauth mode
+                use crate::ui::dialogs::{AuthDialog, AuthDialogOutput};
+                let source_id_for_closure = source_id.clone();
+                let input_sender = sender.input_sender().clone();
+                let reauth_dialog = AuthDialog::builder()
+                    .launch((
+                        self.db.clone(),
+                        Some(root.clone().upcast()),
+                        Some(reauth_mode),
+                    ))
+                    .forward(sender.input_sender(), move |output| {
+                        match output {
+                            AuthDialogOutput::SourceAdded(sync_source_id) => {
+                                tracing::info!("Source re-authenticated: {:?}", sync_source_id);
+                                // Notify that re-auth succeeded
+                                input_sender
+                                    .send(MainWindowInput::ReauthCompleted {
+                                        source_id: source_id_for_closure.clone(),
+                                        success: true,
+                                    })
+                                    .unwrap_or_else(|e| {
+                                        tracing::error!(
+                                            "Failed to send reauth completion: {:?}",
+                                            e
+                                        );
+                                    });
+                                // Trigger a sync of the re-authenticated source
+                                MainWindowInput::SyncSource(sync_source_id)
+                            }
+                            AuthDialogOutput::Cancelled => {
+                                tracing::info!("Re-auth dialog cancelled");
+                                // Notify that re-auth was cancelled
+                                input_sender
+                                    .send(MainWindowInput::ReauthCompleted {
+                                        source_id: source_id_for_closure.clone(),
+                                        success: false,
+                                    })
+                                    .unwrap_or_else(|e| {
+                                        tracing::error!(
+                                            "Failed to send reauth cancellation: {:?}",
+                                            e
+                                        );
+                                    });
+                                MainWindowInput::Navigate("sources".to_string())
+                            }
+                        }
+                    });
+
+                // Show the dialog
+                reauth_dialog.emit(crate::ui::dialogs::AuthDialogInput::Show);
+
+                // The dialog will be dropped when done, which is fine for one-time use
+            }
+            MainWindowInput::ReauthCompleted { source_id, success } => {
+                tracing::info!(
+                    "Re-authentication completed for source {}: {}",
+                    source_id,
+                    if success { "success" } else { "failed" }
+                );
+
+                // Show toast notification
+                if success {
+                    let toast = adw::Toast::builder()
+                        .title("Authentication successful")
+                        .timeout(3)
+                        .build();
+                    self.toast_overlay.add_toast(toast);
+                } else {
+                    let toast = adw::Toast::builder()
+                        .title("Authentication cancelled")
+                        .timeout(3)
+                        .build();
+                    self.toast_overlay.add_toast(toast);
+                }
+
+                // Forward to sources page if it's open
+                if let Some(ref sources_page) = self.sources_page {
+                    sources_page
+                        .sender()
+                        .send(
+                            crate::ui::pages::sources::SourcesPageInput::ReauthCompleted {
+                                source_id,
+                                success,
+                            },
+                        )
+                        .unwrap_or_else(|e| {
+                            tracing::error!(
+                                "Failed to notify sources page of reauth completion: {:?}",
+                                e
+                            );
+                        });
+                }
+            }
             MainWindowInput::SyncSource(source_id) => {
                 tracing::info!("Syncing new source: {:?}", source_id);
 
@@ -802,6 +923,32 @@ impl AsyncComponent for MainWindow {
             MainWindowInput::ConfigUpdated => {
                 // Handle configuration updates from file watcher
                 tracing::info!("Configuration has been updated from disk");
+            }
+            MainWindowInput::AuthStatusChanged {
+                source_id,
+                needs_auth,
+            } => {
+                // Show toast notification when auth is required
+                if needs_auth {
+                    let toast = adw::Toast::builder()
+                        .title(format!("Source {} requires re-authentication", source_id))
+                        .timeout(5)
+                        .build();
+                    self.toast_overlay.add_toast(toast);
+                }
+
+                // Forward to sources page if it's open to update status indicators
+                if let Some(ref sources_page) = self.sources_page {
+                    sources_page
+                        .sender()
+                        .send(crate::ui::pages::sources::SourcesPageInput::LoadData)
+                        .unwrap_or_else(|e| {
+                            tracing::error!(
+                                "Failed to update sources page after auth status change: {:?}",
+                                e
+                            );
+                        });
+                }
             }
             MainWindowInput::ConnectionStatusChanged { source_id, status } => {
                 // Handle connection status changes from ConnectionMonitor

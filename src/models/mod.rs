@@ -79,6 +79,18 @@ impl From<AuthStatus> for String {
     }
 }
 
+/// Result of backend initialization attempt
+/// Distinguishes between successful authentication, missing credentials, and network errors
+#[derive(Debug, Clone)]
+pub enum AuthenticationResult {
+    /// Successfully authenticated with user information
+    Authenticated(User),
+    /// Authentication is required (missing or expired credentials)
+    AuthRequired,
+    /// Network error or server unreachable
+    NetworkError(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Movie {
     pub id: String,

@@ -17,8 +17,8 @@ use tracing::{error, info};
 
 use super::traits::MediaBackend;
 use crate::models::{
-    AuthProvider, Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId, Movie,
-    Season, Show, ShowId, Source, SourceType, StreamInfo, User,
+    AuthProvider, AuthenticationResult, Credentials, Episode, HomeSection, Library, LibraryId,
+    MediaItemId, Movie, Season, Show, ShowId, Source, SourceType, StreamInfo, User,
 };
 
 #[allow(dead_code)] // Used via dynamic dispatch in BackendService
@@ -280,7 +280,7 @@ impl MediaBackend for JellyfinBackend {
         self
     }
 
-    async fn initialize(&self) -> Result<Option<User>> {
+    async fn initialize(&self) -> Result<AuthenticationResult> {
         // If we have an AuthProvider, use its credentials
         let (base_url, api_key, user_id) = if let Some(auth_provider) = &self.auth_provider {
             match auth_provider {
@@ -302,18 +302,18 @@ impl MediaBackend for JellyfinBackend {
                     } else {
                         // Token should be provided in AuthProvider
                         tracing::error!("No access token found in AuthProvider");
-                        return Err(anyhow::anyhow!("No credentials available"));
+                        return Ok(AuthenticationResult::AuthRequired);
                     }
                 }
                 _ => {
                     tracing::error!("Invalid AuthProvider type for Jellyfin backend");
-                    return Ok(None);
+                    return Ok(AuthenticationResult::AuthRequired);
                 }
             }
         } else {
             // No AuthProvider available - can't initialize
             tracing::error!("No AuthProvider available for Jellyfin backend");
-            return Ok(None);
+            return Ok(AuthenticationResult::AuthRequired);
         };
 
         // Store the credentials
@@ -330,11 +330,22 @@ impl MediaBackend for JellyfinBackend {
                     info!("Connected to Jellyfin server: {}", server_info.server_name);
                 }
                 *self.api.write().await = Some(api);
-                Ok(Some(user))
+                Ok(AuthenticationResult::Authenticated(user))
             }
             Err(e) => {
-                error!("Failed to connect with saved credentials: {}", e);
-                Ok(None)
+                let error_str = e.to_string();
+                error!("Failed to connect with saved credentials: {}", error_str);
+
+                // Distinguish between auth errors and network errors
+                if error_str.contains("401")
+                    || error_str.contains("Unauthorized")
+                    || error_str.contains("Invalid")
+                    || error_str.contains("Authentication failed")
+                {
+                    Ok(AuthenticationResult::AuthRequired)
+                } else {
+                    Ok(AuthenticationResult::NetworkError(error_str))
+                }
             }
         }
     }
