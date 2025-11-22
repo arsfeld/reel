@@ -31,6 +31,10 @@ mod error_retry;
 use error_retry::ErrorRetryManager;
 mod progress_tracker;
 use progress_tracker::ProgressTracker;
+mod seek_bar;
+use seek_bar::SeekBarManager;
+mod volume;
+use volume::VolumeManager;
 
 fn format_duration(duration: Duration) -> String {
     let total_secs = duration.as_secs();
@@ -51,7 +55,6 @@ pub struct PlayerPage {
     player_state: PlayerState,
     position: Duration,
     duration: Duration,
-    volume: f64,
     db: Arc<crate::db::connection::DatabaseConnection>,
     video_container: gtk::Box,
     video_placeholder: Option<gtk::Label>,
@@ -68,16 +71,13 @@ pub struct PlayerPage {
     last_mouse_position: Option<(f64, f64)>,
     // Debouncing for window events
     window_event_debounce: Option<SourceId>,
-    // Widgets for seeking
-    seek_bar: gtk::Scale,
-    position_label: gtk::Label,
-    duration_label: gtk::Label,
-    volume_slider: gtk::Scale,
+    // Seek bar management
+    seek_bar_manager: SeekBarManager,
+    // Volume management
+    volume_manager: VolumeManager,
     playlist_position_label: gtk::Label,
     // Window reference for cursor management
     window: adw::ApplicationWindow,
-    // Seek bar drag state
-    is_seeking: bool,
     // Error handling and retry management
     error_retry_manager: ErrorRetryManager,
     // Progress tracking and syncing
@@ -130,7 +130,7 @@ impl std::fmt::Debug for PlayerPage {
             .field("player_state", &self.player_state)
             .field("position", &self.position)
             .field("duration", &self.duration)
-            .field("volume", &self.volume)
+            .field("volume", &self.volume_manager.get_volume())
             .finish()
     }
 }
@@ -461,18 +461,18 @@ impl AsyncComponent for PlayerPage {
                     set_spacing: 8,
                     set_margin_bottom: 8,
 
-                    model.position_label.clone() {
+                    model.seek_bar_manager.get_position_label().clone() {
                         add_css_class: "dim-label",
                         set_width_chars: 7,
                     },
 
-                    model.seek_bar.clone() {
+                    model.seek_bar_manager.get_seek_bar().clone() {
                         set_hexpand: true,
                         set_draw_value: false,
                         add_css_class: "progress-bar",
                     },
 
-                    model.duration_label.clone() {
+                    model.seek_bar_manager.get_duration_label().clone() {
                         add_css_class: "dim-label",
                         set_width_chars: 7,
                     },
@@ -496,7 +496,7 @@ impl AsyncComponent for PlayerPage {
                             add_css_class: "dim-label",
                         },
 
-                        model.volume_slider.clone() {
+                        model.volume_manager.get_volume_slider().clone() {
                             set_size_request: (100, -1),
                             set_draw_value: false,
                             add_css_class: "volume-slider",
@@ -681,34 +681,13 @@ impl AsyncComponent for PlayerPage {
         placeholder.set_halign(gtk::Align::Center);
         video_container.append(&placeholder);
 
-        // Create seek bar
-        let seek_bar = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
-        seek_bar.set_draw_value(false);
-        seek_bar.set_has_tooltip(true);
+        // Create seek bar manager (handles widgets and gesture setup)
+        let seek_bar_manager = SeekBarManager::new(&sender);
 
-        // Add tooltip to show time at cursor position
-        seek_bar.connect_query_tooltip(|scale, x, _y, _keyboard_mode, tooltip| {
-            let adjustment = scale.adjustment();
-            // x is already relative to the widget
-            let width = scale.width() as f64;
-            let ratio = x as f64 / width;
-            let max = adjustment.upper();
-            let value = ratio * max;
-            // Clamp value to ensure it's non-negative
-            let duration = Duration::from_secs_f64(value.max(0.0));
-            tooltip.set_text(Some(&format_duration(duration)));
-            true
-        });
+        // Create volume manager (handles widget and change handler setup)
+        let volume_manager = VolumeManager::new(&sender);
 
-        // Create time labels
-        let position_label = gtk::Label::new(Some("0:00"));
-        let duration_label = gtk::Label::new(Some("0:00"));
         let playlist_position_label = gtk::Label::new(None);
-
-        // Create volume slider
-        let volume_slider = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
-        volume_slider.set_value(1.0);
-        volume_slider.set_draw_value(false);
 
         // Create menu buttons for track selection
         let audio_menu_button = gtk::MenuButton::new();
@@ -726,7 +705,6 @@ impl AsyncComponent for PlayerPage {
             player_state: PlayerState::Idle,
             position: Duration::from_secs(0),
             duration: Duration::from_secs(0),
-            volume: 1.0,
             db,
             video_container: video_container.clone(),
             video_placeholder: Some(placeholder.clone()),
@@ -740,13 +718,10 @@ impl AsyncComponent for PlayerPage {
             cursor_timer: None,
             last_mouse_position: None,
             window_event_debounce: None,
-            seek_bar: seek_bar.clone(),
-            position_label: position_label.clone(),
-            duration_label: duration_label.clone(),
-            volume_slider: volume_slider.clone(),
+            seek_bar_manager,
+            volume_manager,
             playlist_position_label: playlist_position_label.clone(),
             window: window.clone(),
-            is_seeking: false,
             error_retry_manager: ErrorRetryManager::new(3),
             progress_tracker: ProgressTracker::new(
                 config.playback.auto_resume,
@@ -797,75 +772,6 @@ impl AsyncComponent for PlayerPage {
                     .show_error(format!("Failed to initialize player: {}", e));
                 model.player_state = PlayerState::Error;
             }
-        }
-
-        // Setup seek bar handlers - handle clicks and drags directly for video seeking behavior
-        {
-            let sender_start = sender.clone();
-            let sender_end = sender.clone();
-            let seek_bar_for_click = model.seek_bar.clone();
-
-            // Handle direct clicks and drags for video seeking
-            let click_gesture = gtk::GestureClick::new();
-            click_gesture.set_button(gtk::gdk::BUTTON_PRIMARY);
-
-            // Start seeking on press
-            click_gesture.connect_pressed(move |_gesture, _n_press, x, _y| {
-                sender_start.input(PlayerInput::StartSeeking);
-
-                // Calculate position from click location
-                let widget_width = seek_bar_for_click.width() as f64;
-                let adjustment = seek_bar_for_click.adjustment();
-                let range = adjustment.upper() - adjustment.lower();
-                let value = adjustment.lower() + (x / widget_width) * range;
-
-                // Update the scale value and seek
-                seek_bar_for_click.set_value(value);
-                sender_start.input(PlayerInput::Seek(Duration::from_secs_f64(value.max(0.0))));
-            });
-
-            // End seeking on release
-            click_gesture.connect_released(move |_gesture, _n_press, _x, _y| {
-                sender_end.input(PlayerInput::StopSeeking);
-            });
-
-            model.seek_bar.add_controller(click_gesture);
-
-            // Handle dragging
-            let sender_drag = sender.clone();
-            let seek_bar_for_drag = model.seek_bar.clone();
-            let drag_gesture = gtk::GestureDrag::new();
-            drag_gesture.set_button(gtk::gdk::BUTTON_PRIMARY);
-
-            drag_gesture.connect_drag_update(move |_gesture, offset_x, _offset_y| {
-                // Calculate position from drag location
-                let widget_width = seek_bar_for_drag.width() as f64;
-                let adjustment = seek_bar_for_drag.adjustment();
-                let range = adjustment.upper() - adjustment.lower();
-
-                // Get current position and add offset
-                let current_value = seek_bar_for_drag.value();
-                let value_per_pixel = range / widget_width;
-                let new_value = (current_value + offset_x * value_per_pixel)
-                    .clamp(adjustment.lower(), adjustment.upper());
-
-                // Update the scale value and seek
-                seek_bar_for_drag.set_value(new_value);
-                sender_drag.input(PlayerInput::Seek(Duration::from_secs_f64(
-                    new_value.max(0.0),
-                )));
-            });
-
-            model.seek_bar.add_controller(drag_gesture);
-        }
-
-        // Setup volume slider handler
-        {
-            let sender = sender.clone();
-            let volume_slider = model.volume_slider.clone();
-            volume_slider.connect_value_changed(move |scale| {
-                sender.input(PlayerInput::SetVolume(scale.value()));
-            });
         }
 
         // Setup motion detection with state machine
@@ -1118,9 +1024,7 @@ impl AsyncComponent for PlayerPage {
                 self.player_state = PlayerState::Loading;
 
                 // Reset scrubber UI to prevent showing previous video's position
-                self.seek_bar.set_value(0.0);
-                self.position_label.set_text("0:00");
-                self.duration_label.set_text("--:--");
+                self.seek_bar_manager.reset();
 
                 // Clear context when loading without context
                 self.playlist_context = None;
@@ -1371,9 +1275,7 @@ impl AsyncComponent for PlayerPage {
                 self.player_state = PlayerState::Loading;
 
                 // Reset scrubber UI to prevent showing previous video's position
-                self.seek_bar.set_value(0.0);
-                self.position_label.set_text("0:00");
-                self.duration_label.set_text("--:--");
+                self.seek_bar_manager.reset();
 
                 // Update navigation state based on context
                 self.can_go_previous = context.has_previous();
@@ -1700,7 +1602,7 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::SetVolume(volume) => {
-                self.volume = volume;
+                self.volume_manager.set_volume(volume);
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
@@ -1824,14 +1726,16 @@ impl AsyncComponent for PlayerPage {
                 self.handle_next_navigation(&sender);
             }
             PlayerInput::StartSeeking => {
-                self.is_seeking = true;
+                self.seek_bar_manager.set_seeking(true);
             }
             PlayerInput::StopSeeking => {
-                self.is_seeking = false;
+                self.seek_bar_manager.set_seeking(false);
             }
             PlayerInput::UpdateSeekPreview(position) => {
                 // Update position label to show preview time during seek
-                self.position_label.set_text(&format_duration(position));
+                self.seek_bar_manager
+                    .get_position_label()
+                    .set_text(&format_duration(position));
             }
             PlayerInput::Rewind => {
                 // Seek backward 10 seconds
@@ -1944,16 +1848,12 @@ impl AsyncComponent for PlayerPage {
             }
             PlayerInput::VolumeUp => {
                 // Increase volume by 10%
-                let new_volume = (self.volume + 0.1).min(1.0);
-                self.volume = new_volume;
-                self.volume_slider.set_value(new_volume);
+                let new_volume = self.volume_manager.volume_up();
                 sender.input(PlayerInput::SetVolume(new_volume));
             }
             PlayerInput::VolumeDown => {
                 // Decrease volume by 10%
-                let new_volume = (self.volume - 0.1).max(0.0);
-                self.volume = new_volume;
-                self.volume_slider.set_value(new_volume);
+                let new_volume = self.volume_manager.volume_down();
                 sender.input(PlayerInput::SetVolume(new_volume));
             }
             PlayerInput::CycleSubtitleTrack => {
@@ -2314,13 +2214,8 @@ impl AsyncComponent for PlayerPage {
             } => {
                 if let Some(pos) = position {
                     self.position = pos;
-                    // Update position label
-                    self.position_label.set_text(&format_duration(pos));
-
-                    // Update seek bar position (only if not being dragged)
-                    if !self.is_seeking {
-                        self.seek_bar.set_value(pos.as_secs_f64());
-                    }
+                    // Update position label and seek bar (only if not being dragged)
+                    self.seek_bar_manager.update_position(pos);
 
                     // Check skip button visibility based on position
                     sender.input(PlayerInput::UpdateSkipButtonsVisibility);
@@ -2367,10 +2262,8 @@ impl AsyncComponent for PlayerPage {
                 }
                 if let Some(dur) = duration {
                     self.duration = dur;
-                    // Update duration label
-                    self.duration_label.set_text(&format_duration(dur));
-                    // Update seek bar range
-                    self.seek_bar.set_range(0.0, dur.as_secs_f64());
+                    // Update duration label and seek bar range
+                    self.seek_bar_manager.update_duration(dur);
                 }
                 self.player_state = state;
             }

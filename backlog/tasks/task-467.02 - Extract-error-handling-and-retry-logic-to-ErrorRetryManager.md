@@ -1,9 +1,10 @@
 ---
 id: task-467.02
 title: Extract error handling and retry logic to ErrorRetryManager
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-11-22 19:06'
+updated_date: '2025-11-22 21:55'
 labels:
   - refactoring
   - player

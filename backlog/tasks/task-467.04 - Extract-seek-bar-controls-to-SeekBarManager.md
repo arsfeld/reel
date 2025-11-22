@@ -1,9 +1,10 @@
 ---
 id: task-467.04
 title: Extract seek bar controls to SeekBarManager
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-11-22 19:06'
+updated_date: '2025-11-22 22:03'
 labels:
   - refactoring
   - player
@@ -45,10 +46,10 @@ SeekBarManager API:
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Create src/ui/pages/player/seek_bar.rs with SeekBarManager struct
-- [ ] #2 Extract seek bar widget and label widgets from PlayerPage
-- [ ] #3 Move click/drag gesture handling to manager
-- [ ] #4 Move position/duration formatting to manager
-- [ ] #5 Code compiles without errors
-- [ ] #6 Seek bar works correctly with click, drag, and keyboard shortcuts
+- [x] #1 Create src/ui/pages/player/seek_bar.rs with SeekBarManager struct
+- [x] #2 Extract seek bar widget and label widgets from PlayerPage
+- [x] #3 Move click/drag gesture handling to manager
+- [x] #4 Move position/duration formatting to manager
+- [x] #5 Code compiles without errors
+- [x] #6 Seek bar works correctly with click, drag, and keyboard shortcuts
 <!-- AC:END -->

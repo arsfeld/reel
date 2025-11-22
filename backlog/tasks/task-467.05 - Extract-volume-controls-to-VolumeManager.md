@@ -1,9 +1,10 @@
 ---
 id: task-467.05
 title: Extract volume controls to VolumeManager
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-11-22 19:06'
+updated_date: '2025-11-22 22:03'
 labels:
   - refactoring
   - player
@@ -41,10 +42,10 @@ VolumeManager API:
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Create src/ui/pages/player/volume.rs with VolumeManager struct
-- [ ] #2 Extract volume state and slider widget from PlayerPage
-- [ ] #3 Move volume adjustment logic to manager
-- [ ] #4 Move volume up/down handlers to manager
-- [ ] #5 Code compiles without errors
-- [ ] #6 Volume controls work correctly with slider and keyboard shortcuts
+- [x] #1 Create src/ui/pages/player/volume.rs with VolumeManager struct
+- [x] #2 Extract volume state and slider widget from PlayerPage
+- [x] #3 Move volume adjustment logic to manager
+- [x] #4 Move volume up/down handlers to manager
+- [x] #5 Code compiles without errors
+- [x] #6 Volume controls work correctly with slider and keyboard shortcuts
 <!-- AC:END -->

@@ -1,9 +1,10 @@
 ---
 id: task-467.01
 title: Extract auto-play logic to AutoPlayManager
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-11-22 19:05'
+updated_date: '2025-11-22 21:55'
 labels:
   - refactoring
   - player
