@@ -234,27 +234,33 @@ impl GStreamerPlayer {
         // Clear stream collections from previous media
         self.stream_manager.clear();
 
-        // Create playbin3 element - NEVER fallback
-        trace!("Creating playbin3 element");
-        let playbin = gst::ElementFactory::make("playbin3")
+        // Try playbin first on macOS due to playbin3 preroll issues
+        #[cfg(target_os = "macos")]
+        let playbin_element_name = "playbin";
+
+        #[cfg(not(target_os = "macos"))]
+        let playbin_element_name = "playbin3";
+
+        trace!("Creating {} element", playbin_element_name);
+        let playbin = gst::ElementFactory::make(playbin_element_name)
             .name("player")
             .property("uri", url)
             .build()
-            .context("Failed to create playbin3 element - GStreamer plugins may not be properly installed")?;
+            .with_context(|| {
+                format!(
+                    "Failed to create {} element - GStreamer plugins may not be properly installed",
+                    playbin_element_name
+                )
+            })?;
 
-        trace!("Successfully created playbin3");
+        trace!("Successfully created {}", playbin_element_name);
 
-        // Verify we're using playbin3
+        // Log which playbin we're using
         if let Some(factory) = playbin.factory() {
-            debug!(
+            info!(
                 "Using element: {} (factory: {})",
                 playbin.name(),
                 factory.name()
-            );
-            assert_eq!(
-                factory.name(),
-                "playbin3",
-                "Must use playbin3, no fallbacks!"
             );
         }
 
@@ -264,13 +270,11 @@ impl GStreamerPlayer {
             "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
         );
 
-        // playbin3-specific configuration
-        info!("Configuring playbin3-specific settings...");
-        // playbin3 has QoS always enabled, no property needed
+        info!("Configuring playbin settings...");
 
         // Check available properties and signals for debugging
         let properties = playbin.list_properties();
-        debug!("Available playbin3 properties related to streams:");
+        debug!("Available playbin properties related to streams:");
         for prop in properties {
             let name = prop.name();
             if name.contains("stream")
@@ -281,11 +285,6 @@ impl GStreamerPlayer {
                 debug!("  - {}: {:?}", name, prop.type_());
             }
         }
-
-        // Also check what signals are available
-        debug!("Checking available playbin3 signals...");
-        // Note: GStreamer doesn't have a direct way to list signals via Rust bindings
-        // but we know playbin3 should emit stream-collection on the bus
 
         // Configure subtitle properties if available
         if playbin.has_property("subtitle-encoding") {
@@ -470,6 +469,36 @@ impl GStreamerPlayer {
             Ok(gst::StateChangeSuccess::Async) => {
                 debug!("Pipeline prerolling asynchronously");
                 // The AsyncDone message will signal when preroll is complete
+
+                // Wait a bit and check if there are any errors
+                let (result, state, _) = playbin.state(gst::ClockTime::from_seconds(2));
+                info!(
+                    "After 2s wait for async preroll: result={:?}, state={:?}",
+                    result, state
+                );
+
+                // Check bus for any error messages
+                while let Some(msg) = bus.pop() {
+                    use gst::MessageView;
+                    match msg.view() {
+                        MessageView::Error(err) => {
+                            error!(
+                                "GStreamerPlayer::load_media() - Bus error during preroll: {} ({:?})",
+                                err.error(),
+                                err.debug()
+                            );
+                            return Err(anyhow::anyhow!("Preroll failed: {}", err.error()));
+                        }
+                        MessageView::Warning(warn) => {
+                            warn!(
+                                "GStreamerPlayer::load_media() - Bus warning during preroll: {} ({:?})",
+                                warn.error(),
+                                warn.debug()
+                            );
+                        }
+                        _ => {}
+                    }
+                }
             }
             Ok(gst::StateChangeSuccess::NoPreroll) => {
                 debug!("Live pipeline, no preroll needed");
@@ -491,17 +520,17 @@ impl GStreamerPlayer {
         info!("Starting playback");
 
         if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            // On macOS, ensure we transition through states properly
-            #[cfg(target_os = "macos")]
-            {
-                // Get current state
-                let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
-                info!(
-                    "GStreamerPlayer::play() - Current state before play: {:?}",
-                    current
-                );
+            // Ensure we transition through states properly
+            // GStreamer requires proper state transitions: Null -> Ready -> Paused -> Playing
+            // Async state changes mean the pipeline might not be in Paused yet when play() is called
+            let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
+            info!(
+                "GStreamerPlayer::play() - Current state before play: {:?}",
+                current
+            );
 
-                // If we're in Null state, first go to Ready, then Paused, then Playing
+            // If we're in Null or Ready state, transition to Paused first for proper preroll
+            if current == gst::State::Null || current == gst::State::Ready {
                 if current == gst::State::Null {
                     debug!("Transitioning from Null -> Ready");
                     match playbin.set_state(gst::State::Ready) {
@@ -519,47 +548,48 @@ impl GStreamerPlayer {
                             return Err(anyhow::anyhow!("Failed to set Ready state"));
                         }
                     }
+                }
 
-                    // Now go to Paused to allow preroll
-                    info!(
-                        "GStreamerPlayer::play() - Transitioning from Ready -> Paused for preroll"
-                    );
-                    match playbin.set_state(gst::State::Paused) {
-                        Ok(gst::StateChangeSuccess::Success) => {
-                            info!("Successfully transitioned to Paused");
-                        }
-                        Ok(gst::StateChangeSuccess::Async) => {
-                            info!("Async transition to Paused, waiting for preroll...");
-                            // Wait for preroll to complete
-                            let (state_result, new_state, _) =
-                                playbin.state(gst::ClockTime::from_seconds(5));
-                            match state_result {
-                                Ok(_) => debug!("Preroll complete, now in {:?}", new_state),
-                                Err(_) => {
-                                    warn!("Preroll timeout, checking for errors...");
-                                    // Check bus for errors
-                                    if let Some(bus) = playbin.bus() {
-                                        while let Some(msg) = bus.pop() {
-                                            use gst::MessageView;
-                                            if let MessageView::Error(err) = msg.view() {
-                                                error!(
-                                                    "Bus error during preroll: {} ({:?})",
-                                                    err.error(),
-                                                    err.debug()
-                                                );
-                                                return Err(anyhow::anyhow!(
-                                                    "Preroll failed: {}",
-                                                    err.error()
-                                                ));
-                                            }
+                // Now go to Paused to allow preroll (from either Null or Ready)
+                info!(
+                    "GStreamerPlayer::play() - Transitioning from {:?} -> Paused for preroll",
+                    current
+                );
+                match playbin.set_state(gst::State::Paused) {
+                    Ok(gst::StateChangeSuccess::Success) => {
+                        info!("Successfully transitioned to Paused");
+                    }
+                    Ok(gst::StateChangeSuccess::Async) => {
+                        info!("Async transition to Paused, waiting for preroll...");
+                        // Wait for preroll to complete
+                        let (state_result, new_state, _) =
+                            playbin.state(gst::ClockTime::from_seconds(5));
+                        match state_result {
+                            Ok(_) => debug!("Preroll complete, now in {:?}", new_state),
+                            Err(_) => {
+                                warn!("Preroll timeout, checking for errors...");
+                                // Check bus for errors
+                                if let Some(bus) = playbin.bus() {
+                                    while let Some(msg) = bus.pop() {
+                                        use gst::MessageView;
+                                        if let MessageView::Error(err) = msg.view() {
+                                            error!(
+                                                "Bus error during preroll: {} ({:?})",
+                                                err.error(),
+                                                err.debug()
+                                            );
+                                            return Err(anyhow::anyhow!(
+                                                "Preroll failed: {}",
+                                                err.error()
+                                            ));
                                         }
                                     }
                                 }
                             }
                         }
-                        _ => {
-                            warn!("Failed to transition to Paused for preroll");
-                        }
+                    }
+                    _ => {
+                        warn!("Failed to transition to Paused for preroll");
                     }
                 }
             }
@@ -572,28 +602,7 @@ impl GStreamerPlayer {
                     // Update internal state to Playing
                     let mut state = self.state.write().await;
                     *state = PlayerState::Playing;
-
-                    // On macOS, ensure the state change is complete
-                    #[cfg(target_os = "macos")]
-                    {
-                        // Wait for state change to complete with a timeout
-                        let (state_change, current, _) =
-                            playbin.state(gst::ClockTime::from_seconds(2));
-                        match state_change {
-                            Ok(gst::StateChangeSuccess::Success) => {
-                                info!(
-                                    "GStreamerPlayer::play() - State change confirmed, now in {:?}",
-                                    current
-                                );
-                            }
-                            _ => {
-                                warn!(
-                                    "GStreamerPlayer::play() - State change not complete, current: {:?}",
-                                    current
-                                );
-                            }
-                        }
-                    }
+                    debug!("Player state set to Playing");
 
                     // Ensure GST_DEBUG_DUMP_DOT_DIR is set
                     if std::env::var("GST_DEBUG_DUMP_DOT_DIR").is_err() {
@@ -620,33 +629,29 @@ impl GStreamerPlayer {
                 Ok(gst::StateChangeSuccess::Async) => {
                     debug!("Playbin state change is async, waiting...");
 
-                    // On macOS, wait for the async state change to complete
-                    #[cfg(target_os = "macos")]
-                    {
-                        let (state_change, current, _) =
-                            playbin.state(gst::ClockTime::from_seconds(3));
-                        match state_change {
-                            Ok(gst::StateChangeSuccess::Success) => {
-                                info!(
-                                    "GStreamerPlayer::play() - Async state change completed, now in {:?}",
-                                    current
-                                );
-                                // Update state if we successfully reached Playing
-                                if current == gst::State::Playing {
-                                    let mut state = self.state.write().await;
-                                    *state = PlayerState::Playing;
-                                }
-                            }
-                            _ => {
-                                warn!(
-                                    "GStreamerPlayer::play() - Async state change still pending after 3s, current: {:?}",
-                                    current
-                                );
+                    // Wait for the async state change to complete
+                    let (state_change, current, _) = playbin.state(gst::ClockTime::from_seconds(3));
+                    match state_change {
+                        Ok(gst::StateChangeSuccess::Success) => {
+                            info!(
+                                "GStreamerPlayer::play() - Async state change completed, now in {:?}",
+                                current
+                            );
+                            // Update state if we successfully reached Playing
+                            if current == gst::State::Playing {
+                                let mut state = self.state.write().await;
+                                *state = PlayerState::Playing;
+                                debug!("Player state set to Playing");
                             }
                         }
+                        _ => {
+                            warn!(
+                                "GStreamerPlayer::play() - Async state change still pending after 3s, current: {:?}",
+                                current
+                            );
+                            // State will be updated by the bus message handler when the transition completes
+                        }
                     }
-
-                    // For non-macOS, the state will be updated by the bus message handler
 
                     // Wait a bit for the pipeline to negotiate, then dump it
                     glib::timeout_add_once(std::time::Duration::from_secs(2), {
@@ -773,7 +778,6 @@ impl GStreamerPlayer {
                     return Err(anyhow::anyhow!(error_msg));
                 }
             }
-            debug!("Player state set to Playing");
         } else {
             error!("GStreamerPlayer::play() - No playbin available!");
             return Err(anyhow::anyhow!("No playbin available"));
