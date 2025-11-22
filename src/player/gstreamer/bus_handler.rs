@@ -17,6 +17,7 @@ pub fn handle_bus_message_sync(
     pipeline_ready: &Arc<Mutex<bool>>,
     playbin: &Arc<Mutex<Option<gst::Element>>>,
     buffering_state: &Arc<RwLock<BufferingState>>,
+    paused_for_buffering: &Arc<Mutex<bool>>,
 ) {
     use gst::MessageView;
 
@@ -113,8 +114,32 @@ pub fn handle_bus_message_sync(
 
                 if buffering_guard.is_buffering {
                     debug!("Buffering started/ongoing: {}%", percent);
+
+                    // Pause playback if buffering and not already paused for buffering
+                    if let Ok(state_guard) = state.try_read() {
+                        if matches!(*state_guard, PlayerState::Playing) {
+                            if let Ok(Some(pb)) = playbin.lock().map(|p| p.as_ref().cloned()) {
+                                debug!("Pausing playback due to buffering");
+                                if pb.set_state(gst::State::Paused).is_ok() {
+                                    *paused_for_buffering.lock().unwrap() = true;
+                                    info!("Playback paused for buffering");
+                                }
+                            }
+                        }
+                    }
                 } else {
                     debug!("Buffering complete: 100%");
+
+                    // Resume playback if we paused for buffering
+                    if *paused_for_buffering.lock().unwrap() {
+                        if let Ok(Some(pb)) = playbin.lock().map(|p| p.as_ref().cloned()) {
+                            debug!("Resuming playback after buffering complete");
+                            if pb.set_state(gst::State::Playing).is_ok() {
+                                *paused_for_buffering.lock().unwrap() = false;
+                                info!("Playback resumed after buffering");
+                            }
+                        }
+                    }
                 }
             }
         }
