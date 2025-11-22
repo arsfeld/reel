@@ -4,6 +4,33 @@ use std::time::Instant;
 
 use super::config::DynamicCacheLimit;
 
+/// Real-time statistics for current media playback/download
+#[derive(Debug, Clone)]
+pub struct CurrentCacheStats {
+    /// Current download speed in bytes per second
+    pub download_speed_bps: u64,
+    /// Total bytes downloaded for current media
+    pub bytes_downloaded: u64,
+    /// Total size of the media file (if known)
+    pub total_size: Option<u64>,
+    /// Number of active downloads
+    pub active_downloads: usize,
+    /// Download progress (0.0 to 1.0)
+    pub progress: f64,
+}
+
+impl CurrentCacheStats {
+    pub fn empty() -> Self {
+        Self {
+            download_speed_bps: 0,
+            bytes_downloaded: 0,
+            total_size: None,
+            active_downloads: 0,
+            progress: 0.0,
+        }
+    }
+}
+
 /// Statistics for the cache downloader
 #[derive(Debug, Clone)]
 pub struct DownloaderStats {

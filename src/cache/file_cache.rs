@@ -11,6 +11,7 @@ use super::metadata::MediaCacheKey;
 use super::proxy::CacheProxy;
 use super::state_computer::StateComputer;
 use super::state_types::DownloadState;
+use super::stats::CurrentCacheStats;
 use super::storage::{CacheStats, CacheStorage};
 use crate::db::repository::cache_repository::{CacheRepository, CacheRepositoryImpl};
 use crate::models::{MediaItemId, SourceId, StreamInfo};
@@ -50,6 +51,13 @@ pub enum FileCacheCommand {
     /// Get cache statistics
     GetStats {
         respond_to: mpsc::UnboundedSender<CacheStats>,
+    },
+    /// Get current download statistics for a specific media item
+    GetCurrentStats {
+        source_id: SourceId,
+        media_id: MediaItemId,
+        quality: String,
+        respond_to: mpsc::UnboundedSender<CurrentCacheStats>,
     },
     /// Clear entire cache
     ClearCache {
@@ -230,6 +238,15 @@ impl FileCache {
                 }
                 FileCacheCommand::GetStats { respond_to } => {
                     let stats = self.get_stats().await;
+                    let _ = respond_to.send(stats);
+                }
+                FileCacheCommand::GetCurrentStats {
+                    source_id,
+                    media_id,
+                    quality,
+                    respond_to,
+                } => {
+                    let stats = self.get_current_stats(source_id, media_id, quality).await;
                     let _ = respond_to.send(stats);
                 }
                 FileCacheCommand::ClearCache { respond_to } => {
@@ -421,6 +438,60 @@ impl FileCache {
     async fn get_stats(&self) -> CacheStats {
         let storage = self.storage.read().await;
         storage.get_stats()
+    }
+
+    /// Get current download statistics for a specific media item
+    async fn get_current_stats(
+        &self,
+        source_id: SourceId,
+        media_id: MediaItemId,
+        quality: String,
+    ) -> CurrentCacheStats {
+        let cache_key = MediaCacheKey {
+            source_id,
+            media_id,
+            quality,
+        };
+
+        // Get download state info
+        let state_info = match self.state_computer.get_state(&cache_key).await {
+            Some(info) => info,
+            None => return CurrentCacheStats::empty(),
+        };
+
+        // Calculate download speed based on recent progress
+        // For now, we'll estimate based on total downloaded / elapsed time
+        // In the future, we could track this more precisely with timestamps
+        let download_speed_bps = if state_info.state == DownloadState::Downloading {
+            // Rough estimation: we don't have precise speed tracking yet
+            // This would need to be enhanced with actual speed tracking
+            0 // Placeholder - actual speed tracking would require additional state
+        } else {
+            0
+        };
+
+        // Calculate progress
+        let progress = if let Some(total) = state_info.total_size {
+            if total > 0 {
+                (state_info.downloaded_bytes as f64) / (total as f64)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        CurrentCacheStats {
+            download_speed_bps,
+            bytes_downloaded: state_info.downloaded_bytes,
+            total_size: state_info.total_size,
+            active_downloads: if state_info.state == DownloadState::Downloading {
+                1
+            } else {
+                0
+            },
+            progress,
+        }
     }
 
     /// Clear entire cache
@@ -843,6 +914,29 @@ impl FileCacheHandle {
         let (sender, mut receiver) = mpsc::unbounded_channel();
         self.command_sender
             .send(FileCacheCommand::GetStats { respond_to: sender })
+            .map_err(|_| anyhow::anyhow!("File cache disconnected"))?;
+
+        receiver
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No response from file cache"))
+    }
+
+    /// Get current download statistics for a specific media item
+    pub async fn get_current_stats(
+        &self,
+        source_id: SourceId,
+        media_id: MediaItemId,
+        quality: String,
+    ) -> Result<CurrentCacheStats> {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        self.command_sender
+            .send(FileCacheCommand::GetCurrentStats {
+                source_id,
+                media_id,
+                quality,
+                respond_to: sender,
+            })
             .map_err(|_| anyhow::anyhow!("File cache disconnected"))?;
 
         receiver

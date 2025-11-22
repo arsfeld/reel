@@ -23,6 +23,12 @@ pub enum PlayerState {
     Error,
 }
 
+#[derive(Debug, Clone)]
+pub struct BufferingState {
+    pub is_buffering: bool,
+    pub percentage: i32,
+}
+
 pub struct GStreamerPlayer {
     playbin: Arc<Mutex<Option<gst::Element>>>,
     state: Arc<RwLock<PlayerState>>,
@@ -33,6 +39,7 @@ pub struct GStreamerPlayer {
     pipeline_ready: Arc<Mutex<bool>>,
     seek_pending: Arc<Mutex<Option<(f64, Instant)>>>,
     last_seek_target: Arc<Mutex<Option<f64>>>,
+    buffering_state: Arc<RwLock<BufferingState>>,
 }
 
 impl GStreamerPlayer {
@@ -64,6 +71,10 @@ impl GStreamerPlayer {
             pipeline_ready: Arc::new(Mutex::new(false)),
             seek_pending: Arc::new(Mutex::new(None)),
             last_seek_target: Arc::new(Mutex::new(None)),
+            buffering_state: Arc::new(RwLock::new(BufferingState {
+                is_buffering: false,
+                percentage: 100,
+            })),
         })
     }
 
@@ -357,6 +368,7 @@ impl GStreamerPlayer {
         ) = self.stream_manager.get_refs_for_message_handler();
         let pipeline_ready_clone = self.pipeline_ready.clone();
         let playbin_clone = self.playbin.clone();
+        let buffering_state_clone = self.buffering_state.clone();
 
         info!("Setting up bus sync handler for immediate message processing...");
 
@@ -404,6 +416,7 @@ impl GStreamerPlayer {
             let current_audio = current_audio_clone.clone();
             let current_subtitle = current_subtitle_clone.clone();
             let playbin = playbin_clone.clone();
+            let buffering_state = buffering_state_clone.clone();
             let msg = msg.clone();
 
             // Handle message synchronously to avoid context issues
@@ -417,6 +430,7 @@ impl GStreamerPlayer {
                 &current_subtitle,
                 &pipeline_ready_clone,
                 &playbin,
+                &buffering_state,
             );
 
             gst::BusSyncReply::Pass
@@ -1237,5 +1251,9 @@ impl GStreamerPlayer {
 
     pub async fn get_zoom_mode(&self) -> ZoomMode {
         *self.zoom_mode.lock().unwrap()
+    }
+
+    pub async fn get_buffering_state(&self) -> BufferingState {
+        self.buffering_state.read().await.clone()
     }
 }

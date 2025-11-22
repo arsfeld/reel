@@ -1,5 +1,5 @@
 use crate::player::gstreamer::stream_manager::{StreamInfo, StreamManager};
-use crate::player::gstreamer_player::PlayerState;
+use crate::player::gstreamer_player::{BufferingState, PlayerState};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::sync::{Arc, Mutex};
@@ -16,6 +16,7 @@ pub fn handle_bus_message_sync(
     current_subtitle: &Arc<Mutex<Option<String>>>,
     pipeline_ready: &Arc<Mutex<bool>>,
     playbin: &Arc<Mutex<Option<gst::Element>>>,
+    buffering_state: &Arc<RwLock<BufferingState>>,
 ) {
     use gst::MessageView;
 
@@ -104,6 +105,18 @@ pub fn handle_bus_message_sync(
         MessageView::Buffering(buffering) => {
             let percent = buffering.percent();
             debug!("GStreamerPlayer - Buffering: {}%", percent);
+
+            // Update buffering state
+            if let Ok(mut buffering_guard) = buffering_state.try_write() {
+                buffering_guard.percentage = percent;
+                buffering_guard.is_buffering = percent < 100;
+
+                if buffering_guard.is_buffering {
+                    debug!("Buffering started/ongoing: {}%", percent);
+                } else {
+                    debug!("Buffering complete: 100%");
+                }
+            }
         }
         MessageView::AsyncDone(_) => {
             info!("GStreamerPlayer - AsyncDone: Pipeline ready, dimensions should be available");
