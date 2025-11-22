@@ -4,7 +4,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 pub fn handle_bus_message_sync(
     msg: &gst::Message,
@@ -157,13 +157,14 @@ pub fn handle_bus_message_sync(
                 .unwrap_or(false);
 
             if !has_collection {
-                info!(
-                    "⚠️  AsyncDone but no StreamCollection received yet - this might indicate an issue"
+                // This should be rare now that we process messages synchronously during preroll
+                warn!(
+                    "⚠️  AsyncDone but no StreamCollection received - stream collections should be processed during preroll"
                 );
 
-                // Try to manually query for stream information
+                // Try to manually query for stream information as fallback
                 if let Ok(Some(pb)) = playbin.lock().map(|p| p.as_ref().cloned()) {
-                    info!("Attempting to manually query stream information from playbin3...");
+                    debug!("Attempting to manually query stream information from playbin3...");
 
                     // Check if there are any stream-related signals we can query
                     let props = pb.list_properties();
@@ -175,12 +176,12 @@ pub fn handle_bus_message_sync(
                                 || name.contains("text"))
                         {
                             let value = pb.property_value(name);
-                            info!("  {}: {:?}", name, value);
+                            debug!("  {}: {:?}", name, value);
                         }
                     }
                 }
             } else {
-                debug!("StreamCollection already received");
+                debug!("✓ StreamCollection already received and processed");
             }
         }
         MessageView::StreamCollection(collection_msg) => {
@@ -203,7 +204,10 @@ pub fn handle_bus_message_sync(
             temp_stream_manager.process_stream_collection_sync(&collection);
 
             // Send default stream selection
+            // Per playbin3 spec, SELECT_STREAMS should work at any pipeline state
+            // The async bus watch ensures non-blocking operation
             if let Ok(Some(pb)) = playbin.lock().map(|p| p.as_ref().cloned()) {
+                debug!("Sending default stream selection for new collection");
                 temp_stream_manager.send_default_stream_selection(&collection, &pb);
             }
         }

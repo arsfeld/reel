@@ -10,7 +10,7 @@ use gstreamer::glib;
 use gstreamer::prelude::*;
 use gtk4::{self, prelude::*};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace, warn};
 
@@ -38,8 +38,6 @@ pub struct GStreamerPlayer {
     video_widget: Arc<Mutex<Option<gtk4::Widget>>>,
     stream_manager: StreamManager,
     pipeline_ready: Arc<Mutex<bool>>,
-    seek_pending: Arc<Mutex<Option<(f64, Instant)>>>,
-    last_seek_target: Arc<Mutex<Option<f64>>>,
     buffering_state: Arc<RwLock<BufferingState>>,
     bus_watch_guard: Arc<Mutex<Option<BusWatchGuard>>>,
     current_playback_speed: Arc<Mutex<f64>>,
@@ -73,8 +71,6 @@ impl GStreamerPlayer {
             video_widget: Arc::new(Mutex::new(None)),
             stream_manager: StreamManager::new(),
             pipeline_ready: Arc::new(Mutex::new(false)),
-            seek_pending: Arc::new(Mutex::new(None)),
-            last_seek_target: Arc::new(Mutex::new(None)),
             buffering_state: Arc::new(RwLock::new(BufferingState {
                 is_buffering: false,
                 percentage: 100,
@@ -314,28 +310,14 @@ impl GStreamerPlayer {
             playbin.set_property("video-sink", sink);
             debug!("Video sink configured");
         } else {
-            // On macOS, sometimes it's better to let playbin choose its own sink
-            #[cfg(target_os = "macos")]
-            {
-                info!(
-                    "GStreamerPlayer::load_media() - No pre-configured sink on macOS, letting playbin auto-select"
-                );
-                // Don't set any video-sink, let playbin use autovideosink internally
-            }
+            // Create a fallback video sink on other platforms
+            debug!("No pre-configured sink, creating fallback");
 
-            #[cfg(not(target_os = "macos"))]
-            {
-                // Create a fallback video sink on other platforms
-                debug!("No pre-configured sink, creating fallback");
-
-                if let Some(fallback_sink) = sink_factory::create_auto_fallback_sink() {
-                    playbin.set_property("video-sink", &fallback_sink);
-                    debug!("Fallback video sink configured");
-                } else {
-                    error!(
-                        "GStreamerPlayer::load_media() - Failed to create any fallback video sink!"
-                    );
-                }
+            if let Some(fallback_sink) = sink_factory::create_auto_fallback_sink() {
+                playbin.set_property("video-sink", &fallback_sink);
+                debug!("Fallback video sink configured");
+            } else {
+                error!("GStreamerPlayer::load_media() - Failed to create any fallback video sink!");
             }
         }
 
@@ -368,8 +350,12 @@ impl GStreamerPlayer {
         let bus = playbin.bus().context("Failed to get playbin bus")?;
         debug!("GStreamerPlayer::load_media() - Got playbin bus");
 
+        // Set up async bus watch FIRST, before any state changes
+        // This follows playbin3 best practices: handle everything asynchronously
+        // The bus watch will process all messages including StreamCollection, ASYNC_DONE, errors, etc.
+        info!("Setting up async bus watch with glib main loop integration...");
+
         // Remove any existing bus watch before adding a new one
-        // (BusWatchGuard automatically removes the watch when dropped)
         if let Some(_old_guard) = self.bus_watch_guard.lock().unwrap().take() {
             debug!("Removed previous bus watch (via guard drop)");
         }
@@ -387,12 +373,8 @@ impl GStreamerPlayer {
         let buffering_state_clone = self.buffering_state.clone();
         let paused_for_buffering_clone = self.paused_for_buffering.clone();
 
-        info!("Setting up async bus watch with glib main loop integration...");
-
-        // Use add_watch for async message handling integrated with GTK main loop
         let watch_guard = bus
             .add_watch(move |_, msg| {
-                // Log immediately when any message arrives
                 let msg_type = msg.type_();
                 if !matches!(msg_type, gst::MessageType::Qos | gst::MessageType::Progress) {
                     let src_name = msg
@@ -400,26 +382,22 @@ impl GStreamerPlayer {
                         .map(|s| s.name().to_string())
                         .unwrap_or_else(|| "unknown".to_string());
 
-                    // Highlight specific message types we're interested in
                     if matches!(msg_type, gst::MessageType::StreamCollection) {
                         info!("Stream collection message from {}", src_name);
                     } else if matches!(msg_type, gst::MessageType::StreamsSelected) {
                         info!("Streams selected message from {}", src_name);
                     } else if matches!(msg_type, gst::MessageType::StreamStart) {
                         info!("Stream start message from {}", src_name);
-                    } else if matches!(
+                    } else if !matches!(
                         msg_type,
                         gst::MessageType::StateChanged
                             | gst::MessageType::Tag
                             | gst::MessageType::StreamStatus
                     ) {
-                        // Skip StateChanged, Tag, and StreamStatus messages to reduce noise
-                    } else {
                         trace!("Bus message: {:?} from {}", msg_type, src_name);
                     }
                 }
 
-                // Handle message - messages are already on the main thread via glib
                 bus_handler::handle_bus_message_sync(
                     msg,
                     &state_clone,
@@ -438,86 +416,21 @@ impl GStreamerPlayer {
             })
             .context("Failed to add bus watch")?;
 
-        // Store the watch guard for automatic cleanup when dropped
         *self.bus_watch_guard.lock().unwrap() = Some(watch_guard);
+        info!("Async bus watch set up successfully");
 
-        info!("Async bus watch set up successfully with glib integration");
+        // Now start pipeline preroll by setting to PAUSED state
+        // playbin3 will asynchronously:
+        //  1. Discover streams and send STREAM_COLLECTION messages
+        //  2. Preroll the pipeline
+        //  3. Send ASYNC_DONE when ready for seeking/playback
+        // All messages are handled by the async bus watch above
+        debug!("Setting pipeline to PAUSED for preroll and stream discovery");
+        playbin
+            .set_state(gst::State::Paused)
+            .context("Failed to set pipeline to PAUSED state")?;
 
-        // Preroll the pipeline to PAUSED state to get video dimensions early
-        // This allows the video widget to resize before playback starts
-        debug!("GStreamerPlayer::load_media() - Prerolling pipeline to get dimensions");
-        match playbin.set_state(gst::State::Paused) {
-            Ok(gst::StateChangeSuccess::Success) => {
-                debug!("Pipeline prerolled successfully");
-
-                // Check bus for any pending messages
-                info!("Checking for pending bus messages after preroll...");
-                let mut message_count = 0;
-                while let Some(msg) = bus.pop() {
-                    message_count += 1;
-                    let msg_type = msg.type_();
-                    let src_name = msg
-                        .src()
-                        .map(|s| s.name().to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    info!(
-                        "  Found pending message #{}: {:?} from {}",
-                        message_count, msg_type, src_name
-                    );
-
-                    // Check specifically for stream collection
-                    if matches!(msg_type, gst::MessageType::StreamCollection) {
-                        debug!("Found StreamCollection message in pending queue");
-                    }
-                }
-                info!("Total pending messages found: {}", message_count);
-            }
-            Ok(gst::StateChangeSuccess::Async) => {
-                debug!("Pipeline prerolling asynchronously");
-                // The AsyncDone message will signal when preroll is complete
-
-                // Wait a bit and check if there are any errors
-                let (result, state, _) = playbin.state(gst::ClockTime::from_seconds(2));
-                info!(
-                    "After 2s wait for async preroll: result={:?}, state={:?}",
-                    result, state
-                );
-
-                // Check bus for any error messages
-                while let Some(msg) = bus.pop() {
-                    use gst::MessageView;
-                    match msg.view() {
-                        MessageView::Error(err) => {
-                            error!(
-                                "GStreamerPlayer::load_media() - Bus error during preroll: {} ({:?})",
-                                err.error(),
-                                err.debug()
-                            );
-                            return Err(anyhow::anyhow!("Preroll failed: {}", err.error()));
-                        }
-                        MessageView::Warning(warn) => {
-                            warn!(
-                                "GStreamerPlayer::load_media() - Bus warning during preroll: {} ({:?})",
-                                warn.error(),
-                                warn.debug()
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Ok(gst::StateChangeSuccess::NoPreroll) => {
-                debug!("Live pipeline, no preroll needed");
-            }
-            Err(e) => {
-                warn!(
-                    "GStreamerPlayer::load_media() - Failed to start preroll: {:?}",
-                    e
-                );
-            }
-        }
-
-        debug!("GStreamerPlayer::load_media() - Playbin configured, ready for playback");
+        info!("Pipeline preroll initiated - messages will be handled asynchronously");
         debug!("Media loading complete");
         Ok(())
     }
@@ -525,276 +438,64 @@ impl GStreamerPlayer {
     pub async fn play(&self) -> Result<()> {
         info!("Starting playback");
 
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            // Ensure we transition through states properly
-            // GStreamer requires proper state transitions: Null -> Ready -> Paused -> Playing
-            //
-            // This is critical for playbin3 which may return Async for state changes,
-            // meaning the pipeline might still be in Ready state when play() is called
-            // (before the async Paused transition from load_media() completes).
-            //
-            // Attempting to go directly from Ready -> Playing can cause the pipeline to hang,
-            // so we must ensure we reach Paused state first.
-            let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
-            info!(
-                "GStreamerPlayer::play() - Current state before play: {:?}",
-                current
-            );
+        let playbin = self
+            .playbin
+            .lock()
+            .unwrap()
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("No playbin available"))?;
 
-            // If we're in Null or Ready state, transition to Paused first for proper preroll
-            if current == gst::State::Null || current == gst::State::Ready {
-                if current == gst::State::Null {
-                    debug!("Transitioning from Null -> Ready");
-                    match playbin.set_state(gst::State::Ready) {
-                        Ok(_) => {
-                            // Wait for state change to complete
-                            let (state_result, new_state, _) =
-                                playbin.state(gst::ClockTime::from_seconds(1));
-                            match state_result {
-                                Ok(_) => debug!("Transitioned to Ready state: {:?}", new_state),
-                                Err(_) => warn!("Failed to transition to Ready state"),
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to set Ready state: {:?}", e);
-                            return Err(anyhow::anyhow!("Failed to set Ready state"));
-                        }
-                    }
-                }
+        // playbin3 automatically handles state transitions: Null → Ready → Paused → Playing
+        // We don't query the current state because the pipeline may be in async transition.
+        // Just set to Playing and let playbin3 handle the transition from whatever state
+        // it's currently in (which is typically PAUSED after load_media()).
+        // State updates will come through the bus handler via StateChanged messages.
 
-                // Now go to Paused to allow preroll (from either Null or Ready)
-                info!(
-                    "GStreamerPlayer::play() - Transitioning from {:?} -> Paused for preroll",
-                    current
-                );
-                match playbin.set_state(gst::State::Paused) {
-                    Ok(gst::StateChangeSuccess::Success) => {
-                        info!("Successfully transitioned to Paused");
-                    }
-                    Ok(gst::StateChangeSuccess::Async) => {
-                        info!("Async transition to Paused, waiting for preroll...");
-                        // Wait for preroll to complete
-                        let (state_result, new_state, _) =
-                            playbin.state(gst::ClockTime::from_seconds(5));
-                        match state_result {
-                            Ok(_) => debug!("Preroll complete, now in {:?}", new_state),
-                            Err(_) => {
-                                warn!("Preroll timeout, checking for errors...");
-                                // Check bus for errors
-                                if let Some(bus) = playbin.bus() {
-                                    while let Some(msg) = bus.pop() {
-                                        use gst::MessageView;
-                                        if let MessageView::Error(err) = msg.view() {
-                                            error!(
-                                                "Bus error during preroll: {} ({:?})",
-                                                err.error(),
-                                                err.debug()
-                                            );
-                                            return Err(anyhow::anyhow!(
-                                                "Preroll failed: {}",
-                                                err.error()
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        warn!("Failed to transition to Paused for preroll");
-                    }
-                }
+        match playbin.set_state(gst::State::Playing) {
+            Ok(gst::StateChangeSuccess::Success) => {
+                info!("Playback started successfully");
+                // State will be updated by bus handler's StateChanged message
             }
-
-            debug!("Setting playbin to Playing state");
-            match playbin.set_state(gst::State::Playing) {
-                Ok(gst::StateChangeSuccess::Success) => {
-                    debug!("Successfully set playbin to playing state");
-
-                    // Update internal state to Playing
-                    let mut state = self.state.write().await;
-                    *state = PlayerState::Playing;
-                    debug!("Player state set to Playing");
-
-                    // Ensure GST_DEBUG_DUMP_DOT_DIR is set
-                    if std::env::var("GST_DEBUG_DUMP_DOT_DIR").is_err() {
-                        unsafe {
-                            std::env::set_var("GST_DEBUG_DUMP_DOT_DIR", "/tmp");
-                        }
-                    }
-
-                    // Dump the actual running pipeline after it starts playing
-                    if let Some(bin) = playbin.dynamic_cast_ref::<gst::Bin>() {
-                        bin.debug_to_dot_file(gst::DebugGraphDetails::ALL, "reel-playbin-PLAYING");
-                        debug!("Dumped PLAYING state pipeline to /tmp/reel-playbin-PLAYING.dot");
-
-                        // List what's actually in the pipeline now
-                        let mut iter = bin.iterate_elements();
-                        info!("Elements in PLAYING pipeline:");
-                        while let Ok(Some(elem)) = iter.next() {
-                            if let Some(factory) = elem.factory() {
-                                info!("  - {} ({})", elem.name(), factory.name());
-                            }
-                        }
-                    }
-                }
-                Ok(gst::StateChangeSuccess::Async) => {
-                    debug!("Playbin state change is async, waiting...");
-
-                    // Wait for the async state change to complete
-                    let (state_change, current, _) = playbin.state(gst::ClockTime::from_seconds(3));
-                    match state_change {
-                        Ok(gst::StateChangeSuccess::Success) => {
-                            info!(
-                                "GStreamerPlayer::play() - Async state change completed, now in {:?}",
-                                current
-                            );
-                            // Update state if we successfully reached Playing
-                            if current == gst::State::Playing {
-                                let mut state = self.state.write().await;
-                                *state = PlayerState::Playing;
-                                debug!("Player state set to Playing");
-                            }
-                        }
-                        _ => {
-                            warn!(
-                                "GStreamerPlayer::play() - Async state change still pending after 3s, current: {:?}",
-                                current
-                            );
-                            // State will be updated by the bus message handler when the transition completes
-                        }
-                    }
-
-                    // Wait a bit for the pipeline to negotiate, then dump it
-                    glib::timeout_add_once(std::time::Duration::from_secs(2), {
-                        let playbin = playbin.clone();
-                        move || {
-                            // Ensure GST_DEBUG_DUMP_DOT_DIR is set
-                            if std::env::var("GST_DEBUG_DUMP_DOT_DIR").is_err() {
-                                unsafe {
-                                    std::env::set_var("GST_DEBUG_DUMP_DOT_DIR", "/tmp");
-                                }
-                            }
-
-                            if let Some(bin) = playbin.dynamic_cast_ref::<gst::Bin>() {
-                                bin.debug_to_dot_file(
-                                    gst::DebugGraphDetails::ALL,
-                                    "reel-playbin-PLAYING-async",
-                                );
-                                info!(
-                                    "Dumped PLAYING state pipeline (async) to /tmp/reel-playbin-PLAYING-async.dot"
-                                );
-
-                                // List what's actually in the pipeline now
-                                let mut iter = bin.iterate_elements();
-                                info!("Elements in PLAYING pipeline (after async):");
-                                while let Ok(Some(elem)) = iter.next() {
-                                    if let Some(factory) = elem.factory() {
-                                        info!("  - {} ({})", elem.name(), factory.name());
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-                Ok(gst::StateChangeSuccess::NoPreroll) => {
-                    debug!("Playbin state change: no preroll");
-                    // Live sources don't need preroll, update state immediately
-                    let mut state = self.state.write().await;
-                    *state = PlayerState::Playing;
-                }
-                Err(gst::StateChangeError) => {
-                    // Get more details about the error
-                    let (state_result, current, pending) =
-                        playbin.state(gst::ClockTime::from_seconds(1));
-                    error!("GStreamerPlayer::play() - Failed to set playbin to playing state");
-                    error!(
-                        "GStreamerPlayer::play() - State result: {:?}, Current: {:?}, Pending: {:?}",
-                        state_result, current, pending
-                    );
-
-                    // Try to recover by resetting the pipeline
-                    warn!("GStreamerPlayer::play() - Attempting pipeline recovery...");
-
-                    // First, try to go back to Null state
-                    if let Err(e) = playbin.set_state(gst::State::Null) {
-                        error!(
-                            "GStreamerPlayer::play() - Failed to reset to Null state: {:?}",
-                            e
-                        );
-                    } else {
-                        // Wait for null state to be reached
-                        let _ = playbin.state(gst::ClockTime::from_seconds(1));
-
-                        // Try once more with a simpler approach
-                        info!(
-                            "GStreamerPlayer::play() - Retrying playback with direct Playing state"
-                        );
-                        match playbin.set_state(gst::State::Playing) {
-                            Ok(_) => {
-                                info!(
-                                    "GStreamerPlayer::play() - Recovery successful, playback started"
-                                );
-                                let mut state = self.state.write().await;
-                                *state = PlayerState::Playing;
-                                return Ok(());
-                            }
-                            Err(_) => {
-                                error!("GStreamerPlayer::play() - Recovery failed");
-                            }
-                        }
-                    }
-
-                    // Get the bus to check for error messages
-                    let mut error_details = Vec::new();
-                    if let Some(bus) = playbin.bus() {
-                        while let Some(msg) = bus.pop() {
-                            use gst::MessageView;
-                            match msg.view() {
-                                MessageView::Error(err) => {
-                                    let error_msg = format!(
-                                        "{} (from: {:?})",
-                                        err.error(),
-                                        err.src().map(|s| s.path_string())
-                                    );
-                                    error!(
-                                        "GStreamerPlayer::play() - Bus error: {} ({:?})",
-                                        err.error(),
-                                        err.debug()
-                                    );
-                                    error_details.push(error_msg);
-                                }
-                                MessageView::Warning(warn) => {
-                                    warn!(
-                                        "GStreamerPlayer::play() - Bus warning: {} ({:?})",
-                                        warn.error(),
-                                        warn.debug()
-                                    );
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-
-                    // Update state to Error
-                    let mut state = self.state.write().await;
-                    *state = PlayerState::Error;
-
-                    let error_msg = if !error_details.is_empty() {
-                        format!("Failed to play media: {}", error_details.join("; "))
-                    } else {
-                        "Failed to set playbin to playing state (no specific error available)"
-                            .to_string()
-                    };
-
-                    return Err(anyhow::anyhow!(error_msg));
-                }
+            Ok(gst::StateChangeSuccess::Async) => {
+                info!("Playback starting asynchronously");
+                // State transitions will be reported via bus handler's StateChanged messages
+                // No need to wait synchronously - the async bus watch handles this
             }
-        } else {
-            error!("GStreamerPlayer::play() - No playbin available!");
-            return Err(anyhow::anyhow!("No playbin available"));
+            Ok(gst::StateChangeSuccess::NoPreroll) => {
+                info!("Playback started (live source, no preroll)");
+                // State will be updated by bus handler's StateChanged message
+            }
+            Err(gst::StateChangeError) => {
+                error!("Failed to start playback");
+
+                // Check bus for specific error details
+                let mut error_details = Vec::new();
+                if let Some(bus) = playbin.bus() {
+                    while let Some(msg) = bus.pop() {
+                        use gst::MessageView;
+                        if let MessageView::Error(err) = msg.view() {
+                            let error_msg = format!(
+                                "{} (from: {:?})",
+                                err.error(),
+                                err.src().map(|s| s.path_string())
+                            );
+                            error!("Bus error: {} ({:?})", err.error(), err.debug());
+                            error_details.push(error_msg);
+                        }
+                    }
+                }
+
+                let error_msg = if !error_details.is_empty() {
+                    format!("Failed to play media: {}", error_details.join("; "))
+                } else {
+                    "Failed to set playbin to playing state".to_string()
+                };
+
+                return Err(anyhow::anyhow!(error_msg));
+            }
         }
-        debug!("Playback started");
+
         Ok(())
     }
 
@@ -806,8 +507,7 @@ impl GStreamerPlayer {
                 .set_state(gst::State::Paused)
                 .context("Failed to set playbin to paused state")?;
 
-            let mut state = self.state.write().await;
-            *state = PlayerState::Paused;
+            // State will be updated by bus handler's StateChanged message
 
             // Clear the buffering flag since this is a user-initiated pause
             *self.paused_for_buffering.lock().unwrap() = false;
@@ -823,8 +523,7 @@ impl GStreamerPlayer {
                 .set_state(gst::State::Null)
                 .context("Failed to set playbin to null state")?;
 
-            let mut state = self.state.write().await;
-            *state = PlayerState::Stopped;
+            // State will be updated by bus handler's StateChanged message
 
             // Clear the buffering flag
             *self.paused_for_buffering.lock().unwrap() = false;
@@ -844,107 +543,51 @@ impl GStreamerPlayer {
             return Err(anyhow::anyhow!("Pipeline not ready for seeking"));
         }
 
-        let position_ns = position.as_nanos() as i64;
-        let position_secs = position.as_secs_f64();
+        let playbin = self
+            .playbin
+            .lock()
+            .unwrap()
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("No playbin available for seeking"))?;
 
-        // Update the last seek target for position tracking
-        {
-            let mut last_target = self.last_seek_target.lock().unwrap();
-            *last_target = Some(position_secs);
-        }
+        // Remember if we were playing to resume after seek
+        let was_playing = matches!(*self.state.read().await, PlayerState::Playing);
 
-        // Store the pending seek position
-        {
-            let mut pending = self.seek_pending.lock().unwrap();
-            *pending = Some((position_secs, Instant::now()));
-        }
-
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            // Remember if we were playing to resume after seek
-            let was_playing = matches!(*self.state.read().await, PlayerState::Playing);
-
-            // Get current pipeline state
-            let (state_result, current_state, pending_state) =
-                playbin.state(gst::ClockTime::from_mseconds(100));
-
+        // Check if media is seekable
+        let mut query = gst::query::Seeking::new(gst::Format::Time);
+        if playbin.query(&mut query) {
+            let (seekable, start, end) = query.result();
             debug!(
-                "GStreamerPlayer::seek() - Current state: {:?}, Pending: {:?}, Result: {:?}",
-                current_state, pending_state, state_result
+                "GStreamerPlayer::seek() - Media seekable: {}, range: {:?} - {:?}",
+                seekable, start, end
             );
 
-            // Ensure pipeline is at least in PAUSED state for seeking to work
-            if current_state < gst::State::Paused {
-                info!(
-                    "GStreamerPlayer::seek() - Pipeline in {:?} state, need to reach PAUSED for seeking",
-                    current_state
-                );
-
-                // Try to set to PAUSED state
-                match playbin.set_state(gst::State::Paused) {
-                    Ok(gst::StateChangeSuccess::Success) => {
-                        debug!("Successfully reached PAUSED state");
-                    }
-                    Ok(gst::StateChangeSuccess::Async) => {
-                        debug!("Waiting for PAUSED state...");
-                        // Wait for state change to complete (max 2 seconds)
-                        let (wait_result, new_state, _) =
-                            playbin.state(gst::ClockTime::from_seconds(2));
-                        match wait_result {
-                            Ok(_) => {
-                                debug!("Reached {:?} state", new_state);
-                                if new_state < gst::State::Paused {
-                                    return Err(anyhow::anyhow!(
-                                        "Failed to reach PAUSED state for seeking"
-                                    ));
-                                }
-                            }
-                            Err(_) => {
-                                return Err(anyhow::anyhow!(
-                                    "Timeout waiting for PAUSED state before seeking"
-                                ));
-                            }
-                        }
-                    }
-                    Ok(gst::StateChangeSuccess::NoPreroll) => {
-                        debug!("Live source, no preroll needed");
-                    }
-                    Err(_) => {
-                        return Err(anyhow::anyhow!("Failed to set PAUSED state for seeking"));
-                    }
-                }
+            if !seekable {
+                return Err(anyhow::anyhow!("Media is not seekable"));
             }
+        } else {
+            warn!("GStreamerPlayer::seek() - Unable to query seeking capability");
+        }
 
-            // Check if media is seekable
-            let mut query = gst::query::Seeking::new(gst::Format::Time);
-            if playbin.query(&mut query) {
-                let (seekable, start, end) = query.result();
-                debug!(
-                    "GStreamerPlayer::seek() - Media seekable: {}, range: {:?} - {:?}",
-                    seekable, start, end
-                );
+        // Use FLUSH | KEY_UNIT flags for accurate seeking with flushing
+        // FLUSH will clear the pipeline and restart playback at the new position
+        let seek_flags = gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT;
+        let seek_position = gst::ClockTime::from_nseconds(position.as_nanos() as u64);
 
-                if !seekable {
-                    return Err(anyhow::anyhow!("Media is not seekable"));
-                }
-            } else {
-                warn!("GStreamerPlayer::seek() - Unable to query seeking capability");
-            }
+        debug!(
+            "GStreamerPlayer::seek() - Seeking to {} with flags {:?}",
+            seek_position.display(),
+            seek_flags
+        );
 
-            // Use FLUSH | KEY_UNIT flags for network streams
-            let seek_flags = gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT;
-            let seek_position = gst::ClockTime::from_nseconds(position_ns as u64);
-
-            debug!(
-                "GStreamerPlayer::seek() - Seeking to {} with flags {:?}",
-                seek_position.display(),
-                seek_flags
-            );
-
-            // Use seek_simple - it's simpler and should work for most cases
-            let seek_result = playbin.seek_simple(seek_flags, seek_position);
-
-            if seek_result.is_err() {
-                error!("GStreamerPlayer::seek() - Seek failed");
+        // Perform the seek operation
+        // With FLUSH flag, seek works at any state (even PLAYING)
+        // The pipeline will handle state transitions automatically
+        playbin
+            .seek_simple(seek_flags, seek_position)
+            .map_err(|_| {
+                error!("GStreamerPlayer::seek() - Seek operation failed");
 
                 // Check for errors on the bus
                 if let Some(bus) = playbin.bus() {
@@ -956,67 +599,38 @@ impl GStreamerPlayer {
                                 err.error(),
                                 err.debug()
                             );
-                            return Err(anyhow::anyhow!("Seek failed: {}", err.error()));
                         }
                     }
                 }
 
-                return Err(anyhow::anyhow!("Failed to seek to position {:?}", position));
-            }
+                anyhow::anyhow!("Failed to seek to position {:?}", position)
+            })?;
 
-            debug!("GStreamerPlayer::seek() - Seek initiated successfully");
+        debug!("GStreamerPlayer::seek() - Seek initiated successfully");
 
-            // Wait for the seek to complete (ASYNC_DONE message)
-            // Give it a moment to process
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Seek completion will be signaled via ASYNC_DONE bus message
+        // No need to wait synchronously - the bus handler will process it
 
-            // Resume playing if we were playing before the seek
-            if was_playing {
-                debug!("GStreamerPlayer::seek() - Resuming playback after seek");
-                match playbin.set_state(gst::State::Playing) {
-                    Ok(_) => {
-                        debug!("GStreamerPlayer::seek() - Resumed playing state");
-                    }
-                    Err(e) => {
-                        warn!(
-                            "GStreamerPlayer::seek() - Failed to resume playing after seek: {:?}",
-                            e
-                        );
-                    }
-                }
-            }
-        } else {
-            return Err(anyhow::anyhow!("No playbin available for seeking"));
+        // Resume playing if we were playing before the seek
+        // The FLUSH seek automatically pauses, so we need to resume if needed
+        if was_playing {
+            debug!("GStreamerPlayer::seek() - Resuming playback after seek");
+            playbin.set_state(gst::State::Playing).ok();
         }
 
         Ok(())
     }
 
     pub async fn get_position(&self) -> Option<Duration> {
-        // If we have a pending seek, return that as the effective position
-        // This prevents showing stale values immediately after seeking
-        {
-            let last_target = self.last_seek_target.lock().unwrap();
-            if let Some(target_pos) = *last_target {
-                // Check if the seek is recent (within 200ms)
-                if let Some((_, timestamp)) = *self.seek_pending.lock().unwrap() {
-                    if timestamp.elapsed() < Duration::from_millis(200) {
-                        return Some(Duration::from_secs_f64(target_pos.max(0.0)));
-                    }
-                }
-            }
-        }
-
-        // Otherwise return the actual position from GStreamer
+        // Query the pipeline for the current position
+        // This is the single source of truth for position tracking
         if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            if let Some(pos) = playbin.query_position::<gst::ClockTime>() {
-                // Clear the last seek target since we're at the actual position now
-                let mut last_target = self.last_seek_target.lock().unwrap();
-                *last_target = None;
-                return Some(Duration::from_nanos(pos.nseconds()));
-            }
+            playbin
+                .query_position::<gst::ClockTime>()
+                .map(|pos| Duration::from_nanos(pos.nseconds()))
+        } else {
+            None
         }
-        None
     }
 
     pub async fn get_duration(&self) -> Option<Duration> {
@@ -1039,6 +653,11 @@ impl GStreamerPlayer {
     pub async fn get_video_dimensions(&self) -> Option<(i32, i32)> {
         if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             // Ensure pipeline is at least in PAUSED state for dimensions to be available
+            // Note: This synchronous state query is justified because:
+            // 1. Video dimensions are only available after pipeline reaches PAUSED
+            // 2. We need to verify state before querying caps
+            // 3. If needed, we initiate state change and wait for completion
+            // This is an edge case that doesn't affect normal playback flow
             let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
             if current < gst::State::Paused {
                 debug!(
@@ -1052,6 +671,8 @@ impl GStreamerPlayer {
                     }
                     Ok(gst::StateChangeSuccess::Async) => {
                         // Wait for async state change to complete (max 2 seconds)
+                        // This timeout is justified: we just initiated the state change
+                        // and need to wait for it to complete before querying dimensions
                         match playbin.state(gst::ClockTime::from_seconds(2)) {
                             (Ok(_), new_state, _) => {
                                 debug!("Reached state: {:?}", new_state);
@@ -1090,19 +711,9 @@ impl GStreamerPlayer {
     }
 
     pub async fn get_state(&self) -> PlayerState {
-        // Query GStreamer for the actual state instead of relying on cached state
-        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
-            let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
-
-            match current {
-                gst::State::Playing => return PlayerState::Playing,
-                gst::State::Paused => return PlayerState::Paused,
-                gst::State::Ready | gst::State::Null => return PlayerState::Stopped,
-                _ => {}
-            }
-        }
-
-        // Fall back to cached state if playbin is not available
+        // Return cached state updated by bus handler's StateChanged messages
+        // This is async-aware and doesn't block on GStreamer queries
+        // The bus handler keeps this state synchronized with the actual pipeline state
         self.state.read().await.clone()
     }
 
