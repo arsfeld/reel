@@ -24,7 +24,13 @@ mod skip_markers;
 use skip_markers::SkipMarkerManager;
 mod buffering_overlay;
 use buffering_overlay::{BufferingOverlay, BufferingOverlayInput};
+mod auto_play;
 mod buffering_warnings;
+use auto_play::AutoPlayManager;
+mod error_retry;
+use error_retry::ErrorRetryManager;
+mod progress_tracker;
+use progress_tracker::ProgressTracker;
 
 fn format_duration(duration: Duration) -> String {
     let total_secs = duration.as_secs();
@@ -72,17 +78,10 @@ pub struct PlayerPage {
     window: adw::ApplicationWindow,
     // Seek bar drag state
     is_seeking: bool,
-    // Error handling
-    error_message: Option<String>,
-    retry_count: u32,
-    max_retries: u32,
-    retry_timer: Option<SourceId>,
-    // Progress save tracking
-    last_progress_save: std::time::Instant,
-    // Cached config values to avoid reloading config file every second
-    config_auto_resume: bool,
-    config_resume_threshold_seconds: u64,
-    config_progress_update_interval_seconds: u64,
+    // Error handling and retry management
+    error_retry_manager: ErrorRetryManager,
+    // Progress tracking and syncing
+    progress_tracker: ProgressTracker,
     // Playback state
     playback_speed: f64,
     // Track selection menus
@@ -90,9 +89,8 @@ pub struct PlayerPage {
     subtitle_menu_button: gtk::MenuButton,
     current_audio_track: Option<i32>,
     current_subtitle_track: Option<i32>,
-    // Auto-play state
-    auto_play_triggered: bool,
-    auto_play_timeout: Option<SourceId>,
+    // Auto-play management
+    auto_play_manager: AutoPlayManager,
     // Video quality (upscaling) state
     quality_menu_button: gtk::MenuButton,
     current_upscaling_mode: crate::player::UpscalingMode,
@@ -359,7 +357,7 @@ impl AsyncComponent for PlayerPage {
                 set_valign: gtk::Align::Center,
                 set_spacing: 20,
                 #[watch]
-                set_visible: model.error_message.is_some(),
+                set_visible: model.error_retry_manager.has_error(),
                 add_css_class: "osd",
                 add_css_class: "error-overlay",
 
@@ -371,7 +369,7 @@ impl AsyncComponent for PlayerPage {
 
                 gtk::Label {
                     #[watch]
-                    set_label: model.error_message.as_deref().unwrap_or("An error occurred"),
+                    set_label: model.error_retry_manager.get_error_message().unwrap_or("An error occurred"),
                     set_wrap: true,
                     set_max_width_chars: 50,
                     add_css_class: "title-2",
@@ -444,7 +442,7 @@ impl AsyncComponent for PlayerPage {
                 set_margin_all: 20,
                 set_width_request: 700,
                 #[watch]
-                set_visible: model.controls_visible() && model.error_message.is_none(),
+                set_visible: model.controls_visible() && !model.error_retry_manager.has_error(),
                 add_css_class: "osd",
                 add_css_class: "player-controls",
                 add_css_class: "minimal",
@@ -749,25 +747,18 @@ impl AsyncComponent for PlayerPage {
             playlist_position_label: playlist_position_label.clone(),
             window: window.clone(),
             is_seeking: false,
-            error_message: None,
-            retry_count: 0,
-            max_retries: 3,
-            retry_timer: None,
-            last_progress_save: std::time::Instant::now(),
-            // Cache config values to avoid reloading every second
-            config_auto_resume: config.playback.auto_resume,
-            config_resume_threshold_seconds: config.playback.resume_threshold_seconds as u64,
-            config_progress_update_interval_seconds: config
-                .playback
-                .progress_update_interval_seconds
-                as u64,
+            error_retry_manager: ErrorRetryManager::new(3),
+            progress_tracker: ProgressTracker::new(
+                config.playback.auto_resume,
+                config.playback.resume_threshold_seconds as u64,
+                config.playback.progress_update_interval_seconds as u64,
+            ),
             playback_speed: 1.0,
             audio_menu_button: audio_menu_button.clone(),
             subtitle_menu_button: subtitle_menu_button.clone(),
             current_audio_track: None,
             current_subtitle_track: None,
-            auto_play_triggered: false,
-            auto_play_timeout: None,
+            auto_play_manager: AutoPlayManager::new(),
             quality_menu_button: quality_menu_button.clone(),
             current_upscaling_mode: Self::mpv_upscaling_mode_from_config(&config),
             is_mpv_backend: Self::backend_prefers_mpv(&config.playback.player_backend),
@@ -797,11 +788,13 @@ impl AsyncComponent for PlayerPage {
         match PlayerController::new(&config) {
             Ok((handle, controller)) => {
                 model.attach_player_controller(handle, controller, &sender);
-                model.error_message = None;
+                model.error_retry_manager.clear_error();
             }
             Err(e) => {
                 error!("Failed to initialize player controller: {}", e);
-                model.error_message = Some(format!("Failed to initialize player: {}", e));
+                model
+                    .error_retry_manager
+                    .show_error(format!("Failed to initialize player: {}", e));
                 model.player_state = PlayerState::Error;
             }
         }
@@ -1136,19 +1129,10 @@ impl AsyncComponent for PlayerPage {
                 self.can_go_next = false;
                 // Clear playlist position label
                 self.playlist_position_label.set_text("");
-                // Clear any existing error message
-                self.error_message = None;
+                // Clear any existing error and reset retry state
+                self.error_retry_manager.clear_error();
                 // Reset auto-play state
-                self.auto_play_triggered = false;
-                if let Some(timeout) = self.auto_play_timeout.take() {
-                    // Timeout may have already fired and been auto-removed by GLib
-                    // Use catch_unwind to handle the panic gracefully
-                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| timeout.remove()))
-                        .is_err()
-                    {
-                        debug!("Auto-play timeout already removed (likely fired)");
-                    }
-                }
+                self.auto_play_manager.cancel();
                 // Clear skip button state
                 self.skip_marker_manager.clear_markers();
 
@@ -1245,9 +1229,9 @@ impl AsyncComponent for PlayerPage {
                 let media_id = id.clone();
                 let media_id_for_resume = media_id.clone();
                 let sender_clone = sender.clone();
-                // Capture cached config values to avoid reloading config in async closure
-                let auto_resume = self.config_auto_resume;
-                let resume_threshold_seconds = self.config_resume_threshold_seconds;
+                // Capture progress tracker config values for use in async closure
+                let auto_resume = self.progress_tracker.get_auto_resume();
+                let resume_threshold_seconds = self.progress_tracker.get_resume_threshold_seconds();
 
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
@@ -1399,19 +1383,10 @@ impl AsyncComponent for PlayerPage {
                 self.update_playlist_position_label(&context);
 
                 self.playlist_context = Some(context);
-                // Clear any existing error message
-                self.error_message = None;
+                // Clear any existing error and reset retry state
+                self.error_retry_manager.clear_error();
                 // Reset auto-play state
-                self.auto_play_triggered = false;
-                if let Some(timeout) = self.auto_play_timeout.take() {
-                    // Timeout may have already fired and been auto-removed by GLib
-                    // Use catch_unwind to handle the panic gracefully
-                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| timeout.remove()))
-                        .is_err()
-                    {
-                        debug!("Auto-play timeout already removed (likely fired)");
-                    }
-                }
+                self.auto_play_manager.cancel();
                 // Clear skip button state
                 self.skip_marker_manager.clear_markers();
 
@@ -1508,9 +1483,9 @@ impl AsyncComponent for PlayerPage {
                 let media_id_clone = media_id.clone();
                 let media_id_for_resume = media_id_clone.clone();
                 let sender_clone = sender.clone();
-                // Capture cached config values to avoid reloading config in async closure
-                let auto_resume = self.config_auto_resume;
-                let resume_threshold_seconds = self.config_resume_threshold_seconds;
+                // Capture progress tracker config values for use in async closure
+                let auto_resume = self.progress_tracker.get_auto_resume();
+                let resume_threshold_seconds = self.progress_tracker.get_resume_threshold_seconds();
 
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
@@ -2089,59 +2064,21 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::RetryLoad => {
-                // Clear the error and retry loading the media
-                self.error_message = None;
-
-                // Check if we've exceeded max retries
-                if self.retry_count >= self.max_retries {
-                    self.error_message = Some(
-                        "Failed to load media after multiple attempts. Please check your connection and try again.".to_string()
+                // Retry loading the media with exponential backoff
+                if let Some(media_id) = &self.media_item_id {
+                    self.error_retry_manager.schedule_retry(
+                        media_id.clone(),
+                        self.playlist_context.clone(),
+                        &sender,
                     );
-                    self.retry_count = 0;
-                    return;
                 }
-
-                // Increment retry count
-                self.retry_count += 1;
-
-                // Calculate exponential backoff delay (1s, 2s, 4s)
-                let delay = Duration::from_secs(2_u64.pow(self.retry_count - 1));
-
-                // Schedule retry after delay
-                if let Some(timer) = self.retry_timer.take() {
-                    let _ = timer.remove();
-                }
-
-                let sender_clone = sender.clone();
-                let media_id = self.media_item_id.clone();
-                let context = self.playlist_context.clone();
-
-                info!("Scheduling retry #{} after {:?}", self.retry_count, delay);
-
-                self.retry_timer = Some(glib::timeout_add_local(delay, move || {
-                    if let Some(id) = &media_id {
-                        if let Some(ctx) = &context {
-                            sender_clone.input(PlayerInput::LoadMediaWithContext {
-                                media_id: id.clone(),
-                                context: ctx.clone(),
-                            });
-                        } else {
-                            sender_clone.input(PlayerInput::LoadMedia(id.clone()));
-                        }
-                    }
-                    glib::ControlFlow::Break
-                }));
             }
             PlayerInput::ClearError => {
-                self.error_message = None;
-                self.retry_count = 0;
-                if let Some(timer) = self.retry_timer.take() {
-                    let _ = timer.remove();
-                }
+                self.error_retry_manager.clear_error();
             }
             PlayerInput::ShowError(msg) => {
                 error!("Player error: {}", msg);
-                self.error_message = Some(msg);
+                self.error_retry_manager.show_error(msg);
                 self.player_state = PlayerState::Error;
             }
             PlayerInput::EscapePressed => {
@@ -2185,7 +2122,7 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::ClearAutoPlayTimeout => {
                 // Clear the auto-play timeout reference without trying to remove it
                 // (it's about to be removed automatically by GLib when it fires)
-                self.auto_play_timeout = None;
+                self.auto_play_manager.reset();
             }
             PlayerInput::SetUpscalingMode(mode) => {
                 if let Some(player) = &self.player {
@@ -2270,8 +2207,7 @@ impl AsyncComponent for PlayerPage {
                 self.player_state = state.clone();
                 // Clear error on successful state change
                 if !matches!(&state, PlayerState::Error) {
-                    self.error_message = None;
-                    self.retry_count = 0;
+                    self.error_retry_manager.reset();
                 }
                 // Grab focus when media starts playing to ensure keyboard shortcuts work
                 if matches!(&state, PlayerState::Playing) {
@@ -2391,161 +2327,23 @@ impl AsyncComponent for PlayerPage {
 
                     // Save playback progress to database at configured interval
                     if let (Some(media_id), Some(dur)) = (&self.media_item_id, duration) {
-                        // Use cached config value instead of reloading config file
-                        let save_interval_secs = self.config_progress_update_interval_seconds;
-
-                        // Check if enough time has passed since last save
-                        let elapsed = self.last_progress_save.elapsed().as_secs();
-
-                        // Always save if watched (>90%) or if interval has passed
-                        let watched = pos.as_secs_f64() / dur.as_secs_f64() > 0.9;
-
                         // Check for auto-play when episode is nearly complete (>95%)
-                        let should_auto_play = pos.as_secs_f64() / dur.as_secs_f64() > 0.95;
-                        if should_auto_play && !self.auto_play_triggered {
-                            self.auto_play_triggered = true;
+                        self.auto_play_manager.check_auto_play(
+                            pos,
+                            dur,
+                            &self.playlist_context,
+                            &sender,
+                        );
 
-                            // Check if we have a playlist context with auto-play enabled
-                            if let Some(ref context) = self.playlist_context {
-                                if context.is_auto_play_enabled() {
-                                    if context.has_next() {
-                                        info!("Auto-play triggered, loading next episode");
-
-                                        // Load next item after a short delay to let current one finish
-                                        let sender_clone = sender.clone();
-                                        let timeout_id =
-                                            glib::timeout_add_seconds_local(3, move || {
-                                                // Clear the timeout reference before it's auto-removed by GLib
-                                                sender_clone
-                                                    .input(PlayerInput::ClearAutoPlayTimeout);
-                                                sender_clone.input(PlayerInput::Next);
-                                                glib::ControlFlow::Break
-                                            });
-
-                                        // Store timeout ID in case we need to cancel (e.g., user manually navigates)
-                                        self.auto_play_timeout = Some(timeout_id);
-                                    } else {
-                                        info!(
-                                            "Episode ending without next episode, will navigate back"
-                                        );
-
-                                        // No next episode available - navigate back after a delay
-                                        // This delay allows watch status to be saved and synced before navigation
-                                        let sender_clone = sender.clone();
-                                        let timeout_id =
-                                            glib::timeout_add_seconds_local(5, move || {
-                                                // Clear the timeout reference before it's auto-removed by GLib
-                                                sender_clone
-                                                    .input(PlayerInput::ClearAutoPlayTimeout);
-                                                sender_clone.input(PlayerInput::NavigateBack);
-                                                glib::ControlFlow::Break
-                                            });
-
-                                        // Store timeout ID in case we need to cancel (e.g., user manually navigates)
-                                        self.auto_play_timeout = Some(timeout_id);
-
-                                        // Show toast notification to user
-                                        sender
-                                            .output(PlayerOutput::ShowToast(
-                                                "End of season".to_string(),
-                                            ))
-                                            .unwrap();
-                                    }
-                                } else {
-                                    debug!(
-                                        "Episode ending with auto-play disabled, letting video finish naturally"
-                                    );
-                                    // Auto-play is disabled, let the video finish naturally
-                                    // User can manually navigate back when they're ready
-                                }
-                            } else {
-                                debug!(
-                                    "Episode ending without playlist context, letting video finish naturally"
-                                );
-                                // No playlist context - this is a standalone video
-                                // Let it finish naturally, user can manually navigate back
-                            }
-                        }
-
-                        if watched || elapsed >= save_interval_secs {
-                            self.last_progress_save = std::time::Instant::now();
+                        // Check if progress should be saved
+                        if self.progress_tracker.should_save_progress(pos, dur) {
+                            self.progress_tracker.reset_save_timer();
 
                             let db = (*self.db).clone();
                             let media_id = media_id.clone();
                             let position_ms = pos.as_millis() as i64;
                             let duration_ms = dur.as_millis() as i64;
-
-                            // If we have a PlayQueue context, also sync with Plex server
-                            if let Some(ref context) = self.playlist_context
-                                && let Some(_queue_info) = context.get_play_queue_info()
-                            {
-                                // Clone the context for the async task
-                                let context_clone = context.clone();
-                                let db_clone = db.clone();
-                                let media_id_clone = media_id.clone();
-                                let position = pos;
-                                let duration = dur;
-                                let player_state_clone = self.player_state.clone();
-
-                                glib::spawn_future_local(async move {
-                                    use crate::db::repository::source_repository::SourceRepositoryImpl;
-                                    use crate::db::repository::{MediaRepositoryImpl, Repository};
-                                    use crate::services::core::BackendService;
-                                    use crate::services::core::playqueue::PlayQueueService;
-
-                                    // Get the media's source
-                                    let media_repo = MediaRepositoryImpl::new(db_clone.clone());
-                                    if let Ok(Some(media)) =
-                                        media_repo.find_by_id(media_id_clone.as_ref()).await
-                                        && let Ok(_source_id) = media.source_id.parse::<i32>()
-                                    {
-                                        let source_repo =
-                                            SourceRepositoryImpl::new(db_clone.clone());
-                                        if let Ok(Some(source)) =
-                                            source_repo.find_by_id(&media.source_id).await
-                                        {
-                                            // Create backend and sync PlayQueue progress
-                                            if let Ok(backend) =
-                                                BackendService::create_backend_for_source(
-                                                    &db_clone, &source,
-                                                )
-                                                .await
-                                            {
-                                                // PlayQueueService will handle the sync
-                                                // Map player state to Plex state
-                                                let plex_state = if watched {
-                                                    "stopped"
-                                                } else {
-                                                    match player_state_clone {
-                                                        PlayerState::Playing => "playing",
-                                                        PlayerState::Paused => "paused",
-                                                        PlayerState::Stopped => "stopped",
-                                                        PlayerState::Loading => "buffering",
-                                                        _ => "playing",
-                                                    }
-                                                };
-
-                                                if let Err(e) =
-                                                    PlayQueueService::update_progress_with_queue(
-                                                        backend.as_any(),
-                                                        &context_clone,
-                                                        &media_id_clone,
-                                                        position,
-                                                        duration,
-                                                        plex_state,
-                                                    )
-                                                    .await
-                                                {
-                                                    debug!(
-                                                        "Failed to sync PlayQueue progress: {}",
-                                                        e
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                });
-                            }
+                            let watched = pos.as_secs_f64() / dur.as_secs_f64() > 0.9;
 
                             relm4::spawn(async move {
                                 use crate::services::commands::{
@@ -2609,19 +2407,8 @@ impl AsyncComponent for PlayerPage {
             let _ = timer.remove();
         }
 
-        // Clean up retry timer
-        if let Some(timer) = self.retry_timer.take() {
-            let _ = timer.remove();
-        }
-
-        // Clean up auto-play timeout
-        if let Some(timer) = self.auto_play_timeout.take() {
-            // Timeout may have already fired and been auto-removed by GLib
-            // Use catch_unwind to handle the panic gracefully
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| timer.remove())).is_err() {
-                debug!("Auto-play timeout already removed (likely fired)");
-            }
-        }
+        // Retry timer cleanup is handled by ErrorRetryManager's Drop implementation
+        // Auto-play timeout cleanup is handled by AutoPlayManager's Drop implementation
 
         // Release sleep inhibition
         self.sleep_inhibitor.release(&self.window);
