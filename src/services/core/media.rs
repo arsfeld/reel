@@ -804,6 +804,66 @@ impl MediaService {
         Ok(())
     }
 
+    /// Helper function to retry backend sync with exponential backoff
+    async fn retry_backend_sync<F, Fut>(
+        operation_name: &str,
+        media_id: &MediaItemId,
+        max_retries: u32,
+        operation: F,
+    ) -> Result<()>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<()>>,
+    {
+        let mut attempt = 0;
+        let mut last_error = None;
+
+        while attempt <= max_retries {
+            match operation().await {
+                Ok(()) => {
+                    debug!(
+                        "Successfully synced {} to backend for {} (attempt {}/{})",
+                        operation_name,
+                        media_id.as_ref(),
+                        attempt + 1,
+                        max_retries + 1
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    last_error = Some(e);
+
+                    if attempt < max_retries {
+                        // Exponential backoff: 1s, 2s, 4s
+                        let delay_ms = 1000 * (1 << attempt);
+                        debug!(
+                            "Failed to sync {} for {}, retrying in {}ms (attempt {}/{}): {}",
+                            operation_name,
+                            media_id.as_ref(),
+                            delay_ms,
+                            attempt + 1,
+                            max_retries + 1,
+                            last_error.as_ref().unwrap()
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    }
+
+                    attempt += 1;
+                }
+            }
+        }
+
+        let err = last_error.unwrap();
+        warn!(
+            "Failed to sync {} to backend for {} after {} attempts: {}",
+            operation_name,
+            media_id.as_ref(),
+            max_retries + 1,
+            err
+        );
+        Err(err)
+    }
+
     /// Update playback progress for a media item
     pub async fn update_playback_progress(
         db: &DatabaseConnection,
@@ -833,55 +893,43 @@ impl MediaService {
             let duration_ms_clone = duration_ms;
             let watched_clone = watched;
 
-            // Spawn a detached task to sync with backend
+            // Spawn a detached task to sync with backend (with retry logic)
             tokio::spawn(async move {
                 use crate::services::core::backend::BackendService;
                 use std::time::Duration;
 
-                // If watched, mark as watched on backend; otherwise update progress
-                let result = if watched_clone {
-                    debug!(
-                        "Syncing watched status to backend for {}",
-                        media_id_clone.as_ref()
-                    );
-                    BackendService::mark_watched(&db_clone, &source_id, &media_id_clone).await
+                let operation_name = if watched_clone {
+                    "watched status"
                 } else {
-                    let position = Duration::from_millis(position_ms_clone as u64);
-                    let duration = Duration::from_millis(duration_ms_clone as u64);
-                    BackendService::update_playback_progress(
-                        &db_clone,
-                        &source_id,
-                        &media_id_clone,
-                        position,
-                        duration,
-                    )
-                    .await
+                    "playback progress"
                 };
 
-                if let Err(e) = result {
-                    warn!(
-                        "Failed to sync {} to backend for {}: {}",
+                // Retry up to 2 times (3 attempts total) with exponential backoff
+                let _result = Self::retry_backend_sync(
+                    operation_name,
+                    &media_id_clone,
+                    2, // max_retries
+                    || async {
                         if watched_clone {
-                            "watched status"
+                            BackendService::mark_watched(&db_clone, &source_id, &media_id_clone)
+                                .await
                         } else {
-                            "playback progress"
-                        },
-                        media_id_clone.as_ref(),
-                        e
-                    );
+                            let position = Duration::from_millis(position_ms_clone as u64);
+                            let duration = Duration::from_millis(duration_ms_clone as u64);
+                            BackendService::update_playback_progress(
+                                &db_clone,
+                                &source_id,
+                                &media_id_clone,
+                                position,
+                                duration,
+                            )
+                            .await
+                        }
+                    },
+                )
+                .await;
 
-                    // TODO: Implement retry mechanism for failed syncs
-                } else {
-                    debug!(
-                        "Successfully synced {} to backend for {}",
-                        if watched_clone {
-                            "watched status"
-                        } else {
-                            "playback progress"
-                        },
-                        media_id_clone.as_ref()
-                    );
-                }
+                // Result is already logged by retry_backend_sync
             });
         }
 
@@ -908,7 +956,7 @@ impl MediaService {
                 source_id
             );
 
-            // Sync to backend in fire-and-forget manner
+            // Sync to backend with retry logic
             tokio::spawn(async move {
                 use crate::services::core::backend::BackendService;
 
@@ -917,20 +965,18 @@ impl MediaService {
                     media_id_clone.as_ref()
                 );
 
-                if let Err(e) =
-                    BackendService::mark_watched(&db_clone, &source_id, &media_id_clone).await
-                {
-                    warn!(
-                        "Failed to sync watch status to backend for {}: {}",
-                        media_id_clone.as_ref(),
-                        e
-                    );
-                } else {
-                    debug!(
-                        "Successfully synced watch status to backend for {}",
-                        media_id_clone.as_ref()
-                    );
-                }
+                // Retry up to 2 times (3 attempts total) with exponential backoff
+                let _result = Self::retry_backend_sync(
+                    "watched status",
+                    &media_id_clone,
+                    2, // max_retries
+                    || async {
+                        BackendService::mark_watched(&db_clone, &source_id, &media_id_clone).await
+                    },
+                )
+                .await;
+
+                // Result is already logged by retry_backend_sync
             });
         } else {
             warn!(
@@ -962,7 +1008,7 @@ impl MediaService {
                 source_id
             );
 
-            // Sync to backend in fire-and-forget manner
+            // Sync to backend with retry logic
             tokio::spawn(async move {
                 use crate::services::core::backend::BackendService;
 
@@ -971,20 +1017,18 @@ impl MediaService {
                     media_id_clone.as_ref()
                 );
 
-                if let Err(e) =
-                    BackendService::mark_unwatched(&db_clone, &source_id, &media_id_clone).await
-                {
-                    warn!(
-                        "Failed to sync watch status to backend for {}: {}",
-                        media_id_clone.as_ref(),
-                        e
-                    );
-                } else {
-                    debug!(
-                        "Successfully synced watch status to backend for {}",
-                        media_id_clone.as_ref()
-                    );
-                }
+                // Retry up to 2 times (3 attempts total) with exponential backoff
+                let _result = Self::retry_backend_sync(
+                    "unwatched status",
+                    &media_id_clone,
+                    2, // max_retries
+                    || async {
+                        BackendService::mark_unwatched(&db_clone, &source_id, &media_id_clone).await
+                    },
+                )
+                .await;
+
+                // Result is already logged by retry_backend_sync
             });
         } else {
             warn!(
