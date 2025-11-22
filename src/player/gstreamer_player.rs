@@ -234,26 +234,27 @@ impl GStreamerPlayer {
         // Clear stream collections from previous media
         self.stream_manager.clear();
 
-        // Try playbin first on macOS due to playbin3 preroll issues
-        #[cfg(target_os = "macos")]
-        let playbin_element_name = "playbin";
-
-        #[cfg(not(target_os = "macos"))]
-        let playbin_element_name = "playbin3";
-
-        trace!("Creating {} element", playbin_element_name);
-        let playbin = gst::ElementFactory::make(playbin_element_name)
+        // Use playbin3 for modern stream handling and better performance
+        //
+        // playbin3 is the recommended playback element as of GStreamer 1.22+:
+        // - No longer experimental (stable API since GStreamer 1.22)
+        // - Default in GStreamer 1.24+
+        // - Better stream selection via GstStreamCollection API
+        // - Improved handling of high-bitrate content
+        // - Used by WebKit and other major projects
+        //
+        // Note: playbin3 requires proper state transition handling (Null → Ready → Paused → Playing)
+        // which is implemented in the play() method to avoid preroll hangs.
+        trace!("Creating playbin3 element");
+        let playbin = gst::ElementFactory::make("playbin3")
             .name("player")
             .property("uri", url)
             .build()
-            .with_context(|| {
-                format!(
-                    "Failed to create {} element - GStreamer plugins may not be properly installed",
-                    playbin_element_name
-                )
-            })?;
+            .context(
+                "Failed to create playbin3 element - GStreamer plugins may not be properly installed",
+            )?;
 
-        trace!("Successfully created {}", playbin_element_name);
+        trace!("Successfully created playbin3");
 
         // Log which playbin we're using
         if let Some(factory) = playbin.factory() {
@@ -270,11 +271,11 @@ impl GStreamerPlayer {
             "soft-colorbalance+deinterlace+soft-volume+audio+video+text",
         );
 
-        info!("Configuring playbin settings...");
+        info!("Configuring playbin3 settings...");
 
         // Check available properties and signals for debugging
         let properties = playbin.list_properties();
-        debug!("Available playbin properties related to streams:");
+        debug!("Available playbin3 properties related to streams:");
         for prop in properties {
             let name = prop.name();
             if name.contains("stream")
@@ -522,7 +523,13 @@ impl GStreamerPlayer {
         if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
             // Ensure we transition through states properly
             // GStreamer requires proper state transitions: Null -> Ready -> Paused -> Playing
-            // Async state changes mean the pipeline might not be in Paused yet when play() is called
+            //
+            // This is critical for playbin3 which may return Async for state changes,
+            // meaning the pipeline might still be in Ready state when play() is called
+            // (before the async Paused transition from load_media() completes).
+            //
+            // Attempting to go directly from Ready -> Playing can cause the pipeline to hang,
+            // so we must ensure we reach Paused state first.
             let (_, current, _) = playbin.state(gst::ClockTime::ZERO);
             info!(
                 "GStreamerPlayer::play() - Current state before play: {:?}",
