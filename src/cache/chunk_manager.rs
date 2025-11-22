@@ -136,60 +136,53 @@ impl ChunkManagerCallback {
         // Wait for download to complete
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // Remove from active downloads
-        {
+        // Remove from active downloads and get the handle
+        let handle = {
             let mut active = self.active_downloads.lock().await;
-            if let Some(handle) = active.remove(&(entry_id, chunk_index)) {
-                match handle.await {
-                    Ok(Ok(())) => {
-                        info!(
-                            "Chunk {} for entry {} downloaded successfully",
-                            chunk_index, entry_id
-                        );
-                        // Notify waiters
-                        self.notify_chunk_available(entry_id, chunk_index).await;
-                    }
-                    Ok(Err(e)) => {
-                        warn!(
-                            "Failed to download chunk {} for entry {}: {}",
-                            chunk_index, entry_id, e
-                        );
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Download task for chunk {} (entry {}) was cancelled or panicked: {}",
-                            chunk_index, entry_id, e
-                        );
-                    }
+            active.remove(&(entry_id, chunk_index))
+        };
+
+        // Process the result (lock is now released)
+        if let Some(handle) = handle {
+            match handle.await {
+                Ok(Ok(())) => {
+                    info!(
+                        "Chunk {} for entry {} downloaded successfully",
+                        chunk_index, entry_id
+                    );
+                    // Notify waiters
+                    self.notify_chunk_available(entry_id, chunk_index).await;
+                }
+                Ok(Err(e)) => {
+                    warn!(
+                        "Failed to download chunk {} for entry {}: {}",
+                        chunk_index, entry_id, e
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "Download task for chunk {} (entry {}) was cancelled or panicked: {}",
+                        chunk_index, entry_id, e
+                    );
                 }
             }
         }
 
-        // Dispatch next download from queue
-        // If a download was dispatched, recursively call this handler to process it when it completes
-        match self.dispatch_next_download().await {
-            Ok(Some((dispatched_entry_id, dispatched_chunk_index))) => {
-                // Spawn a completion handler for the newly dispatched download
-                let callback = Arc::new(ChunkManagerCallback {
-                    active_downloads: self.active_downloads.clone(),
-                    chunk_waiters: self.chunk_waiters.clone(),
-                    priority_queue: self.priority_queue.clone(),
-                    downloader: self.downloader.clone(),
-                    max_concurrent_downloads: self.max_concurrent_downloads,
-                });
-
-                // Spawn locally without requiring Send
-                let _ = tokio::task::spawn_local(async move {
-                    callback
-                        .handle_chunk_completion(dispatched_entry_id, dispatched_chunk_index)
-                        .await;
-                });
-            }
-            Ok(None) => {
-                // No more chunks to download
-            }
-            Err(e) => {
-                warn!("Failed to dispatch next download: {}", e);
+        // Try to dispatch pending downloads from the queue until we hit the concurrency limit
+        loop {
+            match self.dispatch_next_download().await {
+                Ok(Some(_)) => {
+                    // Successfully dispatched a download, continue trying to dispatch more
+                    continue;
+                }
+                Ok(None) => {
+                    // Hit concurrency limit or queue is empty, stop dispatching
+                    break;
+                }
+                Err(e) => {
+                    warn!("Failed to dispatch next download: {}", e);
+                    break;
+                }
             }
         }
     }
