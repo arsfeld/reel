@@ -10,6 +10,9 @@ use crate::config::Config;
 
 use crate::player::{UpscalingMode, ZoomMode};
 
+#[cfg(feature = "gstreamer")]
+use crate::player::BufferingState;
+
 /// Commands that can be sent to the player controller
 #[derive(Debug)]
 pub enum PlayerCommand {
@@ -116,6 +119,11 @@ pub enum PlayerCommand {
     SetZoomMode {
         mode: ZoomMode,
         respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Get buffering state (GStreamer only)
+    #[cfg(feature = "gstreamer")]
+    GetBufferingState {
+        respond_to: oneshot::Sender<Option<BufferingState>>,
     },
 }
 
@@ -334,6 +342,18 @@ impl PlayerController {
                     trace!("Setting zoom mode to {:?}", mode);
                     let result = self.player.set_zoom_mode(mode).await;
                     let _ = respond_to.send(result);
+                }
+                #[cfg(feature = "gstreamer")]
+                PlayerCommand::GetBufferingState { respond_to } => {
+                    let state = match &self.player {
+                        #[cfg(feature = "gstreamer")]
+                        Player::GStreamer(gst) => Some(gst.get_buffering_state().await),
+                        #[cfg(all(feature = "mpv", not(target_os = "macos")))]
+                        Player::Mpv(_) => None,
+                        #[cfg(not(any(feature = "mpv", feature = "gstreamer")))]
+                        _ => None,
+                    };
+                    let _ = respond_to.send(state);
                 }
             }
         }
@@ -653,5 +673,17 @@ impl PlayerHandle {
         response
             .await
             .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Get buffering state (GStreamer only, returns None for MPV)
+    #[cfg(feature = "gstreamer")]
+    pub async fn get_buffering_state(&self) -> Result<Option<BufferingState>> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::GetBufferingState { respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))
     }
 }

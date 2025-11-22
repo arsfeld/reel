@@ -15,6 +15,6 @@ pub use factory::PlayerState;
 pub use types::{UpscalingMode, ZoomMode};
 
 #[cfg(feature = "gstreamer")]
-pub use gstreamer_player::GStreamerPlayer;
+pub use gstreamer_player::{BufferingState, GStreamerPlayer};
 #[cfg(all(feature = "mpv", not(target_os = "macos")))]
 pub use mpv_player::MpvPlayer;

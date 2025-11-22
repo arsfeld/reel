@@ -20,3 +20,4 @@ pub use config::FileCacheConfig;
 pub use file_cache::{FileCache, FileCacheHandle};
 pub use state_computer::StateComputer;
 pub use state_types::{DownloadState, DownloadStateInfo};
+pub use stats::CurrentCacheStats;
