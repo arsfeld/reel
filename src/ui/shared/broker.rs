@@ -44,6 +44,7 @@ pub enum BrokerMessage {
     Source(SourceMessage),
     Config(ConfigMessage),
     Cache(CacheMessage),
+    PlaybackSync(PlaybackSyncMessage),
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +130,30 @@ pub enum CacheMessage {
     CleanupFailed {
         error: String,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum PlaybackSyncMessage {
+    /// Sync started for playback changes
+    SyncStarted { pending_count: usize },
+    /// Progress update during sync
+    SyncProgress {
+        synced: usize,
+        failed: usize,
+        remaining: usize,
+    },
+    /// Sync batch completed
+    SyncCompleted { synced: usize, failed: usize },
+    /// A single item failed to sync
+    ItemSyncFailed {
+        media_item_id: String,
+        error: String,
+        attempt_count: i32,
+    },
+    /// Sync was paused
+    SyncPaused,
+    /// Sync was resumed
+    SyncResumed,
 }
 
 pub struct MessageBroker {

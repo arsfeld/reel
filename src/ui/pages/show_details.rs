@@ -40,6 +40,10 @@ pub struct ShowDetailsPage {
     episode_popovers: HashMap<usize, gtk::PopoverMenu>,
     person_textures: HashMap<String, gtk::gdk::Texture>,
     full_metadata_loaded: bool,
+    // Sync status tracking
+    sync_status: crate::ui::shared::sync_status::SyncStatus,
+    failed_syncs: Vec<(String, String)>, // (media_item_id, error)
+    sync_indicator: gtk::Box,
 }
 
 impl std::fmt::Debug for ShowDetailsPage {
@@ -370,6 +374,9 @@ impl AsyncComponent for ShowDetailsPage {
 
                                         connect_clicked => ShowDetailsInput::ToggleSeasonWatched,
                                     },
+
+                                    // Sync status indicator
+                                    append: &model.sync_indicator,
                                 },
 
                                 // Season selector
@@ -498,6 +505,10 @@ impl AsyncComponent for ShowDetailsPage {
             .css_classes(["stagger-animation"])
             .build();
 
+        // Create sync status indicator
+        let sync_indicator = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        sync_indicator.set_visible(false);
+
         let model = Self {
             show: None,
             episodes: Vec::new(),
@@ -516,6 +527,9 @@ impl AsyncComponent for ShowDetailsPage {
             episode_popovers: HashMap::new(),
             person_textures: HashMap::new(),
             full_metadata_loaded: false,
+            sync_status: crate::ui::shared::sync_status::SyncStatus::Idle,
+            failed_syncs: Vec::new(),
+            sync_indicator,
         };
 
         let widgets = view_output!();
@@ -772,6 +786,51 @@ impl AsyncComponent for ShowDetailsPage {
                     }
                     _ => {}
                 },
+                BrokerMessage::PlaybackSync(sync_msg) => {
+                    use crate::ui::shared::broker::PlaybackSyncMessage;
+                    use crate::ui::shared::sync_status::{
+                        SyncStatus, create_sync_status_indicator,
+                    };
+
+                    match sync_msg {
+                        PlaybackSyncMessage::SyncStarted { pending_count } => {
+                            self.sync_status = SyncStatus::Syncing {
+                                count: pending_count,
+                            };
+                            self.update_sync_indicator();
+                        }
+                        PlaybackSyncMessage::SyncProgress {
+                            synced,
+                            failed,
+                            remaining,
+                        } => {
+                            self.sync_status = SyncStatus::Syncing { count: remaining };
+                            self.update_sync_indicator();
+                        }
+                        PlaybackSyncMessage::SyncCompleted { synced, failed } => {
+                            if failed > 0 {
+                                // Keep showing failures
+                            } else {
+                                self.sync_status = SyncStatus::Synced { count: synced };
+                                self.update_sync_indicator();
+                            }
+                        }
+                        PlaybackSyncMessage::ItemSyncFailed {
+                            media_item_id,
+                            error,
+                            ..
+                        } => {
+                            // Track failed items
+                            self.failed_syncs
+                                .push((media_item_id.clone(), error.clone()));
+                            self.sync_status = SyncStatus::Failed {
+                                error: error.clone(),
+                            };
+                            self.update_sync_indicator();
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             },
         }
@@ -1234,6 +1293,30 @@ impl ShowDetailsPage {
             self.episode_grid.is_visible(),
             self.episode_grid.is_realized()
         );
+    }
+
+    fn update_sync_indicator(&mut self) {
+        use crate::ui::shared::sync_status::create_sync_status_indicator;
+
+        // Clear existing children
+        while let Some(child) = self.sync_indicator.first_child() {
+            self.sync_indicator.remove(&child);
+        }
+
+        // Create new indicator with current status
+        let new_indicator = create_sync_status_indicator(&self.sync_status, true);
+
+        // Copy children from the new indicator to our stored widget
+        while let Some(child) = new_indicator.first_child() {
+            new_indicator.remove(&child);
+            self.sync_indicator.append(&child);
+        }
+
+        // Update visibility based on status
+        self.sync_indicator.set_visible(!matches!(
+            self.sync_status,
+            crate::ui::shared::sync_status::SyncStatus::Idle
+        ));
     }
 }
 

@@ -204,68 +204,126 @@ pub fn initialize_workers(
     tracing::info!("Initializing PlaybackSyncWorker for reliable playback sync...");
     let playback_sync_worker = PlaybackSyncWorker::builder()
         .detach_worker(Arc::new(db.clone()))
-        .forward(sender.input_sender(), |output| match output {
-            PlaybackSyncWorkerOutput::SyncStarted { pending_count } => {
-                tracing::info!("Playback sync started: {} pending items", pending_count);
-                MainWindowInput::ShowToast(format!("Syncing {} playback changes...", pending_count))
-            }
-            PlaybackSyncWorkerOutput::SyncProgress {
-                synced,
-                failed,
-                remaining,
-            } => {
-                tracing::debug!(
-                    "Playback sync progress: {} synced, {} failed, {} remaining",
-                    synced,
-                    failed,
-                    remaining
-                );
-                MainWindowInput::ShowToast(format!(
-                    "Syncing playback: {}/{}",
-                    synced,
-                    synced + failed + remaining
-                ))
-            }
-            PlaybackSyncWorkerOutput::SyncCompleted {
-                synced,
-                failed,
-                duration,
-            } => {
-                tracing::info!(
-                    "Playback sync completed: {} synced, {} failed in {:?}",
-                    synced,
-                    failed,
-                    duration
-                );
-                if failed > 0 {
+        .forward(sender.input_sender(), |output| {
+            // Broadcast to MessageBroker for UI components
+            let output_clone = output.clone();
+            relm4::spawn(async move {
+                use crate::ui::shared::broker::{BROKER, BrokerMessage, PlaybackSyncMessage};
+
+                let message = match output_clone {
+                    PlaybackSyncWorkerOutput::SyncStarted { pending_count } => {
+                        BrokerMessage::PlaybackSync(PlaybackSyncMessage::SyncStarted {
+                            pending_count,
+                        })
+                    }
+                    PlaybackSyncWorkerOutput::SyncProgress {
+                        synced,
+                        failed,
+                        remaining,
+                    } => BrokerMessage::PlaybackSync(PlaybackSyncMessage::SyncProgress {
+                        synced,
+                        failed,
+                        remaining,
+                    }),
+                    PlaybackSyncWorkerOutput::SyncCompleted { synced, failed, .. } => {
+                        BrokerMessage::PlaybackSync(PlaybackSyncMessage::SyncCompleted {
+                            synced,
+                            failed,
+                        })
+                    }
+                    PlaybackSyncWorkerOutput::ItemSyncFailed {
+                        media_item_id,
+                        error,
+                        attempt_count,
+                    } => BrokerMessage::PlaybackSync(PlaybackSyncMessage::ItemSyncFailed {
+                        media_item_id,
+                        error,
+                        attempt_count,
+                    }),
+                    PlaybackSyncWorkerOutput::SyncPaused => {
+                        BrokerMessage::PlaybackSync(PlaybackSyncMessage::SyncPaused)
+                    }
+                    PlaybackSyncWorkerOutput::SyncResumed => {
+                        BrokerMessage::PlaybackSync(PlaybackSyncMessage::SyncResumed)
+                    }
+                };
+
+                BROKER.broadcast(message).await;
+            });
+
+            // Also show toasts for user feedback
+            match output {
+                PlaybackSyncWorkerOutput::SyncStarted { pending_count } => {
+                    tracing::info!("Playback sync started: {} pending items", pending_count);
                     MainWindowInput::ShowToast(format!(
-                        "Playback sync: {} succeeded, {} failed",
-                        synced, failed
+                        "Syncing {} playback changes...",
+                        pending_count
                     ))
-                } else {
-                    MainWindowInput::ShowToast(format!("Playback sync: {} changes synced", synced))
                 }
-            }
-            PlaybackSyncWorkerOutput::ItemSyncFailed {
-                media_item_id,
-                error,
-                attempt_count,
-            } => {
-                tracing::warn!(
-                    "Playback sync failed for {}: {} (attempt {})",
+                PlaybackSyncWorkerOutput::SyncProgress {
+                    synced,
+                    failed,
+                    remaining,
+                } => {
+                    tracing::debug!(
+                        "Playback sync progress: {} synced, {} failed, {} remaining",
+                        synced,
+                        failed,
+                        remaining
+                    );
+                    MainWindowInput::ShowToast(format!(
+                        "Syncing playback: {}/{}",
+                        synced,
+                        synced + failed + remaining
+                    ))
+                }
+                PlaybackSyncWorkerOutput::SyncCompleted {
+                    synced,
+                    failed,
+                    duration,
+                } => {
+                    tracing::info!(
+                        "Playback sync completed: {} synced, {} failed in {:?}",
+                        synced,
+                        failed,
+                        duration
+                    );
+                    if failed > 0 {
+                        MainWindowInput::ShowToast(format!(
+                            "Playback sync: {} succeeded, {} failed",
+                            synced, failed
+                        ))
+                    } else {
+                        MainWindowInput::ShowToast(format!(
+                            "Playback sync: {} changes synced",
+                            synced
+                        ))
+                    }
+                }
+                PlaybackSyncWorkerOutput::ItemSyncFailed {
                     media_item_id,
                     error,
-                    attempt_count
-                );
-                MainWindowInput::ShowToast(format!("Sync failed for {}: {}", media_item_id, error))
-            }
-            PlaybackSyncWorkerOutput::SyncPaused => {
-                tracing::info!("Playback sync paused");
-                MainWindowInput::ShowToast("Playback sync paused".to_string())
-            }
-            PlaybackSyncWorkerOutput::SyncResumed => {
-                tracing::info!("Playback sync resumed");
-                MainWindowInput::ShowToast("Playback sync resumed".to_string())
+                    attempt_count,
+                } => {
+                    tracing::warn!(
+                        "Playback sync failed for {}: {} (attempt {})",
+                        media_item_id,
+                        error,
+                        attempt_count
+                    );
+                    MainWindowInput::ShowToast(format!(
+                        "Sync failed for {}: {}",
+                        media_item_id, error
+                    ))
+                }
+                PlaybackSyncWorkerOutput::SyncPaused => {
+                    tracing::info!("Playback sync paused");
+                    MainWindowInput::ShowToast("Playback sync paused".to_string())
+                }
+                PlaybackSyncWorkerOutput::SyncResumed => {
+                    tracing::info!("Playback sync resumed");
+                    MainWindowInput::ShowToast("Playback sync resumed".to_string())
+                }
             }
         });
     tracing::info!("PlaybackSyncWorker initialized successfully");
