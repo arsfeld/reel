@@ -13,6 +13,7 @@ mod m20251003_000001_add_people_tables;
 mod m20251003_000002_add_marker_fields;
 mod m20251004_000001_add_filter_indexes;
 mod m20251120_000001_add_auth_status;
+mod m20251122_000001_add_playback_sync_queue;
 
 pub struct Migrator;
 
@@ -33,6 +34,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20251003_000002_add_marker_fields::Migration),
             Box::new(m20251004_000001_add_filter_indexes::Migration),
             Box::new(m20251120_000001_add_auth_status::Migration),
+            Box::new(m20251122_000001_add_playback_sync_queue::Migration),
         ]
     }
 }

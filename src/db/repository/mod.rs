@@ -5,6 +5,7 @@ pub mod library_repository;
 pub mod media_repository;
 pub mod people_repository;
 pub mod playback_repository;
+pub mod playback_sync_repository;
 pub mod source_repository;
 pub mod sync_repository;
 
@@ -60,4 +61,5 @@ pub use media_repository::{
 };
 pub use people_repository::{PeopleRepository, PeopleRepositoryImpl};
 pub use playback_repository::{PlaybackRepository, PlaybackRepositoryImpl};
+pub use playback_sync_repository::{PlaybackSyncRepository, PlaybackSyncRepositoryImpl};
 pub use source_repository::SourceRepositoryImpl;

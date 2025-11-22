@@ -13,6 +13,7 @@ pub mod media_people;
 pub mod offline_content;
 pub mod people;
 pub mod playback_progress;
+pub mod playback_sync_queue;
 pub mod sources;
 pub mod sync_status;
 
@@ -60,6 +61,10 @@ pub use people::{ActiveModel as PersonActiveModel, Entity as Person, Model as Pe
 pub use playback_progress::{
     ActiveModel as PlaybackProgressActiveModel, Entity as PlaybackProgress,
     Model as PlaybackProgressModel,
+};
+pub use playback_sync_queue::{
+    ActiveModel as PlaybackSyncQueueActiveModel, Entity as PlaybackSyncQueue,
+    Model as PlaybackSyncQueueModel, PlaybackSyncStatus, SyncChangeType,
 };
 pub use sources::{ActiveModel as SourceActiveModel, Entity as Source, Model as SourceModel};
 pub use sync_status::{
