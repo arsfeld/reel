@@ -1,10 +1,10 @@
 ---
 id: task-465.03
 title: Implement buffering overlay UI component
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-11-22 18:32'
-updated_date: '2025-11-22 18:36'
+updated_date: '2025-11-22 19:17'
 labels: []
 dependencies:
   - task-465.01
@@ -39,3 +39,42 @@ Create as a new file in ui/pages/player/buffering_overlay.rs or ui/shared/buffer
 - [ ] #11 Component is responsive to window resizing
 - [ ] #12 Component can be instantiated with minimal setup code
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Implementation Complete
+
+Created BufferingOverlay component as a self-contained Relm4 SimpleComponent in `src/ui/pages/player/buffering_overlay.rs`.
+
+### Features Implemented:
+- ✅ Separate module file with SimpleComponent trait implementation
+- ✅ Component manages its own visibility state
+- ✅ Accepts BufferingState and CurrentCacheStats via Input messages
+- ✅ Displays GTK Spinner (48x48) for buffering indication
+- ✅ Shows buffering percentage text (0-100%)
+- ✅ Shows download speed in human-readable format (KB/s or MB/s)
+- ✅ Shows downloaded bytes / total size
+- ✅ Shows active downloads count
+- ✅ Uses OSD styling matching player control bar aesthetic
+- ✅ Auto-shows when buffering starts or downloads are active
+- ✅ Responsive layout with proper spacing and alignment
+
+### Files Modified:
+1. Created `src/ui/pages/player/buffering_overlay.rs` (241 lines)
+2. Modified `src/ui/pages/player/mod.rs` - added module declaration
+3. Modified `src/styles/player.css` - added buffering overlay styles
+
+### Testing:
+- ✅ Code compiles successfully with cargo check
+- ✅ All format helper functions tested
+- ✅ Component ready for integration in task 465.05
+
+### CSS Classes:
+- `.buffering-overlay` - Main container with dark semi-transparent background
+- `.buffering-spinner` - Spinner styling
+- `.buffering-percentage` - Large percentage text
+- `.download-speed`, `.download-progress`, `.active-downloads` - Stats labels
+
+Component is ready to be integrated into PlayerPage in task 465.05.
+<!-- SECTION:NOTES:END -->

@@ -575,6 +575,60 @@ volumebutton scale {
     min-height: 48px;
 }
 
+/* Buffering overlay */
+.buffering-overlay {
+    background: rgba(0, 0, 0, 0.9);
+    border-radius: 12px;
+    padding: 32px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    min-width: 280px;
+}
+
+.buffering-spinner {
+    color: rgba(255, 255, 255, 0.9);
+    opacity: 0.9;
+}
+
+.buffering-percentage {
+    color: rgba(255, 255, 255, 0.95);
+    font-weight: 600;
+    font-size: 20px;
+}
+
+.download-speed,
+.download-progress,
+.active-downloads {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Performance warnings in buffering overlay */
+.performance-warnings {
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    margin-top: 8px;
+}
+
+.warning-icon {
+    color: rgba(255, 200, 50, 0.9);
+}
+
+.warning-icon-critical {
+    color: rgba(255, 100, 100, 0.9);
+}
+
+.warning-message {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.85);
+    font-weight: 500;
+}
+
+.warning-recommendation {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
 /* Error overlay */
 .error-overlay {
     background: rgba(0, 0, 0, 0.9);
