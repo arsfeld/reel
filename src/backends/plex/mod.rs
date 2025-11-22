@@ -17,8 +17,8 @@ use tracing::{debug, warn};
 
 use super::traits::MediaBackend;
 use crate::models::{
-    AuthProvider, Credentials, Episode, Library, LibraryId, MediaItemId, Movie, Season, Show,
-    ShowId, Source, SourceId, SourceType, StreamInfo, User,
+    AuthProvider, AuthenticationResult, Credentials, Episode, Library, LibraryId, MediaItemId,
+    Movie, Season, Show, ShowId, Source, SourceId, SourceType, StreamInfo, User,
 };
 
 #[allow(dead_code)] // Used via dynamic dispatch in BackendService
@@ -818,7 +818,7 @@ impl MediaBackend for PlexBackend {
         self
     }
 
-    async fn initialize(&self) -> Result<Option<User>> {
+    async fn initialize(&self) -> Result<AuthenticationResult> {
         // If we have an AuthProvider, use its token
         let token = if let Some(auth_provider) = &self.auth_provider {
             match auth_provider {
@@ -828,12 +828,12 @@ impl MediaBackend for PlexBackend {
                     } else {
                         // Token should be provided in AuthProvider
                         tracing::warn!("No token found in AuthProvider");
-                        return Ok(None);
+                        return Ok(AuthenticationResult::AuthRequired);
                     }
                 }
                 _ => {
                     tracing::error!("Invalid AuthProvider type for Plex backend");
-                    return Ok(None);
+                    return Ok(AuthenticationResult::AuthRequired);
                 }
             }
         } else {
@@ -910,13 +910,13 @@ impl MediaBackend for PlexBackend {
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to decode token from file: {}", e);
-                                    return Ok(None);
+                                    return Ok(AuthenticationResult::AuthRequired);
                                 }
                             }
                         }
                         Err(e) => {
                             tracing::debug!("Failed to read token file: {}", e);
-                            return Ok(None);
+                            return Ok(AuthenticationResult::AuthRequired);
                         }
                     }
                 } else {
@@ -924,13 +924,13 @@ impl MediaBackend for PlexBackend {
                         "No saved token found for backend {} in keyring or file",
                         self.backend_id
                     );
-                    return Ok(None);
+                    return Ok(AuthenticationResult::AuthRequired);
                 }
             }
         };
 
         if token.is_empty() {
-            return Ok(None);
+            return Ok(AuthenticationResult::AuthRequired);
         }
 
         // Refresh the token to prevent expiration and ensure local connections work
@@ -978,32 +978,21 @@ impl MediaBackend for PlexBackend {
                         std::fs::remove_file(token_file).ok();
                     }
 
-                    return Ok(None);
+                    return Ok(AuthenticationResult::AuthRequired);
                 } else if error_str.contains("Network error") {
                     tracing::warn!("Network error while validating token, will use cached data");
                     // Store the token even though we can't validate it
                     *self.auth_token.write().await = Some(token.to_string());
 
-                    // Return a minimal user object to indicate partial success
-                    // The username will be loaded from cache later
-                    return Ok(Some(User {
-                        id: "offline".to_string(),
-                        username: "Offline Mode".to_string(),
-                        email: None,
-                        avatar_url: None,
-                    }));
+                    // Return network error to indicate the issue
+                    return Ok(AuthenticationResult::NetworkError(error_str));
                 } else {
                     tracing::warn!("Server error while validating token, will use cached data");
                     // Store the token for retry
                     *self.auth_token.write().await = Some(token.to_string());
 
-                    // Return a minimal user object
-                    return Ok(Some(User {
-                        id: "offline".to_string(),
-                        username: "Offline Mode".to_string(),
-                        email: None,
-                        avatar_url: None,
-                    }));
+                    // Return network error for server issues
+                    return Ok(AuthenticationResult::NetworkError(error_str));
                 }
             }
         };
@@ -1223,44 +1212,44 @@ impl MediaBackend for PlexBackend {
                             }
                             Err(e) => {
                                 tracing::warn!("Failed to connect to any server endpoint: {}", e);
-                                // Return error if we can't connect to the server
-                                return Err(anyhow::anyhow!(
+                                // Return network error if we can't connect to the server
+                                return Ok(AuthenticationResult::NetworkError(format!(
                                     "Failed to connect to Plex server '{}': {}. The server may be offline or unreachable.",
-                                    server.name,
-                                    e
-                                ));
+                                    server.name, e
+                                )));
                             }
                         }
                     } else {
                         tracing::warn!("No matching Plex server found for this source");
-                        // Return error if we couldn't find or connect to any server
-                        return Err(anyhow::anyhow!(
-                            "No matching Plex server found. The server may be offline or the source configuration may be incorrect."
+                        // Return network error if we couldn't find or connect to any server
+                        return Ok(AuthenticationResult::NetworkError(
+                            "No matching Plex server found. The server may be offline or the source configuration may be incorrect.".to_string()
                         ));
                     }
                 }
                 Err(e) => {
                     tracing::warn!("Failed to discover servers: {}", e);
-                    // Return error if we can't discover servers
-                    return Err(anyhow::anyhow!(
+                    // Return network error if we can't discover servers
+                    return Ok(AuthenticationResult::NetworkError(format!(
                         "Failed to discover Plex servers: {}. Please check your network connection.",
                         e
-                    ));
+                    )));
                 }
             }
         }
 
         // Only return success if we have successfully initialized the API
         if self.is_initialized().await {
-            Ok(Some(User {
+            Ok(AuthenticationResult::Authenticated(User {
                 id: plex_user.id.to_string(),
                 username: plex_user.username,
                 email: Some(plex_user.email),
                 avatar_url: plex_user.thumb,
             }))
         } else {
-            Err(anyhow::anyhow!(
+            Ok(AuthenticationResult::NetworkError(
                 "Failed to initialize Plex backend. API client not properly configured."
+                    .to_string(),
             ))
         }
     }

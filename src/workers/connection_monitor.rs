@@ -5,7 +5,7 @@ use tokio::runtime::Handle;
 use tracing::{debug, info, warn};
 
 use crate::db::DatabaseConnection;
-use crate::models::SourceId;
+use crate::models::{AuthStatus, SourceId};
 use crate::services::core::connection::ConnectionService;
 use crate::services::core::connection_cache::ConnectionType;
 
@@ -14,6 +14,7 @@ pub struct ConnectionMonitor {
     pub(crate) db: DatabaseConnection,
     pub(crate) runtime: Handle,
     pub(crate) next_check_times: HashMap<SourceId, Instant>,
+    pub(crate) last_auth_status: HashMap<SourceId, AuthStatus>,
 }
 
 #[derive(Debug, Clone)]
@@ -21,6 +22,7 @@ pub enum ConnectionMonitorInput {
     CheckSource(SourceId),
     CheckAllSources,
     UpdateCheckTimes(HashMap<SourceId, Instant>),
+    UpdateAuthStatus(HashMap<SourceId, AuthStatus>),
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +40,10 @@ pub enum ConnectionMonitorOutput {
         url: String,
         connection_type: ConnectionType,
     },
+    AuthStatusChanged {
+        source_id: SourceId,
+        needs_auth: bool,
+    },
 }
 
 impl Worker for ConnectionMonitor {
@@ -50,6 +56,7 @@ impl Worker for ConnectionMonitor {
             db,
             runtime,
             next_check_times: HashMap::new(),
+            last_auth_status: HashMap::new(),
         }
     }
 
@@ -102,6 +109,7 @@ impl Worker for ConnectionMonitor {
                 let sender = sender.clone();
                 let runtime = self.runtime.clone();
                 let mut next_check_times = self.next_check_times.clone();
+                let mut last_auth_status = self.last_auth_status.clone();
 
                 runtime.spawn(async move {
                     let repo = SourceRepositoryImpl::new(db.clone());
@@ -112,6 +120,46 @@ impl Worker for ConnectionMonitor {
 
                             for source in sources {
                                 let source_id = SourceId::new(source.id.clone());
+
+                                // Check for auth status changes
+                                let current_auth_status =
+                                    AuthStatus::from(source.auth_status.clone());
+                                let prev_auth_status = last_auth_status.get(&source_id).copied();
+
+                                if prev_auth_status.is_none()
+                                    || prev_auth_status != Some(current_auth_status)
+                                {
+                                    debug!(
+                                        "Auth status changed for {}: {:?} -> {:?}",
+                                        source_id, prev_auth_status, current_auth_status
+                                    );
+
+                                    // Emit auth status change if moving to AuthRequired
+                                    if current_auth_status == AuthStatus::AuthRequired {
+                                        info!(
+                                            "Source {} now requires re-authentication",
+                                            source_id
+                                        );
+                                        let _ = sender.output(
+                                            ConnectionMonitorOutput::AuthStatusChanged {
+                                                source_id: source_id.clone(),
+                                                needs_auth: true,
+                                            },
+                                        );
+                                    } else if prev_auth_status == Some(AuthStatus::AuthRequired)
+                                        && current_auth_status == AuthStatus::Authenticated
+                                    {
+                                        info!("Source {} authentication restored", source_id);
+                                        let _ = sender.output(
+                                            ConnectionMonitorOutput::AuthStatusChanged {
+                                                source_id: source_id.clone(),
+                                                needs_auth: false,
+                                            },
+                                        );
+                                    }
+
+                                    last_auth_status.insert(source_id.clone(), current_auth_status);
+                                }
 
                                 // Check if this source is due for checking
                                 let should_check = next_check_times
@@ -207,9 +255,11 @@ impl Worker for ConnectionMonitor {
                                 );
                             }
 
-                            // Update the monitor's next check times
+                            // Update the monitor's next check times and auth status
                             sender
                                 .input(ConnectionMonitorInput::UpdateCheckTimes(next_check_times));
+                            sender
+                                .input(ConnectionMonitorInput::UpdateAuthStatus(last_auth_status));
                         }
                         Err(e) => {
                             warn!("Failed to get sources for connection monitoring: {}", e);
@@ -220,6 +270,10 @@ impl Worker for ConnectionMonitor {
 
             ConnectionMonitorInput::UpdateCheckTimes(times) => {
                 self.next_check_times = times;
+            }
+
+            ConnectionMonitorInput::UpdateAuthStatus(status) => {
+                self.last_auth_status = status;
             }
         }
     }

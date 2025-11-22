@@ -110,6 +110,20 @@ pub fn initialize_workers(
                         },
                     }
                 }
+                ConnectionMonitorOutput::AuthStatusChanged {
+                    source_id,
+                    needs_auth,
+                } => {
+                    tracing::info!(
+                        "📡 AuthStatusChanged: {} needs_auth={}",
+                        source_id,
+                        needs_auth
+                    );
+                    MainWindowInput::AuthStatusChanged {
+                        source_id,
+                        needs_auth,
+                    }
+                }
             }
         });
 

@@ -10,11 +10,87 @@ use crate::backends::plex::{PlexAuth, PlexHomeUser, PlexPin};
 use crate::db::connection::DatabaseConnection;
 use crate::models::{Credentials, SourceId};
 use crate::services::commands::Command;
-use crate::services::commands::auth_commands::CreateSourceCommand;
+use crate::services::commands::auth_commands::{
+    CreateSourceCommand, UpdateSourceCredentialsCommand,
+};
+
+/// Convert technical errors to user-friendly, actionable messages
+fn error_to_user_message(error: &anyhow::Error) -> String {
+    let error_str = error.to_string().to_lowercase();
+
+    // Network-related errors
+    if error_str.contains("connection")
+        || error_str.contains("network")
+        || error_str.contains("timeout")
+    {
+        return "Unable to connect to the server. Check your network connection and try again."
+            .to_string();
+    }
+
+    // DNS/hostname errors
+    if error_str.contains("dns") || error_str.contains("resolve") {
+        return "Cannot reach the server. Check the server address and your network connection."
+            .to_string();
+    }
+
+    // Authentication errors
+    if error_str.contains("unauthorized")
+        || error_str.contains("401")
+        || error_str.contains("invalid credentials")
+    {
+        return "Invalid credentials. Please check your username and password.".to_string();
+    }
+
+    // Token/session errors
+    if error_str.contains("token") || error_str.contains("session") || error_str.contains("expired")
+    {
+        return "Your session has expired. Please sign in again.".to_string();
+    }
+
+    // Server errors
+    if error_str.contains("500")
+        || error_str.contains("internal server")
+        || error_str.contains("server error")
+    {
+        return "The server encountered an error. Please try again later.".to_string();
+    }
+
+    // Server unavailable
+    if error_str.contains("503") || error_str.contains("unavailable") {
+        return "The server is currently unavailable. Please try again later.".to_string();
+    }
+
+    // Forbidden
+    if error_str.contains("403") || error_str.contains("forbidden") {
+        return "Access denied. Check that your account has the necessary permissions.".to_string();
+    }
+
+    // Not found
+    if error_str.contains("404") || error_str.contains("not found") {
+        return "Server or resource not found. Check the server address.".to_string();
+    }
+
+    // SSL/TLS errors
+    if error_str.contains("ssl") || error_str.contains("tls") || error_str.contains("certificate") {
+        return "Secure connection failed. The server's security certificate may be invalid."
+            .to_string();
+    }
+
+    // Generic fallback with a hint
+    format!("Authentication failed. Please check your settings and try again.")
+}
 
 #[derive(Debug, Clone)]
 pub enum BackendType {
     Plex,
+    Jellyfin,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReauthMode {
+    pub source_id: SourceId,
+    pub source_name: String,
+    pub source_type: String,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +139,7 @@ pub struct AuthDialog {
     db: DatabaseConnection,
     backend_type: BackendType,
     parent_window: Option<gtk4::Window>,
+    reauth_mode: Option<ReauthMode>,
 
     // UI state
     is_visible: bool,
@@ -129,13 +206,14 @@ pub struct AuthDialog {
 }
 
 impl AuthDialog {
-    /// Helper method to proceed with Plex source creation after authentication
+    /// Helper method to proceed with Plex source creation or update after authentication
     fn proceed_with_plex_source_creation(
         &self,
         token: String,
         sender: AsyncComponentSender<AuthDialog>,
     ) {
         let db = self.db.clone();
+        let reauth_mode = self.reauth_mode.clone();
         let server_url = if self.plex_server_url.is_empty() {
             None
         } else {
@@ -146,14 +224,76 @@ impl AuthDialog {
         sender.oneshot_command(async move {
             use crate::backends::plex::PlexBackend;
 
+            // If in reauth mode, update credentials and skip server discovery
+            if let Some(reauth) = reauth_mode {
+                info!("Re-authentication mode: updating credentials for source {}", reauth.source_id);
+
+                // Create credentials
+                let credentials = Credentials::Token {
+                    token: token.clone(),
+                };
+
+                // Get the source to retrieve its server URL
+                use crate::db::repository::{Repository, SourceRepositoryImpl};
+                let repo = SourceRepositoryImpl::new(db.clone());
+                let source_model = match repo.find_by_id(reauth.source_id.as_ref()).await {
+                    Ok(Some(source)) => source,
+                    Ok(None) => {
+                        sender_clone.input(AuthDialogInput::PlexAuthError(format!(
+                            "Source not found: {}",
+                            reauth.source_id
+                        )));
+                        return;
+                    }
+                    Err(e) => {
+                        sender_clone.input(AuthDialogInput::PlexAuthError(format!(
+                            "Failed to load source: {}",
+                            e
+                        )));
+                        return;
+                    }
+                };
+
+                let server_url = source_model.connection_url.unwrap_or_else(|| {
+                    info!("No server URL found for source, using default");
+                    "https://plex.tv".to_string()
+                });
+
+                // Create PlexBackend for authentication
+                let plex_backend = PlexBackend::new_for_auth(server_url, token.clone());
+
+                // Update source credentials
+                let command = UpdateSourceCredentialsCommand {
+                    db: db.clone(),
+                    backend: &plex_backend as &dyn MediaBackend,
+                    source_id: reauth.source_id.clone(),
+                    new_credentials: credentials,
+                };
+
+                match command.execute().await {
+                    Ok(source) => {
+                        info!(
+                            "Successfully updated credentials for source: {}",
+                            source.id
+                        );
+                        sender_clone.input(AuthDialogInput::SourceCreated(SourceId::new(source.id)));
+                    }
+                    Err(e) => {
+                        error!("Failed to update Plex credentials: {}", e);
+                        sender_clone.input(AuthDialogInput::PlexAuthError(error_to_user_message(&e)));
+                    }
+                }
+                return;
+            }
+
             // Discover available servers
             let servers = match PlexAuth::discover_servers(&token).await {
                 Ok(servers) => servers,
                 Err(e) => {
-                    sender_clone.input(AuthDialogInput::PlexAuthError(format!(
-                        "Failed to discover servers: {}",
-                        e
-                    )));
+                    error!("Failed to discover Plex servers: {}", e);
+                    sender_clone.input(AuthDialogInput::PlexAuthError(
+                        "Unable to find your Plex servers. Check your network connection and try again.".to_string()
+                    ));
                     return;
                 }
             };
@@ -316,14 +456,15 @@ impl AuthDialog {
 impl AsyncComponent for AuthDialog {
     type Input = AuthDialogInput;
     type Output = AuthDialogOutput;
-    type Init = (DatabaseConnection, Option<gtk4::Window>);
+    type Init = (DatabaseConnection, Option<gtk4::Window>, Option<ReauthMode>);
     type CommandOutput = ();
 
     view! {
         #[root]
         #[name = "dialog"]
         adw::Dialog {
-            set_title: "Add Media Source",
+            #[watch]
+            set_title: if model.reauth_mode.is_some() { "Re-authenticate Source" } else { "Add Media Source" },
             set_content_width: 700,
             set_content_height: 650,
             set_follows_content_size: true,
@@ -331,14 +472,23 @@ impl AsyncComponent for AuthDialog {
             set_child = &adw::ToolbarView {
                 // Top toolbar with proper draggable header
                 add_top_bar = &adw::HeaderBar {
-                    set_title_widget: Some(&gtk4::Label::new(Some("Add Media Source"))),
+                    #[wrap(Some)]
+                    set_title_widget = &gtk4::Label {
+                        #[watch]
+                        set_label: if model.reauth_mode.is_some() {
+                            "Re-authenticate Source"
+                        } else {
+                            "Add Media Source"
+                        },
+                    },
                     set_show_end_title_buttons: true,
                 },
 
-                // ViewSwitcherBar below the header for backend selection
+                // ViewSwitcherBar below the header for backend selection (hide in reauth mode)
                 add_top_bar = &adw::ViewSwitcherBar {
                     set_stack: Some(&view_stack),
-                    set_reveal: true,
+                    #[watch]
+                    set_reveal: model.reauth_mode.is_none(),
                 },
 
                 #[wrap(Some)]
@@ -377,7 +527,12 @@ impl AsyncComponent for AuthDialog {
                                     set_spacing: 24,
 
                                     gtk4::Label {
-                                        set_label: "Authenticate with Plex to access your media libraries",
+                                        #[watch]
+                                        set_label: if model.reauth_mode.is_some() {
+                                            "Your authentication has expired or is invalid. Please sign in again to restore access to your media."
+                                        } else {
+                                            "Authenticate with Plex to access your media libraries"
+                                        },
                                         add_css_class: "dim-label",
                                         set_wrap: true,
                                         set_justify: gtk4::Justification::Center,
@@ -862,14 +1017,26 @@ impl AsyncComponent for AuthDialog {
     }
 
     async fn init(
-        (db, parent_window): Self::Init,
+        (db, parent_window, reauth_mode): Self::Init,
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
+        // Determine backend type from reauth mode if provided
+        let backend_type = if let Some(ref reauth) = reauth_mode {
+            match reauth.source_type.as_str() {
+                "plex" => BackendType::Plex,
+                "jellyfin" => BackendType::Jellyfin,
+                _ => BackendType::Plex,
+            }
+        } else {
+            BackendType::Plex
+        };
+
         let mut model = AuthDialog {
             db,
-            backend_type: BackendType::Plex,
+            backend_type,
             parent_window,
+            reauth_mode,
             is_visible: false,
             dialog_position: None,
 
@@ -1364,6 +1531,7 @@ impl AsyncComponent for AuthDialog {
                 let username = self.jellyfin_username.clone();
                 let password = self.jellyfin_password.clone();
                 let db = self.db.clone();
+                let reauth_mode = self.reauth_mode.clone();
                 let sender_clone = sender.clone();
 
                 sender.oneshot_command(async move {
@@ -1384,28 +1552,60 @@ impl AsyncComponent for AuthDialog {
                                 password: password.clone(),
                             };
 
-                            // Create the source using CreateSourceCommand
-                            let command = CreateSourceCommand {
-                                db,
-                                backend: &jellyfin_client as &dyn MediaBackend,
-                                source_type: "jellyfin".to_string(),
-                                name: format!("Jellyfin - {}", username),
-                                credentials,
-                                server_url: Some(url),
-                                machine_id: None, // Not used for Jellyfin
-                                is_owned: None,   // Not used for Jellyfin
-                            };
+                            // Check if in reauth mode
+                            if let Some(reauth) = reauth_mode {
+                                info!(
+                                    "Re-authentication mode: updating credentials for source {}",
+                                    reauth.source_id
+                                );
 
-                            match command.execute().await {
-                                Ok(source) => {
-                                    info!("Created Jellyfin source: {}", source.id);
-                                    let source_id = SourceId::new(source.id);
-                                    sender_clone.input(AuthDialogInput::SourceCreated(source_id));
+                                // Update existing source credentials
+                                let command = UpdateSourceCredentialsCommand {
+                                    db,
+                                    backend: &jellyfin_client as &dyn MediaBackend,
+                                    source_id: reauth.source_id.clone(),
+                                    new_credentials: credentials,
+                                };
+
+                                match command.execute().await {
+                                    Ok(source) => {
+                                        info!("Updated Jellyfin source credentials: {}", source.id);
+                                        sender_clone.input(AuthDialogInput::SourceCreated(
+                                            SourceId::new(source.id),
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to update Jellyfin credentials: {}", e);
+                                        sender_clone.input(AuthDialogInput::JellyfinAuthError(
+                                            error_to_user_message(&e),
+                                        ));
+                                    }
                                 }
-                                Err(e) => {
-                                    let error_msg = format!("Failed to create source: {}", e);
-                                    sender_clone
-                                        .input(AuthDialogInput::JellyfinAuthError(error_msg));
+                            } else {
+                                // Create new source
+                                let command = CreateSourceCommand {
+                                    db,
+                                    backend: &jellyfin_client as &dyn MediaBackend,
+                                    source_type: "jellyfin".to_string(),
+                                    name: format!("Jellyfin - {}", username),
+                                    credentials,
+                                    server_url: Some(url),
+                                    machine_id: None, // Not used for Jellyfin
+                                    is_owned: None,   // Not used for Jellyfin
+                                };
+
+                                match command.execute().await {
+                                    Ok(source) => {
+                                        info!("Created Jellyfin source: {}", source.id);
+                                        let source_id = SourceId::new(source.id);
+                                        sender_clone
+                                            .input(AuthDialogInput::SourceCreated(source_id));
+                                    }
+                                    Err(e) => {
+                                        let error_msg = format!("Failed to create source: {}", e);
+                                        sender_clone
+                                            .input(AuthDialogInput::JellyfinAuthError(error_msg));
+                                    }
                                 }
                             }
                         }
@@ -1580,6 +1780,7 @@ impl AsyncComponent for AuthDialog {
                 // Create the source with the token
                 let url = self.jellyfin_url.clone();
                 let db = self.db.clone();
+                let reauth_mode = self.reauth_mode.clone();
                 let sender_clone = sender.clone();
 
                 sender.oneshot_command(async move {
@@ -1600,35 +1801,61 @@ impl AsyncComponent for AuthDialog {
                         Ok(user) => {
                             info!("Quick Connect user authenticated: {}", user.username);
 
-                            // Create the source
-                            let command = CreateSourceCommand {
-                                db,
-                                backend: &jellyfin_backend as &dyn MediaBackend,
-                                source_type: "jellyfin".to_string(),
-                                name: format!("Jellyfin - {}", user.username),
-                                credentials,
-                                server_url: Some(url),
-                                machine_id: None,
-                                is_owned: None,
-                            };
+                            // Check if in reauth mode
+                            if let Some(reauth) = reauth_mode {
+                                info!("Re-authentication mode: updating credentials for source {}", reauth.source_id);
 
-                            match command.execute().await {
-                                Ok(source) => {
-                                    info!(
-                                        "Created Jellyfin source via Quick Connect: {}",
-                                        source.id
-                                    );
-                                    sender_clone.input(AuthDialogInput::SourceCreated(
-                                        SourceId::new(source.id),
-                                    ));
+                                // Update existing source credentials
+                                let command = UpdateSourceCredentialsCommand {
+                                    db,
+                                    backend: &jellyfin_backend as &dyn MediaBackend,
+                                    source_id: reauth.source_id.clone(),
+                                    new_credentials: credentials,
+                                };
+
+                                match command.execute().await {
+                                    Ok(source) => {
+                                        info!("Updated Jellyfin source credentials via Quick Connect: {}", source.id);
+                                        sender_clone.input(AuthDialogInput::SourceCreated(SourceId::new(source.id)));
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to update Jellyfin credentials via Quick Connect: {}", e);
+                                        sender_clone.input(
+                                            AuthDialogInput::JellyfinQuickConnectFailed(error_to_user_message(&e)),
+                                        );
+                                    }
                                 }
-                                Err(e) => {
-                                    sender_clone.input(
-                                        AuthDialogInput::JellyfinQuickConnectFailed(format!(
-                                            "Failed to create source: {}",
-                                            e
-                                        )),
-                                    );
+                            } else {
+                                // Create new source
+                                let command = CreateSourceCommand {
+                                    db,
+                                    backend: &jellyfin_backend as &dyn MediaBackend,
+                                    source_type: "jellyfin".to_string(),
+                                    name: format!("Jellyfin - {}", user.username),
+                                    credentials,
+                                    server_url: Some(url),
+                                    machine_id: None,
+                                    is_owned: None,
+                                };
+
+                                match command.execute().await {
+                                    Ok(source) => {
+                                        info!(
+                                            "Created Jellyfin source via Quick Connect: {}",
+                                            source.id
+                                        );
+                                        sender_clone.input(AuthDialogInput::SourceCreated(
+                                            SourceId::new(source.id),
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        sender_clone.input(
+                                            AuthDialogInput::JellyfinQuickConnectFailed(format!(
+                                                "Failed to create source: {}",
+                                                e
+                                            )),
+                                        );
+                                    }
                                 }
                             }
                         }

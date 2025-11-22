@@ -21,6 +21,13 @@ pub trait SourceRepository: Repository<SourceModel> {
     /// Update source online status
     async fn update_online_status(&self, id: &str, is_online: bool) -> Result<()>;
 
+    /// Update source authentication status
+    async fn update_auth_status(
+        &self,
+        id: &str,
+        auth_status: crate::models::AuthStatus,
+    ) -> Result<()>;
+
     /// Update last sync time
     async fn update_last_sync(&self, id: &str) -> Result<()>;
 
@@ -147,6 +154,21 @@ impl SourceRepository for SourceRepositoryImpl {
         if let Some(source) = self.find_by_id(id).await? {
             let mut active_model: SourceActiveModel = source.clone().into();
             active_model.is_online = Set(is_online);
+            active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+            active_model.update(self.base.db.as_ref()).await?;
+        }
+        Ok(())
+    }
+
+    async fn update_auth_status(
+        &self,
+        id: &str,
+        auth_status: crate::models::AuthStatus,
+    ) -> Result<()> {
+        if let Some(source) = self.find_by_id(id).await? {
+            let mut active_model: SourceActiveModel = source.clone().into();
+            active_model.auth_status = Set(auth_status.into());
+            active_model.last_auth_check = Set(Some(chrono::Utc::now().naive_utc()));
             active_model.updated_at = Set(chrono::Utc::now().naive_utc());
             active_model.update(self.base.db.as_ref()).await?;
         }

@@ -298,6 +298,8 @@ impl AuthService {
             enabled: true,
             last_sync: entity.last_sync.map(|dt| dt.and_utc()),
             library_count: 0,
+            auth_status: crate::models::AuthStatus::Authenticated,
+            last_auth_check: Some(chrono::Utc::now()),
         };
 
         repo.insert(entity).await?;
@@ -361,5 +363,76 @@ impl AuthService {
 
         info!("Re-authenticated source: {}", source_id);
         Ok(())
+    }
+
+    /// Update credentials for an existing source
+    pub async fn update_source_credentials(
+        db: &DatabaseConnection,
+        backend: &dyn MediaBackend,
+        source_id: &SourceId,
+        new_credentials: Credentials,
+    ) -> Result<Source> {
+        // First, remove old credentials
+        Self::remove_credentials(db, source_id).await?;
+
+        // Authenticate with new credentials
+        let user = backend.authenticate(new_credentials.clone()).await?;
+
+        // Update source in database
+        let repo = SourceRepositoryImpl::new(db.clone());
+        let source_model = repo
+            .find_by_id(source_id.as_ref())
+            .await?
+            .context("Source not found")?;
+
+        let mut updated_source = source_model.clone();
+        updated_source.auth_provider_id = Some(user.id.clone());
+        updated_source.auth_status = "authenticated".to_string();
+        updated_source.last_auth_check = Some(chrono::Utc::now().naive_utc());
+        updated_source.is_online = true;
+        updated_source.connection_failure_count = 0;
+        updated_source.updated_at = chrono::Utc::now().naive_utc();
+
+        repo.update(updated_source.clone()).await?;
+
+        // Save new credentials
+        Self::save_credentials(db, source_id, &new_credentials).await?;
+
+        // Convert to Source model
+        let source_type_enum = match updated_source.source_type.as_str() {
+            "plex" => SourceType::PlexServer {
+                machine_id: updated_source.machine_id.clone().unwrap_or_default(),
+                owned: updated_source.is_owned,
+            },
+            "jellyfin" => SourceType::JellyfinServer,
+            "local" => SourceType::LocalFolder {
+                path: std::path::PathBuf::from("/"),
+            },
+            _ => SourceType::PlexServer {
+                machine_id: updated_source.machine_id.clone().unwrap_or_default(),
+                owned: updated_source.is_owned,
+            },
+        };
+
+        let source = Source {
+            id: updated_source.id.clone(),
+            name: updated_source.name.clone(),
+            source_type: source_type_enum,
+            auth_provider_id: updated_source.auth_provider_id.clone(),
+            connection_info: ConnectionInfo {
+                primary_url: updated_source.connection_url.clone(),
+                is_online: updated_source.is_online,
+                last_check: updated_source.last_connection_test.map(|dt| dt.and_utc()),
+                connection_quality: updated_source.connection_quality,
+            },
+            enabled: true,
+            last_sync: updated_source.last_sync.map(|dt| dt.and_utc()),
+            library_count: 0,
+            auth_status: crate::models::AuthStatus::from(updated_source.auth_status.clone()),
+            last_auth_check: updated_source.last_auth_check.map(|dt| dt.and_utc()),
+        };
+
+        info!("Updated credentials for source: {}", source_id);
+        Ok(source)
     }
 }

@@ -7,8 +7,8 @@ use crate::db::repository::{
     source_repository::{SourceRepository, SourceRepositoryImpl},
 };
 use crate::models::{
-    AuthProvider, ConnectionInfo, Credentials, HomeSection, MediaItemId, Source, SourceId,
-    SourceType, StreamInfo,
+    AuthProvider, AuthStatus, AuthenticationResult, ConnectionInfo, Credentials, HomeSection,
+    MediaItemId, Source, SourceId, SourceType, StreamInfo,
 };
 use crate::services::core::auth::AuthService;
 use anyhow::{Context, Result};
@@ -64,22 +64,52 @@ impl BackendService {
             "plex" | "PlexServer" => {
                 let backend = PlexBackend::from_auth(auth_provider, source)
                     .context("Failed to create Plex backend")?;
-                backend.initialize().await?;
+                let auth_result = backend.initialize().await?;
 
-                // Update the source with the best connection URL if it changed
-                if backend.has_url_changed().await
-                    && let Some(new_url) = backend.get_current_url().await
-                {
-                    tracing::info!(
-                        "Updating source {} with new URL: {}",
-                        source_entity.id,
-                        new_url
-                    );
-                    let source_repo = SourceRepositoryImpl::new(db.clone());
-                    source_repo
-                        .update_connection_url(&source_entity.id, Some(new_url))
-                        .await
-                        .context("Failed to update source URL")?;
+                // Update source auth status based on initialization result
+                let auth_status = match &auth_result {
+                    AuthenticationResult::Authenticated(_) => AuthStatus::Authenticated,
+                    AuthenticationResult::AuthRequired => AuthStatus::AuthRequired,
+                    AuthenticationResult::NetworkError(_) => AuthStatus::Unknown,
+                };
+
+                let source_repo = SourceRepositoryImpl::new(db.clone());
+                source_repo
+                    .update_auth_status(&source_entity.id, auth_status)
+                    .await
+                    .context("Failed to update source auth status")?;
+
+                // Handle authentication result
+                match auth_result {
+                    AuthenticationResult::Authenticated(_user) => {
+                        // Update the source with the best connection URL if it changed
+                        if backend.has_url_changed().await
+                            && let Some(new_url) = backend.get_current_url().await
+                        {
+                            tracing::info!(
+                                "Updating source {} with new URL: {}",
+                                source_entity.id,
+                                new_url
+                            );
+                            source_repo
+                                .update_connection_url(&source_entity.id, Some(new_url))
+                                .await
+                                .context("Failed to update source URL")?;
+                        }
+                    }
+                    AuthenticationResult::AuthRequired => {
+                        return Err(anyhow::anyhow!(
+                            "Authentication required for source {}",
+                            source_entity.id
+                        ));
+                    }
+                    AuthenticationResult::NetworkError(msg) => {
+                        return Err(anyhow::anyhow!(
+                            "Network error initializing source {}: {}",
+                            source_entity.id,
+                            msg
+                        ));
+                    }
                 }
 
                 Box::new(backend)
@@ -87,7 +117,41 @@ impl BackendService {
             "jellyfin" | "JellyfinServer" => {
                 let backend = JellyfinBackend::from_auth(auth_provider, source)
                     .context("Failed to create Jellyfin backend")?;
-                backend.initialize().await?;
+                let auth_result = backend.initialize().await?;
+
+                // Update source auth status based on initialization result
+                let auth_status = match &auth_result {
+                    AuthenticationResult::Authenticated(_) => AuthStatus::Authenticated,
+                    AuthenticationResult::AuthRequired => AuthStatus::AuthRequired,
+                    AuthenticationResult::NetworkError(_) => AuthStatus::Unknown,
+                };
+
+                let source_repo = SourceRepositoryImpl::new(db.clone());
+                source_repo
+                    .update_auth_status(&source_entity.id, auth_status)
+                    .await
+                    .context("Failed to update source auth status")?;
+
+                // Handle authentication result
+                match auth_result {
+                    AuthenticationResult::Authenticated(_user) => {
+                        // Successfully authenticated
+                    }
+                    AuthenticationResult::AuthRequired => {
+                        return Err(anyhow::anyhow!(
+                            "Authentication required for source {}",
+                            source_entity.id
+                        ));
+                    }
+                    AuthenticationResult::NetworkError(msg) => {
+                        return Err(anyhow::anyhow!(
+                            "Network error initializing source {}: {}",
+                            source_entity.id,
+                            msg
+                        ));
+                    }
+                }
+
                 Box::new(backend)
             }
             _ => {
@@ -176,6 +240,8 @@ impl BackendService {
             enabled: true,
             last_sync: entity.last_sync.map(|dt| dt.and_utc()),
             library_count: 0,
+            auth_status: crate::models::AuthStatus::from(entity.auth_status.clone()),
+            last_auth_check: entity.last_auth_check.map(|dt| dt.and_utc()),
         }
     }
 

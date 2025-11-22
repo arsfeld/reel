@@ -8,7 +8,7 @@ use tracing::{error, info};
 use crate::db::connection::DatabaseConnection;
 use crate::db::entities::sync_status::SyncStatusType;
 use crate::models::{
-    SourceId,
+    AuthStatus, SourceId,
     auth_provider::{Source, SourceType},
 };
 use crate::services::commands::{
@@ -41,6 +41,14 @@ pub enum SourcesPageInput {
     SyncSource(SourceId),
     /// Sync completed
     SyncCompleted(SourceId, Result<(), String>),
+    /// Re-authenticate a source
+    ReauthSource {
+        source_id: SourceId,
+        source_name: String,
+        source_type: String,
+    },
+    /// Re-authentication completed
+    ReauthCompleted { source_id: SourceId, success: bool },
     /// Message from the broker
     BrokerMsg(BrokerMessage),
     /// Update connection status for a source
@@ -56,6 +64,12 @@ pub enum SourcesPageInput {
 pub enum SourcesPageOutput {
     /// Open authentication dialog for adding a source
     OpenAuthDialog,
+    /// Open authentication dialog for re-authenticating a source
+    OpenReauthDialog {
+        source_id: SourceId,
+        source_name: String,
+        source_type: String,
+    },
     /// Request sync for a source
     SyncSource(crate::models::SourceId),
 }
@@ -65,6 +79,7 @@ pub struct SourceListItem {
     source: Source,
     is_syncing: bool,
     is_connected: bool,
+    is_reauthenticating: bool,
     sync_progress: Option<(usize, usize)>,
     sync_error: Option<String>,
     last_sync_status: Option<SyncStatusType>,
@@ -74,7 +89,10 @@ pub struct SourceListItem {
 pub enum SourceListItemInput {
     Sync,
     Remove,
+    Reauth,
     UpdateConnectionStatus(bool),
+    ReauthStarted,
+    ReauthCompleted(bool), // success or failure
 }
 
 #[relm4::factory(pub)]
@@ -135,41 +153,47 @@ impl FactoryComponent for SourceListItem {
                     },
                 },
 
-                // Sync status section
+                // Status section
                 gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
                     set_spacing: 4,
                     set_valign: gtk::Align::Center,
 
-                    // Connection and sync status row
+                    // Authentication and connection status row
                     gtk::Box {
                         set_orientation: gtk::Orientation::Horizontal,
                         set_spacing: 6,
 
-                        // Connection status indicator
+                        // Authentication status indicator
                         gtk::Image {
                             #[watch]
-                            set_icon_name: Some(if self.is_connected {
-                                "emblem-ok-symbolic"
-                            } else {
-                                "network-offline-symbolic"
+                            set_icon_name: Some(match self.source.auth_status {
+                                AuthStatus::Authenticated if self.is_connected => "emblem-ok-symbolic",
+                                AuthStatus::Authenticated => "network-offline-symbolic",
+                                AuthStatus::AuthRequired => "dialog-warning-symbolic",
+                                AuthStatus::Unknown => "dialog-question-symbolic",
                             }),
                             set_pixel_size: 16,
                             #[watch]
-                            set_tooltip_text: Some(if self.is_connected {
-                                "Connected"
-                            } else {
-                                "Disconnected"
+                            set_tooltip_text: Some(match self.source.auth_status {
+                                AuthStatus::Authenticated if self.is_connected =>
+                                    "Connected and authenticated",
+                                AuthStatus::Authenticated =>
+                                    "Authenticated but disconnected - check network connection",
+                                AuthStatus::AuthRequired =>
+                                    "Authentication required - credentials expired or invalid",
+                                AuthStatus::Unknown =>
+                                    "Authentication status unknown",
                             }),
                             #[watch]
-                            add_css_class: if self.is_connected {
-                                "success"
-                            } else {
-                                "error"
+                            add_css_class: match self.source.auth_status {
+                                AuthStatus::Authenticated if self.is_connected => "success",
+                                AuthStatus::AuthRequired => "warning",
+                                _ => "error",
                             },
                         },
 
-                        // Sync status text
+                        // Status text
                         gtk::Label {
                             #[watch]
                             set_text: &if self.is_syncing {
@@ -178,21 +202,31 @@ impl FactoryComponent for SourceListItem {
                                 } else {
                                     "Syncing...".to_string()
                                 }
-                            } else if let Some(ref _error) = self.sync_error {
-                                "Sync failed".to_string()
-                            } else if let Some(ref last_sync) = self.source.last_sync {
-                                use chrono::Utc;
-                                let now = Utc::now();
-                                let duration = now.signed_duration_since(*last_sync);
-                                if duration.num_hours() < 1 {
-                                    format!("{}m ago", duration.num_minutes())
-                                } else if duration.num_days() < 1 {
-                                    format!("{}h ago", duration.num_hours())
-                                } else {
-                                    format!("{}d ago", duration.num_days())
-                                }
                             } else {
-                                "Never synced".to_string()
+                                match self.source.auth_status {
+                                    AuthStatus::Authenticated if self.is_connected => {
+                                        // Show last sync time when connected
+                                        if let Some(ref _error) = self.sync_error {
+                                            "Sync failed".to_string()
+                                        } else if let Some(ref last_sync) = self.source.last_sync {
+                                            use chrono::Utc;
+                                            let now = Utc::now();
+                                            let duration = now.signed_duration_since(*last_sync);
+                                            if duration.num_hours() < 1 {
+                                                format!("Synced {}m ago", duration.num_minutes())
+                                            } else if duration.num_days() < 1 {
+                                                format!("Synced {}h ago", duration.num_hours())
+                                            } else {
+                                                format!("Synced {}d ago", duration.num_days())
+                                            }
+                                        } else {
+                                            "Connected".to_string()
+                                        }
+                                    },
+                                    AuthStatus::Authenticated => "Disconnected".to_string(),
+                                    AuthStatus::AuthRequired => "Authentication Required".to_string(),
+                                    AuthStatus::Unknown => "Status Unknown".to_string(),
+                                }
                             },
                             add_css_class: "dim-label",
                             add_css_class: "caption",
@@ -224,6 +258,28 @@ impl FactoryComponent for SourceListItem {
                 gtk::Box {
                     set_orientation: gtk::Orientation::Horizontal,
                     set_spacing: 6,
+
+                    // Re-authenticate button (only shown when auth is required)
+                    gtk::Button {
+                        #[watch]
+                        set_visible: self.source.needs_reauthentication(),
+                        #[watch]
+                        set_icon_name: if self.is_reauthenticating {
+                            "content-loading-symbolic"
+                        } else {
+                            "dialog-password-symbolic"
+                        },
+                        #[watch]
+                        set_tooltip_text: Some(if self.is_reauthenticating {
+                            "Re-authenticating..."
+                        } else {
+                            "Re-authenticate"
+                        }),
+                        #[watch]
+                        set_sensitive: !self.is_reauthenticating,
+                        add_css_class: "suggested-action",
+                        connect_clicked => SourceListItemInput::Reauth,
+                    },
 
                     // Sync button
                     gtk::Button {
@@ -261,6 +317,7 @@ impl FactoryComponent for SourceListItem {
             source,
             is_syncing: false,
             is_connected,
+            is_reauthenticating: false,
             sync_progress: None,
             sync_error: None,
             last_sync_status: None,
@@ -283,8 +340,32 @@ impl FactoryComponent for SourceListItem {
                     )))
                     .unwrap();
             }
+            SourceListItemInput::Reauth => {
+                let source_type = match &self.source.source_type {
+                    SourceType::PlexServer { .. } => "plex",
+                    SourceType::JellyfinServer => "jellyfin",
+                    _ => "unknown",
+                };
+                sender
+                    .output(SourceItemAction::Reauth(
+                        SourceId::from(self.source.id.clone()),
+                        self.source.name.clone(),
+                        source_type.to_string(),
+                    ))
+                    .unwrap();
+            }
             SourceListItemInput::UpdateConnectionStatus(is_connected) => {
                 self.is_connected = is_connected;
+            }
+            SourceListItemInput::ReauthStarted => {
+                self.is_reauthenticating = true;
+            }
+            SourceListItemInput::ReauthCompleted(success) => {
+                self.is_reauthenticating = false;
+                if success {
+                    // Update source auth status to authenticated
+                    self.source.auth_status = AuthStatus::Authenticated;
+                }
             }
         }
     }
@@ -294,6 +375,7 @@ impl FactoryComponent for SourceListItem {
 pub enum SourceItemAction {
     Sync(SourceId),
     Remove(SourceId),
+    Reauth(SourceId, String, String), // source_id, source_name, source_type
 }
 
 #[relm4::component(pub async)]
@@ -397,6 +479,13 @@ impl AsyncComponent for SourcesPage {
             .forward(sender.input_sender(), |output| match output {
                 SourceItemAction::Sync(id) => SourcesPageInput::SyncSource(id),
                 SourceItemAction::Remove(id) => SourcesPageInput::RemoveSource(id),
+                SourceItemAction::Reauth(source_id, source_name, source_type) => {
+                    SourcesPageInput::ReauthSource {
+                        source_id,
+                        source_name,
+                        source_type,
+                    }
+                }
             });
 
         let model = Self {
@@ -471,6 +560,69 @@ impl AsyncComponent for SourcesPage {
             SourcesPageInput::AddSource => {
                 info!("Opening auth dialog to add source");
                 sender.output(SourcesPageOutput::OpenAuthDialog).unwrap();
+            }
+
+            SourcesPageInput::ReauthSource {
+                source_id,
+                source_name,
+                source_type,
+            } => {
+                info!("Opening re-auth dialog for source: {}", source_id);
+
+                // Set loading state on the factory item
+                let idx_to_update = {
+                    let factory_guard = self.sources_factory.guard();
+                    factory_guard.iter().enumerate().find_map(|(idx, item)| {
+                        if item.source.id == source_id.to_string() {
+                            Some(idx)
+                        } else {
+                            None
+                        }
+                    })
+                };
+
+                if let Some(idx) = idx_to_update {
+                    self.sources_factory
+                        .send(idx, SourceListItemInput::ReauthStarted);
+                }
+
+                sender
+                    .output(SourcesPageOutput::OpenReauthDialog {
+                        source_id,
+                        source_name,
+                        source_type,
+                    })
+                    .unwrap();
+            }
+
+            SourcesPageInput::ReauthCompleted { source_id, success } => {
+                info!(
+                    "Re-authentication {} for source: {}",
+                    if success { "succeeded" } else { "failed" },
+                    source_id
+                );
+
+                // Clear loading state on the factory item
+                let idx_to_update = {
+                    let factory_guard = self.sources_factory.guard();
+                    factory_guard.iter().enumerate().find_map(|(idx, item)| {
+                        if item.source.id == source_id.to_string() {
+                            Some(idx)
+                        } else {
+                            None
+                        }
+                    })
+                };
+
+                if let Some(idx) = idx_to_update {
+                    self.sources_factory
+                        .send(idx, SourceListItemInput::ReauthCompleted(success));
+                }
+
+                // Reload sources to get updated auth status
+                if success {
+                    sender.input(SourcesPageInput::LoadData);
+                }
             }
 
             SourcesPageInput::RemoveSource(source_id) => {

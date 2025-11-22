@@ -3,15 +3,15 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 use crate::models::{
-    ChapterMarker, Credentials, Episode, HomeSection, Library, LibraryId, MediaItemId, Movie,
-    Season, Show, ShowId, StreamInfo, User,
+    AuthenticationResult, ChapterMarker, Credentials, Episode, HomeSection, Library, LibraryId,
+    MediaItemId, Movie, Season, Show, ShowId, StreamInfo, User,
 };
 
 #[async_trait]
 pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     /// Initialize the backend with stored credentials
-    /// Returns Ok(Some(user)) if successfully connected, Ok(None) if no credentials, Err if failed
-    async fn initialize(&self) -> Result<Option<User>>;
+    /// Returns AuthenticationResult indicating success, missing credentials, or network error
+    async fn initialize(&self) -> Result<AuthenticationResult>;
 
     // is_initialized and is_playback_ready removed - never used
 

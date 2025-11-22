@@ -69,6 +69,27 @@ impl Command<Vec<Source>> for LoadSourcesCommand {
     }
 }
 
+/// Update credentials for an existing source
+pub struct UpdateSourceCredentialsCommand<'a> {
+    pub db: DatabaseConnection,
+    pub backend: &'a dyn MediaBackend,
+    pub source_id: SourceId,
+    pub new_credentials: Credentials,
+}
+
+#[async_trait]
+impl<'a> Command<Source> for UpdateSourceCredentialsCommand<'a> {
+    async fn execute(&self) -> Result<Source> {
+        AuthService::update_source_credentials(
+            &self.db,
+            self.backend,
+            &self.source_id,
+            self.new_credentials.clone(),
+        )
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
