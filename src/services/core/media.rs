@@ -831,25 +831,56 @@ impl MediaService {
             let db_clone = db.clone();
             let position_ms_clone = position_ms;
             let duration_ms_clone = duration_ms;
+            let watched_clone = watched;
 
             // Spawn a detached task to sync with backend
             tokio::spawn(async move {
                 use crate::services::core::backend::BackendService;
                 use std::time::Duration;
 
-                let position = Duration::from_millis(position_ms_clone as u64);
-                let duration = Duration::from_millis(duration_ms_clone as u64);
+                // If watched, mark as watched on backend; otherwise update progress
+                let result = if watched_clone {
+                    debug!(
+                        "Syncing watched status to backend for {}",
+                        media_id_clone.as_ref()
+                    );
+                    BackendService::mark_watched(&db_clone, &source_id, &media_id_clone).await
+                } else {
+                    let position = Duration::from_millis(position_ms_clone as u64);
+                    let duration = Duration::from_millis(duration_ms_clone as u64);
+                    BackendService::update_playback_progress(
+                        &db_clone,
+                        &source_id,
+                        &media_id_clone,
+                        position,
+                        duration,
+                    )
+                    .await
+                };
 
-                if let Err(e) = BackendService::update_playback_progress(
-                    &db_clone,
-                    &source_id,
-                    &media_id_clone,
-                    position,
-                    duration,
-                )
-                .await
-                {
-                    warn!("Failed to sync playback progress to backend: {}", e);
+                if let Err(e) = result {
+                    warn!(
+                        "Failed to sync {} to backend for {}: {}",
+                        if watched_clone {
+                            "watched status"
+                        } else {
+                            "playback progress"
+                        },
+                        media_id_clone.as_ref(),
+                        e
+                    );
+
+                    // TODO: Implement retry mechanism for failed syncs
+                } else {
+                    debug!(
+                        "Successfully synced {} to backend for {}",
+                        if watched_clone {
+                            "watched status"
+                        } else {
+                            "playback progress"
+                        },
+                        media_id_clone.as_ref()
+                    );
                 }
             });
         }
