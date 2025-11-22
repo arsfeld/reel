@@ -108,7 +108,7 @@ impl PlayerPage {
 
         self.is_mpv_backend = Self::backend_prefers_mpv(backend_label);
         self.current_upscaling_mode = Self::mpv_upscaling_mode_from_config(config);
-        self.error_message = None;
+        self.error_retry_manager.clear_error();
 
         if let Some(existing_player) = self.player.take() {
             let handle = existing_player.clone();
@@ -152,7 +152,8 @@ impl PlayerPage {
             }
             Err(e) => {
                 error!("Failed to rebuild player backend: {}", e);
-                self.error_message = Some(format!("Failed to initialize player: {}", e));
+                self.error_retry_manager
+                    .show_error(format!("Failed to initialize player: {}", e));
                 self.player_state = PlayerState::Error;
             }
         }
@@ -163,10 +164,12 @@ impl PlayerPage {
         config: &Config,
         sender: &AsyncComponentSender<Self>,
     ) {
-        self.config_auto_resume = config.playback.auto_resume;
-        self.config_resume_threshold_seconds = config.playback.resume_threshold_seconds as u64;
-        self.config_progress_update_interval_seconds =
-            config.playback.progress_update_interval_seconds as u64;
+        // Update progress tracker config
+        self.progress_tracker.update_config(
+            config.playback.auto_resume,
+            config.playback.resume_threshold_seconds as u64,
+            config.playback.progress_update_interval_seconds as u64,
+        );
 
         // Update skip marker manager config
         self.skip_marker_manager.update_config(
