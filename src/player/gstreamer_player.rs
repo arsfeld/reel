@@ -5,6 +5,7 @@ use crate::player::gstreamer::stream_manager::{StreamInfo, StreamManager};
 use anyhow::{Context, Result};
 use gdk4 as gdk;
 use gstreamer as gst;
+use gstreamer::bus::BusWatchGuard;
 use gstreamer::glib;
 use gstreamer::prelude::*;
 use gtk4::{self, prelude::*};
@@ -40,6 +41,9 @@ pub struct GStreamerPlayer {
     seek_pending: Arc<Mutex<Option<(f64, Instant)>>>,
     last_seek_target: Arc<Mutex<Option<f64>>>,
     buffering_state: Arc<RwLock<BufferingState>>,
+    bus_watch_guard: Arc<Mutex<Option<BusWatchGuard>>>,
+    current_playback_speed: Arc<Mutex<f64>>,
+    paused_for_buffering: Arc<Mutex<bool>>,
 }
 
 impl GStreamerPlayer {
@@ -75,6 +79,9 @@ impl GStreamerPlayer {
                 is_buffering: false,
                 percentage: 100,
             })),
+            bus_watch_guard: Arc::new(Mutex::new(None)),
+            current_playback_speed: Arc::new(Mutex::new(1.0)),
+            paused_for_buffering: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -215,6 +222,9 @@ impl GStreamerPlayer {
 
         // Reset pipeline ready flag for new media
         *self.pipeline_ready.lock().unwrap() = false;
+
+        // Clear buffering flag for new media
+        *self.paused_for_buffering.lock().unwrap() = false;
 
         // Update state
         {
@@ -358,6 +368,12 @@ impl GStreamerPlayer {
         let bus = playbin.bus().context("Failed to get playbin bus")?;
         debug!("GStreamerPlayer::load_media() - Got playbin bus");
 
+        // Remove any existing bus watch before adding a new one
+        // (BusWatchGuard automatically removes the watch when dropped)
+        if let Some(_old_guard) = self.bus_watch_guard.lock().unwrap().take() {
+            debug!("Removed previous bus watch (via guard drop)");
+        }
+
         let state_clone = self.state.clone();
         let (
             stream_collection_clone,
@@ -369,74 +385,63 @@ impl GStreamerPlayer {
         let pipeline_ready_clone = self.pipeline_ready.clone();
         let playbin_clone = self.playbin.clone();
         let buffering_state_clone = self.buffering_state.clone();
+        let paused_for_buffering_clone = self.paused_for_buffering.clone();
 
-        info!("Setting up bus sync handler for immediate message processing...");
+        info!("Setting up async bus watch with glib main loop integration...");
 
-        bus.set_sync_handler(move |_, msg| {
-            // Log immediately when any message arrives
-            let msg_type = msg.type_();
-            if !matches!(msg_type, gst::MessageType::Qos | gst::MessageType::Progress) {
-                let src_name = msg
-                    .src()
-                    .map(|s| s.name().to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
+        // Use add_watch for async message handling integrated with GTK main loop
+        let watch_guard = bus
+            .add_watch(move |_, msg| {
+                // Log immediately when any message arrives
+                let msg_type = msg.type_();
+                if !matches!(msg_type, gst::MessageType::Qos | gst::MessageType::Progress) {
+                    let src_name = msg
+                        .src()
+                        .map(|s| s.name().to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
 
-                // Highlight specific message types we're interested in
-                if matches!(msg_type, gst::MessageType::StreamCollection) {
-                    info!(
-                        "Stream collection message (sync): {:?} from {}",
-                        msg_type, src_name
-                    );
-                } else if matches!(msg_type, gst::MessageType::StreamsSelected) {
-                    info!(
-                        "Streams selected message (sync): {:?} from {}",
-                        msg_type, src_name
-                    );
-                } else if matches!(msg_type, gst::MessageType::StreamStart) {
-                    info!(
-                        "Stream start message (sync): {:?} from {}",
-                        msg_type, src_name
-                    );
-                } else if matches!(
-                    msg_type,
-                    gst::MessageType::StateChanged
-                        | gst::MessageType::Tag
-                        | gst::MessageType::StreamStatus
-                ) {
-                    // Skip StateChanged, Tag, and StreamStatus messages to reduce noise
-                } else {
-                    trace!("Bus message (sync): {:?} from {}", msg_type, src_name);
+                    // Highlight specific message types we're interested in
+                    if matches!(msg_type, gst::MessageType::StreamCollection) {
+                        info!("Stream collection message from {}", src_name);
+                    } else if matches!(msg_type, gst::MessageType::StreamsSelected) {
+                        info!("Streams selected message from {}", src_name);
+                    } else if matches!(msg_type, gst::MessageType::StreamStart) {
+                        info!("Stream start message from {}", src_name);
+                    } else if matches!(
+                        msg_type,
+                        gst::MessageType::StateChanged
+                            | gst::MessageType::Tag
+                            | gst::MessageType::StreamStatus
+                    ) {
+                        // Skip StateChanged, Tag, and StreamStatus messages to reduce noise
+                    } else {
+                        trace!("Bus message: {:?} from {}", msg_type, src_name);
+                    }
                 }
-            }
 
-            let state = state_clone.clone();
-            let stream_collection = stream_collection_clone.clone();
-            let audio_streams = audio_streams_clone.clone();
-            let subtitle_streams = subtitle_streams_clone.clone();
-            let current_audio = current_audio_clone.clone();
-            let current_subtitle = current_subtitle_clone.clone();
-            let playbin = playbin_clone.clone();
-            let buffering_state = buffering_state_clone.clone();
-            let msg = msg.clone();
+                // Handle message - messages are already on the main thread via glib
+                bus_handler::handle_bus_message_sync(
+                    msg,
+                    &state_clone,
+                    &stream_collection_clone,
+                    &audio_streams_clone,
+                    &subtitle_streams_clone,
+                    &current_audio_clone,
+                    &current_subtitle_clone,
+                    &pipeline_ready_clone,
+                    &playbin_clone,
+                    &buffering_state_clone,
+                    &paused_for_buffering_clone,
+                );
 
-            // Handle message synchronously to avoid context issues
-            bus_handler::handle_bus_message_sync(
-                &msg,
-                &state,
-                &stream_collection,
-                &audio_streams,
-                &subtitle_streams,
-                &current_audio,
-                &current_subtitle,
-                &pipeline_ready_clone,
-                &playbin,
-                &buffering_state,
-            );
+                glib::ControlFlow::Continue
+            })
+            .context("Failed to add bus watch")?;
 
-            gst::BusSyncReply::Pass
-        });
+        // Store the watch guard for automatic cleanup when dropped
+        *self.bus_watch_guard.lock().unwrap() = Some(watch_guard);
 
-        info!("Bus sync handler set up successfully");
+        info!("Async bus watch set up successfully with glib integration");
 
         // Preroll the pipeline to PAUSED state to get video dimensions early
         // This allows the video widget to resize before playback starts
@@ -803,6 +808,9 @@ impl GStreamerPlayer {
 
             let mut state = self.state.write().await;
             *state = PlayerState::Paused;
+
+            // Clear the buffering flag since this is a user-initiated pause
+            *self.paused_for_buffering.lock().unwrap() = false;
         }
         Ok(())
     }
@@ -817,6 +825,9 @@ impl GStreamerPlayer {
 
             let mut state = self.state.write().await;
             *state = PlayerState::Stopped;
+
+            // Clear the buffering flag
+            *self.paused_for_buffering.lock().unwrap() = false;
         }
         Ok(())
     }
@@ -1143,15 +1154,18 @@ impl GStreamerPlayer {
                         gst::ClockTime::NONE,
                     )
                     .map_err(|e| anyhow::anyhow!("Failed to set playback speed: {:?}", e))?;
+
+                // Update stored playback speed
+                *self.current_playback_speed.lock().unwrap() = speed;
+                debug!("Playback speed set to {}", speed);
             }
         }
         Ok(())
     }
 
     pub async fn get_playback_speed(&self) -> f64 {
-        // GStreamer doesn't have a simple way to get current playback rate
-        // We'd need to track it separately or query the segment
-        1.0 // Default to normal speed for now
+        // Return the currently stored playback speed
+        *self.current_playback_speed.lock().unwrap()
     }
 
     pub async fn frame_step_forward(&self) -> Result<()> {
@@ -1266,5 +1280,32 @@ impl GStreamerPlayer {
 
     pub async fn get_buffering_state(&self) -> BufferingState {
         self.buffering_state.read().await.clone()
+    }
+}
+
+impl Drop for GStreamerPlayer {
+    fn drop(&mut self) {
+        debug!("GStreamerPlayer - Dropping player, cleaning up resources");
+
+        // Remove bus watch to prevent callbacks after drop
+        // BusWatchGuard automatically removes the watch when dropped
+        if let Some(_guard) = self.bus_watch_guard.lock().unwrap().take() {
+            debug!("GStreamerPlayer - Bus watch will be removed (via guard drop)");
+        }
+
+        // Set pipeline to NULL state to release resources
+        if let Some(playbin) = self.playbin.lock().unwrap().take() {
+            debug!("GStreamerPlayer - Setting pipeline to NULL state");
+            if let Err(e) = playbin.set_state(gst::State::Null) {
+                error!(
+                    "GStreamerPlayer - Failed to set pipeline to NULL on drop: {:?}",
+                    e
+                );
+            } else {
+                debug!("GStreamerPlayer - Pipeline set to NULL state successfully");
+            }
+        }
+
+        debug!("GStreamerPlayer - Drop complete");
     }
 }
