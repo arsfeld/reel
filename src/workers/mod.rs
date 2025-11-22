@@ -3,6 +3,7 @@ pub mod cache_cleanup_worker;
 pub mod config_manager;
 pub mod connection_monitor;
 pub mod image_loader;
+pub mod playback_sync_worker;
 pub mod search_worker;
 pub mod sync_worker;
 
@@ -19,5 +20,8 @@ pub use cache_cleanup_worker::{
 };
 pub use connection_monitor::{ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput};
 pub use image_loader::{ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize};
+pub use playback_sync_worker::{
+    PlaybackSyncWorker, PlaybackSyncWorkerInput, PlaybackSyncWorkerOutput, SyncConfig,
+};
 pub use search_worker::{SearchWorker, SearchWorkerInput, SearchWorkerOutput};
 pub use sync_worker::{SyncWorker, SyncWorkerInput, SyncWorkerOutput};
