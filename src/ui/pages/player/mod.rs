@@ -13,6 +13,16 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
+mod sleep_inhibition;
+use sleep_inhibition::SleepInhibitor;
+mod controls_visibility;
+mod menu_builders;
+use controls_visibility::ControlState;
+mod backend_manager;
+mod playlist_navigation;
+mod skip_markers;
+use skip_markers::SkipMarkerManager;
+
 fn format_duration(duration: Duration) -> String {
     let total_secs = duration.as_secs();
     let hours = total_secs / 3600;
@@ -24,17 +34,6 @@ fn format_duration(duration: Duration) -> String {
     } else {
         format!("{}:{:02}", minutes, seconds)
     }
-}
-
-/// Control visibility state machine states
-#[derive(Debug, PartialEq)]
-enum ControlState {
-    /// Controls and cursor are completely hidden
-    Hidden,
-    /// Controls and cursor are visible with inactivity timer running
-    Visible { timer_id: Option<SourceId> },
-    /// Controls and cursor are visible because mouse is over controls
-    Hovering,
 }
 
 pub struct PlayerPage {
@@ -107,21 +106,10 @@ pub struct PlayerPage {
     inactivity_timeout_secs: u64,
     mouse_move_threshold: f64,
     window_event_debounce_ms: u64,
-    // Skip intro/credits state
-    intro_marker: Option<ChapterMarker>,
-    credits_marker: Option<ChapterMarker>,
-    skip_intro_visible: bool,
-    skip_credits_visible: bool,
-    skip_intro_hide_timer: Option<SourceId>,
-    skip_credits_hide_timer: Option<SourceId>,
-    // Cached skip intro/credits config values
-    config_skip_intro_enabled: bool,
-    config_skip_credits_enabled: bool,
-    config_auto_skip_intro: bool,
-    config_auto_skip_credits: bool,
-    config_minimum_marker_duration_seconds: u64,
+    // Skip intro/credits management
+    skip_marker_manager: SkipMarkerManager,
     // Sleep inhibition
-    inhibit_cookie: Option<u32>,
+    sleep_inhibitor: SleepInhibitor,
 }
 
 impl PlayerPage {
@@ -130,742 +118,6 @@ impl PlayerPage {
     const DEFAULT_MOUSE_MOVE_THRESHOLD: f64 = 5.0; // pixels
     const DEFAULT_WINDOW_EVENT_DEBOUNCE_MS: u64 = 50; // milliseconds
     const CONTROL_FADE_ANIMATION_MS: u64 = 200; // milliseconds for fade transition
-
-    #[cfg(all(feature = "mpv", not(target_os = "macos")))]
-    fn backend_prefers_mpv(selected_backend: &str) -> bool {
-        selected_backend.is_empty() || selected_backend.eq_ignore_ascii_case("mpv")
-    }
-
-    #[cfg(not(all(feature = "mpv", not(target_os = "macos"))))]
-    fn backend_prefers_mpv(_selected_backend: &str) -> bool {
-        false
-    }
-
-    fn mpv_upscaling_mode_from_config(config: &Config) -> crate::player::UpscalingMode {
-        match config.playback.mpv_upscaling_mode.as_str() {
-            "High Quality" | "high_quality" => crate::player::UpscalingMode::HighQuality,
-            "FSR" | "fsr" => crate::player::UpscalingMode::FSR,
-            "Anime" | "anime" => crate::player::UpscalingMode::Anime,
-            "custom" => crate::player::UpscalingMode::Custom,
-            _ => crate::player::UpscalingMode::None,
-        }
-    }
-
-    fn attach_player_controller(
-        &mut self,
-        handle: PlayerHandle,
-        controller: PlayerController,
-        sender: &AsyncComponentSender<Self>,
-    ) {
-        info!("Player controller initialized successfully");
-
-        if let Some(mut error_receiver) = handle.take_error_receiver() {
-            let sender_clone = sender.clone();
-            glib::spawn_future_local(async move {
-                while let Some(error_msg) = error_receiver.recv().await {
-                    error!("Player error received: {}", error_msg);
-                    sender_clone
-                        .output(PlayerOutput::ShowToast(error_msg.clone()))
-                        .unwrap();
-                    sender_clone.input(PlayerInput::ShowError(error_msg));
-                }
-            });
-        }
-
-        glib::spawn_future_local(async move {
-            controller.run().await;
-        });
-
-        let placeholder = self.video_placeholder.take();
-        if placeholder.is_none() {
-            while let Some(child) = self.video_container.first_child() {
-                self.video_container.remove(&child);
-            }
-        }
-
-        let video_container = self.video_container.clone();
-        let handle_for_widget = handle.clone();
-        glib::spawn_future_local(async move {
-            if let Ok(video_widget) = handle_for_widget.create_video_widget().await {
-                if let Some(placeholder) = placeholder {
-                    video_container.remove(&placeholder);
-                }
-
-                video_widget.set_vexpand(true);
-                video_widget.set_hexpand(true);
-                video_widget.set_valign(gtk::Align::Fill);
-                video_widget.set_halign(gtk::Align::Fill);
-
-                video_container.append(&video_widget);
-                info!("Video widget successfully attached to container");
-            }
-        });
-
-        if self.is_mpv_backend {
-            let saved_mode = self.current_upscaling_mode;
-            let handle_for_upscaling = handle.clone();
-            glib::spawn_future_local(async move {
-                if let Err(err) = handle_for_upscaling.set_upscaling_mode(saved_mode).await {
-                    warn!("Failed to apply MPV upscaling mode: {}", err);
-                }
-            });
-        }
-
-        self.player = Some(handle);
-    }
-
-    async fn rebuild_player_backend(
-        &mut self,
-        config: &Config,
-        sender: &AsyncComponentSender<Self>,
-        reason: &str,
-    ) {
-        let backend_label = &config.playback.player_backend;
-        info!(
-            "Rebuilding player backend due to {} (requested={})",
-            reason, backend_label
-        );
-
-        self.is_mpv_backend = Self::backend_prefers_mpv(backend_label);
-        self.current_upscaling_mode = Self::mpv_upscaling_mode_from_config(config);
-        self.error_message = None;
-
-        if let Some(existing_player) = self.player.take() {
-            let handle = existing_player.clone();
-            glib::spawn_future_local(async move {
-                if let Err(err) = handle.stop().await {
-                    warn!(
-                        "Failed to stop previous player during backend switch: {}",
-                        err
-                    );
-                }
-            });
-        }
-
-        let active_media = self.media_item_id.clone();
-        let active_context = self.playlist_context.clone();
-
-        match PlayerController::new(config) {
-            Ok((handle, controller)) => {
-                self.attach_player_controller(handle, controller, sender);
-
-                let backend_display = if self.is_mpv_backend {
-                    "MPV"
-                } else {
-                    "GStreamer"
-                };
-
-                sender
-                    .output(PlayerOutput::ShowToast(format!(
-                        "Switched playback backend to {}",
-                        backend_display
-                    )))
-                    .ok();
-
-                if let Some(media_id) = active_media {
-                    if let Some(context) = active_context {
-                        sender.input(PlayerInput::LoadMediaWithContext { media_id, context });
-                    } else {
-                        sender.input(PlayerInput::LoadMedia(media_id));
-                    }
-                }
-            }
-            Err(e) => {
-                error!("Failed to rebuild player backend: {}", e);
-                self.error_message = Some(format!("Failed to initialize player: {}", e));
-                self.player_state = PlayerState::Error;
-            }
-        }
-    }
-
-    async fn handle_config_update(&mut self, config: &Config, sender: &AsyncComponentSender<Self>) {
-        self.config_auto_resume = config.playback.auto_resume;
-        self.config_resume_threshold_seconds = config.playback.resume_threshold_seconds as u64;
-        self.config_progress_update_interval_seconds =
-            config.playback.progress_update_interval_seconds as u64;
-        self.config_skip_intro_enabled = config.playback.skip_intro_enabled;
-        self.config_skip_credits_enabled = config.playback.skip_credits_enabled;
-        self.config_auto_skip_intro = config.playback.auto_skip_intro;
-        self.config_auto_skip_credits = config.playback.auto_skip_credits;
-        self.config_minimum_marker_duration_seconds =
-            config.playback.minimum_marker_duration_seconds as u64;
-
-        let prefer_mpv = Self::backend_prefers_mpv(&config.playback.player_backend);
-        if prefer_mpv != self.is_mpv_backend {
-            self.rebuild_player_backend(config, sender, "config update")
-                .await;
-            return;
-        }
-
-        if self.is_mpv_backend {
-            let new_mode = Self::mpv_upscaling_mode_from_config(config);
-            if new_mode != self.current_upscaling_mode {
-                self.current_upscaling_mode = new_mode;
-                if let Some(ref player) = self.player {
-                    let player_handle = player.clone();
-                    glib::spawn_future_local(async move {
-                        if let Err(err) = player_handle.set_upscaling_mode(new_mode).await {
-                            warn!("Failed to update MPV upscaling mode: {}", err);
-                        }
-                    });
-                }
-            }
-        }
-    }
-
-    async fn ensure_backend_alignment(
-        &mut self,
-        backend: &str,
-        sender: &AsyncComponentSender<Self>,
-    ) {
-        let prefer_mpv = Self::backend_prefers_mpv(backend);
-        if prefer_mpv != self.is_mpv_backend {
-            let config = CONFIG_SERVICE.get_config().await;
-            self.rebuild_player_backend(&config, sender, "backend change event")
-                .await;
-        } else {
-            info!(
-                "Player backend already using requested engine: {}",
-                if prefer_mpv { "mpv" } else { "gstreamer" }
-            );
-        }
-    }
-
-    /// Transition to the Hidden state
-    fn transition_to_hidden(&mut self, _sender: AsyncComponentSender<Self>, from_timer: bool) {
-        // Don't hide controls if a popover is open
-        if *self.active_popover_count.borrow() > 0 {
-            debug!("Popover is open, keeping controls visible");
-            return;
-        }
-        // Only try to cancel timer if not called from the timer itself
-        if !from_timer
-            && let ControlState::Visible { timer_id } = &mut self.control_state
-            && let Some(timer) = timer_id.take()
-        {
-            let _ = timer.remove();
-        }
-
-        self.control_state = ControlState::Hidden;
-
-        // Hide cursor
-        if let Some(surface) = self.window.surface() {
-            if let Some(cursor) = gtk::gdk::Cursor::from_name("none", None) {
-                surface.set_cursor(Some(&cursor));
-            } else {
-                surface.set_cursor(None);
-            }
-        }
-    }
-
-    /// Transition to the Visible state
-    fn transition_to_visible(&mut self, sender: AsyncComponentSender<Self>) {
-        // Cancel any existing timer first
-        if let ControlState::Visible { timer_id } = &mut self.control_state
-            && let Some(timer) = timer_id.take()
-        {
-            let _ = timer.remove();
-        }
-
-        // Show cursor
-        if let Some(surface) = self.window.surface()
-            && let Some(cursor) = gtk::gdk::Cursor::from_name("default", None)
-        {
-            surface.set_cursor(Some(&cursor));
-        }
-
-        // Start inactivity timer
-        let timeout_secs = self.inactivity_timeout_secs;
-        let sender_clone = sender.clone();
-        let timer_id = glib::timeout_add_seconds_local(timeout_secs as u32, move || {
-            sender_clone.input(PlayerInput::HideControls);
-            glib::ControlFlow::Break
-        });
-
-        self.control_state = ControlState::Visible {
-            timer_id: Some(timer_id),
-        };
-    }
-
-    /// Transition to the Hovering state
-    fn transition_to_hovering(&mut self, _sender: AsyncComponentSender<Self>) {
-        // Cancel any existing timer
-        if let ControlState::Visible { timer_id } = &mut self.control_state
-            && let Some(timer) = timer_id.take()
-        {
-            let _ = timer.remove();
-        }
-
-        self.control_state = ControlState::Hovering;
-
-        // Ensure cursor is visible
-        if let Some(surface) = self.window.surface()
-            && let Some(cursor) = gtk::gdk::Cursor::from_name("default", None)
-        {
-            surface.set_cursor(Some(&cursor));
-        }
-    }
-
-    /// Check if controls should be visible
-    fn controls_visible(&self) -> bool {
-        !matches!(self.control_state, ControlState::Hidden)
-    }
-
-    /// Check if mouse movement exceeds threshold
-    fn mouse_movement_exceeds_threshold(&self, x: f64, y: f64) -> bool {
-        if let Some((last_x, last_y)) = self.last_mouse_position {
-            let dx = (x - last_x).abs();
-            let dy = (y - last_y).abs();
-            let distance = (dx * dx + dy * dy).sqrt();
-            distance >= self.mouse_move_threshold
-        } else {
-            true // First movement always exceeds threshold
-        }
-    }
-
-    /// Check if mouse is over control widgets
-    fn is_mouse_over_controls(&self, _x: f64, y: f64) -> bool {
-        // For now use the heuristic approach, but this should be replaced
-        // with actual widget bounds checking when controls_overlay is properly set
-        if let Some(controls) = &self.controls_overlay {
-            // Get the height of the controls overlay
-            let controls_height = controls.height() as f64;
-            let window_height = self.window.height() as f64;
-
-            // Check if y position is within control bounds
-            // Controls are at the bottom of the window
-            y >= (window_height - controls_height - 50.0) // Add some padding
-        } else {
-            // Fallback to heuristic: bottom 20% of window
-            let window_height = self.window.height() as f64;
-            y >= window_height * 0.8
-        }
-    }
-
-    /// Set up sleep inhibition when playback starts
-    fn setup_sleep_inhibition(&mut self) {
-        // Only set up inhibition if not already active
-        if self.inhibit_cookie.is_some() {
-            return;
-        }
-
-        if let Some(app) = self.window.application() {
-            if let Ok(gtk_app) = app.downcast::<adw::Application>() {
-                use gtk4::ApplicationInhibitFlags;
-
-                let flags = ApplicationInhibitFlags::IDLE | ApplicationInhibitFlags::SUSPEND;
-                let cookie = gtk_app.inhibit(Some(&self.window), flags, Some("Playing video"));
-
-                self.inhibit_cookie = Some(cookie);
-                debug!("Sleep inhibition enabled (cookie: {})", cookie);
-            }
-        }
-    }
-
-    /// Release sleep inhibition when playback stops/pauses
-    fn release_sleep_inhibition(&mut self) {
-        if let Some(cookie) = self.inhibit_cookie.take() {
-            if let Some(app) = self.window.application() {
-                if let Ok(gtk_app) = app.downcast::<adw::Application>() {
-                    gtk_app.uninhibit(cookie);
-                    debug!("Sleep inhibition disabled (cookie: {})", cookie);
-                }
-            }
-        }
-    }
-
-    fn populate_audio_menu(&self, sender: AsyncComponentSender<Self>) {
-        if let Some(player) = &self.player {
-            let player_clone = player.clone();
-            let audio_menu_button = self.audio_menu_button.clone();
-            let _current_track = self.current_audio_track;
-            let sender = sender.clone();
-            let popover_count = self.active_popover_count.clone();
-
-            glib::spawn_future_local(async move {
-                let tracks = player_clone.get_audio_tracks().await.unwrap_or_default();
-
-                if tracks.is_empty() {
-                    // No audio tracks available, disable the button
-                    audio_menu_button.set_sensitive(false);
-                    audio_menu_button.set_popover(None::<&gtk::Popover>);
-                } else {
-                    audio_menu_button.set_sensitive(true);
-
-                    // Create menu
-                    let menu = gtk::gio::Menu::new();
-
-                    for (track_id, track_name) in &tracks {
-                        let item = gtk::gio::MenuItem::new(Some(track_name), None);
-                        let action_name = format!("player.audio-track-{}", track_id);
-                        item.set_action_and_target_value(Some(&action_name), None);
-                        menu.append_item(&item);
-                    }
-
-                    // Create popover from menu model
-                    let popover = gtk::PopoverMenu::from_model(Some(&menu));
-
-                    // Track popover state to prevent control hiding
-                    let popover_count_clone = popover_count.clone();
-                    popover.connect_show(move |_| {
-                        *popover_count_clone.borrow_mut() += 1;
-                        debug!(
-                            "Audio popover shown, count: {}",
-                            *popover_count_clone.borrow()
-                        );
-                    });
-                    popover.connect_hide(move |_| {
-                        let mut count = popover_count.borrow_mut();
-                        if *count > 0 {
-                            *count -= 1;
-                        }
-                        debug!("Audio popover hidden, count: {}", *count);
-                    });
-
-                    // Add actions for each track
-                    let action_group = gtk::gio::SimpleActionGroup::new();
-                    for (track_id, _) in &tracks {
-                        let action_name = format!("audio-track-{}", track_id);
-                        let action = gtk::gio::SimpleAction::new(&action_name, None);
-                        let sender_clone = sender.clone();
-                        let track_id_copy = *track_id;
-                        action.connect_activate(move |_, _| {
-                            sender_clone.input(PlayerInput::SetAudioTrack(track_id_copy));
-                        });
-                        action_group.add_action(&action);
-                    }
-
-                    // Insert the action group
-                    audio_menu_button.insert_action_group("player", Some(&action_group));
-                    audio_menu_button.set_popover(Some(&popover));
-                }
-            });
-        }
-    }
-
-    fn populate_subtitle_menu(&self, sender: AsyncComponentSender<Self>) {
-        if let Some(player) = &self.player {
-            let player_clone = player.clone();
-            let subtitle_menu_button = self.subtitle_menu_button.clone();
-            let _current_track = self.current_subtitle_track;
-            let sender = sender.clone();
-            let popover_count = self.active_popover_count.clone();
-
-            glib::spawn_future_local(async move {
-                let tracks = player_clone.get_subtitle_tracks().await.unwrap_or_default();
-
-                if tracks.is_empty() || tracks.len() == 1 {
-                    // No subtitle tracks available (only "None" option), disable the button
-                    subtitle_menu_button.set_sensitive(false);
-                    subtitle_menu_button.set_popover(None::<&gtk::Popover>);
-                } else {
-                    subtitle_menu_button.set_sensitive(true);
-
-                    // Create menu
-                    let menu = gtk::gio::Menu::new();
-
-                    for (track_id, track_name) in &tracks {
-                        let item = gtk::gio::MenuItem::new(Some(track_name), None);
-                        let action_name = format!("player.subtitle-track-{}", track_id);
-                        item.set_action_and_target_value(Some(&action_name), None);
-                        menu.append_item(&item);
-                    }
-
-                    // Create popover from menu model
-                    let popover = gtk::PopoverMenu::from_model(Some(&menu));
-
-                    // Track popover state to prevent control hiding
-                    let popover_count_clone = popover_count.clone();
-                    popover.connect_show(move |_| {
-                        *popover_count_clone.borrow_mut() += 1;
-                        debug!(
-                            "Subtitle popover shown, count: {}",
-                            *popover_count_clone.borrow()
-                        );
-                    });
-                    popover.connect_hide(move |_| {
-                        let mut count = popover_count.borrow_mut();
-                        if *count > 0 {
-                            *count -= 1;
-                        }
-                        debug!("Subtitle popover hidden, count: {}", *count);
-                    });
-
-                    // Add actions for each track
-                    let action_group = gtk::gio::SimpleActionGroup::new();
-                    for (track_id, _) in &tracks {
-                        let action_name = format!("subtitle-track-{}", track_id);
-                        let action = gtk::gio::SimpleAction::new(&action_name, None);
-                        let sender_clone = sender.clone();
-                        let track_id_copy = *track_id;
-                        action.connect_activate(move |_, _| {
-                            sender_clone.input(PlayerInput::SetSubtitleTrack(track_id_copy));
-                        });
-                        action_group.add_action(&action);
-                    }
-
-                    // Insert the action group
-                    subtitle_menu_button.insert_action_group("player", Some(&action_group));
-                    subtitle_menu_button.set_popover(Some(&popover));
-                }
-            });
-        }
-    }
-
-    fn populate_zoom_menu(&self, sender: AsyncComponentSender<Self>) {
-        let zoom_menu_button = self.zoom_menu_button.clone();
-        let popover_count = self.active_popover_count.clone();
-        let current_mode = self.current_zoom_mode;
-
-        zoom_menu_button.set_sensitive(true);
-        zoom_menu_button.set_tooltip_text(Some("Video Zoom"));
-
-        // Create menu
-        let menu = gtk::gio::Menu::new();
-
-        // Add zoom modes
-        let modes = [
-            (crate::player::ZoomMode::Fit, "Fit", "Fit video to window"),
-            (
-                crate::player::ZoomMode::Fill,
-                "Fill",
-                "Fill window (may crop)",
-            ),
-            (
-                crate::player::ZoomMode::Zoom16_9,
-                "16:9",
-                "Force 16:9 aspect ratio",
-            ),
-            (
-                crate::player::ZoomMode::Zoom4_3,
-                "4:3",
-                "Force 4:3 aspect ratio",
-            ),
-            (
-                crate::player::ZoomMode::Zoom2_35,
-                "2.35:1",
-                "Cinematic aspect ratio",
-            ),
-        ];
-
-        for (mode, label, _description) in modes {
-            let item = gtk::gio::MenuItem::new(Some(label), None);
-            let action_name = format!(
-                "player.zoom-{}",
-                label.to_lowercase().replace([':', '.'], "-")
-            );
-            item.set_action_and_target_value(Some(&action_name), None);
-
-            // Add checkmark for current mode
-            if mode == current_mode {
-                item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
-            }
-
-            menu.append_item(&item);
-        }
-
-        // Add custom zoom levels
-        menu.append_item(&gtk::gio::MenuItem::new(Some("──────"), None));
-        let custom_zooms = [(1.1, "110%"), (1.2, "120%"), (1.3, "130%"), (1.5, "150%")];
-
-        for (level, label) in custom_zooms {
-            let item = gtk::gio::MenuItem::new(Some(label), None);
-            let action_name = format!("player.zoom-custom-{}", label.replace('%', ""));
-            item.set_action_and_target_value(Some(&action_name), None);
-
-            // Check if it matches custom zoom
-            if let crate::player::ZoomMode::Custom(current_level) = current_mode
-                && (current_level - level).abs() < 0.01
-            {
-                item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
-            }
-
-            menu.append_item(&item);
-        }
-
-        // Create popover
-        let popover = gtk::PopoverMenu::from_model(Some(&menu));
-
-        // Track popover state to prevent control hiding
-        let popover_count_clone = popover_count.clone();
-        popover.connect_show(move |_| {
-            *popover_count_clone.borrow_mut() += 1;
-            debug!(
-                "Zoom popover shown, count: {}",
-                *popover_count_clone.borrow()
-            );
-        });
-        popover.connect_hide(move |_| {
-            let mut count = popover_count.borrow_mut();
-            if *count > 0 {
-                *count -= 1;
-            }
-            debug!("Zoom popover hidden, count: {}", *count);
-        });
-
-        // Create action group
-        let action_group = gtk::gio::SimpleActionGroup::new();
-
-        // Add actions for preset modes
-        for (mode, label, _) in modes {
-            let action_name = format!("zoom-{}", label.to_lowercase().replace([':', '.'], "-"));
-            let action = gtk::gio::SimpleAction::new(&action_name, None);
-            let sender_clone = sender.clone();
-            let mode_copy = mode;
-            action.connect_activate(move |_, _| {
-                sender_clone.input(PlayerInput::SetZoomMode(mode_copy));
-            });
-            action_group.add_action(&action);
-        }
-
-        // Add actions for custom zoom levels
-        for (level, label) in custom_zooms {
-            let action_name = format!("zoom-custom-{}", label.replace('%', ""));
-            let action = gtk::gio::SimpleAction::new(&action_name, None);
-            let sender_clone = sender.clone();
-            action.connect_activate(move |_, _| {
-                sender_clone.input(PlayerInput::SetZoomMode(crate::player::ZoomMode::Custom(
-                    level,
-                )));
-            });
-            action_group.add_action(&action);
-        }
-
-        // Insert the action group
-        zoom_menu_button.insert_action_group("player", Some(&action_group));
-        zoom_menu_button.set_popover(Some(&popover));
-    }
-
-    fn populate_quality_menu(&self, sender: AsyncComponentSender<Self>) {
-        let quality_menu_button = self.quality_menu_button.clone();
-        let popover_count = self.active_popover_count.clone();
-        let current_mode = self.current_upscaling_mode;
-        let is_mpv = self.is_mpv_backend;
-
-        if !is_mpv {
-            // Disable button for non-MPV backends
-            quality_menu_button.set_sensitive(false);
-            quality_menu_button.set_tooltip_text(Some("Upscaling only available with MPV player"));
-            return;
-        }
-
-        quality_menu_button.set_sensitive(true);
-        quality_menu_button.set_tooltip_text(Some("Video Quality"));
-
-        // Create menu
-        let menu = gtk::gio::Menu::new();
-
-        // Add upscaling modes
-        let modes = [
-            (crate::player::UpscalingMode::None, "None", "No upscaling"),
-            (
-                crate::player::UpscalingMode::HighQuality,
-                "High Quality",
-                "Enhanced quality upscaling",
-            ),
-            (
-                crate::player::UpscalingMode::FSR,
-                "FSR",
-                "AMD FidelityFX Super Resolution",
-            ),
-            (
-                crate::player::UpscalingMode::Anime,
-                "Anime",
-                "Optimized for anime content",
-            ),
-        ];
-
-        for (mode, label, _description) in modes {
-            let item = gtk::gio::MenuItem::new(Some(label), None);
-            let action_name = format!("player.quality-{}", label.to_lowercase().replace(' ', "-"));
-            item.set_action_and_target_value(Some(&action_name), None);
-
-            // Add checkmark for current mode
-            if mode == current_mode {
-                item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
-            }
-
-            menu.append_item(&item);
-        }
-
-        // Create popover from menu model
-        let popover = gtk::PopoverMenu::from_model(Some(&menu));
-
-        // Track popover state to prevent control hiding
-        let popover_count_clone = popover_count.clone();
-        popover.connect_show(move |_| {
-            *popover_count_clone.borrow_mut() += 1;
-            debug!(
-                "Quality popover shown, count: {}",
-                *popover_count_clone.borrow()
-            );
-        });
-        popover.connect_hide(move |_| {
-            let mut count = popover_count.borrow_mut();
-            if *count > 0 {
-                *count -= 1;
-            }
-            debug!("Quality popover hidden, count: {}", *count);
-        });
-
-        // Add actions for each mode
-        let action_group = gtk::gio::SimpleActionGroup::new();
-        for (mode, label, _) in modes {
-            let action_name = format!("quality-{}", label.to_lowercase().replace(' ', "-"));
-            let action = gtk::gio::SimpleAction::new(&action_name, None);
-            let sender_clone = sender.clone();
-            let mode_copy = mode;
-            action.connect_activate(move |_, _| {
-                sender_clone.input(PlayerInput::SetUpscalingMode(mode_copy));
-            });
-            action_group.add_action(&action);
-        }
-
-        // Insert the action group
-        quality_menu_button.insert_action_group("player", Some(&action_group));
-        quality_menu_button.set_popover(Some(&popover));
-    }
-
-    fn update_playlist_position_label(&self, context: &PlaylistContext) {
-        match context {
-            PlaylistContext::SingleItem => {
-                self.playlist_position_label.set_text("");
-            }
-            PlaylistContext::TvShow {
-                show_title,
-                current_index,
-                episodes,
-                ..
-            } => {
-                if let Some(current_episode) = episodes.get(*current_index) {
-                    let text = format!(
-                        "{} - S{}E{} - Episode {} of {}",
-                        show_title,
-                        current_episode.season_number,
-                        current_episode.episode_number,
-                        current_index + 1,
-                        episodes.len()
-                    );
-                    self.playlist_position_label.set_text(&text);
-                }
-            }
-            PlaylistContext::PlayQueue {
-                current_index,
-                items,
-                ..
-            } => {
-                if let Some(current_item) = items.get(*current_index) {
-                    let text = format!(
-                        "{} - Item {} of {}",
-                        current_item.title,
-                        current_index + 1,
-                        items.len()
-                    );
-                    self.playlist_position_label.set_text(&text);
-                }
-            }
-        }
-    }
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -1148,7 +400,7 @@ impl AsyncComponent for PlayerPage {
                 set_margin_bottom: 140,
                 set_margin_end: 20,
                 #[watch]
-                set_visible: model.skip_intro_visible,
+                set_visible: model.skip_marker_manager.is_skip_intro_visible(),
 
                 gtk::Button {
                     set_label: "Skip Intro",
@@ -1165,7 +417,7 @@ impl AsyncComponent for PlayerPage {
                 set_margin_bottom: 140,
                 set_margin_end: 20,
                 #[watch]
-                set_visible: model.skip_credits_visible,
+                set_visible: model.skip_marker_manager.is_skip_credits_visible(),
 
                 gtk::Button {
                     set_label: "Skip Credits",
@@ -1373,7 +625,7 @@ impl AsyncComponent for PlayerPage {
 
         // Load player CSS styles
         let css_provider = gtk::CssProvider::new();
-        css_provider.load_from_string(include_str!("../../styles/player.css"));
+        css_provider.load_from_string(include_str!("../../../styles/player.css"));
         gtk::style_context_add_provider_for_display(
             &gtk::gdk::Display::default().expect("Could not get default display"),
             &css_provider,
@@ -1518,22 +770,16 @@ impl AsyncComponent for PlayerPage {
             inactivity_timeout_secs: Self::DEFAULT_INACTIVITY_TIMEOUT_SECS,
             mouse_move_threshold: Self::DEFAULT_MOUSE_MOVE_THRESHOLD,
             window_event_debounce_ms: Self::DEFAULT_WINDOW_EVENT_DEBOUNCE_MS,
-            // Skip intro/credits state
-            intro_marker: None,
-            credits_marker: None,
-            skip_intro_visible: false,
-            skip_credits_visible: false,
-            skip_intro_hide_timer: None,
-            skip_credits_hide_timer: None,
-            // Cached skip intro/credits config values
-            config_skip_intro_enabled: config.playback.skip_intro_enabled,
-            config_skip_credits_enabled: config.playback.skip_credits_enabled,
-            config_auto_skip_intro: config.playback.auto_skip_intro,
-            config_auto_skip_credits: config.playback.auto_skip_credits,
-            config_minimum_marker_duration_seconds: config.playback.minimum_marker_duration_seconds
-                as u64,
+            // Skip intro/credits management
+            skip_marker_manager: SkipMarkerManager::new(
+                config.playback.skip_intro_enabled,
+                config.playback.skip_credits_enabled,
+                config.playback.auto_skip_intro,
+                config.playback.auto_skip_credits,
+                config.playback.minimum_marker_duration_seconds as u64,
+            ),
             // Sleep inhibition
-            inhibit_cookie: None,
+            sleep_inhibitor: SleepInhibitor::new(),
         };
 
         // Initialize the player controller
@@ -1887,16 +1133,7 @@ impl AsyncComponent for PlayerPage {
                     let _ = timeout.remove();
                 }
                 // Clear skip button state
-                self.intro_marker = None;
-                self.credits_marker = None;
-                self.skip_intro_visible = false;
-                self.skip_credits_visible = false;
-                if let Some(timer) = self.skip_intro_hide_timer.take() {
-                    let _ = timer.remove();
-                }
-                if let Some(timer) = self.skip_credits_hide_timer.take() {
-                    let _ = timer.remove();
-                }
+                self.skip_marker_manager.clear_markers();
 
                 // Load marker data from database and fetch from backend if missing
                 let db_clone_for_markers = self.db.clone();
@@ -2153,16 +1390,7 @@ impl AsyncComponent for PlayerPage {
                     let _ = timeout.remove();
                 }
                 // Clear skip button state
-                self.intro_marker = None;
-                self.credits_marker = None;
-                self.skip_intro_visible = false;
-                self.skip_credits_visible = false;
-                if let Some(timer) = self.skip_intro_hide_timer.take() {
-                    let _ = timer.remove();
-                }
-                if let Some(timer) = self.skip_credits_hide_timer.take() {
-                    let _ = timer.remove();
-                }
+                self.skip_marker_manager.clear_markers();
 
                 // Load marker data from database and fetch from backend if missing
                 let db_clone_for_markers = self.db.clone();
@@ -2592,44 +1820,10 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::Previous => {
-                debug!("Previous track requested");
-
-                if let Some(ref context) = self.playlist_context {
-                    if let Some(prev_id) = context.get_previous_item() {
-                        // Keep the context and just load the previous media
-                        let mut new_context = context.clone();
-                        new_context.update_current_index(&prev_id);
-
-                        sender.input(PlayerInput::LoadMediaWithContext {
-                            media_id: prev_id,
-                            context: new_context,
-                        });
-                    } else {
-                        debug!("No previous episode available");
-                    }
-                } else {
-                    debug!("No playlist context available for previous navigation");
-                }
+                self.handle_previous_navigation(&sender);
             }
             PlayerInput::Next => {
-                debug!("Next track requested");
-
-                if let Some(ref context) = self.playlist_context {
-                    if let Some(next_id) = context.get_next_item() {
-                        // Keep the context and just load the next media
-                        let mut new_context = context.clone();
-                        new_context.update_current_index(&next_id);
-
-                        sender.input(PlayerInput::LoadMediaWithContext {
-                            media_id: next_id,
-                            context: new_context,
-                        });
-                    } else {
-                        debug!("No next episode available");
-                    }
-                } else {
-                    debug!("No playlist context available for next navigation");
-                }
+                self.handle_next_navigation(&sender);
             }
             PlayerInput::StartSeeking => {
                 self.is_seeking = true;
@@ -2838,139 +2032,23 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::UpdateSkipButtonsVisibility => {
-                // Check if position is within intro marker range
-                if let Some(ref intro) = self.intro_marker {
-                    // Check if marker meets minimum duration threshold
-                    let marker_duration = intro.end_time.as_secs() - intro.start_time.as_secs();
-                    let meets_threshold =
-                        marker_duration >= self.config_minimum_marker_duration_seconds;
-
-                    // Check if we're in the intro time range
-                    let in_intro_range =
-                        self.position >= intro.start_time && self.position < intro.end_time;
-
-                    if in_intro_range && meets_threshold {
-                        // Auto-skip if configured
-                        if self.config_auto_skip_intro {
-                            // Only skip once at the start of the intro
-                            if !self.skip_intro_visible
-                                && self.position < intro.start_time + Duration::from_secs(1)
-                            {
-                                debug!("Auto-skipping intro");
-                                sender.input(PlayerInput::Seek(intro.end_time));
-                            }
-                        } else if self.config_skip_intro_enabled {
-                            // Show button if enabled
-                            let was_visible = self.skip_intro_visible;
-                            if !was_visible {
-                                self.skip_intro_visible = true;
-
-                                // Start auto-hide timer when button becomes visible
-                                // Cancel any existing timer
-                                if let Some(timer) = self.skip_intro_hide_timer.take() {
-                                    let _ = timer.remove();
-                                }
-
-                                // Start 5 second auto-hide timer
-                                let sender_clone = sender.clone();
-                                let timer = glib::timeout_add_seconds_local(5, move || {
-                                    sender_clone.input(PlayerInput::HideSkipIntro);
-                                    glib::ControlFlow::Break
-                                });
-                                self.skip_intro_hide_timer = Some(timer);
-                            }
-                        }
-                    } else {
-                        self.skip_intro_visible = false;
-                    }
-                } else {
-                    self.skip_intro_visible = false;
-                }
-
-                // Check if position is within credits marker range
-                if let Some(ref credits) = self.credits_marker {
-                    // Check if marker meets minimum duration threshold
-                    let marker_duration = credits.end_time.as_secs() - credits.start_time.as_secs();
-                    let meets_threshold =
-                        marker_duration >= self.config_minimum_marker_duration_seconds;
-
-                    // Check if we're in the credits time range
-                    let in_credits_range =
-                        self.position >= credits.start_time && self.position < credits.end_time;
-
-                    if in_credits_range && meets_threshold {
-                        // Auto-skip if configured
-                        if self.config_auto_skip_credits {
-                            // Only skip once at the start of the credits
-                            if !self.skip_credits_visible
-                                && self.position < credits.start_time + Duration::from_secs(1)
-                            {
-                                debug!("Auto-skipping credits");
-                                sender.input(PlayerInput::Seek(credits.end_time));
-                            }
-                        } else if self.config_skip_credits_enabled {
-                            // Show button if enabled
-                            let was_visible = self.skip_credits_visible;
-                            if !was_visible {
-                                self.skip_credits_visible = true;
-
-                                // Start auto-hide timer when button becomes visible
-                                // Cancel any existing timer
-                                if let Some(timer) = self.skip_credits_hide_timer.take() {
-                                    let _ = timer.remove();
-                                }
-
-                                // Start 5 second auto-hide timer
-                                let sender_clone = sender.clone();
-                                let timer = glib::timeout_add_seconds_local(5, move || {
-                                    sender_clone.input(PlayerInput::HideSkipCredits);
-                                    glib::ControlFlow::Break
-                                });
-                                self.skip_credits_hide_timer = Some(timer);
-                            }
-                        }
-                    } else {
-                        self.skip_credits_visible = false;
-                    }
-                } else {
-                    self.skip_credits_visible = false;
-                }
+                self.skip_marker_manager
+                    .update_visibility(self.position, &sender);
             }
             PlayerInput::HideSkipIntro => {
-                self.skip_intro_visible = false;
-                // Clear the timer without calling remove() - it already fired and was removed by GLib
-                self.skip_intro_hide_timer.take();
+                self.skip_marker_manager.hide_skip_intro();
             }
             PlayerInput::HideSkipCredits => {
-                self.skip_credits_visible = false;
-                // Clear the timer without calling remove() - it already fired and was removed by GLib
-                self.skip_credits_hide_timer.take();
+                self.skip_marker_manager.hide_skip_credits();
             }
             PlayerInput::SkipIntro => {
-                if let Some(ref intro) = self.intro_marker {
-                    // Seek to the end of the intro marker
-                    sender.input(PlayerInput::Seek(intro.end_time));
-                    // Hide the button immediately
-                    self.skip_intro_visible = false;
-                    if let Some(timer) = self.skip_intro_hide_timer.take() {
-                        let _ = timer.remove();
-                    }
-                }
+                self.skip_marker_manager.skip_intro(&sender);
             }
             PlayerInput::SkipCredits => {
-                if let Some(ref credits) = self.credits_marker {
-                    // Seek to the end of the credits marker
-                    sender.input(PlayerInput::Seek(credits.end_time));
-                    // Hide the button immediately
-                    self.skip_credits_visible = false;
-                    if let Some(timer) = self.skip_credits_hide_timer.take() {
-                        let _ = timer.remove();
-                    }
-                }
+                self.skip_marker_manager.skip_credits(&sender);
             }
             PlayerInput::LoadedMarkers { intro, credits } => {
-                self.intro_marker = intro;
-                self.credits_marker = credits;
+                self.skip_marker_manager.load_markers(intro, credits);
                 // Trigger visibility check
                 sender.input(PlayerInput::UpdateSkipButtonsVisibility);
             }
@@ -3171,7 +2249,7 @@ impl AsyncComponent for PlayerPage {
                 if matches!(&state, PlayerState::Playing) {
                     root.grab_focus();
                     // Enable sleep inhibition when playback starts
-                    self.setup_sleep_inhibition();
+                    self.sleep_inhibitor.setup(&self.window);
                 }
 
                 // Release sleep inhibition when playback stops, pauses, or errors
@@ -3179,7 +2257,7 @@ impl AsyncComponent for PlayerPage {
                     &state,
                     PlayerState::Paused | PlayerState::Stopped | PlayerState::Error
                 ) {
-                    self.release_sleep_inhibition();
+                    self.sleep_inhibitor.release(&self.window);
                 }
 
                 // Send immediate timeline update on play, pause, or stop state changes
@@ -3508,7 +2586,7 @@ impl AsyncComponent for PlayerPage {
         }
 
         // Release sleep inhibition
-        self.release_sleep_inhibition();
+        self.sleep_inhibitor.release(&self.window);
 
         tracing::debug!("PlayerPage shutdown: restored cursor and cleaned up timers");
     }
