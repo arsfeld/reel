@@ -34,6 +34,7 @@ pub struct HomePage {
     source_states: HashMap<SourceId, SectionLoadState>, // Track per-source loading states
     loading_containers: HashMap<SourceId, gtk::Box>,    // UI containers for loading/error states
     section_ui_containers: HashMap<String, gtk::Box>, // Track actual section UI containers by section_id
+    load_in_progress: bool, // Track if a LoadData operation is currently in progress
 }
 
 impl std::fmt::Debug for HomePage {
@@ -50,6 +51,8 @@ impl std::fmt::Debug for HomePage {
 pub enum HomePageInput {
     /// Load home page data
     LoadData,
+    /// Load data complete (all sources processed)
+    LoadDataComplete,
     /// Source-specific sections loaded
     SourceSectionsLoaded {
         source_id: SourceId,
@@ -188,6 +191,7 @@ impl AsyncComponent for HomePage {
             source_states: HashMap::new(),
             loading_containers: HashMap::new(),
             section_ui_containers: HashMap::new(),
+            load_in_progress: false,
         };
 
         let widgets = view_output!();
@@ -219,7 +223,15 @@ impl AsyncComponent for HomePage {
     ) {
         match msg {
             HomePageInput::LoadData => {
+                // Prevent concurrent loads - ignore if already loading
+                if self.load_in_progress {
+                    debug!("Load already in progress, ignoring duplicate LoadData request");
+                    return;
+                }
+
                 debug!("Loading home page data - offline-first approach");
+                self.load_in_progress = true;
+                self.is_loading = true;
 
                 // Clear existing sections
                 self.clear_sections();
@@ -238,9 +250,13 @@ impl AsyncComponent for HomePage {
                     // Get all sources to load sections for
                     use crate::db::repository::source_repository::SourceRepositoryImpl;
                     let source_repo = SourceRepositoryImpl::new(db.clone());
+
+                    let mut sources_processed = 0;
+
                     if let Ok(sources) = source_repo.find_all().await {
                         for source in sources {
                             let source_id = SourceId::new(source.id.clone());
+                            sources_processed += 1;
 
                             // Load cached sections for this source
                             if let Ok(persisted_sections) =
@@ -297,10 +313,20 @@ impl AsyncComponent for HomePage {
                         }
                     }
 
+                    // Signal that we've finished processing all sources
+                    sender_clone.input(HomePageInput::LoadDataComplete);
+
                     // Note: Background API refresh should be triggered by sync worker, not here
                     // The home page should only read from cache, never fetch from API directly
                     // This ensures data is properly persisted to the database
                 });
+            }
+
+            HomePageInput::LoadDataComplete => {
+                debug!("Load data complete - all sources processed");
+                // Mark loading as complete
+                self.load_in_progress = false;
+                self.is_loading = false;
             }
 
             HomePageInput::SourceSectionsLoaded {
@@ -511,8 +537,9 @@ impl AsyncComponent for HomePage {
                                 "Playback progress updated for media {}: watched={}",
                                 media_id, watched
                             );
-                            // Reload home page to update continue watching and watch status
-                            sender.input(HomePageInput::LoadData);
+                            // Don't reload here - progress updates happen while watching video
+                            // and the home page isn't even visible. We'll reload when navigating
+                            // back to the home page instead.
                         }
                         _ => {
                             // Ignore other data messages
@@ -988,6 +1015,8 @@ impl HomePage {
                 "All sources finished loading. Total sections: {}",
                 self.sections.len()
             );
+            // Clear the load_in_progress flag now that all sources are done
+            self.load_in_progress = false;
         }
     }
 

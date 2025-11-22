@@ -227,6 +227,11 @@ fn navigate_home(window: &mut MainWindow, sender: &AsyncComponentSender<MainWind
         // Clear any custom header content
         sender.input(MainWindowInput::ClearHeaderContent);
         sender.input(MainWindowInput::Navigate("update_header".to_string()));
+
+        // Reload home page data to reflect any changes from watching videos
+        window
+            .home_page
+            .emit(crate::ui::pages::home::HomePageInput::LoadData);
         return;
     }
 
@@ -270,6 +275,11 @@ fn navigate_home(window: &mut MainWindow, sender: &AsyncComponentSender<MainWind
 
     // Trigger header update
     sender.input(MainWindowInput::Navigate("update_header".to_string()));
+
+    // Reload home page data to reflect any changes from watching videos
+    window
+        .home_page
+        .emit(crate::ui::pages::home::HomePageInput::LoadData);
 }
 
 /// Navigate to sources page
