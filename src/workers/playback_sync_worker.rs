@@ -147,7 +147,6 @@ impl PlaybackSyncWorker {
         };
 
         if pending_items.is_empty() {
-            debug!("No pending items in sync queue");
             return;
         }
 

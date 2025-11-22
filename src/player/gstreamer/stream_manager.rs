@@ -297,7 +297,8 @@ impl StreamManager {
             tracks.push((stream.index, track_name));
         }
 
-        // If no streams found yet, provide default
+        // No workaround needed - stream collections are now reliably processed
+        // during load_media() before any track queries can happen
         if tracks.is_empty() {
             if let Some(pb) = playbin {
                 let timeout = if cfg!(target_os = "macos") {
@@ -310,9 +311,10 @@ impl StreamManager {
                 if current < gst::State::Paused {
                     debug!("Playbin not in PAUSED/PLAYING state yet, no audio tracks available");
                 } else {
-                    // Provide a default track if playbin is ready but no collection received yet
-                    debug!("No stream collection available, providing default audio track");
-                    tracks.push((0, "Audio Track 1".to_string()));
+                    // Stream collection should have been received during preroll
+                    warn!(
+                        "Playbin is ready but no stream collection available - this indicates a timing issue"
+                    );
                 }
             }
         }
