@@ -3,10 +3,11 @@ use tracing::{debug, warn};
 
 use crate::db::{
     connection::DatabaseConnection,
-    entities::LibraryModel,
+    entities::{LibraryModel, SyncChangeType},
     repository::{
         LibraryRepository, LibraryRepositoryImpl, MediaRepository, MediaRepositoryImpl,
-        PeopleRepository, PlaybackRepository, PlaybackRepositoryImpl, Repository,
+        PeopleRepository, PlaybackRepository, PlaybackRepositoryImpl, PlaybackSyncRepository,
+        PlaybackSyncRepositoryImpl, Repository,
     },
 };
 use crate::models::{Library, LibraryId, MediaItem, MediaItemId, MediaType, ShowId, SourceId};
@@ -804,66 +805,6 @@ impl MediaService {
         Ok(())
     }
 
-    /// Helper function to retry backend sync with exponential backoff
-    async fn retry_backend_sync<F, Fut>(
-        operation_name: &str,
-        media_id: &MediaItemId,
-        max_retries: u32,
-        operation: F,
-    ) -> Result<()>
-    where
-        F: Fn() -> Fut,
-        Fut: std::future::Future<Output = Result<()>>,
-    {
-        let mut attempt = 0;
-        let mut last_error = None;
-
-        while attempt <= max_retries {
-            match operation().await {
-                Ok(()) => {
-                    debug!(
-                        "Successfully synced {} to backend for {} (attempt {}/{})",
-                        operation_name,
-                        media_id.as_ref(),
-                        attempt + 1,
-                        max_retries + 1
-                    );
-                    return Ok(());
-                }
-                Err(e) => {
-                    last_error = Some(e);
-
-                    if attempt < max_retries {
-                        // Exponential backoff: 1s, 2s, 4s
-                        let delay_ms = 1000 * (1 << attempt);
-                        debug!(
-                            "Failed to sync {} for {}, retrying in {}ms (attempt {}/{}): {}",
-                            operation_name,
-                            media_id.as_ref(),
-                            delay_ms,
-                            attempt + 1,
-                            max_retries + 1,
-                            last_error.as_ref().unwrap()
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                    }
-
-                    attempt += 1;
-                }
-            }
-        }
-
-        let err = last_error.unwrap();
-        warn!(
-            "Failed to sync {} to backend for {} after {} attempts: {}",
-            operation_name,
-            media_id.as_ref(),
-            max_retries + 1,
-            err
-        );
-        Err(err)
-    }
-
     /// Update playback progress for a media item
     pub async fn update_playback_progress(
         db: &DatabaseConnection,
@@ -882,55 +823,55 @@ impl MediaService {
                 .await?;
         }
 
-        // Also sync progress to the backend server in a fire-and-forget manner
+        // Enqueue sync change to be processed by PlaybackSyncWorker
         // Parse source ID from media ID (format: "source_id:item_id")
         let media_id_str = media_id.to_string();
         if let Some(colon_pos) = media_id_str.find(':') {
-            let source_id = media_id_str[..colon_pos].to_string();
-            let media_id_clone = media_id.clone();
-            let db_clone = db.clone();
-            let position_ms_clone = position_ms;
-            let duration_ms_clone = duration_ms;
-            let watched_clone = watched;
+            let source_id_str = &media_id_str[..colon_pos];
 
-            // Spawn a detached task to sync with backend (with retry logic)
-            tokio::spawn(async move {
-                use crate::services::core::backend::BackendService;
-                use std::time::Duration;
+            // Parse source_id as i32
+            if let Ok(source_id) = source_id_str.parse::<i32>() {
+                let sync_repo = PlaybackSyncRepositoryImpl::new(db.clone());
 
-                let operation_name = if watched_clone {
-                    "watched status"
+                // Determine change type based on watched status
+                let (change_type, pos_ms) = if watched {
+                    (SyncChangeType::MarkWatched, None)
                 } else {
-                    "playback progress"
+                    (SyncChangeType::ProgressUpdate, Some(position_ms))
                 };
 
-                // Retry up to 2 times (3 attempts total) with exponential backoff
-                let _result = Self::retry_backend_sync(
-                    operation_name,
-                    &media_id_clone,
-                    2, // max_retries
-                    || async {
-                        if watched_clone {
-                            BackendService::mark_watched(&db_clone, &source_id, &media_id_clone)
-                                .await
-                        } else {
-                            let position = Duration::from_millis(position_ms_clone as u64);
-                            let duration = Duration::from_millis(duration_ms_clone as u64);
-                            BackendService::update_playback_progress(
-                                &db_clone,
-                                &source_id,
-                                &media_id_clone,
-                                position,
-                                duration,
-                            )
-                            .await
-                        }
-                    },
-                )
-                .await;
-
-                // Result is already logged by retry_backend_sync
-            });
+                // Enqueue the change for background sync
+                match sync_repo
+                    .enqueue_change(
+                        media_id.as_ref(),
+                        source_id,
+                        None, // user_id (single-user system)
+                        change_type.clone(),
+                        pos_ms,
+                        Some(watched),
+                    )
+                    .await
+                {
+                    Ok(queued_item) => {
+                        debug!(
+                            "Enqueued {:?} sync for {} (queue_id: {})",
+                            change_type,
+                            media_id.as_ref(),
+                            queued_item.id
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to enqueue {:?} sync for {}: {}",
+                            change_type,
+                            media_id.as_ref(),
+                            e
+                        );
+                    }
+                }
+            } else {
+                warn!("Failed to parse source_id from media_id: {}", media_id_str);
+            }
         }
 
         Ok(())
@@ -943,41 +884,52 @@ impl MediaService {
         // Mark as watched in database (None for user_id for single-user system)
         repo.mark_watched(media_id.as_ref(), None).await?;
 
-        // Look up the media item to get its source_id
+        // Enqueue sync change to be processed by PlaybackSyncWorker
         let media_repo = MediaRepositoryImpl::new(db.clone());
         if let Ok(Some(media_item)) = media_repo.find_by_id(media_id.as_ref()).await {
-            let source_id = media_item.source_id.clone();
-            let media_id_clone = media_id.clone();
-            let db_clone = db.clone();
+            let source_id_str = &media_item.source_id;
 
-            debug!(
-                "Spawning backend sync task for media_id: {} with source_id: {}",
-                media_id.as_ref(),
-                source_id
-            );
-
-            // Sync to backend with retry logic
-            tokio::spawn(async move {
-                use crate::services::core::backend::BackendService;
-
+            // Parse source_id as i32
+            if let Ok(source_id) = source_id_str.parse::<i32>() {
                 debug!(
-                    "Backend sync task running for media_id: {}",
-                    media_id_clone.as_ref()
+                    "Enqueueing mark_watched sync for media_id: {} with source_id: {}",
+                    media_id.as_ref(),
+                    source_id
                 );
 
-                // Retry up to 2 times (3 attempts total) with exponential backoff
-                let _result = Self::retry_backend_sync(
-                    "watched status",
-                    &media_id_clone,
-                    2, // max_retries
-                    || async {
-                        BackendService::mark_watched(&db_clone, &source_id, &media_id_clone).await
-                    },
-                )
-                .await;
-
-                // Result is already logged by retry_backend_sync
-            });
+                let sync_repo = PlaybackSyncRepositoryImpl::new(db.clone());
+                match sync_repo
+                    .enqueue_change(
+                        media_id.as_ref(),
+                        source_id,
+                        None, // user_id (single-user system)
+                        SyncChangeType::MarkWatched,
+                        None,       // position_ms not needed for mark_watched
+                        Some(true), // completed = true
+                    )
+                    .await
+                {
+                    Ok(queued_item) => {
+                        debug!(
+                            "Enqueued mark_watched sync for {} (queue_id: {})",
+                            media_id.as_ref(),
+                            queued_item.id
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to enqueue mark_watched sync for {}: {}",
+                            media_id.as_ref(),
+                            e
+                        );
+                    }
+                }
+            } else {
+                warn!(
+                    "Failed to parse source_id from media item: {}",
+                    source_id_str
+                );
+            }
         } else {
             warn!(
                 "Could not find media item {} in database to sync watch status",
@@ -995,41 +947,52 @@ impl MediaService {
         // Mark as unwatched in database (None for user_id for single-user system)
         repo.mark_unwatched(media_id.as_ref(), None).await?;
 
-        // Look up the media item to get its source_id
+        // Enqueue sync change to be processed by PlaybackSyncWorker
         let media_repo = MediaRepositoryImpl::new(db.clone());
         if let Ok(Some(media_item)) = media_repo.find_by_id(media_id.as_ref()).await {
-            let source_id = media_item.source_id.clone();
-            let media_id_clone = media_id.clone();
-            let db_clone = db.clone();
+            let source_id_str = &media_item.source_id;
 
-            debug!(
-                "Spawning backend sync task for media_id: {} with source_id: {}",
-                media_id.as_ref(),
-                source_id
-            );
-
-            // Sync to backend with retry logic
-            tokio::spawn(async move {
-                use crate::services::core::backend::BackendService;
-
+            // Parse source_id as i32
+            if let Ok(source_id) = source_id_str.parse::<i32>() {
                 debug!(
-                    "Backend sync task running for media_id: {}",
-                    media_id_clone.as_ref()
+                    "Enqueueing mark_unwatched sync for media_id: {} with source_id: {}",
+                    media_id.as_ref(),
+                    source_id
                 );
 
-                // Retry up to 2 times (3 attempts total) with exponential backoff
-                let _result = Self::retry_backend_sync(
-                    "unwatched status",
-                    &media_id_clone,
-                    2, // max_retries
-                    || async {
-                        BackendService::mark_unwatched(&db_clone, &source_id, &media_id_clone).await
-                    },
-                )
-                .await;
-
-                // Result is already logged by retry_backend_sync
-            });
+                let sync_repo = PlaybackSyncRepositoryImpl::new(db.clone());
+                match sync_repo
+                    .enqueue_change(
+                        media_id.as_ref(),
+                        source_id,
+                        None, // user_id (single-user system)
+                        SyncChangeType::MarkUnwatched,
+                        None,        // position_ms not needed for mark_unwatched
+                        Some(false), // completed = false
+                    )
+                    .await
+                {
+                    Ok(queued_item) => {
+                        debug!(
+                            "Enqueued mark_unwatched sync for {} (queue_id: {})",
+                            media_id.as_ref(),
+                            queued_item.id
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to enqueue mark_unwatched sync for {}: {}",
+                            media_id.as_ref(),
+                            e
+                        );
+                    }
+                }
+            } else {
+                warn!(
+                    "Failed to parse source_id from media item: {}",
+                    source_id_str
+                );
+            }
         } else {
             warn!(
                 "Could not find media item {} in database to sync watch status",
