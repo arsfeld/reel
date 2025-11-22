@@ -168,6 +168,7 @@ pub enum PlayerInput {
     ShowError(String),
     EscapePressed,
     NavigateBack,
+    ClearAutoPlayTimeout,
     // Speed controls
     SpeedUp,
     SpeedDown,
@@ -1130,7 +1131,13 @@ impl AsyncComponent for PlayerPage {
                 // Reset auto-play state
                 self.auto_play_triggered = false;
                 if let Some(timeout) = self.auto_play_timeout.take() {
-                    let _ = timeout.remove();
+                    // Timeout may have already fired and been auto-removed by GLib
+                    // Use catch_unwind to handle the panic gracefully
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| timeout.remove()))
+                        .is_err()
+                    {
+                        debug!("Auto-play timeout already removed (likely fired)");
+                    }
                 }
                 // Clear skip button state
                 self.skip_marker_manager.clear_markers();
@@ -1387,7 +1394,13 @@ impl AsyncComponent for PlayerPage {
                 // Reset auto-play state
                 self.auto_play_triggered = false;
                 if let Some(timeout) = self.auto_play_timeout.take() {
-                    let _ = timeout.remove();
+                    // Timeout may have already fired and been auto-removed by GLib
+                    // Use catch_unwind to handle the panic gracefully
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| timeout.remove()))
+                        .is_err()
+                    {
+                        debug!("Auto-play timeout already removed (likely fired)");
+                    }
                 }
                 // Clear skip button state
                 self.skip_marker_manager.clear_markers();
@@ -2159,6 +2172,11 @@ impl AsyncComponent for PlayerPage {
                 // Navigate back
                 sender.output(PlayerOutput::NavigateBack).unwrap();
             }
+            PlayerInput::ClearAutoPlayTimeout => {
+                // Clear the auto-play timeout reference without trying to remove it
+                // (it's about to be removed automatically by GLib when it fires)
+                self.auto_play_timeout = None;
+            }
             PlayerInput::SetUpscalingMode(mode) => {
                 if let Some(player) = &self.player {
                     self.current_upscaling_mode = mode;
@@ -2387,6 +2405,9 @@ impl AsyncComponent for PlayerPage {
                                         let sender_clone = sender.clone();
                                         let timeout_id =
                                             glib::timeout_add_seconds_local(3, move || {
+                                                // Clear the timeout reference before it's auto-removed by GLib
+                                                sender_clone
+                                                    .input(PlayerInput::ClearAutoPlayTimeout);
                                                 sender_clone.input(PlayerInput::Next);
                                                 glib::ControlFlow::Break
                                             });
@@ -2403,6 +2424,9 @@ impl AsyncComponent for PlayerPage {
                                         let sender_clone = sender.clone();
                                         let timeout_id =
                                             glib::timeout_add_seconds_local(5, move || {
+                                                // Clear the timeout reference before it's auto-removed by GLib
+                                                sender_clone
+                                                    .input(PlayerInput::ClearAutoPlayTimeout);
                                                 sender_clone.input(PlayerInput::NavigateBack);
                                                 glib::ControlFlow::Break
                                             });
@@ -2582,7 +2606,11 @@ impl AsyncComponent for PlayerPage {
 
         // Clean up auto-play timeout
         if let Some(timer) = self.auto_play_timeout.take() {
-            let _ = timer.remove();
+            // Timeout may have already fired and been auto-removed by GLib
+            // Use catch_unwind to handle the panic gracefully
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| timer.remove())).is_err() {
+                debug!("Auto-play timeout already removed (likely fired)");
+            }
         }
 
         // Release sleep inhibition
