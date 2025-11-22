@@ -22,6 +22,9 @@ mod backend_manager;
 mod playlist_navigation;
 mod skip_markers;
 use skip_markers::SkipMarkerManager;
+mod buffering_overlay;
+use buffering_overlay::{BufferingOverlay, BufferingOverlayInput};
+mod buffering_warnings;
 
 fn format_duration(duration: Duration) -> String {
     let total_secs = duration.as_secs();
@@ -110,6 +113,8 @@ pub struct PlayerPage {
     skip_marker_manager: SkipMarkerManager,
     // Sleep inhibition
     sleep_inhibitor: SleepInhibitor,
+    // Buffering overlay component
+    buffering_overlay: Controller<BufferingOverlay>,
 }
 
 impl PlayerPage {
@@ -393,6 +398,9 @@ impl AsyncComponent for PlayerPage {
                     },
                 },
             },
+
+            // Buffering overlay
+            add_overlay = model.buffering_overlay.widget(),
 
             // Skip intro button overlay
             add_overlay = &gtk::Box {
@@ -781,6 +789,8 @@ impl AsyncComponent for PlayerPage {
             ),
             // Sleep inhibition
             sleep_inhibitor: SleepInhibitor::new(),
+            // Buffering overlay
+            buffering_overlay: BufferingOverlay::builder().launch(()).detach(),
         };
 
         // Initialize the player controller
