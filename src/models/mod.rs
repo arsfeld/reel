@@ -20,6 +20,18 @@ pub struct User {
     pub avatar_url: Option<String>,
 }
 
+/// Playback progress information from a backend
+/// Used for conflict resolution when syncing local changes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaybackProgress {
+    /// Current playback position
+    pub position: Option<Duration>,
+    /// Whether the item is marked as watched
+    pub is_watched: Option<bool>,
+    /// When the progress was last updated (if available from backend)
+    pub last_updated_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Library {
     pub id: String,

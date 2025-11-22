@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::models::{
     AuthenticationResult, ChapterMarker, Credentials, Episode, HomeSection, Library, LibraryId,
-    MediaItemId, Movie, Season, Show, ShowId, StreamInfo, User,
+    MediaItemId, Movie, PlaybackProgress, Season, Show, ShowId, StreamInfo, User,
 };
 
 #[async_trait]
@@ -81,6 +81,19 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
         // Default implementation does nothing
         // Backends should override this to sync watch status
         Ok(())
+    }
+
+    /// Get current playback progress for a media item from the backend
+    /// Used for conflict resolution when syncing local changes
+    /// Returns PlaybackProgress with position and watch status
+    async fn get_playback_progress(&self, _item_id: &str) -> Result<PlaybackProgress> {
+        // Default implementation returns unknown state
+        // Backends should override this to enable conflict resolution
+        Ok(PlaybackProgress {
+            position: None,
+            is_watched: None,
+            last_updated_at: None,
+        })
     }
 
     // Marker and navigation methods removed - never used in production

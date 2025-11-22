@@ -280,6 +280,7 @@ impl PlaybackSyncWorker {
     ) -> anyhow::Result<()> {
         use crate::db::repository::Repository;
         use crate::db::repository::source_repository::SourceRepositoryImpl;
+        use crate::services::conflict_resolver::ConflictResolverContext;
 
         // Load source
         let source_repo = SourceRepositoryImpl::new(db.as_ref().clone());
@@ -293,6 +294,28 @@ impl PlaybackSyncWorker {
 
         // Parse change type
         let change_type = item.get_change_type().map_err(|e| anyhow::anyhow!(e))?;
+
+        // Create conflict resolver (using Local-Progressive strategy by default)
+        let resolver = ConflictResolverContext::new_local_progressive();
+
+        // Check if we should proceed with sync (conflict resolution)
+        let should_sync = resolver
+            .should_sync(
+                &change_type,
+                backend.as_ref(),
+                &item.media_item_id,
+                item.position_ms,
+                item.completed,
+            )
+            .await?;
+
+        if !should_sync {
+            info!(
+                "Skipping sync for {} due to conflict resolution (backend has more recent/better data)",
+                item.media_item_id
+            );
+            return Ok(());
+        }
 
         // Execute the appropriate sync operation
         match change_type {
@@ -312,18 +335,18 @@ impl PlaybackSyncWorker {
                     .update_progress(&media_id, position, duration)
                     .await?;
 
-                debug!(
+                info!(
                     "Updated playback progress for {} to {}ms",
                     item.media_item_id, position_ms
                 );
             }
             SyncChangeType::MarkWatched => {
                 backend.mark_watched(&item.media_item_id).await?;
-                debug!("Marked {} as watched", item.media_item_id);
+                info!("Marked {} as watched", item.media_item_id);
             }
             SyncChangeType::MarkUnwatched => {
                 backend.mark_unwatched(&item.media_item_id).await?;
-                debug!("Marked {} as unwatched", item.media_item_id);
+                info!("Marked {} as unwatched", item.media_item_id);
             }
         }
 
