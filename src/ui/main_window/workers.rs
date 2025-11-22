@@ -5,8 +5,9 @@ use tokio::runtime::Runtime;
 use crate::db::connection::DatabaseConnection;
 use crate::models::SourceId;
 use crate::workers::{
-    ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput, SearchWorker,
-    SearchWorkerInput, SearchWorkerOutput, SyncWorker, SyncWorkerInput, SyncWorkerOutput,
+    ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput, PlaybackSyncWorker,
+    PlaybackSyncWorkerInput, PlaybackSyncWorkerOutput, SearchWorker, SearchWorkerInput,
+    SearchWorkerOutput, SyncWorker, SyncWorkerInput, SyncWorkerOutput,
     cache_cleanup_worker::{
         CacheCleanupInput, CacheCleanupOutput, CacheCleanupWorker, CleanupConfig,
     },
@@ -20,6 +21,7 @@ pub struct Workers {
     pub config_manager: relm4::WorkerController<ConfigManager>,
     pub connection_monitor: relm4::WorkerController<ConnectionMonitor>,
     pub sync_worker: relm4::WorkerController<SyncWorker>,
+    pub playback_sync_worker: relm4::WorkerController<PlaybackSyncWorker>,
     pub search_worker: relm4::WorkerController<SearchWorker>,
     pub cache_cleanup_worker: relm4::WorkerController<CacheCleanupWorker>,
 }
@@ -198,6 +200,76 @@ pub fn initialize_workers(
             }
         });
 
+    // Initialize the PlaybackSyncWorker
+    tracing::info!("Initializing PlaybackSyncWorker for reliable playback sync...");
+    let playback_sync_worker = PlaybackSyncWorker::builder()
+        .detach_worker(Arc::new(db.clone()))
+        .forward(sender.input_sender(), |output| match output {
+            PlaybackSyncWorkerOutput::SyncStarted { pending_count } => {
+                tracing::info!("Playback sync started: {} pending items", pending_count);
+                MainWindowInput::ShowToast(format!("Syncing {} playback changes...", pending_count))
+            }
+            PlaybackSyncWorkerOutput::SyncProgress {
+                synced,
+                failed,
+                remaining,
+            } => {
+                tracing::debug!(
+                    "Playback sync progress: {} synced, {} failed, {} remaining",
+                    synced,
+                    failed,
+                    remaining
+                );
+                MainWindowInput::ShowToast(format!(
+                    "Syncing playback: {}/{}",
+                    synced,
+                    synced + failed + remaining
+                ))
+            }
+            PlaybackSyncWorkerOutput::SyncCompleted {
+                synced,
+                failed,
+                duration,
+            } => {
+                tracing::info!(
+                    "Playback sync completed: {} synced, {} failed in {:?}",
+                    synced,
+                    failed,
+                    duration
+                );
+                if failed > 0 {
+                    MainWindowInput::ShowToast(format!(
+                        "Playback sync: {} succeeded, {} failed",
+                        synced, failed
+                    ))
+                } else {
+                    MainWindowInput::ShowToast(format!("Playback sync: {} changes synced", synced))
+                }
+            }
+            PlaybackSyncWorkerOutput::ItemSyncFailed {
+                media_item_id,
+                error,
+                attempt_count,
+            } => {
+                tracing::warn!(
+                    "Playback sync failed for {}: {} (attempt {})",
+                    media_item_id,
+                    error,
+                    attempt_count
+                );
+                MainWindowInput::ShowToast(format!("Sync failed for {}: {}", media_item_id, error))
+            }
+            PlaybackSyncWorkerOutput::SyncPaused => {
+                tracing::info!("Playback sync paused");
+                MainWindowInput::ShowToast("Playback sync paused".to_string())
+            }
+            PlaybackSyncWorkerOutput::SyncResumed => {
+                tracing::info!("Playback sync resumed");
+                MainWindowInput::ShowToast("Playback sync resumed".to_string())
+            }
+        });
+    tracing::info!("PlaybackSyncWorker initialized successfully");
+
     // Initialize the SearchWorker
     let search_worker = SearchWorker::builder().detach_worker(db.clone()).forward(
         sender.input_sender(),
@@ -274,6 +346,7 @@ pub fn initialize_workers(
         config_manager,
         connection_monitor,
         sync_worker,
+        playback_sync_worker,
         search_worker,
         cache_cleanup_worker,
     }

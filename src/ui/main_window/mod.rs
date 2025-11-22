@@ -35,6 +35,7 @@ pub struct MainWindow {
     home_page: AsyncController<HomePage>,
     connection_monitor: relm4::WorkerController<ConnectionMonitor>,
     sync_worker: relm4::WorkerController<SyncWorker>,
+    playback_sync_worker: relm4::WorkerController<crate::workers::PlaybackSyncWorker>,
     search_worker: relm4::WorkerController<SearchWorker>,
     config_manager: relm4::WorkerController<crate::workers::config_manager::ConfigManager>,
     cache_cleanup_worker:
@@ -409,6 +410,7 @@ impl AsyncComponent for MainWindow {
             config_manager,
             connection_monitor,
             sync_worker,
+            playback_sync_worker,
             search_worker,
             cache_cleanup_worker,
         } = workers_result;
@@ -421,6 +423,7 @@ impl AsyncComponent for MainWindow {
             auth_dialog,
             connection_monitor,
             sync_worker,
+            playback_sync_worker,
             search_worker,
             config_manager,
             cache_cleanup_worker,
