@@ -203,13 +203,17 @@ pub fn handle_bus_message_sync(
             // Process the collection synchronously
             temp_stream_manager.process_stream_collection_sync(&collection);
 
-            // Send default stream selection
-            // Per playbin3 spec, SELECT_STREAMS should work at any pipeline state
-            // The async bus watch ensures non-blocking operation
+            // DISABLED: Let playbin3 automatically select all streams
+            // Manual stream selection via SELECT_STREAMS is not working on macOS -
+            // playbin3 accepts the event but never sends STREAMS_SELECTED response,
+            // and doesn't create audio decoder. Let it auto-select instead.
+            /*
             if let Ok(Some(pb)) = playbin.lock().map(|p| p.as_ref().cloned()) {
                 debug!("Sending default stream selection for new collection");
                 temp_stream_manager.send_default_stream_selection(&collection, &pb);
             }
+            */
+            debug!("Letting playbin3 automatically select streams (manual selection disabled)");
         }
         MessageView::StreamsSelected(selected_msg) => {
             // Get the collection from the message

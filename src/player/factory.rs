@@ -478,4 +478,17 @@ impl Player {
             Player::Mpv(p) => p.get_zoom_mode().await,
         }
     }
+
+    /// Wait for player backend to be ready for seeking operations.
+    /// Each backend implements its own readiness check:
+    /// - GStreamer: waits for ASYNC_DONE message (pipeline_ready flag)
+    /// - MPV: waits for duration to be available (file loaded and parsed)
+    pub async fn wait_until_ready(&self, timeout: Duration) -> Result<()> {
+        match self {
+            #[cfg(feature = "gstreamer")]
+            Player::GStreamer(p) => p.wait_until_ready(timeout).await,
+            #[cfg(all(feature = "mpv", not(target_os = "macos")))]
+            Player::Mpv(p) => p.wait_until_ready(timeout).await,
+        }
+    }
 }
