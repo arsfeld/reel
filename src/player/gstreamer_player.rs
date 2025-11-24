@@ -63,6 +63,9 @@ impl GStreamerPlayer {
         // Check for required elements
         Self::check_gstreamer_plugins();
 
+        // Ensure proper audio sink selection by raising ranks
+        Self::configure_audio_sink_ranks();
+
         Ok(Self {
             playbin: Arc::new(Mutex::new(None)),
             state: Arc::new(RwLock::new(PlayerState::Idle)),
@@ -123,6 +126,41 @@ impl GStreamerPlayer {
             "Available playback-related elements: {:?}",
             playback_factories
         );
+    }
+
+    fn configure_audio_sink_ranks() {
+        info!("Configuring audio sink ranks for proper autoplugging");
+        let registry = gst::Registry::get();
+
+        // Raise osxaudiosink to PRIMARY+1 (higher than autoaudiosink) for macOS
+        if let Some(feature) = registry.lookup_feature("osxaudiosink") {
+            let old_rank = feature.rank();
+            feature.set_rank(gst::Rank::PRIMARY + 1);
+            info!("Raised osxaudiosink rank from {} to PRIMARY+1", old_rank);
+        }
+
+        // Raise pulsesink to PRIMARY+1 for Linux
+        if let Some(feature) = registry.lookup_feature("pulsesink") {
+            let old_rank = feature.rank();
+            feature.set_rank(gst::Rank::PRIMARY + 1);
+            info!("Raised pulsesink rank from {} to PRIMARY+1", old_rank);
+        }
+
+        // Ensure autoaudiosink has at least MARGINAL rank so it can be used as fallback
+        if let Some(feature) = registry.lookup_feature("autoaudiosink") {
+            let old_rank = feature.rank();
+            if old_rank < gst::Rank::MARGINAL {
+                feature.set_rank(gst::Rank::MARGINAL);
+                info!("Raised autoaudiosink rank from {} to MARGINAL", old_rank);
+            }
+        }
+
+        // Lower fakesink rank to NONE to prevent it being selected for audio
+        if let Some(feature) = registry.lookup_feature("fakesink") {
+            let old_rank = feature.rank();
+            feature.set_rank(gst::Rank::NONE);
+            debug!("Lowered fakesink rank from {} to NONE", old_rank);
+        }
     }
 
     pub fn create_video_widget(&self) -> gtk4::Widget {
@@ -320,6 +358,12 @@ impl GStreamerPlayer {
                 error!("GStreamerPlayer::load_media() - Failed to create any fallback video sink!");
             }
         }
+
+        // DON'T set audio-sink - let playbin3 autoplugging handle it
+        // Setting both video-sink and audio-sink explicitly causes playbin3 to bypass decodebin3,
+        // which means no audio decoder is created. Let playbin3 autoplugging handle audio.
+        // Note: We only set video-sink because we need to extract the paintable for GTK rendering.
+        debug!("Letting playbin3 autoplugging handle audio sink selection");
 
         // Store the playbin
         *self.playbin.lock().unwrap() = Some(playbin.clone());
@@ -891,6 +935,27 @@ impl GStreamerPlayer {
 
     pub async fn get_buffering_state(&self) -> BufferingState {
         self.buffering_state.read().await.clone()
+    }
+
+    /// Wait for pipeline to complete preroll and be ready for seeking.
+    /// This waits for the ASYNC_DONE message which signals that:
+    /// - Stream collection has been discovered
+    /// - Pipeline has prerolled and buffered initial data
+    /// - Seeking operations will work correctly
+    pub async fn wait_until_ready(&self, timeout: Duration) -> Result<()> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+        while !*self.pipeline_ready.lock().unwrap() {
+            if start.elapsed() > timeout {
+                return Err(anyhow::anyhow!(
+                    "Timeout waiting for GStreamer pipeline ready (ASYNC_DONE not received)"
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        debug!("GStreamer pipeline ready for seeking");
+        Ok(())
     }
 }
 

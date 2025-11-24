@@ -1174,6 +1174,15 @@ impl AsyncComponent for PlayerPage {
                                 // Populate track menus after media loads
                                 sender_clone.input(PlayerInput::UpdateTrackMenus);
 
+                                // Wait for player backend to be ready for seeking operations
+                                info!("Waiting for player to be ready for seeking...");
+                                if let Err(e) = player_handle
+                                    .wait_until_ready(std::time::Duration::from_secs(5))
+                                    .await
+                                {
+                                    warn!("Player not ready after timeout: {}", e);
+                                }
+
                                 // Check for saved playback progress and resume if configured
                                 use crate::services::commands::GetPlaybackProgressCommand;
 
@@ -1212,11 +1221,12 @@ impl AsyncComponent for PlayerPage {
                                                 progress_percentage * 100.0
                                             );
 
-                                            // Seek to saved position
+                                            // Seek to saved position (player is now ready)
+                                            info!("Player ready, seeking to saved position");
                                             if let Err(e) =
                                                 player_handle.seek(resume_position).await
                                             {
-                                                warn!("Failed to seek to saved position: {}", e);
+                                                error!("Failed to seek to saved position: {}", e);
                                             }
                                         }
                                     }
@@ -1426,6 +1436,15 @@ impl AsyncComponent for PlayerPage {
                                 // Populate track menus after media loads
                                 sender_clone.input(PlayerInput::UpdateTrackMenus);
 
+                                // Wait for player backend to be ready for seeking operations
+                                info!("Waiting for player to be ready for seeking...");
+                                if let Err(e) = player_handle
+                                    .wait_until_ready(std::time::Duration::from_secs(5))
+                                    .await
+                                {
+                                    warn!("Player not ready after timeout: {}", e);
+                                }
+
                                 // Check for saved playback progress and resume if configured
                                 use crate::services::commands::GetPlaybackProgressCommand;
 
@@ -1464,11 +1483,12 @@ impl AsyncComponent for PlayerPage {
                                                 progress_percentage * 100.0
                                             );
 
-                                            // Seek to saved position
+                                            // Seek to saved position (player is now ready)
+                                            info!("Player ready, seeking to saved position");
                                             if let Err(e) =
                                                 player_handle.seek(resume_position).await
                                             {
-                                                warn!("Failed to seek to saved position: {}", e);
+                                                error!("Failed to seek to saved position: {}", e);
                                             }
                                         }
                                     }

@@ -125,6 +125,11 @@ pub enum PlayerCommand {
     GetBufferingState {
         respond_to: oneshot::Sender<Option<BufferingState>>,
     },
+    /// Wait for player backend to be ready for seeking operations
+    WaitUntilReady {
+        timeout: Duration,
+        respond_to: oneshot::Sender<Result<()>>,
+    },
 }
 
 /// Controller that owns the Player and processes commands
@@ -354,6 +359,14 @@ impl PlayerController {
                         _ => None,
                     };
                     let _ = respond_to.send(state);
+                }
+                PlayerCommand::WaitUntilReady {
+                    timeout,
+                    respond_to,
+                } => {
+                    trace!("Waiting for player to be ready (timeout: {:?})", timeout);
+                    let result = self.player.wait_until_ready(timeout).await;
+                    let _ = respond_to.send(result);
                 }
             }
         }
@@ -685,5 +698,22 @@ impl PlayerHandle {
         response
             .await
             .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))
+    }
+
+    /// Wait for player backend to be ready for seeking operations.
+    /// Each backend implements its own readiness check:
+    /// - GStreamer: waits for ASYNC_DONE message (pipeline_ready flag)
+    /// - MPV: waits for duration to be available (file loaded and parsed)
+    pub async fn wait_until_ready(&self, timeout: Duration) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::WaitUntilReady {
+                timeout,
+                respond_to,
+            })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
     }
 }

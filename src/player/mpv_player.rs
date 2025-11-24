@@ -1448,6 +1448,30 @@ impl MpvPlayer {
     pub async fn get_zoom_mode(&self) -> ZoomMode {
         *self.inner.zoom_mode.lock().unwrap()
     }
+
+    /// Wait for MPV to be ready for seeking.
+    /// MPV needs time to:
+    /// - Load file and parse headers
+    /// - Initialize demuxer and decoders
+    /// - Populate duration and seekable properties
+    pub async fn wait_until_ready(&self, timeout: Duration) -> Result<()> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+
+        // Wait until duration is available (indicates file is loaded and seekable)
+        while self.get_duration().await.is_none() {
+            if start.elapsed() > timeout {
+                return Err(anyhow::anyhow!(
+                    "Timeout waiting for MPV player ready (duration not available)"
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        debug!("MPV player ready for seeking");
+        Ok(())
+    }
 }
 
 impl MpvPlayerInner {
