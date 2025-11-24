@@ -94,7 +94,6 @@ impl CacheCleanupWorker {
 
     /// Perform time-based cleanup: remove entries older than TTL
     async fn cleanup_old_entries(&self) -> Result<CleanupStats> {
-        use crate::db::repository::Repository;
         use crate::db::repository::cache_repository::CacheRepositoryImpl;
 
         let start = std::time::Instant::now();
@@ -130,7 +129,6 @@ impl CacheCleanupWorker {
 
     /// Perform proactive LRU cleanup: remove least-accessed entries when approaching limit
     async fn cleanup_lru_entries(&self) -> Result<CleanupStats> {
-        use crate::db::repository::Repository;
         use crate::db::repository::cache_repository::CacheRepositoryImpl;
 
         let start = std::time::Instant::now();

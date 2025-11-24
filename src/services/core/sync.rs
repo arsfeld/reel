@@ -18,12 +18,6 @@ use crate::services::core::media::MediaService;
 pub struct SyncService;
 
 impl SyncService {
-    /// Estimate total items for sync progress tracking
-    async fn estimate_total_items(_backend: &dyn MediaBackend) -> Result<Option<i32>> {
-        // For now, we can't estimate total items without fetching all libraries
-        // This would be too expensive, so we'll track progress per batch instead
-        Ok(None)
-    }
     /// Sync all libraries for a source
     pub async fn sync_source(
         db: &DatabaseConnection,

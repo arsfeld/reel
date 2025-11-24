@@ -6,7 +6,7 @@ use relm4::prelude::*;
 use tracing::{debug, error};
 
 use crate::db::connection::DatabaseConnection;
-use crate::db::entities::{MediaItemModel, media_items};
+use crate::db::entities::MediaItemModel;
 use crate::db::repository::{Repository, media_repository::MediaRepositoryImpl};
 use crate::models::MediaItemId;
 use crate::ui::factories::media_card::{MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput};

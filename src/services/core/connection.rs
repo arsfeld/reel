@@ -153,7 +153,7 @@ impl ConnectionService {
         use crate::services::core::backend::BackendService;
 
         // Create backend for this source
-        let backend = match BackendService::create_backend_for_source(db, source).await {
+        let _backend = match BackendService::create_backend_for_source(db, source).await {
             Ok(backend) => backend,
             Err(e) => {
                 warn!("Failed to create backend for connection testing: {}", e);

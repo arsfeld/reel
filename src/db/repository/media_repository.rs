@@ -681,7 +681,6 @@ impl MediaRepository for MediaRepositoryImpl {
 
     async fn update_show_watched_count(&self, show_id: &str) -> Result<()> {
         use crate::db::entities::playback_progress;
-        use sea_orm::{JoinType, QuerySelect, RelationTrait};
 
         // Get the show first to ensure it exists and is a show
         let show = match self.find_by_id(show_id).await? {
@@ -1045,9 +1044,6 @@ impl MediaRepositoryImpl {
     /// This is useful for debugging and optimizing query performance
     #[cfg(debug_assertions)]
     pub async fn explain_filtered_query(&self, filters: MediaFilterBuilder) -> Result<String> {
-        use sea_orm::DatabaseBackend;
-        use sea_orm::sea_query::QueryStatementBuilder;
-
         // Build the query using the same logic as find_filtered
         let mut query = MediaItem::find();
 

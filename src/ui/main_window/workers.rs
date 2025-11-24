@@ -3,11 +3,9 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 use crate::db::connection::DatabaseConnection;
-use crate::models::SourceId;
 use crate::workers::{
     ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput, PlaybackSyncWorker,
-    PlaybackSyncWorkerInput, PlaybackSyncWorkerOutput, SearchWorker, SearchWorkerInput,
-    SearchWorkerOutput, SyncWorker, SyncWorkerInput, SyncWorkerOutput,
+    PlaybackSyncWorkerOutput, SearchWorker, SearchWorkerOutput, SyncWorker, SyncWorkerOutput,
     cache_cleanup_worker::{
         CacheCleanupInput, CacheCleanupOutput, CacheCleanupWorker, CleanupConfig,
     },

@@ -1,6 +1,5 @@
 use gtk4::prelude::*;
 use libadwaita as adw;
-use relm4::gtk;
 use tracing::debug;
 
 /// Manages sleep and screensaver inhibition during video playback

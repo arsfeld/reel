@@ -51,33 +51,6 @@ impl ProgressTracker {
         self.last_progress_save = std::time::Instant::now();
     }
 
-    /// Check if we should resume from saved position
-    pub fn should_resume(&self, saved_position: Duration, duration: Duration) -> bool {
-        if !self.config_auto_resume {
-            return false;
-        }
-
-        let saved_secs = saved_position.as_secs();
-        let duration_secs = duration.as_secs();
-
-        // Don't resume if position is too close to the start
-        if saved_secs < self.config_resume_threshold_seconds {
-            return false;
-        }
-
-        // Don't resume if already watched (>90%)
-        if saved_secs as f64 / duration_secs as f64 > 0.9 {
-            return false;
-        }
-
-        true
-    }
-
-    /// Get the progress update interval in seconds
-    pub fn get_progress_update_interval_seconds(&self) -> u64 {
-        self.config_progress_update_interval_seconds
-    }
-
     /// Get auto-resume configuration value
     pub fn get_auto_resume(&self) -> bool {
         self.config_auto_resume

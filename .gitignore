@@ -9,9 +9,11 @@
 build-dir/
 .flatpak-builder/
 cargo-sources.json
+gst-plugin-gtk4-sources.json
 flatpak-cargo-generator.py
 *.flatpak
 repo/
+.gst-plugins-rs/
 
 # MacOS
 Generated/

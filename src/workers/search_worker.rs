@@ -1,4 +1,3 @@
-use crate::db::entities::MediaItemModel;
 use crate::models::{MediaItem, MediaItemId};
 use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage};
 use relm4::{ComponentSender, Worker};

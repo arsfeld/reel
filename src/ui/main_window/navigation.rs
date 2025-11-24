@@ -1,5 +1,4 @@
 use adw::prelude::*;
-use gtk::gio;
 use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;
@@ -7,11 +6,9 @@ use relm4::prelude::*;
 use super::{MainWindow, MainWindowInput};
 use crate::models::{LibraryId, MediaItemId, PlaylistContext, SourceId};
 use crate::ui::dialogs::PreferencesDialogOutput;
-use crate::ui::pages::{
-    LibraryPage, MovieDetailsPage, PlayerPage, SearchPage, ShowDetailsPage, SourcesPage,
-};
+use crate::ui::pages::{LibraryPage, MovieDetailsPage, PlayerPage, ShowDetailsPage, SourcesPage};
 use crate::ui::sidebar::SidebarInput;
-use crate::workers::{SearchWorkerInput, SyncWorkerInput};
+use crate::workers::SyncWorkerInput;
 
 /// Handle navigation to a specific page by name
 pub fn handle_navigate(

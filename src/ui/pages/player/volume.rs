@@ -65,12 +65,4 @@ impl VolumeManager {
         self.volume_slider.set_value(self.volume);
         self.volume
     }
-
-    /// Sync volume state from player backend
-    /// Updates internal state without triggering change events
-    pub fn sync_from_player(&mut self, volume: f64) {
-        self.volume = volume.clamp(0.0, 1.0);
-        // Update slider value without triggering value_changed signal
-        self.volume_slider.set_value(self.volume);
-    }
 }

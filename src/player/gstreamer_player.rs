@@ -1,7 +1,7 @@
 use crate::player::ZoomMode;
 use crate::player::gstreamer::bus_handler;
 use crate::player::gstreamer::sink_factory;
-use crate::player::gstreamer::stream_manager::{StreamInfo, StreamManager};
+use crate::player::gstreamer::stream_manager::StreamManager;
 use anyhow::{Context, Result};
 use gdk4 as gdk;
 use gstreamer as gst;

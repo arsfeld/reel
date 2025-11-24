@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
+# Build script for GStreamer-only Flatpak (no MPV dependencies)
+# This significantly reduces build time and complexity
 set -e
 
-echo "Building Reel Flatpak..."
+echo "Building Reel Flatpak (GStreamer-only)..."
 
 VERSION=${VERSION:-$(grep '^version' Cargo.toml | cut -d'"' -f2)}
 ARCH=${ARCH:-x86_64}
@@ -55,9 +57,10 @@ if ! flatpak info org.gnome.Sdk//48 &> /dev/null; then
     flatpak install --user flathub org.gnome.Sdk//48 -y
 fi
 
-if ! flatpak info org.freedesktop.Sdk.Extension.rust-stable//23.08 &> /dev/null; then
-    echo "Installing Rust SDK extension..."
-    flatpak install --user flathub org.freedesktop.Sdk.Extension.rust-stable//23.08 -y
+# Note: The rust-stable extension version must match the SDK base (GNOME 48 uses freedesktop 24.08)
+if ! flatpak info org.freedesktop.Sdk.Extension.rust-stable//24.08 &> /dev/null; then
+    echo "Installing Rust SDK extension (24.08)..."
+    flatpak install --user flathub org.freedesktop.Sdk.Extension.rust-stable//24.08 -y
 fi
 
 # Clean up previous builds
@@ -75,13 +78,29 @@ if [ ! -f "flatpak-cargo-generator.py" ]; then
     chmod +x flatpak-cargo-generator.py
 fi
 
-# Generate cargo sources
-echo "=== Generating cargo-sources.json ==="
+# Clone gst-plugins-rs to generate cargo sources for gst-plugin-gtk4
+GST_PLUGINS_RS_TAG="gstreamer-1.24.11"
+GST_PLUGINS_RS_DIR=".gst-plugins-rs"
+
+echo "=== Generating cargo sources for gst-plugin-gtk4 ==="
+if [ ! -d "$GST_PLUGINS_RS_DIR" ]; then
+    echo "Cloning gst-plugins-rs (tag: $GST_PLUGINS_RS_TAG)..."
+    git clone --depth 1 --branch "$GST_PLUGINS_RS_TAG" \
+        https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs.git "$GST_PLUGINS_RS_DIR"
+fi
+
+# Generate cargo sources for gst-plugin-gtk4
+echo "Generating gst-plugin-gtk4-sources.json..."
+$PYTHON_RUN flatpak-cargo-generator.py "$GST_PLUGINS_RS_DIR/Cargo.lock" -o gst-plugin-gtk4-sources.json
+echo "✓ Generated gst-plugin-gtk4-sources.json"
+
+# Generate cargo sources for reel (GStreamer-only features)
+echo "=== Generating cargo-sources.json for reel ==="
 $PYTHON_RUN flatpak-cargo-generator.py ./Cargo.lock -o cargo-sources.json
 echo "✓ Generated cargo-sources.json"
 
 # Build the Flatpak with repository
-echo "=== Building Flatpak ==="
+echo "=== Building Flatpak (GStreamer-only) ==="
 flatpak-builder --force-clean --sandbox --user --install-deps-from=flathub --arch=$FLATPAK_ARCH --repo=repo build-dir dev.arsfeld.Reel.json
 
 echo "=== Exporting Flatpak bundle ==="
@@ -94,6 +113,7 @@ ostree --repo=repo summary -u
 echo "=== Build Summary ==="
 echo "✓ Flatpak bundle: reel-$VERSION-$ARCH_SUFFIX.flatpak"
 echo "✓ Repository: repo/ directory"
+echo "✓ Build type: GStreamer-only (no MPV)"
 
 if [ -f "reel-$VERSION-$ARCH_SUFFIX.flatpak" ]; then
     echo "✓ Flatpak bundle created successfully"

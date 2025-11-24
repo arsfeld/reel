@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
-use crate::db::entities::{CacheChunkModel, CacheEntryModel};
+use crate::db::entities::CacheChunkModel;
 use crate::db::repository::CacheRepository;
 
 use super::chunk_store::{ChunkStore, calculate_chunk_range};
@@ -327,12 +327,6 @@ impl ChunkDownloader {
         );
 
         Ok(())
-    }
-
-    /// Calculate total number of chunks for an entry
-    fn calculate_total_chunks(&self, entry: &CacheEntryModel) -> u64 {
-        let file_size = entry.expected_total_size.unwrap_or(0) as u64;
-        (file_size + self.chunk_size - 1) / self.chunk_size
     }
 
     /// Get chunk size

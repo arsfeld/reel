@@ -52,7 +52,7 @@ pub trait MediaBackend: Send + Sync + std::fmt::Debug {
     /// Used during playback initialization to enable skip intro/credits buttons
     async fn fetch_markers(
         &self,
-        media_id: &MediaItemId,
+        _media_id: &MediaItemId,
     ) -> Result<(Option<ChapterMarker>, Option<ChapterMarker>)> {
         // Default implementation returns no markers
         // Backends should override this if they support markers
