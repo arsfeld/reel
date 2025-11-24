@@ -97,6 +97,7 @@ impl CachedStreamInfo {
 
 /// Main file cache implementation
 pub struct FileCache {
+    #[allow(dead_code)]
     config: FileCacheConfig,
     storage: Arc<RwLock<CacheStorage>>,
     state_computer: Arc<StateComputer>,

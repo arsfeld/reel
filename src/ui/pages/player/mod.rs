@@ -23,7 +23,7 @@ mod playlist_navigation;
 mod skip_markers;
 use skip_markers::SkipMarkerManager;
 mod buffering_overlay;
-use buffering_overlay::{BufferingOverlay, BufferingOverlayInput};
+use buffering_overlay::BufferingOverlay;
 mod auto_play;
 mod buffering_warnings;
 use auto_play::AutoPlayManager;
@@ -106,7 +106,6 @@ pub struct PlayerPage {
     // Timing configuration
     inactivity_timeout_secs: u64,
     mouse_move_threshold: f64,
-    window_event_debounce_ms: u64,
     // Skip intro/credits management
     skip_marker_manager: SkipMarkerManager,
     // Sleep inhibition
@@ -119,8 +118,6 @@ impl PlayerPage {
     // Configuration constants for control visibility behavior
     const DEFAULT_INACTIVITY_TIMEOUT_SECS: u64 = 3;
     const DEFAULT_MOUSE_MOVE_THRESHOLD: f64 = 5.0; // pixels
-    const DEFAULT_WINDOW_EVENT_DEBOUNCE_MS: u64 = 50; // milliseconds
-    const CONTROL_FADE_ANIMATION_MS: u64 = 200; // milliseconds for fade transition
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -744,7 +741,6 @@ impl AsyncComponent for PlayerPage {
             active_popover_count: std::rc::Rc::new(std::cell::RefCell::new(0)),
             inactivity_timeout_secs: Self::DEFAULT_INACTIVITY_TIMEOUT_SECS,
             mouse_move_threshold: Self::DEFAULT_MOUSE_MOVE_THRESHOLD,
-            window_event_debounce_ms: Self::DEFAULT_WINDOW_EVENT_DEBOUNCE_MS,
             // Skip intro/credits management
             skip_marker_manager: SkipMarkerManager::new(
                 config.playback.skip_intro_enabled,

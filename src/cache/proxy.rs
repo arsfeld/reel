@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, head},
+    routing::get,
 };
 use futures::stream::Stream;
 use reqwest::Client;
@@ -13,12 +13,9 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::task::{Context as TaskContext, Poll};
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// State machine for handling cache read failures with retries and fallbacks
 #[derive(Debug, Clone)]
@@ -46,17 +43,12 @@ impl ServeStrategy {
             ServeStrategy::Passthrough => ServeStrategy::Passthrough, // Terminal state
         }
     }
-
-    fn is_terminal(&self) -> bool {
-        matches!(self, ServeStrategy::Passthrough)
-    }
 }
 
 use super::chunk_manager::{ChunkManager, Priority};
 use super::chunk_store::ChunkStore;
 use super::metadata::MediaCacheKey;
 use super::state_computer::StateComputer;
-use super::state_types::DownloadState;
 use super::stats::ProxyStats;
 use super::storage::CacheStorage;
 use crate::db::repository::CacheRepository;
@@ -66,6 +58,7 @@ use crate::models::{MediaItemId, SourceId};
 pub struct CacheProxy {
     port: u16,
     storage: Arc<RwLock<CacheStorage>>,
+    #[allow(dead_code)]
     state_computer: Arc<StateComputer>,
     repository: Arc<dyn CacheRepository>,
     chunk_manager: Arc<ChunkManager>,
@@ -484,7 +477,7 @@ impl CacheProxy {
     }
 
     /// Serve HEAD request for a file from cache
-    async fn serve_file_head(&self, cache_key: &MediaCacheKey, headers: HeaderMap) -> Response {
+    async fn serve_file_head(&self, cache_key: &MediaCacheKey, _headers: HeaderMap) -> Response {
         info!(
             "Proxy: Received HEAD request for cache key: {:?}",
             cache_key
@@ -870,191 +863,6 @@ fn create_range_based_progressive_stream(
             current_byte += data.len() as u64;
             yield Ok(bytes::Bytes::from(data));
         }
-    }
-}
-
-fn create_chunk_based_progressive_stream(
-    chunk_manager: Arc<ChunkManager>,
-    chunk_store: Arc<ChunkStore>,
-    entry_id: i32,
-    total_size: u64,
-) -> impl Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>> {
-    async_stream::stream! {
-        let _chunk_size = chunk_manager.chunk_size();
-        let mut current_byte = 0u64;
-
-        while current_byte < total_size {
-            // Calculate current chunk
-            let chunk_index = chunk_manager.byte_to_chunk_index(current_byte);
-            let chunk_start = chunk_manager.chunk_start_byte(chunk_index);
-            let chunk_end = chunk_manager.chunk_end_byte(chunk_index, total_size);
-            let chunk_length = (chunk_end - chunk_start + 1) as usize;
-
-            // Check if chunk is available
-            let has_chunk = match chunk_manager.has_chunk(entry_id, chunk_index).await {
-                Ok(available) => available,
-                Err(e) => {
-                    error!("Failed to check chunk availability: {}", e);
-                    yield Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Chunk availability check failed: {}", e),
-                    ));
-                    break;
-                }
-            };
-
-            if !has_chunk {
-                // Request chunk with CRITICAL priority
-                if let Err(e) = chunk_manager.request_chunk(entry_id, chunk_index, Priority::CRITICAL).await {
-                    error!("Failed to request chunk: {}", e);
-                    yield Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Chunk request failed: {}", e),
-                    ));
-                    break;
-                }
-
-                // Wait for chunk (30 second timeout)
-                let timeout = std::time::Duration::from_secs(30);
-                match chunk_manager.wait_for_chunk(entry_id, chunk_index, timeout).await {
-                    Ok(_) => {
-                        debug!("Progressive stream: Chunk {} now available", chunk_index);
-                    }
-                    Err(e) => {
-                        warn!("Timeout waiting for chunk {}: {}", chunk_index, e);
-                        yield Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            format!("Chunk {} timeout", chunk_index),
-                        ));
-                        break;
-                    }
-                }
-            }
-
-            // Read chunk from store
-            match chunk_store.read_range(entry_id, chunk_start, chunk_length).await {
-                Ok(data) => {
-                    debug!(
-                        "Progressive stream: Streaming chunk {} ({} bytes)",
-                        chunk_index,
-                        data.len()
-                    );
-                    current_byte += data.len() as u64;
-                    yield Ok(bytes::Bytes::from(data));
-                }
-                Err(e) => {
-                    error!("Failed to read chunk {}: {}", chunk_index, e);
-                    yield Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Chunk read failed: {}", e),
-                    ));
-                    break;
-                }
-            }
-        }
-
-        info!("Progressive stream finished: {} bytes streamed", current_byte);
-    }
-}
-
-/// OLD IMPLEMENTATION - Create a progressive file stream that reads from a file as it's being downloaded
-/// TODO: Remove this after verifying chunk-based implementation works
-fn create_progressive_stream(
-    mut file: File,
-    cache_key: MediaCacheKey,
-    state_computer: Arc<StateComputer>,
-    total_size: u64,
-) -> impl Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>> {
-    async_stream::stream! {
-        const CHUNK_SIZE: usize = 256 * 1024; // 256KB chunks
-        let mut position: u64 = 0;
-        let mut eof_wait_count: u32 = 0;
-        let max_eof_waits: u32 = 30; // Wait up to 30 times (30 seconds with 1s intervals)
-
-        while position < total_size {
-            // Calculate how much to read (don't exceed total_size)
-            let remaining = (total_size - position) as usize;
-            let read_size = remaining.min(CHUNK_SIZE);
-
-            // Try to read from the file
-            let mut buffer = vec![0u8; read_size];
-            match file.read(&mut buffer).await {
-                Ok(0) => {
-                    // Hit EOF - check if download is still in progress
-                    let state_info = state_computer.get_state(&cache_key).await;
-
-                    match state_info.as_ref().map(|info| &info.state) {
-                        Some(DownloadState::Downloading) | Some(DownloadState::Paused) => {
-                            // Still downloading, wait and retry
-                            eof_wait_count += 1;
-
-                            if eof_wait_count >= max_eof_waits {
-                                warn!(
-                                    "Exceeded max EOF waits ({}) at position {}",
-                                    max_eof_waits, position
-                                );
-                                yield Err(std::io::Error::new(
-                                    std::io::ErrorKind::TimedOut,
-                                    "Timeout waiting for download to progress",
-                                ));
-                                break;
-                            }
-
-                            debug!(
-                                "Hit EOF at position {}, download in progress, waiting... (attempt {}/{})",
-                                position, eof_wait_count, max_eof_waits
-                            );
-
-                            // Wait for 1 second before retrying
-                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                            continue;
-                        }
-                        Some(DownloadState::Complete) => {
-                            // Download complete, we've reached actual EOF
-                            debug!(
-                                "Download complete, reached EOF at position {} (total: {})",
-                                position, total_size
-                            );
-                            break;
-                        }
-                        Some(DownloadState::Failed(msg)) => {
-                            error!("Download failed during stream: {}", msg);
-                            yield Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("Download failed: {}", msg),
-                            ));
-                            break;
-                        }
-                        _ => {
-                            // Other states or no state info, treat as EOF
-                            debug!("No active download state, treating as EOF at position {}", position);
-                            break;
-                        }
-                    }
-                }
-                Ok(n) => {
-                    // Successfully read data
-                    position += n as u64;
-                    eof_wait_count = 0; // Reset wait count on successful read
-
-                    debug!(
-                        "Read {} bytes at position {} (total: {})",
-                        n,
-                        position - n as u64,
-                        total_size
-                    );
-
-                    yield Ok(bytes::Bytes::copy_from_slice(&buffer[..n]));
-                }
-                Err(e) => {
-                    error!("Error reading from file at position {}: {}", position, e);
-                    yield Err(e);
-                    break;
-                }
-            }
-        }
-
-        info!("Progressive stream finished at position {} (total: {})", position, total_size);
     }
 }
 

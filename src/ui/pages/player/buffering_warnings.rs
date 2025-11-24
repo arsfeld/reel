@@ -6,14 +6,14 @@
 
 /// Warning message constants
 pub mod messages {
-    pub const SLOW_DOWNLOAD: &str = "Download speed is slower than playback bitrate";
-    pub const CRITICALLY_LOW_BUFFER: &str = "Buffer level is critically low";
     pub const BUFFERING_STALLED: &str = "Buffering appears to be stalled";
     pub const NETWORK_ISSUE: &str = "Network connection may be unstable";
 }
 
 /// Warning severity levels
+/// Note: Some variants are defined for API completeness
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum WarningSeverity {
     /// Informational warning (performance may be affected)
     Info,
@@ -24,7 +24,9 @@ pub enum WarningSeverity {
 }
 
 /// Performance warning types
+/// Note: Some variants are defined for API completeness and future detection
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum PerformanceWarning {
     /// Download speed is slower than required bitrate
     SlowDownload {
@@ -129,31 +131,6 @@ pub fn is_download_too_slow(
 /// * `critical_threshold` - Threshold below which buffer is considered critical (default: 15)
 pub fn is_buffer_critically_low(buffer_percentage: i32, critical_threshold: i32) -> bool {
     buffer_percentage > 0 && buffer_percentage < critical_threshold
-}
-
-/// Check if buffering appears to be stalled
-///
-/// Returns true if buffering has made no progress for an extended period,
-/// indicating a potential network or server issue.
-///
-/// # Arguments
-/// * `current_percentage` - Current buffering percentage
-/// * `previous_percentage` - Previous buffering percentage
-/// * `time_elapsed_secs` - Time elapsed since last check in seconds
-/// * `stall_threshold_secs` - Threshold in seconds to consider stalled (default: 10)
-pub fn is_buffering_stalled(
-    current_percentage: i32,
-    previous_percentage: i32,
-    time_elapsed_secs: u64,
-    stall_threshold_secs: u64,
-) -> bool {
-    // Only check if we're actively buffering (not at 0 or 100)
-    if current_percentage == 0 || current_percentage >= 100 {
-        return false;
-    }
-
-    // No progress for extended period
-    current_percentage == previous_percentage && time_elapsed_secs >= stall_threshold_secs
 }
 
 /// Detect all active performance warnings

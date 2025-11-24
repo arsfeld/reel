@@ -7,7 +7,6 @@ use crate::db::connection::DatabaseConnection;
 
 #[derive(Debug)]
 pub struct PreferencesPage {
-    db: DatabaseConnection,
     // Player preferences
     default_player: String,
     hardware_acceleration: bool,
@@ -439,7 +438,7 @@ impl AsyncComponent for PreferencesPage {
     }
 
     async fn init(
-        db: Self::Init,
+        _db: Self::Init,
         _root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
@@ -453,7 +452,6 @@ impl AsyncComponent for PreferencesPage {
         };
 
         let model = Self {
-            db,
             default_player: config.playback.player_backend,
             hardware_acceleration: config.playback.hardware_acceleration,
             items_per_page: 48,

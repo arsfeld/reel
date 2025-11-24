@@ -3,9 +3,8 @@ use libadwaita as adw;
 use relm4::factory::FactoryVecDeque;
 use relm4::gtk;
 use relm4::prelude::*;
-use relm4::view; // Explicit macro import
-use std::time::{Duration, Instant};
-use tracing::{debug, error, trace};
+use std::time::Duration;
+use tracing::{debug, trace};
 
 // Module declarations first
 mod data;
@@ -23,10 +22,10 @@ pub use types::{
 
 use crate::db::connection::DatabaseConnection;
 use crate::db::entities::MediaItemModel;
-use crate::models::{LibraryId, MediaItemId};
+use crate::models::LibraryId;
 use crate::ui::factories::media_card::{MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput};
 use crate::ui::shared::broker::{BROKER, BrokerMessage};
-use crate::workers::{ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize};
+use crate::workers::{ImageLoader, ImageLoaderOutput};
 use std::collections::HashMap;
 
 impl std::fmt::Debug for LibraryPage {
@@ -67,7 +66,6 @@ pub struct LibraryPage {
     selected_genres: Vec<String>,
     available_genres: Vec<String>,
     genre_popover: Option<gtk::Popover>,
-    genre_label_text: String,
     // Year range filtering
     min_year: Option<i32>,
     max_year: Option<i32>,
@@ -83,12 +81,10 @@ pub struct LibraryPage {
     // Media type filtering (for mixed libraries)
     library_type: Option<String>, // 'movies', 'shows', 'music', 'photos', 'mixed'
     selected_media_type: Option<String>, // Filter for mixed libraries
-    media_type_buttons: Vec<gtk::ToggleButton>,
     // Viewport tracking
     visible_start_idx: usize,
     visible_end_idx: usize,
     // Scroll debouncing
-    last_scroll_time: Option<Instant>,
     scroll_debounce_handle: Option<gtk::glib::SourceId>,
     // Image loading state
     images_requested: std::collections::HashSet<String>, // Track which images have been requested
@@ -584,7 +580,6 @@ impl AsyncComponent for LibraryPage {
             selected_genres: Vec::new(),
             available_genres: Vec::new(),
             genre_popover: None,
-            genre_label_text: String::new(),
             // Year range filtering
             min_year: None,
             max_year: None,
@@ -600,12 +595,10 @@ impl AsyncComponent for LibraryPage {
             // Media type filtering (for mixed libraries)
             library_type: None,
             selected_media_type: None,
-            media_type_buttons: Vec::new(),
             // Viewport tracking
             visible_start_idx: 0,
             visible_end_idx: 0,
             // Scroll debouncing
-            last_scroll_time: None,
             scroll_debounce_handle: None,
             // Image loading state
             images_requested: std::collections::HashSet::new(),

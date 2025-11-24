@@ -24,6 +24,7 @@ unsafe impl Send for MpvRenderContextPtr {}
 unsafe impl Sync for MpvRenderContextPtr {}
 
 // Cached OpenGL function pointers for thread-safe access
+#[allow(dead_code)]
 struct OpenGLFunctions {
     get_proc_address: unsafe extern "C" fn(*const i8) -> *mut c_void,
 }
@@ -130,6 +131,7 @@ mod tests {
 struct MpvPlayerInner {
     mpv: Arc<Mutex<Option<Mpv>>>,
     mpv_gl: Arc<Mutex<Option<MpvRenderContextPtr>>>,
+    #[allow(dead_code)]
     gl_functions: Arc<Mutex<Option<OpenGLFunctions>>>,
     state: Arc<RwLock<PlayerState>>,
     update_callback_registered: Arc<Mutex<bool>>,
@@ -139,8 +141,12 @@ struct MpvPlayerInner {
     cached_fbo: Arc<Mutex<i32>>,
     timer_handle: Arc<Mutex<Option<glib::SourceId>>>,
     verbose_logging: bool,
+    // Cache configuration fields - stored for potential future use
+    #[allow(dead_code)]
     cache_size_mb: u32,
+    #[allow(dead_code)]
     cache_backbuffer_mb: u32,
+    #[allow(dead_code)]
     cache_secs: u32,
     seek_pending: Arc<Mutex<Option<(f64, Instant)>>>,
     seek_timer: Arc<Mutex<Option<glib::SourceId>>>,
@@ -693,7 +699,7 @@ impl MpvPlayer {
                             let mut current_fbo = 0i32;
                             if let Some(&get_integerv) = GL_GET_INTEGERV_FN
                                 .get_or_init(|| {
-                                    Self::load_gl_function_ptr("glGetIntegerv").map(|ptr| unsafe {
+                                    Self::load_gl_function_ptr("glGetIntegerv").map(|ptr| {
                                         std::mem::transmute::<
                                             *mut c_void,
                                             unsafe extern "C" fn(u32, *mut i32),
@@ -724,7 +730,7 @@ impl MpvPlayer {
                     // Set OpenGL viewport to match the render area
                     if let Some(&viewport) = GL_VIEWPORT_FN
                         .get_or_init(|| {
-                            Self::load_gl_function_ptr("glViewport").map(|ptr| unsafe {
+                            Self::load_gl_function_ptr("glViewport").map(|ptr| {
                                 std::mem::transmute::<
                                     *mut c_void,
                                     unsafe extern "C" fn(i32, i32, i32, i32),
@@ -759,7 +765,7 @@ impl MpvPlayer {
                         // Only flush if we actually rendered something
                         if let Some(&flush) = GL_FLUSH_FN
                             .get_or_init(|| {
-                                Self::load_gl_function_ptr("glFlush").map(|ptr| unsafe {
+                                Self::load_gl_function_ptr("glFlush").map(|ptr| {
                                     std::mem::transmute::<*mut c_void, unsafe extern "C" fn()>(ptr)
                                 })
                             })

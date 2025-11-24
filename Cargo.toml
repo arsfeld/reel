@@ -122,6 +122,10 @@ strip = true
 opt-level = 0
 debug = true
 
+# Lint configuration - treat warnings as errors
+[lints.rust]
+warnings = "deny"
+
 # Debian package configuration for cargo-deb
 [package.metadata.deb]
 maintainer = "Alexandre Rosenfeld <alex@rosenfeld.one>"
