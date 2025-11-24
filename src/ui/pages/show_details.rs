@@ -538,7 +538,7 @@ impl AsyncComponent for ShowDetailsPage {
         {
             let broker_sender = sender.input_sender().clone();
             relm4::spawn(async move {
-                let (tx, mut rx) = relm4::channel::<BrokerMessage>();
+                let (tx, rx) = relm4::channel::<BrokerMessage>();
                 BROKER.subscribe("ShowDetailsPage".to_string(), tx).await;
 
                 while let Some(msg) = rx.recv().await {
@@ -788,9 +788,7 @@ impl AsyncComponent for ShowDetailsPage {
                 },
                 BrokerMessage::PlaybackSync(sync_msg) => {
                     use crate::ui::shared::broker::PlaybackSyncMessage;
-                    use crate::ui::shared::sync_status::{
-                        SyncStatus, create_sync_status_indicator,
-                    };
+                    use crate::ui::shared::sync_status::SyncStatus;
 
                     match sync_msg {
                         PlaybackSyncMessage::SyncStarted { pending_count } => {
@@ -800,8 +798,8 @@ impl AsyncComponent for ShowDetailsPage {
                             self.update_sync_indicator();
                         }
                         PlaybackSyncMessage::SyncProgress {
-                            synced,
-                            failed,
+                            synced: _,
+                            failed: _,
                             remaining,
                         } => {
                             self.sync_status = SyncStatus::Syncing { count: remaining };

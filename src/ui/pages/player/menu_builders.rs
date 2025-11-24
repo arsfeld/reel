@@ -1,7 +1,6 @@
 use gtk::glib;
 use gtk::prelude::ToVariant;
 use gtk::prelude::*;
-use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;
 use tracing::debug;

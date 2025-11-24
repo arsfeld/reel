@@ -169,7 +169,7 @@ impl FileCacheConfig {
 
         for disk in disks.list() {
             let mount_point = disk.mount_point();
-            if let Ok(stripped) = cache_dir.strip_prefix(mount_point) {
+            if let Ok(_stripped) = cache_dir.strip_prefix(mount_point) {
                 let mount_len = mount_point.as_os_str().len();
                 if mount_len > best_match_len {
                     best_match = Some(disk);

@@ -52,74 +52,6 @@ impl LibraryPage {
         }
     }
 
-    /// Get count of active filters (excluding text search)
-    pub(super) fn get_active_filter_count(&self) -> usize {
-        let mut count = 0;
-
-        // Count genre filters
-        if !self.selected_genres.is_empty() {
-            count += 1;
-        }
-
-        // Count year range filter
-        if self.selected_min_year.is_some() || self.selected_max_year.is_some() {
-            count += 1;
-        }
-
-        // Count rating filter
-        if self.min_rating.is_some() {
-            count += 1;
-        }
-
-        // Count watch status filter
-        if self.watch_status_filter != WatchStatus::All {
-            count += 1;
-        }
-
-        // Don't count text filter as it's shown in the search bar
-
-        count
-    }
-
-    /// Get label text for genre filter display
-    pub(super) fn get_genre_label(&self) -> String {
-        if self.selected_genres.is_empty() {
-            "All Genres".to_string()
-        } else if self.selected_genres.len() == 1 {
-            self.selected_genres[0].clone()
-        } else {
-            format!("{} genres", self.selected_genres.len())
-        }
-    }
-
-    /// Get label text for year filter display
-    pub(super) fn get_year_label(&self) -> String {
-        match (self.selected_min_year, self.selected_max_year) {
-            (Some(min), Some(max)) if min == max => format!("{}", min),
-            (Some(min), Some(max)) => format!("{} - {}", min, max),
-            (Some(min), None) => format!("{} +", min),
-            (None, Some(max)) => format!("- {}", max),
-            (None, None) => "All Years".to_string(),
-        }
-    }
-
-    /// Get label text for rating filter display
-    pub(super) fn get_rating_label(&self) -> String {
-        match self.min_rating {
-            Some(rating) => format!("{:.1}+ ★", rating),
-            None => "All Ratings".to_string(),
-        }
-    }
-
-    /// Get label text for watch status filter display
-    pub(super) fn get_watch_status_label(&self) -> String {
-        match self.watch_status_filter {
-            WatchStatus::All => "All Items".to_string(),
-            WatchStatus::Watched => "Watched".to_string(),
-            WatchStatus::Unwatched => "Unwatched".to_string(),
-        }
-    }
-
     /// Calculate statistics about filtered items
     pub(super) fn get_filter_statistics(&self) -> FilterStatistics {
         if self.total_items.is_empty() {
@@ -230,37 +162,6 @@ impl LibraryPage {
         }
 
         filters
-    }
-
-    /// Get suggestions for clearing filters when no results found
-    pub(super) fn get_filter_suggestions(&self) -> Vec<String> {
-        let mut suggestions = Vec::new();
-
-        if !self.filter_text.is_empty() {
-            suggestions.push("Try removing the search text".to_string());
-        }
-
-        if !self.selected_genres.is_empty() {
-            suggestions.push("Try selecting different genres".to_string());
-        }
-
-        if self.selected_min_year.is_some() || self.selected_max_year.is_some() {
-            suggestions.push("Try expanding the year range".to_string());
-        }
-
-        if self.min_rating.is_some() {
-            suggestions.push("Try lowering the minimum rating".to_string());
-        }
-
-        if self.watch_status_filter != WatchStatus::All {
-            suggestions.push("Try viewing all items (watched and unwatched)".to_string());
-        }
-
-        if suggestions.is_empty() {
-            suggestions.push("This library might be empty or still syncing".to_string());
-        }
-
-        suggestions
     }
 
     /// Update the active filters display with filter chips

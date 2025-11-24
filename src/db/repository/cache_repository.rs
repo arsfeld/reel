@@ -5,7 +5,7 @@ use crate::db::entities::{
     CacheEntryModel, CacheHeader, CacheHeaderActiveModel, CacheHeaderModel, CacheQualityVariant,
     CacheQualityVariantActiveModel, CacheQualityVariantModel, CacheStatistics,
     CacheStatisticsActiveModel, CacheStatisticsModel, cache_chunks, cache_download_queue,
-    cache_entries, cache_headers, cache_quality_variants, cache_statistics,
+    cache_entries, cache_headers, cache_quality_variants,
 };
 use anyhow::Result;
 use async_trait::async_trait;

@@ -347,8 +347,6 @@ impl BackendService {
         db: &DatabaseConnection,
         media_id: &MediaItemId,
     ) -> Result<(Option<(i64, i64)>, Option<(i64, i64)>)> {
-        use crate::models::ChapterMarker;
-
         // Load media item to find its source
         let media_repo = MediaRepositoryImpl::new(db.clone());
         let media_item = media_repo

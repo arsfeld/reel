@@ -416,7 +416,7 @@ impl AsyncComponent for MovieDetailsPage {
         {
             let broker_sender = sender.input_sender().clone();
             relm4::spawn(async move {
-                let (tx, mut rx) = relm4::channel::<BrokerMessage>();
+                let (tx, rx) = relm4::channel::<BrokerMessage>();
                 BROKER.subscribe("MovieDetailsPage".to_string(), tx).await;
 
                 while let Some(msg) = rx.recv().await {

@@ -102,13 +102,6 @@ impl ErrorRetryManager {
         true
     }
 
-    /// Cancel any pending retry
-    pub fn cancel_retry(&mut self) {
-        if let Some(timer) = self.retry_timer.take() {
-            let _ = timer.remove();
-        }
-    }
-
     /// Reset the retry count (called when a load succeeds)
     pub fn reset(&mut self) {
         self.retry_count = 0;

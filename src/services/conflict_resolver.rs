@@ -1,10 +1,8 @@
 use crate::backends::traits::MediaBackend;
 use crate::db::entities::SyncChangeType;
-use crate::models::{MediaItemId, PlaybackProgress};
+use crate::models::PlaybackProgress;
 use anyhow::Result;
 use async_trait::async_trait;
-use std::sync::Arc;
-use std::time::Duration;
 use tracing::{debug, info, warn};
 
 /// Decision made by conflict resolver

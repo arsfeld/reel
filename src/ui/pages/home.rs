@@ -251,12 +251,12 @@ impl AsyncComponent for HomePage {
                     use crate::db::repository::source_repository::SourceRepositoryImpl;
                     let source_repo = SourceRepositoryImpl::new(db.clone());
 
-                    let mut sources_processed = 0;
+                    let mut _sources_processed = 0;
 
                     if let Ok(sources) = source_repo.find_all().await {
                         for source in sources {
                             let source_id = SourceId::new(source.id.clone());
-                            sources_processed += 1;
+                            _sources_processed += 1;
 
                             // Load cached sections for this source
                             if let Ok(persisted_sections) =

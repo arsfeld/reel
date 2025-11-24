@@ -11,12 +11,13 @@
     "--socket=fallback-x11",
     "--socket=wayland",
     "--socket=pulseaudio",
-    "--device=dri"
+    "--device=dri",
+    "--env=GST_PLUGIN_PATH=/app/lib/gstreamer-1.0"
   ],
   "build-options": {
     "append-path": "/usr/lib/sdk/rust-stable/bin",
     "env": {
-      "CARGO_HOME": "/run/build/reel/cargo",
+      "CARGO_HOME": "/run/build/cargo-home",
       "RUST_BACKTRACE": "1"
     }
   },
@@ -33,289 +34,30 @@
   ],
   "modules": [
     {
-      "name": "libmpv",
-      "cleanup": [
-        "/share/bash-completion",
-        "/share/zsh",
-        "/share/doc",
-        "/share/icons",
-        "/share/applications"
-      ],
-      "buildsystem": "meson",
-      "config-opts": [
-        "-Dlibmpv=true",
-        "-Dlua=enabled",
-        "-Ddebug=false",
-        "-Dbuild-date=false",
-        "-Dalsa=disabled",
-        "-Dmanpage-build=disabled"
+      "name": "gst-plugin-gtk4",
+      "buildsystem": "simple",
+      "build-commands": [
+        "mkdir -p .cargo",
+        "cp cargo/config .cargo/config",
+        "cargo --offline build --release -p gst-plugin-gtk4",
+        "install -Dm755 target/release/libgstgtk4.so /app/lib/gstreamer-1.0/libgstgtk4.so"
       ],
       "sources": [
         {
-          "type": "archive",
-          "url": "https://github.com/mpv-player/mpv/archive/refs/tags/v0.40.0.tar.gz",
-          "sha256": "10a0f4654f62140a6dd4d380dcf0bbdbdcf6e697556863dc499c296182f081a3"
-        }
-      ],
-      "modules": [
-        {
-          "name": "luajit",
-          "no-autogen": true,
-          "cleanup": ["/bin", "/lib/*.a"],
-          "sources": [
-            {
-              "type": "git",
-              "url": "https://github.com/openresty/luajit2.git",
-              "tag": "v2.1-20250826",
-              "commit": "dcc9c9ee67e1a5d3d636bd7745e95ddb4a1c70bc"
-            },
-            {
-              "type": "shell",
-              "commands": ["sed -i 's|/usr/local|/app|' ./Makefile"]
-            }
-          ]
+          "type": "git",
+          "url": "https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs.git",
+          "tag": "gstreamer-1.24.11"
         },
-        {
-          "name": "libplacebo",
-          "buildsystem": "meson",
-          "config-opts": [
-            "-Dd3d11=disabled",
-            "-Ddemos=False"
-          ],
-          "sources": [
-            {
-              "type": "archive",
-              "url": "https://code.videolan.org/videolan/libplacebo/-/archive/v7.349.0/libplacebo-v7.349.0.tar.gz",
-              "sha256": "79120e685a1836344b51b13b6a5661622486a84e4d4a35f6c8d01679a20fbc86"
-            },
-            {
-              "type": "archive",
-              "url": "https://github.com/pallets/markupsafe/archive/refs/tags/2.1.3.tar.gz",
-              "sha256": "b209e55e953eabf4bc31e0c9f3182af03b40e5bf5afed652f72b9b7ac02c0b30",
-              "dest": "3rdparty/markupsafe"
-            },
-            {
-              "type": "archive",
-              "url": "https://github.com/pallets/jinja/archive/refs/tags/3.1.2.tar.gz",
-              "sha256": "ecae76cd1a064d40eb46c5375f07953d747f4d65b68cd3fa5f02c91714b799fc",
-              "dest": "3rdparty/jinja"
-            },
-            {
-              "type": "archive",
-              "url": "https://github.com/Dav1dde/glad/archive/refs/tags/v2.0.4.tar.gz",
-              "sha256": "02629644c242dcc27c58222bd2c001d5e2f3765dbbcfd796542308bddebab401",
-              "dest": "3rdparty/glad"
-            }
-          ],
-          "modules": [
-            {
-              "name": "glslang",
-              "buildsystem": "cmake-ninja",
-              "config-opts": ["-DBUILD_SHARED_LIBS=ON"],
-              "cleanup": ["/bin", "/include", "/lib/cmake"],
-              "sources": [
-                {
-                  "type": "archive",
-                  "url": "https://github.com/KhronosGroup/glslang/archive/15.4.0.tar.gz",
-                  "sha256": "b16c78e7604b9be9f546ee35ad8b6db6f39bbbbfb19e8d038b6fe2ea5bba4ff4"
-                },
-                {
-                  "type": "archive",
-                  "url": "https://github.com/KhronosGroup/SPIRV-Tools/archive/refs/tags/vulkan-sdk-1.4.313.0.tar.gz",
-                  "sha256": "6b60f723345ceed5291cceebbcfacf7fea9361a69332261fa08ae57e2a562005",
-                  "dest": "External/spirv-tools"
-                },
-                {
-                  "type": "archive",
-                  "url": "https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/tags/vulkan-sdk-1.4.313.0.tar.gz",
-                  "sha256": "f68be549d74afb61600a1e3a7d1da1e6b7437758c8e77d664909f88f302c5ac1",
-                  "dest": "External/spirv-tools/external/spirv-headers"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "name": "libXpresent",
-          "buildsystem": "autotools",
-          "sources": [
-            {
-              "type": "git",
-              "url": "https://gitlab.freedesktop.org/xorg/lib/libxpresent.git",
-              "tag": "libXpresent-1.0.1"
-            }
-          ]
-        },
-        {
-          "name": "libv4l2",
-          "cleanup": ["/sbin", "/bin"],
-          "config-opts": [
-            "--disable-static",
-            "--disable-bpf",
-            "--with-udevdir=/app/lib/udev"
-          ],
-          "sources": [
-            {
-              "type": "archive",
-              "url": "https://linuxtv.org/downloads/v4l-utils/v4l-utils-1.24.1.tar.bz2",
-              "sha256": "cbb7fe8a6307f5ce533a05cded70bb93c3ba06395ab9b6d007eb53b75d805f5b"
-            }
-          ]
-        },
-        {
-          "name": "nv-codec-headers",
-          "cleanup": ["*"],
-          "no-autogen": true,
-          "make-install-args": ["PREFIX=/app"],
-          "sources": [
-            {
-              "type": "archive",
-              "url": "https://github.com/FFmpeg/nv-codec-headers/archive/refs/tags/n13.0.19.0.tar.gz",
-              "sha256": "86d15d1a7c0ac73a0eafdfc57bebfeba7da8264595bf531cf4d8db1c22940116"
-            }
-          ]
-        },
-        {
-          "name": "x264",
-          "config-opts": [
-            "--enable-shared",
-            "--enable-pic",
-            "--enable-lto",
-            "--disable-avs",
-            "--disable-lavf",
-            "--disable-cli",
-            "--disable-ffms",
-            "--disable-opencl"
-          ],
-          "sources": [
-            {
-              "type": "git",
-              "url": "https://code.videolan.org/videolan/x264.git",
-              "commit": "a8b68ebfaa68621b5ac8907610d3335971839d52"
-            }
-          ]
-        },
-        {
-          "name": "ffmpeg",
-          "cleanup": ["/share/ffmpeg/examples"],
-          "config-opts": [
-            "--disable-debug",
-            "--disable-doc",
-            "--disable-programs",
-            "--disable-static",
-            "--enable-shared",
-            "--enable-gnutls",
-            "--enable-gpl",
-            "--enable-version3",
-            "--enable-encoder=png,libwebp,libjxl,libx264,libvorbis",
-            "--enable-libxml2",
-            "--enable-libv4l2",
-            "--enable-libdav1d",
-            "--enable-libfontconfig",
-            "--enable-libfreetype",
-            "--enable-libopus",
-            "--enable-librsvg",
-            "--enable-libvpx",
-            "--enable-libmp3lame",
-            "--enable-libwebp",
-            "--enable-libjxl",
-            "--enable-libx264",
-            "--enable-libvorbis"
-          ],
-          "sources": [
-            {
-              "type": "archive",
-              "url": "https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.gz",
-              "sha256": "9a6e57a446b671012612aaeb9df5126794d5ac8f2015ca220934f99a6a4e0601"
-            }
-          ],
-          "modules": [
-            {
-              "name": "libjxl",
-              "buildsystem": "cmake-ninja",
-              "config-opts": [
-                "-DJPEGXL_ENABLE_JPEGLI=OFF",
-                "-DBUILD_TESTING=OFF",
-                "-DJPEGXL_ENABLE_BENCHMARK=OFF",
-                "-DJPEGXL_ENABLE_COVERAGE=OFF",
-                "-DJPEGXL_ENABLE_EXAMPLES=OFF",
-                "-DJPEGXL_ENABLE_FUZZERS=OFF",
-                "-DJPEGXL_ENABLE_JNI=OFF",
-                "-DJPEGXL_ENABLE_SJPEG=OFF",
-                "-DJPEGXL_ENABLE_SKCMS=OFF",
-                "-DJPEGXL_ENABLE_TOOLS=OFF",
-                "-DJPEGXL_ENABLE_VIEWERS=OFF"
-              ],
-              "sources": [
-                {
-                  "type": "archive",
-                  "url": "https://github.com/libjxl/libjxl/archive/refs/tags/v0.11.1.tar.gz",
-                  "sha256": "1492dfef8dd6c3036446ac3b340005d92ab92f7d48ee3271b5dac1d36945d3d9"
-                }
-              ],
-              "modules": [
-                {
-                  "name": "highway",
-                  "buildsystem": "cmake-ninja",
-                  "config-opts": [
-                    "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
-                    "-DBUILD_TESTING=OFF",
-                    "-DBUILD_SHARED_LIBS=ON"
-                  ],
-                  "sources": [
-                    {
-                      "type": "archive",
-                      "url": "https://github.com/google/highway/archive/refs/tags/1.2.0.tar.gz",
-                      "sha256": "7e0be78b8318e8bdbf6fa545d2ecb4c90f947df03f7aadc42c1967f019e63343"
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "name": "libass",
-          "config-opts": ["--disable-static"],
-          "sources": [
-            {
-              "type": "archive",
-              "url": "https://github.com/libass/libass/releases/download/0.17.4/libass-0.17.4.tar.gz",
-              "sha256": "a886b3b80867f437bc55cff3280a652bfa0d37b43d2aff39ddf3c4f288b8c5a8"
-            }
-          ]
-        },
-        {
-          "name": "uchardet",
-          "buildsystem": "cmake-ninja",
-          "config-opts": [
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DBUILD_STATIC=0"
-          ],
-          "cleanup": ["/bin"],
-          "sources": [
-            {
-              "type": "archive",
-              "url": "https://www.freedesktop.org/software/uchardet/releases/uchardet-0.0.8.tar.xz",
-              "sha256": "e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f0"
-            }
-          ]
-        }
+        "gst-plugin-gtk4-sources.json"
       ]
     },
     {
       "name": "reel",
       "buildsystem": "simple",
-      "build-options": {
-        "env": {
-          "PKG_CONFIG_PATH": "/app/lib/pkgconfig:/app/share/pkgconfig",
-          "LIBRARY_PATH": "/app/lib"
-        }
-      },
       "build-commands": [
         "mkdir -p .cargo",
         "cp cargo/config .cargo/config",
-        "cargo --offline build --release --verbose",
+        "cargo --offline build --release --no-default-features --features gstreamer",
         "install -Dm755 target/release/reel /app/bin/reel",
         "install -Dm644 data/dev.arsfeld.Reel.desktop /app/share/applications/dev.arsfeld.Reel.desktop",
         "install -Dm644 data/dev.arsfeld.Reel.metainfo.xml /app/share/metainfo/dev.arsfeld.Reel.metainfo.xml",
@@ -324,9 +66,8 @@
       ],
       "sources": [
         {
-          "type": "git",
-          "url": "https://github.com/arsfeld/reel.git",
-          "tag": "v0.7.5"
+          "type": "dir",
+          "path": "."
         },
         "cargo-sources.json"
       ]

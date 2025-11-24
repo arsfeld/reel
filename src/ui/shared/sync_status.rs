@@ -1,6 +1,5 @@
 use gtk::glib;
 use gtk::prelude::*;
-use libadwaita as adw;
 use relm4::gtk;
 
 /// Sync status states for UI representation

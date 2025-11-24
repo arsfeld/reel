@@ -4,9 +4,7 @@ use crate::db::entities::{
         self, ActiveModel as MediaPeopleActiveModel, Entity as MediaPeopleEntity,
         Model as MediaPeopleModel,
     },
-    people::{
-        self, ActiveModel as PeopleActiveModel, Entity as PeopleEntity, Model as PeopleModel,
-    },
+    people::{ActiveModel as PeopleActiveModel, Entity as PeopleEntity, Model as PeopleModel},
 };
 use anyhow::Result;
 use async_trait::async_trait;

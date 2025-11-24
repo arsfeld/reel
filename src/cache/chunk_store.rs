@@ -8,8 +8,7 @@ use crate::db::entities::CacheEntryModel;
 
 /// Check if an I/O error is due to disk space exhaustion (ENOSPC)
 fn is_disk_full_error(err: &std::io::Error) -> bool {
-    // Check for StorageFull error kind (available in Rust 1.80+)
-    #[cfg(feature = "storage_full_error")]
+    // Check for StorageFull error kind (stable since Rust 1.79)
     if matches!(err.kind(), std::io::ErrorKind::StorageFull) {
         return true;
     }
