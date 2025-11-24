@@ -7,21 +7,17 @@ use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;
 
-use super::dialogs::{
-    AuthDialog, AuthDialogInput, AuthDialogOutput, PreferencesDialog, PreferencesDialogInput,
-    PreferencesDialogOutput,
-};
+use super::dialogs::{AuthDialog, AuthDialogOutput, PreferencesDialog};
 use super::pages::{
     HomePage, LibraryPage, MovieDetailsPage, PlayerPage, SearchPage, ShowDetailsPage, SourcesPage,
 };
-use super::shared::broker::{BROKER, BrokerMessage, SourceMessage};
 use super::sidebar::{Sidebar, SidebarInput, SidebarOutput};
 use crate::db::connection::DatabaseConnection;
 use crate::models::{LibraryId, MediaItemId, PlaylistContext, SourceId};
 use crate::services::core::ConnectionType;
 use crate::workers::{
-    ConnectionMonitor, ConnectionMonitorInput, ConnectionMonitorOutput, SearchWorker,
-    SearchWorkerInput, SearchWorkerOutput, SyncWorker, SyncWorkerInput, SyncWorkerOutput,
+    ConnectionMonitor, ConnectionMonitorInput, SearchWorker, SearchWorkerInput, SyncWorker,
+    SyncWorkerInput,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,14 +26,19 @@ use tokio::runtime::Runtime;
 #[derive(Debug)]
 pub struct MainWindow {
     db: DatabaseConnection,
+    // Workers stored for lifecycle management - they run background tasks
+    #[allow(dead_code)]
     runtime: Arc<Runtime>,
     sidebar: Controller<Sidebar>,
     home_page: AsyncController<HomePage>,
     connection_monitor: relm4::WorkerController<ConnectionMonitor>,
     sync_worker: relm4::WorkerController<SyncWorker>,
+    #[allow(dead_code)]
     playback_sync_worker: relm4::WorkerController<crate::workers::PlaybackSyncWorker>,
     search_worker: relm4::WorkerController<SearchWorker>,
+    #[allow(dead_code)]
     config_manager: relm4::WorkerController<crate::workers::config_manager::ConfigManager>,
+    #[allow(dead_code)]
     cache_cleanup_worker:
         relm4::WorkerController<crate::workers::cache_cleanup_worker::CacheCleanupWorker>,
     library_page: Option<AsyncController<LibraryPage>>,

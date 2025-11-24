@@ -66,6 +66,7 @@ pub struct ChunkManager {
     chunk_waiters: Arc<RwLock<HashMap<(i32, u64), Arc<Notify>>>>,
     chunk_size: u64,
     downloader: Arc<ChunkDownloader>,
+    #[allow(dead_code)]
     chunk_store: Arc<ChunkStore>,
     active_downloads: Arc<Mutex<HashMap<(i32, u64), JoinHandle<Result<()>>>>>,
     max_concurrent_downloads: usize,
@@ -93,7 +94,7 @@ impl ChunkManagerCallback {
     /// Dispatch the next download from the priority queue if under concurrent limit
     /// Returns Ok(Some((entry_id, chunk_index))) if a download was dispatched, Ok(None) if not
     async fn dispatch_next_download(&self) -> Result<Option<(i32, u64)>> {
-        let mut active = self.active_downloads.lock().await;
+        let active = self.active_downloads.lock().await;
 
         // Check concurrent limit
         if active.len() >= self.max_concurrent_downloads {

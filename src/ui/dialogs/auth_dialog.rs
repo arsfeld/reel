@@ -134,7 +134,10 @@ pub enum AuthDialogOutput {
     Cancelled,
 }
 
+// AuthDialog stores many UI widgets and state fields that are referenced by GTK callbacks
+// but not directly read from the struct. Suppress dead_code warnings for these.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct AuthDialog {
     db: DatabaseConnection,
     backend_type: BackendType,

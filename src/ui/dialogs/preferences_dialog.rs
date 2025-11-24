@@ -8,6 +8,7 @@ use crate::services::config_service::CONFIG_SERVICE;
 
 #[tracker::track]
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct PreferencesDialog {
     #[do_not_track]
     db: DatabaseConnection,

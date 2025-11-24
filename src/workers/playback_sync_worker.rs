@@ -1,7 +1,6 @@
 use crate::db::DatabaseConnection;
 use crate::db::entities::{PlaybackSyncStatus, SyncChangeType};
 use crate::db::repository::{PlaybackSyncRepository, PlaybackSyncRepositoryImpl};
-use crate::models::SourceId;
 use crate::services::core::backend::BackendService;
 use relm4::{ComponentSender, Worker};
 use std::collections::HashMap;
@@ -87,8 +86,6 @@ pub struct PlaybackSyncWorker {
     config: SyncConfig,
     is_paused: bool,
     sync_handle: Option<relm4::JoinHandle<()>>,
-    /// Track last sync attempt per source to avoid hammering failed sources
-    last_attempt_times: HashMap<i32, Instant>,
 }
 
 impl PlaybackSyncWorker {
@@ -98,7 +95,6 @@ impl PlaybackSyncWorker {
             config: SyncConfig::default(),
             is_paused: false,
             sync_handle: None,
-            last_attempt_times: HashMap::new(),
         }
     }
 
@@ -131,7 +127,7 @@ impl PlaybackSyncWorker {
 
     async fn process_queue(
         db: Arc<DatabaseConnection>,
-        config: SyncConfig,
+        _config: SyncConfig,
         sender: ComponentSender<PlaybackSyncWorker>,
     ) {
         let start_time = Instant::now();

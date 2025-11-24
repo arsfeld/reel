@@ -1,5 +1,4 @@
 use gtk::prelude::*;
-use libadwaita as adw;
 use relm4::gtk;
 use relm4::prelude::*;
 
@@ -10,7 +9,9 @@ use crate::player::BufferingState;
 use super::buffering_warnings::{PerformanceWarning, WarningSeverity, detect_warnings};
 
 /// Input messages for the BufferingOverlay component
+/// Note: Some variants are defined as public API for future use
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum BufferingOverlayInput {
     /// Update buffering state from player
     #[cfg(feature = "gstreamer")]

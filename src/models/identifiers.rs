@@ -9,10 +9,12 @@ macro_rules! impl_id_type {
         pub struct $name(String);
 
         impl $name {
+            #[allow(dead_code)]
             pub fn new(id: impl Into<String>) -> Self {
                 Self(id.into())
             }
 
+            #[allow(dead_code)]
             pub fn as_str(&self) -> &str {
                 &self.0
             }
