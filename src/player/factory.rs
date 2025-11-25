@@ -1,7 +1,7 @@
 use anyhow::Result;
 use gtk4;
 use std::time::Duration;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 #[cfg(feature = "gstreamer")]
 use super::GStreamerPlayer;
