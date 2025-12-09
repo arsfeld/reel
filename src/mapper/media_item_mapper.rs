@@ -395,6 +395,7 @@ impl MediaItem {
             _ => (None, None, None, None),
         };
 
+        let now = chrono::Utc::now().naive_utc();
         MediaItemModel {
             id: self.id().to_string(),
             source_id: source_id.to_string(),
@@ -412,13 +413,14 @@ impl MediaItem {
             season_number,
             episode_number,
             sort_title: Some(title),
-            added_at: Some(chrono::Utc::now().naive_utc()),
-            updated_at: chrono::Utc::now().naive_utc(),
+            added_at: Some(now),
+            updated_at: now,
             metadata: Some(metadata),
             intro_marker_start_ms,
             intro_marker_end_ms,
             credits_marker_start_ms,
             credits_marker_end_ms,
+            fetched_at: Some(now),
         }
     }
 }

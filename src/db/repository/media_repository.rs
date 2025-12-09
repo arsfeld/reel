@@ -117,6 +117,14 @@ pub trait MediaRepository: Repository<MediaItemModel> {
         intro_marker: Option<(i64, i64)>,
         credits_marker: Option<(i64, i64)>,
     ) -> Result<()>;
+
+    /// Find items in a library where fetched_at is older than the TTL
+    /// Returns items that need to be refreshed
+    async fn find_stale_items(
+        &self,
+        library_id: &str,
+        ttl: std::time::Duration,
+    ) -> Result<Vec<MediaItemModel>>;
 }
 
 #[derive(Debug)]
@@ -134,6 +142,7 @@ impl MediaRepositoryImpl {
     // Insert without emitting events (used for bulk/silent paths)
     pub async fn insert_silent(&self, entity: MediaItemModel) -> anyhow::Result<MediaItemModel> {
         use sea_orm::ActiveModelTrait;
+        let now = chrono::Utc::now().naive_utc();
         let active_model: MediaItemActiveModel = MediaItemActiveModel {
             id: Set(entity.id),
             library_id: Set(entity.library_id),
@@ -149,7 +158,7 @@ impl MediaRepositoryImpl {
             overview: Set(entity.overview),
             genres: Set(entity.genres),
             added_at: Set(entity.added_at),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
+            updated_at: Set(now),
             metadata: Set(entity.metadata),
             parent_id: Set(entity.parent_id),
             season_number: Set(entity.season_number),
@@ -158,6 +167,7 @@ impl MediaRepositoryImpl {
             intro_marker_end_ms: Set(entity.intro_marker_end_ms),
             credits_marker_start_ms: Set(entity.credits_marker_start_ms),
             credits_marker_end_ms: Set(entity.credits_marker_end_ms),
+            fetched_at: Set(Some(now)),
         };
 
         let result = active_model.insert(self.base.db.as_ref()).await?;
@@ -167,8 +177,10 @@ impl MediaRepositoryImpl {
     // Update without emitting events (used for bulk/silent paths)
     pub async fn update_silent(&self, entity: MediaItemModel) -> anyhow::Result<MediaItemModel> {
         use sea_orm::ActiveModelTrait;
+        let now = chrono::Utc::now().naive_utc();
         let mut active_model: MediaItemActiveModel = entity.into();
-        active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+        active_model.updated_at = Set(now);
+        active_model.fetched_at = Set(Some(now));
         let result = active_model.update(self.base.db.as_ref()).await?;
         Ok(result)
     }
@@ -206,6 +218,7 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
     }
 
     async fn insert(&self, entity: MediaItemModel) -> Result<MediaItemModel> {
+        let now = chrono::Utc::now().naive_utc();
         let active_model = MediaItemActiveModel {
             id: Set(entity.id.clone()),
             library_id: Set(entity.library_id.clone()),
@@ -221,7 +234,7 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
             overview: Set(entity.overview.clone()),
             genres: Set(entity.genres.clone()),
             added_at: Set(entity.added_at),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
+            updated_at: Set(now),
             metadata: Set(entity.metadata.clone()),
             parent_id: Set(entity.parent_id.clone()),
             season_number: Set(entity.season_number),
@@ -230,6 +243,7 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
             intro_marker_end_ms: Set(entity.intro_marker_end_ms),
             credits_marker_start_ms: Set(entity.credits_marker_start_ms),
             credits_marker_end_ms: Set(entity.credits_marker_end_ms),
+            fetched_at: Set(Some(now)),
         };
 
         let result = active_model.insert(self.base.db.as_ref()).await?;
@@ -247,6 +261,7 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
     async fn update(&self, entity: MediaItemModel) -> Result<MediaItemModel> {
         // Manually create ActiveModel with all fields explicitly set to ensure proper update
         // The auto-generated From implementation doesn't properly mark all fields as Set
+        let now = chrono::Utc::now().naive_utc();
         let active_model = MediaItemActiveModel {
             id: Set(entity.id.clone()),
             library_id: Set(entity.library_id.clone()),
@@ -262,7 +277,7 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
             overview: Set(entity.overview.clone()),
             genres: Set(entity.genres.clone()),
             added_at: Set(entity.added_at),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
+            updated_at: Set(now),
             metadata: Set(entity.metadata.clone()),
             parent_id: Set(entity.parent_id.clone()),
             season_number: Set(entity.season_number),
@@ -271,6 +286,7 @@ impl Repository<MediaItemModel> for MediaRepositoryImpl {
             intro_marker_end_ms: Set(entity.intro_marker_end_ms),
             credits_marker_start_ms: Set(entity.credits_marker_start_ms),
             credits_marker_end_ms: Set(entity.credits_marker_end_ms),
+            fetched_at: Set(Some(now)),
         };
 
         let result = active_model.update(self.base.db.as_ref()).await?;
@@ -422,6 +438,7 @@ impl MediaRepository for MediaRepositoryImpl {
 
         // Clone items for event emission before consuming them
         let items_for_event = items.clone();
+        let now = chrono::Utc::now().naive_utc();
 
         let active_models: Vec<MediaItemActiveModel> = items
             .into_iter()
@@ -440,7 +457,7 @@ impl MediaRepository for MediaRepositoryImpl {
                 overview: Set(item.overview),
                 genres: Set(item.genres),
                 added_at: Set(item.added_at),
-                updated_at: Set(chrono::Utc::now().naive_utc()),
+                updated_at: Set(now),
                 metadata: Set(item.metadata),
                 parent_id: Set(item.parent_id),
                 season_number: Set(item.season_number),
@@ -449,6 +466,7 @@ impl MediaRepository for MediaRepositoryImpl {
                 intro_marker_end_ms: Set(item.intro_marker_end_ms),
                 credits_marker_start_ms: Set(item.credits_marker_start_ms),
                 credits_marker_end_ms: Set(item.credits_marker_end_ms),
+                fetched_at: Set(Some(now)),
             })
             .collect();
 
@@ -804,6 +822,26 @@ impl MediaRepository for MediaRepositoryImpl {
         );
 
         Ok(())
+    }
+
+    async fn find_stale_items(
+        &self,
+        library_id: &str,
+        ttl: std::time::Duration,
+    ) -> Result<Vec<MediaItemModel>> {
+        // Calculate the cutoff timestamp (items older than this are stale)
+        let cutoff = chrono::Utc::now().naive_utc() - chrono::Duration::from_std(ttl)?;
+
+        // Find items where fetched_at is null or older than the cutoff
+        Ok(MediaItem::find()
+            .filter(media_items::Column::LibraryId.eq(library_id))
+            .filter(
+                sea_orm::Condition::any()
+                    .add(media_items::Column::FetchedAt.is_null())
+                    .add(media_items::Column::FetchedAt.lt(cutoff)),
+            )
+            .all(self.base.db.as_ref())
+            .await?)
     }
 }
 
@@ -1359,6 +1397,7 @@ mod tests {
             intro_marker_end_ms: None,
             credits_marker_start_ms: None,
             credits_marker_end_ms: None,
+            fetched_at: Some(Utc::now().naive_utc()),
         }
     }
 
@@ -1394,6 +1433,7 @@ mod tests {
             intro_marker_end_ms: None,
             credits_marker_start_ms: None,
             credits_marker_end_ms: None,
+            fetched_at: Some(Utc::now().naive_utc()),
         }
     }
 
@@ -1436,6 +1476,7 @@ mod tests {
             intro_marker_end_ms: None,
             credits_marker_start_ms: None,
             credits_marker_end_ms: None,
+            fetched_at: Some(Utc::now().naive_utc()),
         }
     }
 

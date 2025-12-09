@@ -1,6 +1,6 @@
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Creates an optimized video sink based on platform and available features.
 ///
