@@ -45,6 +45,7 @@ pub enum BrokerMessage {
     Config(ConfigMessage),
     Cache(CacheMessage),
     PlaybackSync(PlaybackSyncMessage),
+    MetadataRefresh(MetadataRefreshMessage),
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +155,52 @@ pub enum PlaybackSyncMessage {
     SyncPaused,
     /// Sync was resumed
     SyncResumed,
+}
+
+/// Priority level for metadata refresh requests
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshPriority {
+    /// High priority - user is actively viewing this content
+    High,
+    /// Normal priority - background refresh
+    Normal,
+    /// Low priority - opportunistic refresh
+    Low,
+}
+
+/// Messages for TTL-based metadata refresh
+#[derive(Debug, Clone)]
+pub enum MetadataRefreshMessage {
+    /// Request to refresh a library's metadata
+    RefreshLibrary {
+        source_id: String,
+        library_id: String,
+        priority: RefreshPriority,
+    },
+    /// Request to refresh specific items
+    RefreshItems {
+        source_id: String,
+        item_ids: Vec<String>,
+        priority: RefreshPriority,
+    },
+    /// Request to refresh a single item's full metadata (cast/crew)
+    RefreshItemMetadata {
+        source_id: String,
+        item_id: String,
+    },
+    /// Notification that a library refresh completed
+    LibraryRefreshCompleted {
+        library_id: String,
+        items_refreshed: usize,
+    },
+    /// Notification that an item refresh completed
+    ItemRefreshCompleted {
+        item_id: String,
+    },
+    /// Home sections were refreshed
+    HomeSectionsRefreshed {
+        source_id: String,
+    },
 }
 
 pub struct MessageBroker {

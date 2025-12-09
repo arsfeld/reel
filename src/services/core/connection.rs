@@ -79,6 +79,25 @@ impl ConnectionService {
             }
         };
 
+        // For Plex sources, refresh the token before testing connections
+        // This ensures local servers will accept the token (they validate against Plex.tv)
+        if source.source_type == "plex" {
+            if let Some(ref token) = auth_token {
+                debug!("Refreshing Plex token before connection testing");
+                match crate::backends::plex::PlexAuth::refresh_token(token).await {
+                    Ok(true) => {
+                        info!("Plex token refreshed successfully before connection test");
+                    }
+                    Ok(false) => {
+                        warn!("Plex token refresh returned false - token may be invalid");
+                    }
+                    Err(e) => {
+                        warn!("Failed to refresh Plex token: {} - proceeding with connection test anyway", e);
+                    }
+                }
+            }
+        }
+
         // Get stored connections from JSON column
         if let Some(ref connections_json) = source.connections {
             let connections: ServerConnections = serde_json::from_value(connections_json.clone())?;

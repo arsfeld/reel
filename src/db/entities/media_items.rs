@@ -34,6 +34,9 @@ pub struct Model {
     pub intro_marker_end_ms: Option<i64>,
     pub credits_marker_start_ms: Option<i64>,
     pub credits_marker_end_ms: Option<i64>,
+    /// Timestamp when this item's metadata was last fetched from the backend.
+    /// Used for TTL-based cache invalidation.
+    pub fetched_at: Option<DateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
