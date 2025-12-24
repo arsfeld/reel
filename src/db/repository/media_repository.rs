@@ -3,9 +3,11 @@ use crate::db::entities::{MediaItem, MediaItemActiveModel, MediaItemModel, media
 use crate::ui::shared::broker::{BROKER, BrokerMessage, DataMessage};
 use anyhow::Result;
 use async_trait::async_trait;
+#[cfg(debug_assertions)]
+use sea_orm::QueryTrait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, QueryTrait, Set,
+    QueryFilter, QueryOrder, QuerySelect, Set,
 };
 use std::sync::Arc;
 

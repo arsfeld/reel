@@ -43,11 +43,11 @@ pub struct CacheConfig {
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            libraries_ttl: Duration::from_secs(3600),         // 1 hour
-            media_items_ttl: Duration::from_secs(4 * 3600),   // 4 hours
-            episodes_ttl: Duration::from_secs(12 * 3600),     // 12 hours
+            libraries_ttl: Duration::from_secs(3600),          // 1 hour
+            media_items_ttl: Duration::from_secs(4 * 3600),    // 4 hours
+            episodes_ttl: Duration::from_secs(12 * 3600),      // 12 hours
             full_metadata_ttl: Duration::from_secs(24 * 3600), // 24 hours
-            home_sections_ttl: Duration::from_secs(1800),     // 30 minutes
+            home_sections_ttl: Duration::from_secs(1800),      // 30 minutes
         }
     }
 }

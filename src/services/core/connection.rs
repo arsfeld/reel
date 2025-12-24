@@ -92,7 +92,10 @@ impl ConnectionService {
                         warn!("Plex token refresh returned false - token may be invalid");
                     }
                     Err(e) => {
-                        warn!("Failed to refresh Plex token: {} - proceeding with connection test anyway", e);
+                        warn!(
+                            "Failed to refresh Plex token: {} - proceeding with connection test anyway",
+                            e
+                        );
                     }
                 }
             }

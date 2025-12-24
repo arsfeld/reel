@@ -184,23 +184,16 @@ pub enum MetadataRefreshMessage {
         priority: RefreshPriority,
     },
     /// Request to refresh a single item's full metadata (cast/crew)
-    RefreshItemMetadata {
-        source_id: String,
-        item_id: String,
-    },
+    RefreshItemMetadata { source_id: String, item_id: String },
     /// Notification that a library refresh completed
     LibraryRefreshCompleted {
         library_id: String,
         items_refreshed: usize,
     },
     /// Notification that an item refresh completed
-    ItemRefreshCompleted {
-        item_id: String,
-    },
+    ItemRefreshCompleted { item_id: String },
     /// Home sections were refreshed
-    HomeSectionsRefreshed {
-        source_id: String,
-    },
+    HomeSectionsRefreshed { source_id: String },
 }
 
 pub struct MessageBroker {
