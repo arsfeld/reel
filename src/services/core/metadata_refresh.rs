@@ -18,11 +18,9 @@ use crate::backends::traits::MediaBackend;
 use crate::db::connection::DatabaseConnection;
 use crate::db::repository::{MediaRepository, MediaRepositoryImpl};
 use crate::models::{LibraryId, MediaItem, MediaItemId, SourceId};
-use crate::services::core::cache_config::{cache_config, CacheConfig, ContentType};
+use crate::services::core::cache_config::{CacheConfig, ContentType, cache_config};
 use crate::services::core::media::MediaService;
-use crate::ui::shared::broker::{
-    BrokerMessage, MetadataRefreshMessage, RefreshPriority, BROKER,
-};
+use crate::ui::shared::broker::{BROKER, BrokerMessage, MetadataRefreshMessage, RefreshPriority};
 
 /// Stateless service for metadata refresh operations
 pub struct MetadataRefreshService;
@@ -32,10 +30,7 @@ impl MetadataRefreshService {
     ///
     /// Returns true if the content should be refreshed in the background.
     /// Uses the global cache config by default.
-    pub fn needs_refresh(
-        fetched_at: Option<DateTime<Utc>>,
-        content_type: ContentType,
-    ) -> bool {
+    pub fn needs_refresh(fetched_at: Option<DateTime<Utc>>, content_type: ContentType) -> bool {
         cache_config().is_stale(fetched_at, content_type)
     }
 

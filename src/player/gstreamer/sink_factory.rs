@@ -1,6 +1,8 @@
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use tracing::{debug, error, info, warn};
+#[cfg(target_os = "macos")]
+use tracing::warn;
+use tracing::{debug, error, info};
 
 /// Creates an optimized video sink based on platform and available features.
 ///
