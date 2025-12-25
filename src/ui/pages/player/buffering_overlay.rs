@@ -42,6 +42,7 @@ pub struct BufferingOverlay {
     warnings: Vec<PerformanceWarning>,
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub)]
 impl SimpleComponent for BufferingOverlay {
     type Init = ();

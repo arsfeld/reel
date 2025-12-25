@@ -54,6 +54,7 @@ pub enum PreferencesDialogOutput {
     Closed,
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub async)]
 impl AsyncComponent for PreferencesDialog {
     type Init = DatabaseConnection;

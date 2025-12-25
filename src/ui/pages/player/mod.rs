@@ -273,6 +273,7 @@ mod tests {
     }
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub async)]
 impl AsyncComponent for PlayerPage {
     type Init = (

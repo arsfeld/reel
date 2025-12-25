@@ -455,6 +455,7 @@ impl AuthDialog {
     }
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub async)]
 impl AsyncComponent for AuthDialog {
     type Input = AuthDialogInput;
