@@ -269,7 +269,7 @@ impl Command<()> for MarkSeasonUnwatchedCommand {
 
 // Tests disabled temporarily - need proper database mocking support
 #[cfg(test)]
-#[allow(dead_code)]
+#[allow(dead_code, unused_imports)]
 mod tests {
     use super::*;
     use crate::db::entities::{libraries, media_items, playback_progress};

@@ -1100,6 +1100,7 @@ impl MediaService {
 }
 
 #[cfg(test)]
+#[allow(unused_imports, dead_code)]
 mod tests {
     use super::*;
     use crate::db::connection::Database;
@@ -1191,6 +1192,7 @@ mod tests {
             intro_marker_end_ms: None,
             credits_marker_start_ms: None,
             credits_marker_end_ms: None,
+            fetched_at: None,
         }
     }
 
@@ -1583,6 +1585,7 @@ mod tests {
             intro_marker_end_ms: None,
             credits_marker_start_ms: None,
             credits_marker_end_ms: None,
+            fetched_at: None,
         }
     }
 

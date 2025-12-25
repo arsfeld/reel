@@ -192,6 +192,7 @@ mod tests {
             intro_marker_end_ms: None,
             credits_marker_start_ms: None,
             credits_marker_end_ms: None,
+            fetched_at: None,
         };
 
         // Add metadata for cast and crew
@@ -266,6 +267,7 @@ mod tests {
             intro_marker_end_ms: None,
             credits_marker_start_ms: None,
             credits_marker_end_ms: None,
+            fetched_at: None,
         };
 
         // Add metadata for seasons and episodes
@@ -329,6 +331,7 @@ mod tests {
             intro_marker_end_ms: None,
             credits_marker_start_ms: None,
             credits_marker_end_ms: None,
+            fetched_at: None,
         };
 
         // Use the existing TryFrom implementation from db/entities/media_items.rs
@@ -374,6 +377,7 @@ mod tests {
             intro_marker_end_ms: None,
             credits_marker_start_ms: None,
             credits_marker_end_ms: None,
+            fetched_at: None,
         };
 
         let result = MediaItem::try_from(model);

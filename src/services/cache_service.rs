@@ -154,7 +154,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_service_double_initialization() {
-        let service = CacheService::new();
+        let _service = CacheService::new();
 
         // Double initialization should not fail
         // Note: This test would need proper config setup to work

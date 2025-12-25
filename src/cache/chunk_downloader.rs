@@ -76,6 +76,16 @@ impl ChunkDownloader {
         self
     }
 
+    /// Calculate the total number of chunks needed for a cache entry
+    #[cfg(test)]
+    fn calculate_total_chunks(&self, entry: &crate::db::entities::CacheEntryModel) -> u64 {
+        let total_size = entry.expected_total_size.unwrap_or(0) as u64;
+        if total_size == 0 {
+            return 0;
+        }
+        (total_size + self.chunk_size - 1) / self.chunk_size
+    }
+
     /// Download a specific chunk and record in database
     /// Returns a JoinHandle that can be awaited or cancelled
     pub async fn download_chunk(

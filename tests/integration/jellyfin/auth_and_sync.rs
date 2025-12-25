@@ -6,6 +6,8 @@
 //! 3. Media sync to database
 //! 4. Playback progress tracking
 
+#![allow(dead_code, unused_imports)]
+
 use anyhow::Result;
 use mockito::Server;
 use reel::backends::jellyfin::JellyfinBackend;

@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
     use crate::db::connection::get_test_db_connection;
     use crate::db::repository::source_repository::SourceRepositoryImpl;
@@ -44,6 +45,7 @@ mod tests {
             db: db.clone(),
             runtime: tokio::runtime::Handle::current(),
             next_check_times: HashMap::new(),
+            last_auth_status: HashMap::new(),
         };
 
         // Test different quality levels have correct intervals
@@ -77,6 +79,7 @@ mod tests {
             db: db.clone(),
             runtime: tokio::runtime::Handle::current(),
             next_check_times: HashMap::new(),
+            last_auth_status: HashMap::new(),
         };
 
         let source_id = SourceId::new("test-source".to_string());
@@ -123,6 +126,7 @@ mod tests {
             db: db.clone(),
             runtime: tokio::runtime::Handle::current(),
             next_check_times: HashMap::new(),
+            last_auth_status: HashMap::new(),
         };
 
         // Simulate checking a source
@@ -236,6 +240,7 @@ mod tests {
             db: db.clone(),
             runtime: tokio::runtime::Handle::current(),
             next_check_times: HashMap::new(),
+            last_auth_status: HashMap::new(),
         };
 
         // Create new check times
@@ -299,6 +304,7 @@ mod tests {
             db: db.clone(),
             runtime: tokio::runtime::Handle::current(),
             next_check_times: HashMap::new(),
+            last_auth_status: HashMap::new(),
         };
 
         // Calculate expected intervals
