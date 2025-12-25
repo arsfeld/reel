@@ -3,6 +3,8 @@
 //! This module provides test database helpers and utilities for integration testing.
 //! Docker container fixtures using testcontainers can be added here for E2E testing.
 
+#![allow(dead_code)]
+
 use anyhow::Result;
 
 /// Test database helper

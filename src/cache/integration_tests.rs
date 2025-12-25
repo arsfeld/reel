@@ -10,6 +10,7 @@
 //! Tests use a mock HTTP server to simulate the upstream media server.
 
 #![cfg(test)]
+#![allow(unused_imports, dead_code)]
 
 use super::*;
 use crate::cache::{

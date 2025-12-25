@@ -133,6 +133,32 @@ pub fn is_buffer_critically_low(buffer_percentage: i32, critical_threshold: i32)
     buffer_percentage > 0 && buffer_percentage < critical_threshold
 }
 
+/// Check if buffering appears to be stalled
+///
+/// Returns true if the buffer percentage hasn't changed for an extended period,
+/// indicating the stream may be stuck.
+///
+/// # Arguments
+/// * `current_percentage` - Current buffer level (0-100)
+/// * `previous_percentage` - Previous buffer level (0-100)
+/// * `seconds_unchanged` - How long the percentage has been unchanged
+/// * `stall_threshold_secs` - Threshold in seconds to consider stalled (default: 10)
+#[allow(dead_code)]
+pub fn is_buffering_stalled(
+    current_percentage: i32,
+    previous_percentage: i32,
+    seconds_unchanged: u64,
+    stall_threshold_secs: u64,
+) -> bool {
+    // Not stalled if at 0% (not started) or 100% (complete)
+    if current_percentage == 0 || current_percentage == 100 {
+        return false;
+    }
+
+    // Stalled if same percentage for threshold time
+    current_percentage == previous_percentage && seconds_unchanged >= stall_threshold_secs
+}
+
 /// Detect all active performance warnings
 ///
 /// This is a convenience function that checks all warning conditions and returns
@@ -294,6 +320,7 @@ mod tests {
         let warning = PerformanceWarning::BufferingStalled;
         let rec = warning.recommendation();
         assert!(rec.is_some());
-        assert!(rec.unwrap().contains("network") || rec.unwrap().contains("reload"));
+        let rec_str = rec.unwrap();
+        assert!(rec_str.contains("network") || rec_str.contains("reload"));
     }
 }

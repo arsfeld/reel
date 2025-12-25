@@ -2,6 +2,8 @@
 //!
 //! Provides sample movies, shows, episodes, and libraries for testing
 
+#![allow(dead_code)]
+
 use reel::models::*;
 use std::time::Duration;
 
