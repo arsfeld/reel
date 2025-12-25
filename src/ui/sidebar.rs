@@ -188,6 +188,7 @@ pub enum SourceGroupOutput {
     NavigateToLibrary(LibraryId),
 }
 
+#[allow(unused_assignments)]
 #[relm4::factory(pub)]
 impl FactoryComponent for SourceGroup {
     type Init = (Source, DatabaseConnection);
@@ -640,6 +641,7 @@ impl Sidebar {
     }
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub)]
 impl Component for Sidebar {
     type Init = DatabaseConnection;

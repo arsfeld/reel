@@ -105,6 +105,7 @@ pub struct LibraryPage {
     needs_factory_clear: bool,
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub async)]
 impl AsyncComponent for LibraryPage {
     type Init = DatabaseConnection;

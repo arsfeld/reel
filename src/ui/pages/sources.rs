@@ -95,6 +95,7 @@ pub enum SourceListItemInput {
     ReauthCompleted(bool), // success or failure
 }
 
+#[allow(unused_assignments)]
 #[relm4::factory(pub)]
 impl FactoryComponent for SourceListItem {
     type Init = Source;
@@ -378,6 +379,7 @@ pub enum SourceItemAction {
     Reauth(SourceId, String, String), // source_id, source_name, source_type
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub async)]
 impl AsyncComponent for SourcesPage {
     type Init = DatabaseConnection;
