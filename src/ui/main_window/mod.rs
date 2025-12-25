@@ -143,6 +143,7 @@ pub enum MainWindowOutput {
     // No output messages currently defined
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub async)]
 impl AsyncComponent for MainWindow {
     type Init = (DatabaseConnection, Arc<Runtime>);

@@ -358,6 +358,7 @@ pub struct PlexGenericMetadata {
     pub genre: Option<Vec<PlexTag>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PlexOnDeckResponse {
@@ -365,6 +366,7 @@ pub struct PlexOnDeckResponse {
     _media_container: PlexOnDeckContainer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexOnDeckContainer {
@@ -372,10 +374,12 @@ pub struct PlexOnDeckContainer {
     _metadata: Vec<PlexGenericMetadata>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PlexRecentlyAddedResponse {}
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlexRecentlyAddedContainer {}

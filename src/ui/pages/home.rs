@@ -83,6 +83,7 @@ pub enum HomePageOutput {
     NavigateToMediaItem(MediaItemId),
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub async)]
 impl AsyncComponent for HomePage {
     type Init = DatabaseConnection;
