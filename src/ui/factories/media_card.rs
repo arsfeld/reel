@@ -54,6 +54,7 @@ pub enum MediaCardOutput {
     MarkUnwatched(MediaItemId),
 }
 
+#[allow(unused_assignments)]
 #[relm4::factory(pub)]
 impl FactoryComponent for MediaCard {
     type Init = MediaCardInit;

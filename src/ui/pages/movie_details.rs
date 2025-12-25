@@ -69,6 +69,7 @@ pub enum MovieDetailsCommand {
     FullMetadataLoaded,
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub, async)]
 impl AsyncComponent for MovieDetailsPage {
     type Init = (MediaItemId, Arc<crate::db::connection::DatabaseConnection>);

@@ -68,6 +68,7 @@ pub enum SearchPageOutput {
     NavigateToMediaItem(MediaItemId),
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub async)]
 impl AsyncComponent for SearchPage {
     type Init = DatabaseConnection;

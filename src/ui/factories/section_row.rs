@@ -33,6 +33,7 @@ pub enum SectionRowOutput {
     LoadMore,
 }
 
+#[allow(unused_assignments)]
 #[relm4::factory(pub)]
 impl FactoryComponent for SectionRow {
     type Init = String;

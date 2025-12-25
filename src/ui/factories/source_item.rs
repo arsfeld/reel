@@ -43,6 +43,7 @@ pub enum SourceItemOutput {
     ToggleExpanded(SourceId),
 }
 
+#[allow(unused_assignments)]
 #[relm4::factory(pub)]
 impl FactoryComponent for SourceItem {
     type Init = Source;

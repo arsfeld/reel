@@ -120,6 +120,7 @@ pub enum ShowDetailsCommand {
     FullMetadataLoaded,
 }
 
+#[allow(unused_assignments)]
 #[relm4::component(pub, async)]
 impl AsyncComponent for ShowDetailsPage {
     type Init = (MediaItemId, Arc<crate::db::connection::DatabaseConnection>);
