@@ -129,7 +129,7 @@
     min-height: 0;
 }
 
-/* --- Watch Progress Bar (hidden until M4) --- */
+/* --- Watch State Indicators --- */
 
 .watch-progress {
     min-height: 3px;
@@ -146,6 +146,13 @@
     min-height: 3px;
     border-radius: 0 0 12px 12px;
     background-color: @accent_color;
+}
+
+.watched-indicator {
+    background-color: alpha(@accent_color, 0.85);
+    border-radius: 50%;
+    padding: 4px;
+    color: white;
 }
 
 /* --- Detail Pages --- */

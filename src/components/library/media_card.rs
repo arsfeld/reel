@@ -20,6 +20,10 @@ pub struct MediaCardData {
     /// Card dimensions (set by density; default 180x270).
     pub card_width: i32,
     pub card_height: i32,
+    /// Watch progress as a fraction (0.0-1.0). None = no progress data.
+    pub watch_progress: Option<f64>,
+    /// Whether the item has been fully watched.
+    pub watched: bool,
 }
 
 impl MediaCardData {
@@ -36,6 +40,8 @@ impl MediaCardData {
             rating: item.rating,
             card_width: 180,
             card_height: 270,
+            watch_progress: None,
+            watched: false,
         }
     }
 }
@@ -49,8 +55,8 @@ pub struct MediaCardWidgets {
     year_label: gtk4::Label,
     resolution_badge: gtk4::Label,
     rating_badge: gtk4::Label,
-    #[allow(dead_code)]
     progress_bar: gtk4::ProgressBar,
+    watched_icon: gtk4::Image,
 }
 
 impl RelmGridItem for MediaCardData {
@@ -102,11 +108,23 @@ impl RelmGridItem for MediaCardData {
             .visible(false)
             .build();
 
-        // Watch progress bar (bottom, hidden until M4)
+        // Watch progress bar (bottom of poster, visible for in-progress items)
         let progress_bar = gtk4::ProgressBar::builder()
             .halign(gtk4::Align::Fill)
             .valign(gtk4::Align::End)
             .css_classes(["watch-progress"])
+            .visible(false)
+            .build();
+
+        // Watched checkmark (bottom-right of poster)
+        let watched_icon = gtk4::Image::builder()
+            .icon_name("emblem-ok-symbolic")
+            .pixel_size(20)
+            .halign(gtk4::Align::End)
+            .valign(gtk4::Align::End)
+            .margin_bottom(8)
+            .margin_end(8)
+            .css_classes(["watched-indicator"])
             .visible(false)
             .build();
 
@@ -117,6 +135,7 @@ impl RelmGridItem for MediaCardData {
         overlay.add_overlay(&resolution_badge);
         overlay.add_overlay(&rating_badge);
         overlay.add_overlay(&progress_bar);
+        overlay.add_overlay(&watched_icon);
 
         // Wrap overlay in a frame for rounded corners + hover effects
         let frame = gtk4::Frame::builder()
@@ -152,6 +171,7 @@ impl RelmGridItem for MediaCardData {
             resolution_badge,
             rating_badge,
             progress_bar,
+            watched_icon,
         };
 
         (container, widgets)
@@ -213,6 +233,27 @@ impl RelmGridItem for MediaCardData {
             }
         } else {
             widgets.rating_badge.set_visible(false);
+        }
+
+        // Watch state indicators
+        if self.watched {
+            // Watched: show checkmark, hide progress bar
+            widgets.watched_icon.set_visible(true);
+            widgets.progress_bar.set_visible(false);
+        } else if let Some(progress) = self.watch_progress {
+            if progress > 0.0 {
+                // In progress: show progress bar, hide checkmark
+                widgets.progress_bar.set_fraction(progress);
+                widgets.progress_bar.set_visible(true);
+                widgets.watched_icon.set_visible(false);
+            } else {
+                widgets.progress_bar.set_visible(false);
+                widgets.watched_icon.set_visible(false);
+            }
+        } else {
+            // No watch data
+            widgets.progress_bar.set_visible(false);
+            widgets.watched_icon.set_visible(false);
         }
     }
 }
