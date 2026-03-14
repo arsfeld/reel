@@ -21,6 +21,21 @@ gdk4-wayland = { version = "0.10", optional = true }
 gdk4-x11 = { version = "0.10", optional = true }
 khronos-egl = { version = "6", features = ["dynamic"] }
 
+# HTTP + serialization
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+async-trait = "0.1"
+
+# Crypto (artwork cache keys)
+sha2 = "0.10"
+
 # Error handling
 thiserror = "2"
 
@@ -34,6 +49,7 @@ libc = "0.2"
 [dev-dependencies]
 mockall = "0.13"
 tempfile = "3"
+wiremock = "0.6"
 
 [features]
 default = ["wayland", "x11"]

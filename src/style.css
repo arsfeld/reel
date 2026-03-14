@@ -34,3 +34,56 @@
 .player-controls .volume-slider trough {
     min-height: 4px;
 }
+
+/* --- Library Grid --- */
+
+.media-grid {
+    padding: 12px;
+}
+
+.media-card {
+    margin: 6px;
+}
+
+.media-card-frame {
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.media-card-poster {
+    background-color: alpha(@card_bg_color, 0.5);
+    border-radius: 8px;
+}
+
+.media-card-title {
+    font-weight: bold;
+    font-size: 13px;
+    margin-top: 4px;
+}
+
+.media-card-year {
+    font-size: 12px;
+}
+
+/* --- Detail Pages --- */
+
+.media-backdrop {
+    border-radius: 12px;
+    overflow: hidden;
+    background-color: alpha(@card_bg_color, 0.3);
+}
+
+.genre-chip {
+    border-radius: 99px;
+    padding: 2px 10px;
+}
+
+/* --- Toast Colors --- */
+
+.success {
+    color: @success_color;
+}
+
+.error {
+    color: @error_color;
+}

@@ -2,6 +2,11 @@
 
 mod app;
 mod components;
+mod config;
+mod db;
+mod models;
+#[allow(dead_code)]
+mod navigation;
 mod player;
 mod services;
 
