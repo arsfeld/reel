@@ -15,7 +15,9 @@ use crate::components::player::drop_target;
 use crate::components::player::overlay_controller::{self, OverlayAction, OverlayState};
 use crate::player::backend::{self, EndReason, PlayState};
 use crate::player::mpv::gl_render;
+use crate::player::mpv::tracks;
 use crate::player::playback_tracker::{PlaybackEvent, PlaybackTracker, PollData};
+use crate::player::subtitles;
 
 /// Wrapper for mpv_render_context pointer.
 struct RenderCtxPtr(*mut mpv_render_context);
@@ -25,6 +27,7 @@ struct MpvState {
     mpv: Option<Mpv>,
     render_ctx: Option<RenderCtxPtr>,
     tracker: PlaybackTracker,
+    init_error: Option<String>,
 }
 
 impl Drop for MpvState {
@@ -88,6 +91,7 @@ pub enum VideoAreaOutput {
     SpeedChanged(f64),
     ToggleFullscreen,
     LoadSubtitleFile,
+    Error(String),
 }
 
 pub struct VideoArea {
@@ -137,6 +141,7 @@ impl Component for VideoArea {
             mpv: None,
             render_ctx: None,
             tracker: PlaybackTracker::new(),
+            init_error: None,
         }));
 
         Self::setup_gl_callbacks(&gl_area, &state);
@@ -164,7 +169,11 @@ impl Component for VideoArea {
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
-            VideoAreaMsg::LoadFile(uri) => self.handle_load_file(&uri),
+            VideoAreaMsg::LoadFile(uri) => {
+                if let Some(err) = self.handle_load_file(&uri) {
+                    let _ = sender.output(VideoAreaOutput::Error(err));
+                }
+            }
             VideoAreaMsg::TogglePause => self.mpv_cmd("cycle", &["pause"]),
             VideoAreaMsg::SeekAbsolute(pos) => self.handle_seek_absolute(pos),
             VideoAreaMsg::SeekRelative(offset) => {
@@ -245,6 +254,7 @@ impl VideoArea {
                 Ok(backend) => backend.mpv,
                 Err(e) => {
                     error!("Failed to create mpv: {:?}", e);
+                    st.init_error = Some(format!("Failed to initialize video player: {e:?}"));
                     return;
                 }
             };
@@ -320,10 +330,7 @@ impl VideoArea {
         });
     }
 
-    fn setup_render_timer(
-        gl_area: &gtk4::GLArea,
-        state: &Rc<RefCell<MpvState>>,
-    ) -> glib::SourceId {
+    fn setup_render_timer(gl_area: &gtk4::GLArea, state: &Rc<RefCell<MpvState>>) -> glib::SourceId {
         let gl_area_timer = gl_area.clone();
         let state_timer = state.clone();
         glib::timeout_add_local(Duration::from_millis(16), move || {
@@ -418,7 +425,7 @@ impl VideoArea {
 // --- Update helpers ---
 
 impl VideoArea {
-    fn handle_load_file(&mut self, uri: &str) {
+    fn handle_load_file(&mut self, uri: &str) -> Option<String> {
         info!("Loading file: {}", uri);
         self.current_speed = 1.0;
         self.has_video = false;
@@ -429,10 +436,13 @@ impl VideoArea {
         if let Some(ref mpv) = st.mpv {
             if let Err(e) = mpv.command("loadfile", &[uri, "replace"]) {
                 error!("Failed to load file: {:?}", e);
+                return Some(format!("Failed to open file: {e:?}"));
             }
         } else {
             warn!("mpv not initialized yet");
+            return Some("Player not ready yet".to_string());
         }
+        None
     }
 
     fn handle_seek_absolute(&self, pos: f64) {
@@ -500,6 +510,14 @@ impl VideoArea {
     }
 
     fn handle_poll_state(&mut self, sender: &ComponentSender<Self>) {
+        // Check for init errors (emit once)
+        {
+            let mut st = self.state.borrow_mut();
+            if let Some(err) = st.init_error.take() {
+                let _ = sender.output(VideoAreaOutput::Error(err));
+            }
+        }
+
         let poll_data = {
             let st = self.state.borrow();
             let Some(ref mpv) = st.mpv else {
@@ -525,34 +543,47 @@ impl VideoArea {
 
         for event in events {
             match event {
-                PlaybackEvent::FileLoaded { hwdec, .. } => {
+                PlaybackEvent::FileLoaded {
+                    ref path, hwdec, ..
+                } => {
                     info!("File loaded");
                     self.has_video = true;
                     if let Some(ref h) = hwdec {
                         info!("Hardware decoding: {}", h);
                     }
+
+                    // Send track list and chapter count to controls
                     let st = self.state.borrow();
                     if let Some(ref mpv) = st.mpv {
+                        let track_list = tracks::get_track_list(mpv);
+                        self.controls.emit(ControlsInput::Tracks(track_list));
+
                         let chapters = mpv.get_property::<i64>("chapters").unwrap_or(0);
                         self.controls.emit(ControlsInput::ChapterCount(chapters));
                     }
                     drop(st);
+
+                    // Auto-detect and load matching subtitle files
+                    let video_path = std::path::Path::new(path);
+                    for sub_path in subtitles::find_matching_subtitles(video_path) {
+                        info!("Auto-loading subtitle: {:?}", sub_path);
+                        sender.input(VideoAreaMsg::AddSubtitleFile(
+                            sub_path.to_string_lossy().to_string(),
+                        ));
+                    }
+
                     let _ = sender.output(VideoAreaOutput::FileLoaded);
                 }
                 PlaybackEvent::PositionChanged { position, duration } => {
                     self.controls
                         .emit(ControlsInput::Position { position, duration });
-                    let _ =
-                        sender.output(VideoAreaOutput::PositionChanged { position, duration });
+                    let _ = sender.output(VideoAreaOutput::PositionChanged { position, duration });
                 }
                 PlaybackEvent::StateChanged(state) => {
                     info!("State changed: {:?}", state);
                     self.controls.emit(ControlsInput::PlayStateChanged(state));
                     let is_paused = state == PlayState::Paused;
-                    self.apply_overlay_action(
-                        &OverlayAction::PauseChanged(is_paused),
-                        sender,
-                    );
+                    self.apply_overlay_action(&OverlayAction::PauseChanged(is_paused), sender);
                     let _ = sender.output(VideoAreaOutput::StateChanged(state));
                 }
                 PlaybackEvent::EndOfFile(reason) => {

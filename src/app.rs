@@ -193,6 +193,9 @@ impl Component for App {
                 VideoAreaOutput::LoadSubtitleFile => {
                     show_subtitle_chooser(root, &self.video_area);
                 }
+                VideoAreaOutput::Error(msg) => {
+                    sender.input(AppMsg::ShowToast(msg));
+                }
             },
             AppMsg::ShowToast(message) => {
                 let toast = adw::Toast::new(&message);
