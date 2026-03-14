@@ -12,19 +12,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::player::backend::{EndReason, PlayState};
 use crate::player::mpv::gl_render;
-
-/// Intermediate struct to hold polled mpv property values.
-struct PollData {
-    file_loaded: bool,
-    last_position: f64,
-    last_paused: Option<bool>,
-    path: Option<String>,
-    duration: Option<f64>,
-    position: Option<f64>,
-    paused: Option<bool>,
-    eof: Option<bool>,
-    hwdec: Option<String>,
-}
+use crate::player::playback_tracker::{PlaybackEvent, PlaybackTracker, PollData};
 
 /// Wrapper for mpv_render_context pointer.
 struct RenderCtxPtr(*mut mpv_render_context);
@@ -33,9 +21,7 @@ struct RenderCtxPtr(*mut mpv_render_context);
 struct MpvState {
     mpv: Option<Mpv>,
     render_ctx: Option<RenderCtxPtr>,
-    last_position: f64,
-    last_paused: Option<bool>,
-    file_loaded: bool,
+    tracker: PlaybackTracker,
 }
 
 impl Drop for MpvState {
@@ -105,9 +91,7 @@ impl Component for VideoArea {
         let state = Rc::new(RefCell::new(MpvState {
             mpv: None,
             render_ctx: None,
-            last_position: -1.0,
-            last_paused: None,
-            file_loaded: false,
+            tracker: PlaybackTracker::new(),
         }));
 
         // --- Realize: init mpv + render context ---
@@ -242,7 +226,11 @@ impl Component for VideoArea {
         match msg {
             VideoAreaMsg::LoadFile(uri) => {
                 info!("Loading file: {}", uri);
-                let st = self.state.borrow();
+                let mut st = self.state.borrow_mut();
+                let has_mpv = st.mpv.is_some();
+                if has_mpv {
+                    st.tracker.reset();
+                }
                 if let Some(ref mpv) = st.mpv {
                     if let Err(e) = mpv.command("loadfile", &[&uri, "replace"]) {
                         error!("Failed to load file: {:?}", e);
@@ -268,69 +256,43 @@ impl Component for VideoArea {
                     };
 
                     PollData {
-                        file_loaded: st.file_loaded,
-                        last_position: st.last_position,
-                        last_paused: st.last_paused,
                         path: mpv.get_property::<String>("path").ok(),
                         duration: mpv.get_property::<f64>("duration").ok(),
                         position: mpv.get_property::<f64>("playback-time").ok(),
                         paused: mpv.get_property::<bool>("pause").ok(),
-                        eof: mpv.get_property::<bool>("eof-reached").ok(),
-                        hwdec: mpv.get_property::<String>("hwdec-current").ok(),
+                        eof_reached: mpv.get_property::<bool>("eof-reached").ok(),
+                        hwdec_current: mpv.get_property::<String>("hwdec-current").ok(),
                     }
                 };
 
-                // Now process the polled data and update state
-                let mut st = self.state.borrow_mut();
+                // Process through the tracker and emit events
+                let events = {
+                    let mut st = self.state.borrow_mut();
+                    st.tracker.process(&poll_data)
+                };
 
-                // Check file loaded
-                if !poll_data.file_loaded
-                    && let Some(ref path) = poll_data.path
-                    && !path.is_empty()
-                    && let Some(dur) = poll_data.duration
-                    && dur > 0.0
-                {
-                    st.file_loaded = true;
-                    info!("File loaded");
-                    if let Some(ref hwdec) = poll_data.hwdec {
-                        info!("Hardware decoding: {}", hwdec);
+                for event in events {
+                    match event {
+                        PlaybackEvent::FileLoaded { hwdec, .. } => {
+                            info!("File loaded");
+                            if let Some(ref h) = hwdec {
+                                info!("Hardware decoding: {}", h);
+                            }
+                            let _ = sender.output(VideoAreaOutput::FileLoaded);
+                        }
+                        PlaybackEvent::PositionChanged { position, duration } => {
+                            let _ = sender
+                                .output(VideoAreaOutput::PositionChanged { position, duration });
+                        }
+                        PlaybackEvent::StateChanged(state) => {
+                            info!("State changed: {:?}", state);
+                            let _ = sender.output(VideoAreaOutput::StateChanged(state));
+                        }
+                        PlaybackEvent::EndOfFile(reason) => {
+                            info!("End of file reached");
+                            let _ = sender.output(VideoAreaOutput::EndOfFile(reason));
+                        }
                     }
-                    let _ = sender.output(VideoAreaOutput::FileLoaded);
-                }
-
-                // Position update
-                if let Some(pos) = poll_data.position
-                    && (pos - poll_data.last_position).abs() > 0.05
-                {
-                    st.last_position = pos;
-                    let dur = poll_data.duration.unwrap_or(0.0);
-                    let _ = sender.output(VideoAreaOutput::PositionChanged {
-                        position: pos,
-                        duration: dur,
-                    });
-                }
-
-                // Pause state change
-                if let Some(paused) = poll_data.paused
-                    && poll_data.last_paused != Some(paused)
-                {
-                    st.last_paused = Some(paused);
-                    let play_state = if paused {
-                        PlayState::Paused
-                    } else {
-                        PlayState::Playing
-                    };
-                    info!("State changed: {:?}", play_state);
-                    let _ = sender.output(VideoAreaOutput::StateChanged(play_state));
-                }
-
-                // EOF check
-                if let Some(true) = poll_data.eof
-                    && poll_data.file_loaded
-                {
-                    info!("End of file reached");
-                    st.file_loaded = false;
-                    let _ = sender.output(VideoAreaOutput::EndOfFile(EndReason::Finished));
                 }
             }
         }

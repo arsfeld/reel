@@ -31,10 +31,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # System
 libc = "0.2"
 
+[dev-dependencies]
+mockall = "0.13"
+
 [features]
 default = ["wayland", "x11"]
 wayland = ["dep:gdk4-wayland"]
 x11 = ["dep:gdk4-x11"]
+integration = []
 
 [profile.release]
 lto = true

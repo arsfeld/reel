@@ -5,7 +5,7 @@ use relm4::prelude::*;
 use tracing::info;
 
 use crate::components::player::video_area::{VideoArea, VideoAreaMsg, VideoAreaOutput};
-use crate::player::backend::PlayState;
+use crate::player::backend;
 
 pub struct App {
     video_area: Controller<VideoArea>,
@@ -102,12 +102,7 @@ impl Component for App {
                 }
                 VideoAreaOutput::PositionChanged { .. } => {}
                 VideoAreaOutput::StateChanged(state) => {
-                    let title = match state {
-                        PlayState::Playing => "Reel - Playing",
-                        PlayState::Paused => "Reel - Paused",
-                        PlayState::Stopped => "Reel",
-                    };
-                    root.set_title(Some(title));
+                    root.set_title(Some(backend::window_title_for_state(state)));
                 }
                 VideoAreaOutput::EndOfFile(reason) => {
                     info!("Playback ended: {:?}", reason);
