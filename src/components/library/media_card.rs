@@ -10,6 +10,7 @@ pub struct MediaCardData {
     pub title: String,
     pub year: Option<i32>,
     pub poster_texture: Option<gtk4::gdk::Texture>,
+    pub poster_url: Option<String>,
     pub media_type: MediaType,
     pub media_item: Option<MediaItem>,
 }
@@ -21,6 +22,7 @@ impl MediaCardData {
             title: item.title.clone(),
             year: item.year,
             poster_texture: None,
+            poster_url: None,
             media_type: item.media_type,
             media_item: Some(item.clone()),
         }

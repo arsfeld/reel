@@ -1,5 +1,6 @@
 mod media_card;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gtk4::prelude::*;
@@ -11,6 +12,9 @@ use tracing::info;
 use crate::models::library::LibraryType;
 use crate::models::media::MediaItem;
 use crate::services::artwork::ArtworkCache;
+use crate::services::library_filter::{
+    self, FilterState, SortOrder,
+};
 use crate::services::media_source::MediaSource;
 
 use media_card::MediaCardData;
@@ -20,19 +24,36 @@ pub struct LibraryView {
     library_type: LibraryType,
     source: Option<Arc<dyn MediaSource>>,
     artwork_cache: Option<Arc<ArtworkCache>>,
+    // UI widgets
     stack: gtk4::Stack,
     loading_page: adw::StatusPage,
     empty_page: adw::StatusPage,
     error_page: adw::StatusPage,
+    no_results_page: adw::StatusPage,
     grid_page: gtk4::ScrolledWindow,
+    // State retention for search/filter/sort
+    all_items: Vec<MediaItem>,
+    search_query: String,
+    filter_state: FilterState,
+    sort_order: SortOrder,
+    /// Cached textures keyed by artwork URL to avoid re-fetching on grid rebuild.
+    texture_cache: HashMap<String, gtk4::gdk::Texture>,
 }
 
+#[allow(dead_code)]
 pub enum LibraryViewMsg {
     LoadLibrary(LibraryType),
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
     ItemActivated(u32),
     LibraryLoaded(Vec<MediaItem>),
     LoadError(String),
+    // Search/filter/sort messages
+    SearchChanged(String),
+    GenreFilterChanged(Vec<String>),
+    DecadeFilterChanged(Option<i32>),
+    SortChanged(SortOrder),
+    ClearFilters,
+    FocusSearch,
 }
 
 impl std::fmt::Debug for LibraryViewMsg {
@@ -43,6 +64,12 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::ItemActivated(pos) => write!(f, "ItemActivated({pos})"),
             Self::LibraryLoaded(items) => write!(f, "LibraryLoaded({} items)", items.len()),
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
+            Self::SearchChanged(q) => write!(f, "SearchChanged({q:?})"),
+            Self::GenreFilterChanged(g) => write!(f, "GenreFilterChanged({g:?})"),
+            Self::DecadeFilterChanged(d) => write!(f, "DecadeFilterChanged({d:?})"),
+            Self::SortChanged(s) => write!(f, "SortChanged({s:?})"),
+            Self::ClearFilters => write!(f, "ClearFilters"),
+            Self::FocusSearch => write!(f, "FocusSearch"),
         }
     }
 }
@@ -57,7 +84,7 @@ pub enum LibraryViewOutput {
 pub enum LibraryViewCmd {
     Loaded(Vec<MediaItem>),
     Error(String),
-    ArtworkReady(usize, gtk4::gdk::Texture),
+    ArtworkReady(String, gtk4::gdk::Texture),
 }
 
 impl std::fmt::Debug for LibraryViewCmd {
@@ -109,6 +136,24 @@ impl Component for LibraryView {
             .icon_name("dialog-error-symbolic")
             .build();
 
+        let no_results_page = adw::StatusPage::builder()
+            .title("No Results")
+            .description("No items match your search and filters")
+            .icon_name("edit-find-symbolic")
+            .build();
+
+        // Add "Clear Filters" button to no_results_page
+        let clear_btn = gtk4::Button::builder()
+            .label("Clear Filters")
+            .css_classes(["pill", "suggested-action"])
+            .halign(gtk4::Align::Center)
+            .build();
+        let sender_clear = sender.input_sender().clone();
+        clear_btn.connect_clicked(move |_| {
+            let _ = sender_clear.send(LibraryViewMsg::ClearFilters);
+        });
+        no_results_page.set_child(Some(&clear_btn));
+
         let grid: TypedGridView<MediaCardData, gtk4::SingleSelection> = TypedGridView::new();
         let grid_view = grid.view.clone();
         grid_view.set_min_columns(3);
@@ -133,6 +178,7 @@ impl Component for LibraryView {
         stack.add_child(&loading_page);
         stack.add_child(&empty_page);
         stack.add_child(&error_page);
+        stack.add_child(&no_results_page);
         stack.add_child(&grid_page);
         stack.set_visible_child(&empty_page);
 
@@ -147,12 +193,19 @@ impl Component for LibraryView {
             loading_page,
             empty_page,
             error_page,
+            no_results_page,
             grid_page,
+            all_items: Vec::new(),
+            search_query: String::new(),
+            filter_state: FilterState::default(),
+            sort_order: SortOrder::default(),
+            texture_cache: HashMap::new(),
         };
 
         ComponentParts { model, widgets }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
             LibraryViewMsg::SetSource(source, artwork_cache) => {
@@ -160,6 +213,19 @@ impl Component for LibraryView {
                 self.artwork_cache = Some(artwork_cache);
             }
             LibraryViewMsg::LoadLibrary(library_type) => {
+                // If same library type and we already have items, just show existing data.
+                // This preserves filter/sort state when navigating back from detail pages.
+                if library_type == self.library_type && !self.all_items.is_empty() {
+                    self.stack.set_visible_child(&self.grid_page);
+                    return;
+                }
+
+                // Switching library types: reset filters (genres differ) but keep sort
+                if library_type != self.library_type {
+                    self.filter_state.clear();
+                    self.search_query.clear();
+                }
+
                 self.library_type = library_type;
                 self.stack.set_visible_child(&self.loading_page);
 
@@ -201,43 +267,51 @@ impl Component for LibraryView {
                 }
             }
             LibraryViewMsg::LibraryLoaded(items) => {
-                self.grid.clear();
-
                 if items.is_empty() {
+                    self.all_items.clear();
+                    self.grid.clear();
                     self.stack.set_visible_child(&self.empty_page);
                     return;
                 }
 
-                let artwork_cache = self.artwork_cache.clone();
-                let source = self.source.clone();
-
-                for (idx, item) in items.iter().enumerate() {
-                    let card = MediaCardData::from_media_item(item);
-                    self.grid.append(card);
-
-                    if let (Some(poster_path), Some(source), Some(cache)) =
-                        (&item.poster_path, &source, &artwork_cache)
-                    {
-                        let url = source.artwork_url(poster_path, 300, 450);
-                        let cache = Arc::clone(cache);
-                        sender.oneshot_command(async move {
-                            match cache.get_or_download(&url).await {
-                                Ok(path) => match gtk4::gdk::Texture::from_filename(&path) {
-                                    Ok(texture) => LibraryViewCmd::ArtworkReady(idx, texture),
-                                    Err(_) => LibraryViewCmd::Error(String::new()),
-                                },
-                                Err(_) => LibraryViewCmd::Error(String::new()),
-                            }
-                        });
-                    }
-                }
-
-                self.stack.set_visible_child(&self.grid_page);
-                info!("Library loaded: {} items", items.len());
+                self.all_items = items;
+                info!("Library loaded: {} items", self.all_items.len());
+                self.rebuild_grid(&sender);
             }
             LibraryViewMsg::LoadError(msg) => {
                 self.error_page.set_description(Some(&msg));
                 self.stack.set_visible_child(&self.error_page);
+            }
+            LibraryViewMsg::SearchChanged(query) => {
+                self.search_query = query;
+                self.rebuild_grid(&sender);
+            }
+            LibraryViewMsg::GenreFilterChanged(genres) => {
+                if genres.is_empty() {
+                    self.filter_state.genres = None;
+                } else {
+                    self.filter_state.genres = Some(library_filter::GenreFilter {
+                        selected_genres: genres,
+                    });
+                }
+                self.rebuild_grid(&sender);
+            }
+            LibraryViewMsg::DecadeFilterChanged(decade) => {
+                self.filter_state.decade =
+                    decade.map(|d| library_filter::DecadeFilter { decade_start: d });
+                self.rebuild_grid(&sender);
+            }
+            LibraryViewMsg::SortChanged(order) => {
+                self.sort_order = order;
+                self.rebuild_grid(&sender);
+            }
+            LibraryViewMsg::ClearFilters => {
+                self.filter_state.clear();
+                self.search_query.clear();
+                self.rebuild_grid(&sender);
+            }
+            LibraryViewMsg::FocusSearch => {
+                // Will be handled in Phase 3 when SearchBar widget is added
             }
         }
     }
@@ -257,11 +331,83 @@ impl Component for LibraryView {
                     sender.input(LibraryViewMsg::LoadError(msg));
                 }
             }
-            LibraryViewCmd::ArtworkReady(idx, texture) => {
-                if let Some(item) = self.grid.get(idx as u32) {
-                    item.borrow_mut().poster_texture = Some(texture);
+            LibraryViewCmd::ArtworkReady(url, texture) => {
+                // Store in cache for future rebuilds
+                self.texture_cache.insert(url.clone(), texture.clone());
+
+                // Find and update the matching grid item
+                let len = self.grid.len();
+                for i in 0..len {
+                    if let Some(item) = self.grid.get(i) {
+                        let mut borrow = item.borrow_mut();
+                        if borrow.poster_url.as_deref() == Some(url.as_str()) && borrow.poster_texture.is_none() {
+                            borrow.poster_texture = Some(texture);
+                            break;
+                        }
+                    }
                 }
             }
         }
+    }
+}
+
+impl LibraryView {
+    /// Rebuild the grid from all_items using current search/filter/sort state.
+    fn rebuild_grid(&mut self, sender: &ComponentSender<Self>) {
+        self.grid.clear();
+
+        let filtered_indices = library_filter::apply_filters_and_sort(
+            &self.all_items,
+            &self.search_query,
+            &self.filter_state,
+            self.sort_order,
+        );
+
+        if filtered_indices.is_empty() {
+            // Show no_results if we have items but filters exclude all,
+            // or empty_page if we truly have no items.
+            if self.all_items.is_empty() {
+                self.stack.set_visible_child(&self.empty_page);
+            } else {
+                self.stack.set_visible_child(&self.no_results_page);
+            }
+            return;
+        }
+
+        let artwork_cache = self.artwork_cache.clone();
+        let source = self.source.clone();
+
+        for &item_idx in &filtered_indices {
+            let item = &self.all_items[item_idx];
+            let mut card = MediaCardData::from_media_item(item);
+
+            // Build the artwork URL and check texture cache
+            if let (Some(poster_path), Some(source)) = (&item.poster_path, &source) {
+                let url = source.artwork_url(poster_path, 300, 450);
+                card.poster_url = Some(url.clone());
+
+                if let Some(texture) = self.texture_cache.get(&url) {
+                    // Already cached — set immediately, no async fetch needed
+                    card.poster_texture = Some(texture.clone());
+                } else if let Some(cache) = &artwork_cache {
+                    // Not cached — fetch asynchronously
+                    let cache = Arc::clone(cache);
+                    let fetch_url = url;
+                    sender.oneshot_command(async move {
+                        match cache.get_or_download(&fetch_url).await {
+                            Ok(path) => match gtk4::gdk::Texture::from_filename(&path) {
+                                Ok(texture) => LibraryViewCmd::ArtworkReady(fetch_url, texture),
+                                Err(_) => LibraryViewCmd::Error(String::new()),
+                            },
+                            Err(_) => LibraryViewCmd::Error(String::new()),
+                        }
+                    });
+                }
+            }
+
+            self.grid.append(card);
+        }
+
+        self.stack.set_visible_child(&self.grid_page);
     }
 }
