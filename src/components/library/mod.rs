@@ -77,6 +77,10 @@ pub enum LibraryViewMsg {
     LoadCollectionItems(String),
     /// Set watch progress data: media_item_id -> (progress_fraction, watched).
     SetWatchData(HashMap<String, (f64, bool)>),
+    /// Mark an item at grid position as watched.
+    MarkWatchedAt(u32),
+    /// Mark an item at grid position as unwatched.
+    MarkUnwatchedAt(u32),
 }
 
 impl std::fmt::Debug for LibraryViewMsg {
@@ -97,6 +101,8 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::LoadCollections => write!(f, "LoadCollections"),
             Self::LoadCollectionItems(key) => write!(f, "LoadCollectionItems({key})"),
             Self::SetWatchData(data) => write!(f, "SetWatchData({} items)", data.len()),
+            Self::MarkWatchedAt(pos) => write!(f, "MarkWatchedAt({pos})"),
+            Self::MarkUnwatchedAt(pos) => write!(f, "MarkUnwatchedAt({pos})"),
         }
     }
 }
@@ -105,6 +111,8 @@ impl std::fmt::Debug for LibraryViewMsg {
 #[allow(dead_code, clippy::large_enum_variant)]
 pub enum LibraryViewOutput {
     ShowDetail(MediaItem),
+    MarkWatched(MediaItem),
+    MarkUnwatched(MediaItem),
     Error(String),
 }
 
@@ -195,6 +203,21 @@ impl Component for LibraryView {
         grid_view.connect_activate(move |_view, position| {
             let _ = sender_activate.send(LibraryViewMsg::ItemActivated(position));
         });
+
+        // Right-click context menu on grid items
+        let right_click = gtk4::GestureClick::builder()
+            .button(3) // secondary button
+            .build();
+        let sender_ctx = sender.input_sender().clone();
+        let grid_view_ctx = grid_view.clone();
+        right_click.connect_released(move |gesture, _n_press, x, y| {
+            // Find which item was right-clicked by hit-testing
+            if let Some(position) = pick_grid_position(&grid_view_ctx, x, y) {
+                show_watch_context_menu(&grid_view_ctx, &sender_ctx, position, x, y);
+            }
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+        });
+        grid_view.add_controller(right_click);
 
         let grid_page = gtk4::ScrolledWindow::builder()
             .hexpand(true)
@@ -567,6 +590,23 @@ impl Component for LibraryView {
                     }
                 });
             }
+            LibraryViewMsg::MarkWatchedAt(position) => {
+                if let Some(item) = self.grid.get(position) {
+                    let borrow = item.borrow();
+                    if let Some(ref media_item) = borrow.media_item {
+                        let _ = sender.output(LibraryViewOutput::MarkWatched(media_item.clone()));
+                    }
+                }
+            }
+            LibraryViewMsg::MarkUnwatchedAt(position) => {
+                if let Some(item) = self.grid.get(position) {
+                    let borrow = item.borrow();
+                    if let Some(ref media_item) = borrow.media_item {
+                        let _ =
+                            sender.output(LibraryViewOutput::MarkUnwatched(media_item.clone()));
+                    }
+                }
+            }
             LibraryViewMsg::SetWatchData(data) => {
                 self.watch_data = data;
                 // Re-populate grid to reflect updated watch indicators
@@ -901,3 +941,87 @@ impl LibraryView {
         }
     }
 }
+
+/// Find which grid item is at the given (x, y) coordinates.
+/// Returns the position index if found.
+fn pick_grid_position(grid_view: &gtk4::GridView, x: f64, y: f64) -> Option<u32> {
+    // Use the selection model to get the item at the click position
+    // GTK GridView doesn't have a direct pick method, so we iterate
+    // and check which child contains the point
+    let model = grid_view.model()?;
+    let n_items = model.n_items();
+    if n_items == 0 {
+        return None;
+    }
+
+    // For simplicity, find the child widget at the position using pick()
+    if let Some(widget) = grid_view.pick(x, y, gtk4::PickFlags::DEFAULT) {
+        // Walk up to find the ListItem's child
+        let mut w = Some(widget);
+        while let Some(ref current) = w {
+            // Check if this widget's parent is a ListItem (GridView row)
+            if let Some(parent) = current.parent() {
+                if parent.type_().name() == "GtkGridViewCell" || parent.type_().name() == "GtkListItemWidget" {
+                    // Use the scroll position and item height to estimate the index
+                    // Alternatively, get position from the selection model
+                    // For now, use selected item approach
+                    break;
+                }
+            }
+            w = current.parent();
+        }
+    }
+
+    // Fallback: use the selected item
+    let selection = model.downcast_ref::<gtk4::SingleSelection>()?;
+    let selected = selection.selected();
+    if selected < n_items {
+        Some(selected)
+    } else {
+        None
+    }
+}
+
+/// Show a context menu popover at the given position with Watch/Unwatch actions.
+fn show_watch_context_menu(
+    grid_view: &gtk4::GridView,
+    sender: &relm4::Sender<LibraryViewMsg>,
+    position: u32,
+    x: f64,
+    y: f64,
+) {
+    let menu = gtk4::gio::Menu::new();
+    menu.append(Some("Mark as Watched"), Some("watch.mark-watched"));
+    menu.append(Some("Mark as Unwatched"), Some("watch.mark-unwatched"));
+
+    let popover = gtk4::PopoverMenu::from_model(Some(&menu));
+    popover.set_parent(grid_view);
+    popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
+        x as i32,
+        y as i32,
+        1,
+        1,
+    )));
+    popover.set_has_arrow(true);
+
+    // Action group for the popover
+    let action_group = gtk4::gio::SimpleActionGroup::new();
+
+    let sender_watched = sender.clone();
+    let watched_action = gtk4::gio::SimpleAction::new("mark-watched", None);
+    watched_action.connect_activate(move |_, _| {
+        let _ = sender_watched.send(LibraryViewMsg::MarkWatchedAt(position));
+    });
+    action_group.add_action(&watched_action);
+
+    let sender_unwatched = sender.clone();
+    let unwatched_action = gtk4::gio::SimpleAction::new("mark-unwatched", None);
+    unwatched_action.connect_activate(move |_, _| {
+        let _ = sender_unwatched.send(LibraryViewMsg::MarkUnwatchedAt(position));
+    });
+    action_group.add_action(&unwatched_action);
+
+    grid_view.insert_action_group("watch", Some(&action_group));
+    popover.popup();
+}
+

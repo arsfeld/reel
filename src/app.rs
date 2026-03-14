@@ -83,6 +83,8 @@ pub enum AppMsg {
     FocusSearch,
     ShowCollections,
     ShowCollectionDetail(MediaItem),
+    MarkWatched(MediaItem),
+    MarkUnwatched(MediaItem),
 }
 
 #[derive(Debug)]
@@ -138,6 +140,8 @@ impl Component for App {
                     MediaType::Collection => AppMsg::ShowCollectionDetail(item),
                     _ => AppMsg::ShowToast("Unsupported media type".to_string()),
                 },
+                LibraryViewOutput::MarkWatched(item) => AppMsg::MarkWatched(item),
+                LibraryViewOutput::MarkUnwatched(item) => AppMsg::MarkUnwatched(item),
                 LibraryViewOutput::Error(msg) => AppMsg::ShowToast(msg),
             },
         );
@@ -664,6 +668,35 @@ impl Component for App {
                     .child(self.library_view.widget())
                     .build();
                 self.nav_view.push(&page);
+            }
+            AppMsg::MarkWatched(item) => {
+                info!("Marking as watched: {}", item.title);
+                if let Some(ref conn) = self.db_conn {
+                    let repo = WatchProgressRepo::new(conn);
+                    let progress = WatchProgress {
+                        media_item_id: item.id.clone(),
+                        position_seconds: 0.0,
+                        duration_seconds: item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0),
+                        watched: true,
+                        last_watched_at: iso_now(),
+                    };
+                    let _ = repo.upsert(&progress);
+                }
+                // Refresh watch data
+                let watch_data = load_watch_data(&self.db_conn);
+                self.library_view.emit(LibraryViewMsg::SetWatchData(watch_data));
+                sender.input(AppMsg::ShowToast(format!("Marked \"{}\" as watched", item.title)));
+            }
+            AppMsg::MarkUnwatched(item) => {
+                info!("Marking as unwatched: {}", item.title);
+                if let Some(ref conn) = self.db_conn {
+                    let repo = WatchProgressRepo::new(conn);
+                    let _ = repo.mark_unwatched(&item.id);
+                }
+                // Refresh watch data
+                let watch_data = load_watch_data(&self.db_conn);
+                self.library_view.emit(LibraryViewMsg::SetWatchData(watch_data));
+                sender.input(AppMsg::ShowToast(format!("Marked \"{}\" as unwatched", item.title)));
             }
         }
     }
