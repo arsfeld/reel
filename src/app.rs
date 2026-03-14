@@ -51,6 +51,8 @@ pub struct App {
     watch_tracker: WatchStateTracker,
     /// Cached current position for save-on-exit.
     last_position: f64,
+    /// Resume position to seek to after file loads. Set from saved watch progress.
+    pending_resume: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -351,6 +353,7 @@ impl Component for App {
             now_playing: None,
             watch_tracker: WatchStateTracker::new(),
             last_position: 0.0,
+            pending_resume: None,
         };
 
         // Handle CLI file arg or start with library
@@ -415,6 +418,18 @@ impl Component for App {
             }
             AppMsg::PlayMedia { url, media_item } => {
                 info!("Playing media: {}...", &url[..url.len().min(80)]);
+                // Check for saved watch progress to auto-resume
+                self.pending_resume = None;
+                if let Some(ref item) = media_item {
+                    if let Some(ref conn) = self.db_conn {
+                        let repo = WatchProgressRepo::new(conn);
+                        if let Ok(Some(progress)) = repo.find_by_media_id(&item.id) {
+                            if progress.should_show_resume() {
+                                self.pending_resume = Some(progress.resume_position());
+                            }
+                        }
+                    }
+                }
                 self.now_playing = media_item;
                 self.last_position = 0.0;
                 self.current_view = CurrentView::Player;
@@ -450,6 +465,16 @@ impl Component for App {
             AppMsg::VideoOutput(output) => match output {
                 VideoAreaOutput::FileLoaded => {
                     self.screensaver.inhibit(root);
+                    // Auto-resume from saved position
+                    if let Some(position) = self.pending_resume.take() {
+                        let formatted = backend::format_position(position);
+                        info!("Resuming at {formatted}");
+                        self.video_area
+                            .emit(VideoAreaMsg::SeekAbsolute(position));
+                        let toast = adw::Toast::new(&format!("Resumed at {formatted}"));
+                        toast.set_timeout(3);
+                        self.toast_overlay.add_toast(toast);
+                    }
                     // Start watch state tracking
                     if let Some(ref item) = self.now_playing {
                         let rating_key = if item.source_type == SourceType::Plex {
