@@ -50,6 +50,8 @@ pub struct LibraryView {
     grid_density: GridDensity,
     /// Cached textures keyed by artwork URL to avoid re-fetching on grid rebuild.
     texture_cache: HashMap<String, gtk4::gdk::Texture>,
+    /// Watch progress data keyed by media_item_id: (progress_fraction, watched).
+    watch_data: HashMap<String, (f64, bool)>,
 }
 
 #[allow(dead_code)]
@@ -69,6 +71,8 @@ pub enum LibraryViewMsg {
     DensityChanged(GridDensity),
     LoadCollections,
     LoadCollectionItems(String),
+    /// Set watch progress data: media_item_id -> (progress_fraction, watched).
+    SetWatchData(HashMap<String, (f64, bool)>),
 }
 
 impl std::fmt::Debug for LibraryViewMsg {
@@ -88,6 +92,7 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::DensityChanged(d) => write!(f, "DensityChanged({d:?})"),
             Self::LoadCollections => write!(f, "LoadCollections"),
             Self::LoadCollectionItems(key) => write!(f, "LoadCollectionItems({key})"),
+            Self::SetWatchData(data) => write!(f, "SetWatchData({} items)", data.len()),
         }
     }
 }
@@ -364,6 +369,7 @@ impl Component for LibraryView {
             sort_order: SortOrder::default(),
             grid_density: GridDensity::default(),
             texture_cache: HashMap::new(),
+            watch_data: HashMap::new(),
         };
 
         ComponentParts { model, widgets }
@@ -522,6 +528,13 @@ impl Component for LibraryView {
                     }
                 });
             }
+            LibraryViewMsg::SetWatchData(data) => {
+                self.watch_data = data;
+                // Re-populate grid to reflect updated watch indicators
+                if !self.all_items.is_empty() {
+                    self.rebuild_grid(&sender);
+                }
+            }
             LibraryViewMsg::LoadCollectionItems(collection_key) => {
                 self.stack.set_visible_child(&self.loading_page);
                 self.all_items.clear();
@@ -609,6 +622,12 @@ impl LibraryView {
             let mut card = MediaCardData::from_media_item(item);
             card.card_width = self.grid_density.card_width();
             card.card_height = self.grid_density.card_height();
+
+            // Apply watch state data if available
+            if let Some(&(progress, watched)) = self.watch_data.get(&item.id) {
+                card.watch_progress = Some(progress);
+                card.watched = watched;
+            }
 
             // Build the artwork URL and check texture cache
             if let (Some(poster_path), Some(source)) = (&item.poster_path, &source) {

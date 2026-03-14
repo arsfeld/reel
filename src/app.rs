@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -513,6 +514,10 @@ impl Component for App {
                     let events = self.watch_tracker.stop(self.last_position);
                     dispatch_watch_events(&self.db_conn, events);
                     self.now_playing = None;
+                    // Refresh watch data on library cards
+                    let watch_data = load_watch_data(&self.db_conn);
+                    self.library_view
+                        .emit(LibraryViewMsg::SetWatchData(watch_data));
                     if self.current_view == CurrentView::Player {
                         self.stack.set_visible_child_name("shell");
                         root.set_fullscreened(false);
@@ -589,6 +594,11 @@ impl Component for App {
                 ));
                 self.show_detail
                     .emit(ShowDetailMsg::SetSource(source, artwork_cache));
+
+                // Send watch data to library view
+                let watch_data = load_watch_data(&self.db_conn);
+                self.library_view
+                    .emit(LibraryViewMsg::SetWatchData(watch_data));
 
                 if let CurrentView::Library(lt) = self.current_view {
                     self.library_view.emit(LibraryViewMsg::LoadLibrary(lt));
@@ -681,6 +691,11 @@ impl Component for App {
                 ));
                 self.show_detail
                     .emit(ShowDetailMsg::SetSource(plex_source, artwork_cache));
+
+                // Send watch data to library view
+                let watch_data = load_watch_data(&self.db_conn);
+                self.library_view
+                    .emit(LibraryViewMsg::SetWatchData(watch_data));
 
                 if let CurrentView::Library(lt) = self.current_view {
                     self.library_view.emit(LibraryViewMsg::LoadLibrary(lt));
@@ -826,6 +841,37 @@ fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+/// Load all watch progress from DB into a HashMap for the library view.
+fn load_watch_data(db_conn: &Option<Connection>) -> HashMap<String, (f64, bool)> {
+    let mut map = HashMap::new();
+    if let Some(conn) = db_conn {
+        let repo = WatchProgressRepo::new(conn);
+        // Load all in-progress items
+        if let Ok(items) = repo.list_in_progress(1000) {
+            for item in &items {
+                map.insert(item.media_item_id.clone(), (item.progress_fraction(), false));
+            }
+        }
+        // Also query watched items (where watched = 1)
+        let mut stmt = conn
+            .prepare(
+                "SELECT media_item_id, position_seconds, duration_seconds FROM watch_progress WHERE watched = 1",
+            )
+            .ok();
+        if let Some(ref mut stmt) = stmt {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                let id: String = row.get(0)?;
+                Ok(id)
+            }) {
+                for row in rows.flatten() {
+                    map.insert(row, (1.0, true));
+                }
+            }
+        }
+    }
+    map
 }
 
 fn init_database() -> Option<Connection> {
