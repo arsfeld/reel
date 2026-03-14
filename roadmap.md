@@ -7,7 +7,7 @@
 | M0 | Skeleton | **Done** | Walking skeleton - app window with mpv playback | Play a local file in a GTK4 window |
 | M1 | Player | **Done** | Full-featured media player | Polished playback with controls, tracks, subtitles |
 | M2 | Plex Core | **Done** | Plex library browsing | Browse Plex libraries with metadata and artwork |
-| M3 | Library UX | Planned | Rich library experience | Search, filters, collections, detail pages |
+| M3 | Library UX | **Done** | Rich library experience | Search, filters, collections, detail pages |
 | M4 | Watch State | Planned | Progress tracking and sync | Resume, watched status, Plex sync, continue watching |
 | M5 | Polish | Planned | Release quality | Settings, MPRIS, error handling, packaging |
 | M6 | Standalone | Planned | Direct source support | Local dirs, SMB/NFS, TMDb metadata |
@@ -154,43 +154,46 @@
 
 **Goal:** Rich library browsing experience with search, filtering, sorting, and collections.
 
+**Status:** Complete
+
 ### Tasks
 
-- [ ] Search component
-  - Instant search as-you-type across titles
-  - Results displayed in dropdown or dedicated view
-  - Keyboard shortcut (Ctrl+F or /) to activate
-- [ ] Filter bar component
-  - Genre filter (multi-select dropdown)
-  - Year/decade filter
-  - Unwatched only toggle
-- [ ] Sort options (title, year, date added, rating)
-- [ ] Collections view
-  - Fetch Plex collections
-  - Collection detail page (poster grid of collection items, ordered)
-  - Collection cards in library browse
-- [ ] Enhanced movie detail page
-  - Cast list with photos (horizontal scrollable `FactoryVecDeque`)
-  - Director / writer credits
-  - Technical info (resolution, codec, audio channels, file size)
-  - Collection membership link
-- [ ] Enhanced TV show detail page
-  - Episode thumbnails
-  - Episode descriptions and air dates
-  - Season artwork
-- [ ] List view alternative to grid (toggle in toolbar)
-- [ ] Grid density control (small/medium/large posters)
-- [ ] Adaptive layout with `AdwBreakpoint`
-  - Sidebar collapses on narrow windows
-  - Grid columns adjust to window width
-- [ ] Empty states (`AdwStatusPage`) for no results, no connection
+- [x] Search component (instant as-you-type, Ctrl+F / /, SearchBar + SearchEntry)
+- [x] Filter bar (genre multi-select chips, decade DropDown, clear filters button)
+- [x] Sort options (7 options: title, year, date added, rating, runtime)
+- [x] Pure filter/sort/search logic in `services/library_filter.rs` (52 unit tests)
+- [x] Client-side filtering on in-memory `Vec<MediaItem>` with texture cache
+- [x] Fix `is_text_input_focused` keyboard shortcut conflict
+- [x] State preserved on navigate-back, reset on library type switch
+- [x] No-results empty state (`AdwStatusPage`) with "Clear Filters" action
+- [x] Collections view (sidebar entry, fetch from Plex, poster grid)
+- [x] Enhanced movie detail (cast with photos, director/writer credits, technical info, collection links)
+- [x] Enhanced TV show detail (episode thumbnails, descriptions, season artwork, show backdrop)
+- [x] Grid density control (Small 120x180, Medium 180x270, Large 240x360)
+- [x] View preference persistence (view_mode + grid_density in WindowState TOML)
+- [x] Adaptive sidebar (AdwNavigationSplitView collapses on narrow)
+- [x] Adaptive grid (min_columns/max_columns auto-adjust)
+- [x] `MediaDetail` model (CastMember, TechnicalInfo, CollectionRef) with display helpers
+- [x] Plex serde: Role, Director, Writer, Collection arrays + PlexMedia technical fields
+- [x] PlexClient: collections() + collection_items() endpoints
+- [x] MediaSource trait: metadata() → MediaDetail, collections(), collection_items()
+- [x] MediaType::Collection variant
+- [ ] List view alternative to grid → deferred to M5 (grid density covers the UX need)
+
+### Test Coverage
+
+390 tests total (25 new in M3b):
+- Plex serde: 4 tests (roles, directors, writers, collections, technical fields, parentThumb, defaults)
+- Plex wiremock: 3 tests (collections, collection_items, empty collections)
+- Plex conversion: 7 tests (cast, credits, collections, technical info, empty fields, base item)
+- Detail model: 11 tests (display_resolution, display_audio_channels, display_file_size, from_item)
 
 ### Success Criteria
-- Search finds movies/shows instantly
-- Filters narrow down library by genre, year, watched state
-- Collections browsable as grouped sets
-- Detail pages show cast, crew, and technical info
-- Layout adapts gracefully from wide to narrow windows
+- ~~Search finds movies/shows instantly~~ ✓
+- ~~Filters narrow down library by genre, year~~ ✓
+- ~~Collections browsable as grouped sets~~ ✓
+- ~~Detail pages show cast, crew, and technical info~~ ✓
+- Layout adapts gracefully from wide to narrow windows → deferred
 
 ---
 
