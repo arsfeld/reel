@@ -12,9 +12,7 @@ use tracing::info;
 use crate::models::library::LibraryType;
 use crate::models::media::MediaItem;
 use crate::services::artwork::ArtworkCache;
-use crate::services::library_filter::{
-    self, FilterState, SortOrder,
-};
+use crate::services::library_filter::{self, FilterState, SortOrder};
 use crate::services::media_source::MediaSource;
 
 use media_card::MediaCardData;
@@ -256,7 +254,8 @@ impl Component for LibraryView {
                     let text = string_obj.string();
                     // Parse "2020s" → 2020
                     if let Ok(decade) = text.trim_end_matches('s').parse::<i32>() {
-                        let _ = sender_decade.send(LibraryViewMsg::DecadeFilterChanged(Some(decade)));
+                        let _ =
+                            sender_decade.send(LibraryViewMsg::DecadeFilterChanged(Some(decade)));
                     }
                 }
             }
@@ -490,7 +489,9 @@ impl Component for LibraryView {
                 for i in 0..len {
                     if let Some(item) = self.grid.get(i) {
                         let mut borrow = item.borrow_mut();
-                        if borrow.poster_url.as_deref() == Some(url.as_str()) && borrow.poster_texture.is_none() {
+                        if borrow.poster_url.as_deref() == Some(url.as_str())
+                            && borrow.poster_texture.is_none()
+                        {
                             borrow.poster_texture = Some(texture);
                             break;
                         }
@@ -639,8 +640,7 @@ impl LibraryView {
 
     /// Show/hide the clear filters button based on active filter state.
     fn update_clear_button_visibility(&self) {
-        self.clear_filters_btn.set_visible(
-            self.filter_state.is_active() || !self.search_query.is_empty(),
-        );
+        self.clear_filters_btn
+            .set_visible(self.filter_state.is_active() || !self.search_query.is_empty());
     }
 }

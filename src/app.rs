@@ -200,13 +200,12 @@ impl Component for App {
             let in_player = stack_key.visible_child_name().as_deref() == Some("player");
 
             // Detect if a text input widget has focus
-            let is_text_focused = gtk4::prelude::GtkWindowExt::focus(&root_key)
-                .is_some_and(|w| {
-                    w.is::<gtk4::SearchEntry>()
-                        || w.is::<gtk4::Entry>()
-                        || w.is::<gtk4::Text>()
-                        || w.is::<gtk4::TextView>()
-                });
+            let is_text_focused = gtk4::prelude::GtkWindowExt::focus(&root_key).is_some_and(|w| {
+                w.is::<gtk4::SearchEntry>()
+                    || w.is::<gtk4::Entry>()
+                    || w.is::<gtk4::Text>()
+                    || w.is::<gtk4::TextView>()
+            });
 
             if let Some(action) = shortcuts::map_key_to_action(key, mods, is_text_focused) {
                 if in_player {

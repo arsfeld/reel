@@ -101,9 +101,7 @@ pub fn filter_matches(item: &MediaItem, filter: &FilterState) -> bool {
     if let Some(ref decade_filter) = filter.decade {
         match item.year {
             Some(year) => {
-                if year < decade_filter.decade_start
-                    || year > decade_filter.decade_start + 9
-                {
+                if year < decade_filter.decade_start || year > decade_filter.decade_start + 9 {
                     return false;
                 }
             }
@@ -240,7 +238,12 @@ mod tests {
         }
     }
 
-    fn movie_with(title: &str, year: Option<i32>, rating: Option<f64>, genres: Vec<&str>) -> MediaItem {
+    fn movie_with(
+        title: &str,
+        year: Option<i32>,
+        rating: Option<f64>,
+        genres: Vec<&str>,
+    ) -> MediaItem {
         let mut m = movie(title);
         m.year = year;
         m.rating = rating;
@@ -337,7 +340,12 @@ mod tests {
 
     #[test]
     fn genre_filter_item_with_multiple_genres() {
-        let item = movie_with("Dune", Some(2021), None, vec!["Sci-Fi", "Adventure", "Drama"]);
+        let item = movie_with(
+            "Dune",
+            Some(2021),
+            None,
+            vec!["Sci-Fi", "Adventure", "Drama"],
+        );
         let filter = FilterState {
             genres: Some(GenreFilter {
                 selected_genres: vec!["Drama".to_string()],
@@ -481,7 +489,10 @@ mod tests {
     fn sort_title_desc_reverse() {
         let a = movie("Arrival");
         let b = movie("Dune");
-        assert_eq!(sort_compare(&a, &b, SortOrder::TitleDesc), Ordering::Greater);
+        assert_eq!(
+            sort_compare(&a, &b, SortOrder::TitleDesc),
+            Ordering::Greater
+        );
     }
 
     #[test]
@@ -495,7 +506,10 @@ mod tests {
     fn sort_year_newest_first() {
         let a = movie_with("Old", Some(2010), None, vec![]);
         let b = movie_with("New", Some(2024), None, vec![]);
-        assert_eq!(sort_compare(&a, &b, SortOrder::YearNewest), Ordering::Greater);
+        assert_eq!(
+            sort_compare(&a, &b, SortOrder::YearNewest),
+            Ordering::Greater
+        );
     }
 
     #[test]
@@ -526,7 +540,10 @@ mod tests {
         a.added_at = "1600000000".to_string();
         let mut b = movie("New");
         b.added_at = "1700000000".to_string();
-        assert_eq!(sort_compare(&a, &b, SortOrder::DateAdded), Ordering::Greater);
+        assert_eq!(
+            sort_compare(&a, &b, SortOrder::DateAdded),
+            Ordering::Greater
+        );
     }
 
     #[test]
@@ -579,7 +596,10 @@ mod tests {
         let b = movie_with("Dune", Some(2020), Some(8.0), vec![]);
         // Same year, should tiebreak by title
         assert_eq!(sort_compare(&a, &b, SortOrder::YearNewest), Ordering::Less);
-        assert_eq!(sort_compare(&a, &b, SortOrder::RatingHighest), Ordering::Less);
+        assert_eq!(
+            sort_compare(&a, &b, SortOrder::RatingHighest),
+            Ordering::Less
+        );
     }
 
     // === apply_filters_and_sort tests ===
@@ -590,7 +610,12 @@ mod tests {
             movie_with("Arrival", Some(2016), Some(7.9), vec!["Sci-Fi", "Drama"]),
             movie_with("The Hangover", Some(2009), Some(7.7), vec!["Comedy"]),
             movie_with("Zoolander", Some(2001), Some(6.5), vec!["Comedy"]),
-            movie_with("Interstellar", Some(2014), Some(8.7), vec!["Sci-Fi", "Drama"]),
+            movie_with(
+                "Interstellar",
+                Some(2014),
+                Some(8.7),
+                vec!["Sci-Fi", "Drama"],
+            ),
         ]
     }
 
@@ -644,7 +669,8 @@ mod tests {
     fn apply_all_filtered_out_returns_empty() {
         let items = sample_library();
         let filter = FilterState::default();
-        let indices = apply_filters_and_sort(&items, "xyznonexistent", &filter, SortOrder::TitleAsc);
+        let indices =
+            apply_filters_and_sort(&items, "xyznonexistent", &filter, SortOrder::TitleAsc);
         assert!(indices.is_empty());
     }
 
@@ -656,7 +682,13 @@ mod tests {
         let titles: Vec<&str> = indices.iter().map(|&i| items[i].title.as_str()).collect();
         assert_eq!(
             titles,
-            vec!["Dune", "Arrival", "Interstellar", "The Hangover", "Zoolander"]
+            vec![
+                "Dune",
+                "Arrival",
+                "Interstellar",
+                "The Hangover",
+                "Zoolander"
+            ]
         );
     }
 
