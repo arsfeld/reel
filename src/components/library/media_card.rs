@@ -42,6 +42,7 @@ impl MediaCardData {
 
 pub struct MediaCardWidgets {
     picture: gtk4::Picture,
+    placeholder_icon: gtk4::Image,
     #[allow(dead_code)]
     frame: gtk4::Frame,
     title_label: gtk4::Label,
@@ -59,7 +60,7 @@ impl RelmGridItem for MediaCardData {
     fn setup(_item: &gtk4::ListItem) -> (Self::Root, Self::Widgets) {
         let container = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Vertical)
-            .spacing(4)
+            .spacing(0)
             .css_classes(["media-card"])
             .width_request(180)
             .build();
@@ -69,6 +70,16 @@ impl RelmGridItem for MediaCardData {
             .width_request(180)
             .height_request(270)
             .css_classes(["media-card-poster"])
+            .build();
+
+        // Placeholder icon shown when no poster texture is loaded
+        let placeholder_icon = gtk4::Image::builder()
+            .icon_name("video-x-generic-symbolic")
+            .pixel_size(48)
+            .halign(gtk4::Align::Center)
+            .valign(gtk4::Align::Center)
+            .css_classes(["media-card-placeholder-icon"])
+            .visible(false)
             .build();
 
         // Resolution badge (top-right)
@@ -99,9 +110,10 @@ impl RelmGridItem for MediaCardData {
             .visible(false)
             .build();
 
-        // Overlay stacks badges and progress on top of the poster
+        // Overlay stacks badges, placeholder icon, and progress on top of the poster
         let overlay = gtk4::Overlay::new();
         overlay.set_child(Some(&picture));
+        overlay.add_overlay(&placeholder_icon);
         overlay.add_overlay(&resolution_badge);
         overlay.add_overlay(&rating_badge);
         overlay.add_overlay(&progress_bar);
@@ -116,6 +128,9 @@ impl RelmGridItem for MediaCardData {
             .halign(gtk4::Align::Start)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
             .max_width_chars(20)
+            .lines(2)
+            .wrap(true)
+            .wrap_mode(gtk4::pango::WrapMode::WordChar)
             .css_classes(["media-card-title"])
             .build();
 
@@ -130,6 +145,7 @@ impl RelmGridItem for MediaCardData {
 
         let widgets = MediaCardWidgets {
             picture,
+            placeholder_icon,
             frame,
             title_label,
             year_label,
@@ -162,10 +178,12 @@ impl RelmGridItem for MediaCardData {
             widgets.picture.set_paintable(Some(texture));
             widgets.picture.remove_css_class("loading");
             widgets.picture.set_opacity(1.0);
+            widgets.placeholder_icon.set_visible(false);
         } else {
             widgets.picture.set_paintable(None::<&gtk4::gdk::Texture>);
             widgets.picture.add_css_class("loading");
             widgets.picture.set_opacity(0.0);
+            widgets.placeholder_icon.set_visible(true);
         }
 
         // Resolution badge: visible only with poster + resolution data
