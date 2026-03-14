@@ -5,6 +5,7 @@ pub enum MediaType {
     Show,
     Season,
     Episode,
+    Collection,
 }
 
 impl MediaType {
@@ -14,6 +15,7 @@ impl MediaType {
             Self::Show => "show",
             Self::Season => "season",
             Self::Episode => "episode",
+            Self::Collection => "collection",
         }
     }
 
@@ -23,6 +25,7 @@ impl MediaType {
             "show" => Some(Self::Show),
             "season" => Some(Self::Season),
             "episode" => Some(Self::Episode),
+            "collection" => Some(Self::Collection),
             _ => None,
         }
     }

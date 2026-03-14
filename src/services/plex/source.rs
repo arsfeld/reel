@@ -1,13 +1,16 @@
 use async_trait::async_trait;
 
 use crate::models::{
+    detail::MediaDetail,
     library::LibrarySection,
     media::{MediaItem, SourceType},
 };
 use crate::services::media_source::{MediaSource, SourceError};
 
 use super::api::PlexClient;
-use super::convert::{plex_library_to_section, plex_metadata_to_media_item};
+use super::convert::{
+    plex_library_to_section, plex_metadata_to_media_detail, plex_metadata_to_media_item,
+};
 use super::error::PlexError;
 
 /// MediaSource implementation backed by a Plex Media Server.
@@ -67,10 +70,10 @@ impl MediaSource for PlexSource {
             .collect())
     }
 
-    async fn metadata(&self, rating_key: &str) -> Result<MediaItem, SourceError> {
+    async fn metadata(&self, rating_key: &str) -> Result<MediaDetail, SourceError> {
         let plex_meta = self.client.metadata(rating_key).await?;
         let base_url = self.client.base_url();
-        plex_metadata_to_media_item(&plex_meta, base_url)
+        plex_metadata_to_media_detail(&plex_meta, base_url)
             .ok_or_else(|| SourceError::Other("Failed to convert metadata".into()))
     }
 
@@ -89,6 +92,24 @@ impl MediaSource for PlexSource {
 
     fn artwork_url(&self, path: &str, width: u32, height: u32) -> String {
         self.client.transcode_image_url(path, width, height)
+    }
+
+    async fn collections(&self, library_key: &str) -> Result<Vec<MediaItem>, SourceError> {
+        let plex_collections = self.client.collections(library_key).await?;
+        let base_url = self.client.base_url();
+        Ok(plex_collections
+            .iter()
+            .filter_map(|m| plex_metadata_to_media_item(m, base_url))
+            .collect())
+    }
+
+    async fn collection_items(&self, collection_key: &str) -> Result<Vec<MediaItem>, SourceError> {
+        let plex_items = self.client.collection_items(collection_key).await?;
+        let base_url = self.client.base_url();
+        Ok(plex_items
+            .iter()
+            .filter_map(|m| plex_metadata_to_media_item(m, base_url))
+            .collect())
     }
 }
 

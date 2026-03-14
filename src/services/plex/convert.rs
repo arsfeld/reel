@@ -1,4 +1,5 @@
 use crate::models::{
+    detail::{CastMember, CollectionRef, MediaDetail, TechnicalInfo},
     library::{LibrarySection, LibraryType},
     media::{MediaItem, MediaType, SourceType},
 };
@@ -23,6 +24,7 @@ pub fn plex_metadata_to_media_item(metadata: &PlexMetadata, source_id: &str) -> 
         "show" => MediaType::Show,
         "season" => MediaType::Season,
         "episode" => MediaType::Episode,
+        "collection" => MediaType::Collection,
         _ => return None,
     };
 
@@ -90,6 +92,56 @@ pub fn plex_metadata_to_media_item(metadata: &PlexMetadata, source_id: &str) -> 
         file_path,
         added_at,
         updated_at,
+    })
+}
+
+/// Convert PlexMetadata to a MediaDetail (MediaItem + enrichment data).
+pub fn plex_metadata_to_media_detail(
+    metadata: &PlexMetadata,
+    source_id: &str,
+) -> Option<MediaDetail> {
+    let item = plex_metadata_to_media_item(metadata, source_id)?;
+
+    let cast: Vec<CastMember> = metadata
+        .roles
+        .iter()
+        .map(|r| CastMember {
+            name: r.tag.clone(),
+            character: r.role.clone(),
+            photo_path: r.thumb.clone(),
+        })
+        .collect();
+
+    let directors: Vec<String> = metadata.directors.iter().map(|d| d.tag.clone()).collect();
+    let writers: Vec<String> = metadata.writers.iter().map(|w| w.tag.clone()).collect();
+    let collections: Vec<CollectionRef> = metadata
+        .collections
+        .iter()
+        .map(|c| CollectionRef {
+            name: c.tag.clone(),
+        })
+        .collect();
+
+    let technical = metadata.media.first().map(|m| {
+        let file_size = m.parts.first().and_then(|p| p.size);
+        TechnicalInfo {
+            video_resolution: m.video_resolution.clone(),
+            video_codec: m.video_codec.clone(),
+            audio_codec: m.audio_codec.clone(),
+            audio_channels: m.audio_channels,
+            container: m.container.clone(),
+            bitrate_kbps: m.bitrate,
+            file_size_bytes: file_size,
+        }
+    });
+
+    Some(MediaDetail {
+        item,
+        cast,
+        directors,
+        writers,
+        technical,
+        collections,
     })
 }
 
@@ -343,5 +395,122 @@ mod tests {
             item_count: None,
         };
         assert!(plex_library_to_section(&lib).is_none());
+    }
+
+    // --- MediaDetail conversion tests ---
+
+    #[test]
+    fn convert_detail_extracts_cast() {
+        let mut plex = test_plex_movie();
+        plex.roles = vec![
+            PlexRole {
+                tag: "Actor A".to_string(),
+                role: Some("Character A".to_string()),
+                thumb: Some("/photo/a".to_string()),
+            },
+            PlexRole {
+                tag: "Actor B".to_string(),
+                role: None,
+                thumb: None,
+            },
+        ];
+
+        let detail = plex_metadata_to_media_detail(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(detail.cast.len(), 2);
+        assert_eq!(detail.cast[0].name, "Actor A");
+        assert_eq!(detail.cast[0].character, Some("Character A".to_string()));
+        assert_eq!(detail.cast[0].photo_path, Some("/photo/a".to_string()));
+        assert_eq!(detail.cast[1].name, "Actor B");
+        assert_eq!(detail.cast[1].character, None);
+    }
+
+    #[test]
+    fn convert_detail_extracts_directors_and_writers() {
+        let mut plex = test_plex_movie();
+        plex.directors = vec![PlexTag {
+            tag: "Denis Villeneuve".to_string(),
+        }];
+        plex.writers = vec![
+            PlexTag {
+                tag: "Jon Spaihts".to_string(),
+            },
+            PlexTag {
+                tag: "Denis Villeneuve".to_string(),
+            },
+        ];
+
+        let detail = plex_metadata_to_media_detail(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(detail.directors, vec!["Denis Villeneuve"]);
+        assert_eq!(detail.writers, vec!["Jon Spaihts", "Denis Villeneuve"]);
+    }
+
+    #[test]
+    fn convert_detail_extracts_collections() {
+        let mut plex = test_plex_movie();
+        plex.collections = vec![PlexTag {
+            tag: "Dune Collection".to_string(),
+        }];
+
+        let detail = plex_metadata_to_media_detail(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(detail.collections.len(), 1);
+        assert_eq!(detail.collections[0].name, "Dune Collection");
+    }
+
+    #[test]
+    fn convert_detail_extracts_technical_info() {
+        let mut plex = test_plex_movie();
+        plex.media = vec![PlexMedia {
+            video_resolution: Some("1080".to_string()),
+            video_codec: Some("h264".to_string()),
+            audio_codec: Some("aac".to_string()),
+            audio_channels: Some(6),
+            bitrate: Some(12000),
+            container: Some("mkv".to_string()),
+            width: Some(1920),
+            height: Some(1080),
+            parts: vec![PlexPart {
+                key: "/library/parts/456/file.mkv".to_string(),
+                file: Some("/data/Dune.mkv".to_string()),
+                size: Some(15_000_000_000),
+            }],
+        }];
+
+        let detail = plex_metadata_to_media_detail(&plex, "http://localhost:32400").unwrap();
+        let tech = detail.technical.unwrap();
+        assert_eq!(tech.video_resolution, Some("1080".to_string()));
+        assert_eq!(tech.video_codec, Some("h264".to_string()));
+        assert_eq!(tech.audio_codec, Some("aac".to_string()));
+        assert_eq!(tech.audio_channels, Some(6));
+        assert_eq!(tech.container, Some("mkv".to_string()));
+        assert_eq!(tech.bitrate_kbps, Some(12000));
+        assert_eq!(tech.file_size_bytes, Some(15_000_000_000));
+    }
+
+    #[test]
+    fn convert_detail_no_media_gives_none_technical() {
+        let mut plex = test_plex_movie();
+        plex.media.clear();
+
+        let detail = plex_metadata_to_media_detail(&plex, "http://localhost:32400").unwrap();
+        assert!(detail.technical.is_none());
+    }
+
+    #[test]
+    fn convert_detail_empty_enrichment_fields() {
+        let plex = test_plex_movie(); // roles, directors, writers, collections all empty
+        let detail = plex_metadata_to_media_detail(&plex, "http://localhost:32400").unwrap();
+        assert!(detail.cast.is_empty());
+        assert!(detail.directors.is_empty());
+        assert!(detail.writers.is_empty());
+        assert!(detail.collections.is_empty());
+    }
+
+    #[test]
+    fn convert_detail_preserves_base_item() {
+        let plex = test_plex_movie();
+        let detail = plex_metadata_to_media_detail(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(detail.item.title, "Dune");
+        assert_eq!(detail.item.year, Some(2021));
+        assert_eq!(detail.item.media_type, MediaType::Movie);
     }
 }

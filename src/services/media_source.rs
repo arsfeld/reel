@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::models::{
+    detail::MediaDetail,
     library::LibrarySection,
     media::{MediaItem, SourceType},
 };
@@ -16,6 +17,9 @@ pub enum SourceError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Not supported: {0}")]
+    NotSupported(String),
+
     #[error("Source error: {0}")]
     Other(String),
 }
@@ -28,8 +32,22 @@ pub trait MediaSource: Send + Sync {
     async fn test_connection(&self) -> Result<String, SourceError>;
     async fn libraries(&self) -> Result<Vec<LibrarySection>, SourceError>;
     async fn library_items(&self, library_key: &str) -> Result<Vec<MediaItem>, SourceError>;
-    async fn metadata(&self, rating_key: &str) -> Result<MediaItem, SourceError>;
+    async fn metadata(&self, rating_key: &str) -> Result<MediaDetail, SourceError>;
     async fn children(&self, rating_key: &str) -> Result<Vec<MediaItem>, SourceError>;
     fn playback_url(&self, part_key: &str) -> String;
     fn artwork_url(&self, path: &str, width: u32, height: u32) -> String;
+
+    /// Fetch collections for a library section. Default: not supported.
+    async fn collections(&self, _library_key: &str) -> Result<Vec<MediaItem>, SourceError> {
+        Err(SourceError::NotSupported(
+            "Collections not supported by this source".into(),
+        ))
+    }
+
+    /// Fetch items in a collection. Default: not supported.
+    async fn collection_items(&self, _collection_key: &str) -> Result<Vec<MediaItem>, SourceError> {
+        Err(SourceError::NotSupported(
+            "Collection items not supported by this source".into(),
+        ))
+    }
 }
