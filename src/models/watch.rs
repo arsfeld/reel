@@ -8,6 +8,7 @@ pub struct WatchProgress {
     pub last_watched_at: String, // ISO 8601
 }
 
+#[allow(dead_code)]
 impl WatchProgress {
     /// Progress as a fraction (0.0 to 1.0).
     pub fn progress_fraction(&self) -> f64 {

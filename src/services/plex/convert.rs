@@ -177,6 +177,9 @@ mod tests {
             index: None,
             originally_available_at: None,
             parent_thumb: None,
+            view_offset: None,
+            view_count: None,
+            last_viewed_at: None,
             genres: vec![
                 PlexTag {
                     tag: "Science Fiction".to_string(),
@@ -227,6 +230,9 @@ mod tests {
             index: Some(1),
             originally_available_at: Some("2024-03-01".to_string()),
             parent_thumb: None,
+            view_offset: None,
+            view_count: None,
+            last_viewed_at: None,
             genres: vec![],
             roles: vec![],
             directors: vec![],

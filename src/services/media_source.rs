@@ -50,4 +50,25 @@ pub trait MediaSource: Send + Sync {
             "Collection items not supported by this source".into(),
         ))
     }
+
+    /// Report playback progress to the source. Default: no-op.
+    async fn report_progress(
+        &self,
+        _rating_key: &str,
+        _state: &str,
+        _time_ms: i64,
+        _duration_ms: i64,
+    ) -> Result<(), SourceError> {
+        Ok(())
+    }
+
+    /// Mark an item as watched. Default: no-op.
+    async fn scrobble(&self, _rating_key: &str) -> Result<(), SourceError> {
+        Ok(())
+    }
+
+    /// Mark an item as unwatched. Default: no-op.
+    async fn unscrobble(&self, _rating_key: &str) -> Result<(), SourceError> {
+        Ok(())
+    }
 }

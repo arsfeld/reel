@@ -111,6 +111,27 @@ impl MediaSource for PlexSource {
             .filter_map(|m| plex_metadata_to_media_item(m, base_url))
             .collect())
     }
+
+    async fn report_progress(
+        &self,
+        rating_key: &str,
+        state: &str,
+        time_ms: i64,
+        duration_ms: i64,
+    ) -> Result<(), SourceError> {
+        Ok(self
+            .client
+            .report_timeline(rating_key, state, time_ms, duration_ms)
+            .await?)
+    }
+
+    async fn scrobble(&self, rating_key: &str) -> Result<(), SourceError> {
+        Ok(self.client.scrobble(rating_key).await?)
+    }
+
+    async fn unscrobble(&self, rating_key: &str) -> Result<(), SourceError> {
+        Ok(self.client.unscrobble(rating_key).await?)
+    }
 }
 
 #[cfg(test)]

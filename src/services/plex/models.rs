@@ -76,6 +76,17 @@ pub struct PlexMetadata {
     #[serde(rename = "parentThumb")]
     pub parent_thumb: Option<String>,
 
+    // Watch state fields
+    /// Resume position in milliseconds. Present only if partially watched.
+    #[serde(rename = "viewOffset")]
+    pub view_offset: Option<i64>,
+    /// Number of times fully watched. >= 1 means watched.
+    #[serde(rename = "viewCount")]
+    pub view_count: Option<i32>,
+    /// Unix timestamp of when last fully watched.
+    #[serde(rename = "lastViewedAt")]
+    pub last_viewed_at: Option<i64>,
+
     // Nested structures
     #[serde(default, rename = "Genre")]
     pub genres: Vec<PlexTag>,
@@ -466,5 +477,48 @@ mod tests {
         assert_eq!(season.metadata_type, "season");
         assert_eq!(season.parent_rating_key, Some("300".to_string()));
         assert_eq!(season.index, Some(1));
+    }
+
+    #[test]
+    fn deserialize_watch_state_fields() {
+        let json = r#"{
+            "MediaContainer": {
+                "size": 1,
+                "Metadata": [{
+                    "ratingKey": "123",
+                    "title": "Dune",
+                    "type": "movie",
+                    "viewOffset": 2700000,
+                    "viewCount": 3,
+                    "lastViewedAt": 1710000000
+                }]
+            }
+        }"#;
+
+        let resp: PlexMetadataResponse = serde_json::from_str(json).unwrap();
+        let m = &resp.media_container.metadata[0];
+        assert_eq!(m.view_offset, Some(2700000));
+        assert_eq!(m.view_count, Some(3));
+        assert_eq!(m.last_viewed_at, Some(1710000000));
+    }
+
+    #[test]
+    fn deserialize_watch_state_fields_absent() {
+        let json = r#"{
+            "MediaContainer": {
+                "size": 1,
+                "Metadata": [{
+                    "ratingKey": "456",
+                    "title": "Unwatched",
+                    "type": "movie"
+                }]
+            }
+        }"#;
+
+        let resp: PlexMetadataResponse = serde_json::from_str(json).unwrap();
+        let m = &resp.media_container.metadata[0];
+        assert_eq!(m.view_offset, None);
+        assert_eq!(m.view_count, None);
+        assert_eq!(m.last_viewed_at, None);
     }
 }

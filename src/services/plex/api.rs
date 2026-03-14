@@ -139,6 +139,55 @@ impl PlexClient {
         &self.base_url
     }
 
+    /// Report playback timeline to the Plex server.
+    /// Call every ~10 seconds during playback, and on state changes.
+    pub async fn report_timeline(
+        &self,
+        rating_key: &str,
+        state: &str,
+        time_ms: i64,
+        duration_ms: i64,
+    ) -> Result<(), PlexError> {
+        let url = format!(
+            "{}/:/timeline?ratingKey={}&key=/library/metadata/{}&state={}&time={}&duration={}&identifier=com.plexapp.plugins.library",
+            self.base_url, rating_key, rating_key, state, time_ms, duration_ms
+        );
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        Ok(())
+    }
+
+    /// Mark an item as watched.
+    pub async fn scrobble(&self, rating_key: &str) -> Result<(), PlexError> {
+        let url = format!(
+            "{}/:/scrobble?key={}&identifier=com.plexapp.plugins.library",
+            self.base_url, rating_key
+        );
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        Ok(())
+    }
+
+    /// Mark an item as unwatched.
+    pub async fn unscrobble(&self, rating_key: &str) -> Result<(), PlexError> {
+        let url = format!(
+            "{}/:/unscrobble?key={}&identifier=com.plexapp.plugins.library",
+            self.base_url, rating_key
+        );
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        Ok(())
+    }
+
+    /// Get on-deck (continue watching) items.
+    pub async fn on_deck(&self) -> Result<Vec<PlexMetadata>, PlexError> {
+        let url = format!("{}/library/onDeck", self.base_url);
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        let body: PlexMetadataResponse = resp.json().await?;
+        Ok(body.media_container.metadata)
+    }
+
     fn check_status(resp: &reqwest::Response) -> Result<(), PlexError> {
         let status = resp.status();
         if status.is_success() {
@@ -440,5 +489,96 @@ mod tests {
         let client = PlexClient::new(&server.uri(), "token");
         let cols = client.collections("1").await.unwrap();
         assert!(cols.is_empty());
+    }
+
+    #[tokio::test]
+    async fn report_timeline_sends_correct_params() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path_regex("/:/timeline.*"))
+            .and(wiremock::matchers::query_param("ratingKey", "123"))
+            .and(wiremock::matchers::query_param("state", "playing"))
+            .and(wiremock::matchers::query_param("time", "45000"))
+            .and(wiremock::matchers::query_param("duration", "7200000"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token");
+        let result = client.report_timeline("123", "playing", 45000, 7200000).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn scrobble_calls_correct_endpoint() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path_regex("/:/scrobble.*"))
+            .and(wiremock::matchers::query_param("key", "123"))
+            .and(wiremock::matchers::query_param(
+                "identifier",
+                "com.plexapp.plugins.library",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token");
+        let result = client.scrobble("123").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn unscrobble_calls_correct_endpoint() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path_regex("/:/unscrobble.*"))
+            .and(wiremock::matchers::query_param("key", "123"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token");
+        let result = client.unscrobble("123").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn on_deck_returns_items_with_view_offset() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/library/onDeck"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                r#"{"MediaContainer":{"size":1,"Metadata":[
+                    {"ratingKey":"123","title":"Dune","type":"movie","viewOffset":2700000,"duration":7200000}
+                ]}}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token");
+        let items = client.on_deck().await.unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Dune");
+        assert_eq!(items[0].view_offset, Some(2700000));
+    }
+
+    #[tokio::test]
+    async fn scrobble_unauthorized_returns_error() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path_regex("/:/scrobble.*"))
+            .respond_with(wiremock::ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "bad-token");
+        let result = client.scrobble("123").await;
+        assert!(matches!(result, Err(PlexError::Unauthorized)));
     }
 }
