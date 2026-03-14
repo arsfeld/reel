@@ -19,7 +19,7 @@ fn main() {
     let style_manager = libadwaita::StyleManager::default();
     style_manager.set_color_scheme(libadwaita::ColorScheme::ForceDark);
 
-    relm4::set_global_css("");
+    relm4::set_global_css(include_str!("style.css"));
 
     let file_arg = std::env::args().nth(1);
     app.run::<app::App>(file_arg);

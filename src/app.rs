@@ -4,6 +4,7 @@ use libadwaita as adw;
 use relm4::prelude::*;
 use tracing::info;
 
+use crate::components::player::shortcuts::{self, PlayerAction};
 use crate::components::player::video_area::{VideoArea, VideoAreaMsg, VideoAreaOutput};
 use crate::player::backend;
 
@@ -14,12 +15,18 @@ pub struct App {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum AppMsg {
     TogglePause,
     OpenFile(String),
     VideoOutput(VideoAreaOutput),
-    #[allow(dead_code)]
     ShowFileChooser,
+    ToggleFullscreen,
+    ExitFullscreen,
+    SeekRelative(f64),
+    SetVolume(f64),
+    ToggleMute,
+    SetSpeed(f64),
 }
 
 #[relm4::component(pub)]
@@ -44,13 +51,30 @@ impl Component for App {
             },
 
             add_controller = gtk4::EventControllerKey {
-                connect_key_pressed[sender] => move |_controller, key, _code, _mods| {
-                    match key {
-                        gtk4::gdk::Key::space => {
-                            sender.input(AppMsg::TogglePause);
-                            glib::Propagation::Stop
+                connect_key_pressed[sender] => move |_controller, key, _code, mods| {
+                    // TODO: detect text input focus and pass is_text_input_focused=true
+                    if let Some(action) = shortcuts::map_key_to_action(key, mods, false) {
+                        match action {
+                            PlayerAction::TogglePause => sender.input(AppMsg::TogglePause),
+                            PlayerAction::SeekForward(s) => sender.input(AppMsg::SeekRelative(s)),
+                            PlayerAction::SeekBackward(s) => sender.input(AppMsg::SeekRelative(-s)),
+                            PlayerAction::VolumeUp(v) => sender.input(AppMsg::SetVolume(v)),
+                            PlayerAction::VolumeDown(v) => sender.input(AppMsg::SetVolume(-v)),
+                            PlayerAction::ToggleMute => sender.input(AppMsg::ToggleMute),
+                            PlayerAction::ToggleFullscreen => sender.input(AppMsg::ToggleFullscreen),
+                            PlayerAction::ExitFullscreen => sender.input(AppMsg::ExitFullscreen),
+                            PlayerAction::SpeedUp => {
+                                // Speed stepping handled via backend::next_speed
+                                sender.input(AppMsg::SetSpeed(1.0)); // placeholder, will be refined
+                            }
+                            PlayerAction::SpeedDown => {
+                                sender.input(AppMsg::SetSpeed(1.0)); // placeholder
+                            }
+                            PlayerAction::SpeedReset => sender.input(AppMsg::SetSpeed(1.0)),
                         }
-                        _ => glib::Propagation::Proceed,
+                        glib::Propagation::Stop
+                    } else {
+                        glib::Propagation::Proceed
                     }
                 },
             },
@@ -96,6 +120,28 @@ impl Component for App {
                 info!("Opening file: {}", path);
                 self.video_area.emit(VideoAreaMsg::LoadFile(path));
             }
+            AppMsg::SeekRelative(offset) => {
+                self.video_area.emit(VideoAreaMsg::SeekRelative(offset));
+            }
+            AppMsg::SetVolume(delta) => {
+                // Volume delta from keyboard: +5 or -5
+                // TODO: track current volume and clamp
+                self.video_area.emit(VideoAreaMsg::SetVolume(delta));
+            }
+            AppMsg::ToggleMute => {
+                self.video_area.emit(VideoAreaMsg::ToggleMute);
+            }
+            AppMsg::SetSpeed(speed) => {
+                self.video_area.emit(VideoAreaMsg::SetSpeed(speed));
+            }
+            AppMsg::ToggleFullscreen => {
+                root.set_fullscreened(!root.is_fullscreen());
+            }
+            AppMsg::ExitFullscreen => {
+                if root.is_fullscreen() {
+                    root.set_fullscreened(false);
+                }
+            }
             AppMsg::VideoOutput(output) => match output {
                 VideoAreaOutput::FileLoaded => {
                     info!("File loaded in app");
@@ -107,8 +153,9 @@ impl Component for App {
                 VideoAreaOutput::EndOfFile(reason) => {
                     info!("Playback ended: {:?}", reason);
                 }
-                VideoAreaOutput::VolumeChanged { .. } | VideoAreaOutput::SpeedChanged(_) => {
-                    // Will be forwarded to PlayerControls in Phase 1e
+                VideoAreaOutput::VolumeChanged { .. } | VideoAreaOutput::SpeedChanged(_) => {}
+                VideoAreaOutput::ToggleFullscreen => {
+                    root.set_fullscreened(!root.is_fullscreen());
                 }
             },
             AppMsg::ShowFileChooser => {

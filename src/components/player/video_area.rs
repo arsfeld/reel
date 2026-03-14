@@ -10,6 +10,7 @@ use libmpv2_sys::*;
 use relm4::prelude::*;
 use tracing::{debug, error, info, warn};
 
+use crate::components::player::controls::{ControlsInput, ControlsOutput, PlayerControls};
 use crate::player::backend::{EndReason, PlayState};
 use crate::player::mpv::gl_render;
 use crate::player::playback_tracker::{PlaybackEvent, PlaybackTracker, PollData};
@@ -50,6 +51,7 @@ pub enum VideoAreaMsg {
     SetSubtitleTrack(i64),
     DisableSubtitles,
     SetChapter(i64),
+    ToggleFullscreen,
 }
 
 #[derive(Debug)]
@@ -61,10 +63,12 @@ pub enum VideoAreaOutput {
     EndOfFile(EndReason),
     VolumeChanged { volume: f64, muted: bool },
     SpeedChanged(f64),
+    ToggleFullscreen,
 }
 
 pub struct VideoArea {
     state: Rc<RefCell<MpvState>>,
+    controls: Controller<PlayerControls>,
     #[allow(dead_code)]
     gl_area: gtk4::GLArea,
     #[allow(dead_code)]
@@ -81,6 +85,7 @@ impl Component for VideoArea {
     type CommandOutput = ();
 
     view! {
+        #[name = "overlay"]
         gtk4::Overlay {
             #[name = "gl_area"]
             gtk4::GLArea {
@@ -224,8 +229,24 @@ impl Component for VideoArea {
             glib::ControlFlow::Continue
         });
 
+        // Create player controls and add as overlay
+        let controls =
+            PlayerControls::builder()
+                .launch(())
+                .forward(sender.input_sender(), |output| match output {
+                    ControlsOutput::TogglePause => VideoAreaMsg::TogglePause,
+                    ControlsOutput::SeekTo(pos) => VideoAreaMsg::SeekAbsolute(pos),
+                    ControlsOutput::SetVolume(vol) => VideoAreaMsg::SetVolume(vol),
+                    ControlsOutput::ToggleMute => VideoAreaMsg::ToggleMute,
+                    ControlsOutput::ToggleFullscreen => VideoAreaMsg::ToggleFullscreen,
+                });
+
+        // Add controls widget as overlay
+        widgets.overlay.add_overlay(controls.widget());
+
         let model = Self {
             state,
+            controls,
             gl_area,
             timer_handle: Some(timer_handle),
             poll_handle: Some(poll_handle),
@@ -260,9 +281,17 @@ impl Component for VideoArea {
                 }
             }
             VideoAreaMsg::SeekAbsolute(pos) => {
+                // pos can be absolute seconds or a fraction 0.0-1.0 (from controls)
                 let st = self.state.borrow();
                 if let Some(ref mpv) = st.mpv {
-                    let pos_str = format!("{pos}");
+                    // If pos is a fraction (from progress bar), convert to seconds
+                    let seconds = if (0.0..=1.0).contains(&pos) {
+                        let dur = mpv.get_property::<f64>("duration").unwrap_or(0.0);
+                        pos * dur
+                    } else {
+                        pos
+                    };
+                    let pos_str = format!("{seconds}");
                     if let Err(e) = mpv.command("seek", &[&pos_str, "absolute"]) {
                         error!("Failed to seek: {:?}", e);
                     }
@@ -334,6 +363,9 @@ impl Component for VideoArea {
                     error!("Failed to set chapter: {:?}", e);
                 }
             }
+            VideoAreaMsg::ToggleFullscreen => {
+                let _ = sender.output(VideoAreaOutput::ToggleFullscreen);
+            }
             VideoAreaMsg::PollState => {
                 // Collect all values from mpv with an immutable borrow first
                 let poll_data = {
@@ -371,11 +403,14 @@ impl Component for VideoArea {
                             let _ = sender.output(VideoAreaOutput::FileLoaded);
                         }
                         PlaybackEvent::PositionChanged { position, duration } => {
+                            self.controls
+                                .emit(ControlsInput::Position { position, duration });
                             let _ = sender
                                 .output(VideoAreaOutput::PositionChanged { position, duration });
                         }
                         PlaybackEvent::StateChanged(state) => {
                             info!("State changed: {:?}", state);
+                            self.controls.emit(ControlsInput::PlayStateChanged(state));
                             let _ = sender.output(VideoAreaOutput::StateChanged(state));
                         }
                         PlaybackEvent::EndOfFile(reason) => {
@@ -383,6 +418,7 @@ impl Component for VideoArea {
                             let _ = sender.output(VideoAreaOutput::EndOfFile(reason));
                         }
                         PlaybackEvent::VolumeChanged { volume, muted } => {
+                            self.controls.emit(ControlsInput::Volume { volume, muted });
                             let _ = sender.output(VideoAreaOutput::VolumeChanged { volume, muted });
                         }
                         PlaybackEvent::SpeedChanged(speed) => {
