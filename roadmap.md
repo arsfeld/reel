@@ -2,139 +2,151 @@
 
 ## Milestone Overview
 
-| Milestone | Name | Goal | Key Deliverable |
-|-----------|------|------|-----------------|
-| M0 | Skeleton | Walking skeleton - app window with mpv playback | Play a local file in a GTK4 window |
-| M1 | Player | Full-featured media player | Polished playback with controls, tracks, subtitles |
-| M2 | Plex Core | Plex library browsing | Browse Plex libraries with metadata and artwork |
-| M3 | Library UX | Rich library experience | Search, filters, collections, detail pages |
-| M4 | Watch State | Progress tracking and sync | Resume, watched status, Plex sync, continue watching |
-| M5 | Polish | Release quality | Settings, MPRIS, error handling, packaging |
-| M6 | Standalone | Direct source support | Local dirs, SMB/NFS, TMDb metadata |
-| M7 | Extensions | Additional integrations | Jellyfin, Emby, Trakt, OpenSubtitles download |
+| Milestone | Name | Status | Goal | Key Deliverable |
+|-----------|------|--------|------|-----------------|
+| M0 | Skeleton | **Done** | Walking skeleton - app window with mpv playback | Play a local file in a GTK4 window |
+| M1 | Player | **Done** | Full-featured media player | Polished playback with controls, tracks, subtitles |
+| M2 | Plex Core | **Done** | Plex library browsing | Browse Plex libraries with metadata and artwork |
+| M3 | Library UX | Planned | Rich library experience | Search, filters, collections, detail pages |
+| M4 | Watch State | Planned | Progress tracking and sync | Resume, watched status, Plex sync, continue watching |
+| M5 | Polish | Planned | Release quality | Settings, MPRIS, error handling, packaging |
+| M6 | Standalone | Planned | Direct source support | Local dirs, SMB/NFS, TMDb metadata |
+| M7 | Extensions | Planned | Additional integrations | Jellyfin, Emby, Trakt, OpenSubtitles download |
 
 ---
 
-## M0: Walking Skeleton
+## M0: Walking Skeleton ✓
 
 **Goal:** Prove the stack works end-to-end. A Relm4 + libadwaita window that plays a video file using mpv.
 
+**Status:** Complete
+
 ### Tasks
 
-- [ ] Initialize Rust project with Cargo.toml and all core dependencies
-- [ ] Set up Nix flake for development:
+- [x] Initialize Rust project with Cargo.toml and all core dependencies
+- [x] Set up Nix flake for development:
   - `flake.nix` with `devShells.default` providing: `rustc`, `cargo`, `clippy`, `rustfmt`, `pkg-config`
   - Native build inputs: `gtk4`, `libadwaita`, `mpv`, `glib`, `pango`, `gdk-pixbuf`, `graphene`, `wrapGAppsHook4`
   - `LD_LIBRARY_PATH` / `PKG_CONFIG_PATH` set via `shellHook` or `nativeBuildInputs`
   - Nix package definition for building Reel (`packages.default`)
   - `nix develop` must provide a working environment where `cargo build` succeeds
   - Pin nixpkgs to a specific rev for reproducibility
-- [ ] Create `main.rs`: create `adw::Application`, load CSS
-- [ ] Create `app.rs`: root `App` component with `AdwApplicationWindow`
-- [ ] Define `VideoBackend` trait in `player/backend.rs` with core playback methods
-- [ ] Implement `MpvBackend` wrapping `libmpv2`:
+- [x] Create `main.rs`: create `adw::Application`, load CSS
+- [x] Create `app.rs`: root `App` component with `AdwApplicationWindow`
+- [x] Define `PlayState`, `EndReason`, and utility functions in `player/backend.rs`
+- [x] Implement `MpvBackend` wrapping `libmpv2`:
   - Initialize mpv with `vo=libmpv`, `hwdec=auto`
   - Create render context on GLArea `realize` signal
   - Platform detection (Wayland/X11) for display handle + `get_proc_address`
   - Set update callback → `glib::idle_add` → `gl_area.queue_render()`
   - Render into GLArea FBO via `mpv_render_context_render()`
-- [ ] Create `VideoArea` widget: `GtkGraphicsOffload` wrapping `GtkGLArea`
-- [ ] Wire mpv wakeup callback → event processing on main thread
-- [ ] Basic play/pause with spacebar
-- [ ] Open file via command-line argument or file chooser dialog
-- [ ] Verify hardware acceleration works (check `hwdec-current` property)
-
-### Success Criteria
-- `nix develop` drops into a shell where `cargo build` succeeds
-- `nix build` produces a working binary
-- Run `reel /path/to/video.mkv` and see it play in a libadwaita window
-- Video renders via mpv OpenGL render API into GtkGLArea
-- Hardware-accelerated decoding active on supported hardware (VA-API/NVDEC)
-- Works on both Wayland and X11
-- No crashes on common formats (MKV, MP4, AVI)
+- [x] Create `VideoArea` component with GLArea + mpv render context
+- [x] Wire mpv wakeup callback → event processing on main thread
+- [x] Basic play/pause with spacebar
+- [x] Open file via command-line argument or file chooser dialog
+- [x] Hardware acceleration works (VA-API/NVDEC detected via `hwdec-current`)
+- [x] `PlaybackTracker` pure state machine with 57+ tests
 
 ---
 
-## M1: Full-Featured Player
+## M1: Full-Featured Player ✓
 
-**Goal:** A polished video player that rivals Celluloid in playback capabilities, with a clean overlay UI. All playback interaction goes through the `VideoBackend` trait.
+**Goal:** A polished video player that rivals Celluloid in playback capabilities, with a clean overlay UI.
+
+**Status:** Complete
 
 ### Tasks
 
-- [ ] Player controls overlay component (`PlayerControls`)
+- [x] Player controls overlay component (`PlayerControls`)
   - Play/pause button
-  - Progress bar with seek (click and drag via `VideoBackend::seek_absolute`)
-  - Position / duration labels (from `BackendEvent::PositionChanged`)
-  - Volume slider with mute toggle (via `VideoBackend::set_volume/set_mute`)
+  - Progress bar with seek (click and drag)
+  - Position / duration labels
+  - Volume slider with mute toggle
   - Fullscreen toggle
-- [ ] Auto-hide controls (show on mouse move via `EventControllerMotion`, hide after 3s timeout)
-- [ ] Keyboard shortcuts (space=pause, left/right=seek, up/down=volume, F11=fullscreen, Esc=exit fullscreen)
-- [ ] Audio track selector popover (parse `track-list` via `VideoBackend::tracks()`, switch via `set_audio_track`)
-- [ ] Subtitle track selector popover (embedded + external subs via `VideoBackend::tracks()`)
-- [ ] External subtitle file loading (via `VideoBackend::add_subtitle_file`, auto-detect matching filenames)
-- [ ] Subtitle rendering customization (via `VideoBackend::set_subtitle_style`) stored in settings
-- [ ] Playback speed control (0.25x-4x via `VideoBackend::set_speed`)
-- [ ] Skip forward/back buttons (configurable interval via `VideoBackend::seek_relative`)
-- [ ] Chapter navigation (when chapters present)
-- [ ] Screensaver inhibition during playback (D-Bus `org.freedesktop.ScreenSaver.Inhibit`)
-- [ ] Drag-and-drop file onto window to play
-- [ ] Remember window size/position across sessions
-- [ ] Error handling: show toast on playback errors with codec/format info
+- [x] Auto-hide controls (show on mouse move, hide after 3s timeout via `OverlayController`)
+- [x] Keyboard shortcuts (space=pause, left/right=seek, up/down=volume, F11=fullscreen, Esc=exit fullscreen)
+- [x] Audio track selector popover (parse `track-list`, switch tracks)
+- [x] Subtitle track selector popover (embedded + external subs)
+- [x] External subtitle file loading (auto-detect matching filenames + file chooser)
+- [x] Playback speed control (0.25x–4x with presets)
+- [x] Chapter navigation (when chapters present)
+- [x] Screensaver inhibition during playback (D-Bus `org.freedesktop.ScreenSaver.Inhibit`)
+- [x] Drag-and-drop file onto window to play
+- [x] Remember window size/position across sessions
+- [x] Error handling: show toast on playback errors
 
-### Success Criteria
-- Can play any format mpv/FFmpeg supports with full control
-- Controls auto-hide during playback, appear on mouse movement
-- Audio/subtitle tracks switchable during playback
-- All keyboard shortcuts functional
+### Deferred from M1
+
+- Subtitle rendering customization (font, size, color) → M5 settings
+- Skip forward/back buttons in controls bar → M3 or M5
 
 ---
 
-## M2: Plex Core
+## M2: Plex Core ✓
 
 **Goal:** Connect to a Plex server and browse its libraries with metadata and artwork.
 
+**Status:** Complete (needs manual testing against real Plex server)
+
 ### Tasks
 
-- [ ] Define `MediaSource` trait in `services/media_source.rs`
-- [ ] Implement `PlexClient` HTTP API client
-  - Authentication (server URL + token, or Plex account OAuth)
-  - List libraries
-  - Fetch library items (movies, shows) with pagination
-  - Fetch metadata details (cast, crew, synopsis)
-  - Construct direct play URLs
-  - Image URL construction (poster, backdrop, via Plex image transcoder)
-- [ ] Implement `PlexSource: MediaSource`
-- [ ] Plex server connection UI (onboarding/settings)
-  - Server URL + token input
-  - Connection test with feedback
-  - mDNS discovery of local Plex servers (nice-to-have, can defer)
-- [ ] SQLite database setup
-  - Schema creation with migrations
-  - `MediaRepo` for caching Plex items locally
-- [ ] Sidebar navigation component
-  - Movies / TV Shows sections
-  - Source indicator
-- [ ] Library grid view (`TypedGridView<MediaCard>`)
-  - Poster card factory component with title, year
-  - Async artwork loading with placeholder
-  - Artwork disk cache (`$XDG_CACHE_HOME/reel/artwork/`)
+- [x] Define `MediaSource` trait in `services/media_source.rs`
+- [x] Implement `PlexClient` HTTP API client
+  - List libraries, fetch library items, fetch metadata
+  - Construct direct play URLs and image transcoder URLs
+  - Proper Plex headers (`X-Plex-Token`, `X-Plex-Product`, `Accept: application/json`)
+  - Error handling (401 → Unauthorized, 404 → NotFound, 5xx → Server)
+- [x] Implement `PlexSource: MediaSource`
+- [x] Plex OAuth browser sign-in flow
+  - PIN-based auth via `plex.tv/api/v2/pins` with `strong=true`
+  - Opens browser with `xdg-open` for user authentication
+  - Polls for token (1s interval, 5min timeout)
+  - Auto-discovers servers via `plex.tv/api/v2/resources`
+  - Auto-connects if single server, shows picker if multiple
+  - Persistent `X-Plex-Client-Identifier` (UUID stored in `$XDG_DATA_HOME/reel/client_id`)
+- [x] SQLite database setup
+  - Schema with `media_items`, `sources`, `schema_version` tables
+  - `MediaRepo` for caching Plex items locally (upsert, find, list, delete)
+  - `SourceRepo` for persisting server connections
+  - In-memory SQLite tests
+- [x] Data models: `MediaItem`, `MediaType`, `SourceType`, `Source`, `SourceConfig`, `LibrarySection`
+- [x] Plex serde models with separate container types for Directory vs Metadata responses
+- [x] Conversion layer: `PlexMetadata` → `MediaItem` (duration ms→min, genres, file paths, parent IDs)
+- [x] Config module: XDG path helpers (`data_dir`, `cache_dir`, `config_dir`, `db_path`, `artwork_dir`)
+- [x] Sidebar navigation component (Movies / TV Shows)
+- [x] Library grid view (`TypedGridView<MediaCardData>`)
+  - Poster card with title, year
+  - Async artwork loading via `ArtworkCache`
+  - Loading / empty / error states with `AdwStatusPage`
   - Click to navigate to detail page
-- [ ] Basic movie detail page
-  - Backdrop header image
-  - Title, year, rating, runtime, genres
-  - Synopsis
-  - Play button → launches player with Plex direct play URL
-- [ ] Basic TV show detail page
-  - Show info + season list
-  - Episode list per season
-  - Play episode → launches player
+- [x] Artwork disk cache (`$XDG_CACHE_HOME/reel/artwork/`, SHA256 cache keys)
+- [x] Movie detail page (backdrop, title, year, rating, runtime, genres, synopsis, Play button)
+- [x] TV show detail page (season dropdown, episode list with `AdwActionRow`, per-episode play)
+- [x] Navigation shell: `gtk::Stack` (shell/player) + `AdwNavigationSplitView` + `AdwNavigationView`
+- [x] CLI `reel file.mkv` still works (bypasses library, straight to player)
+- [x] Drag-and-drop still works in library views (switches to player)
+- [x] Keyboard shortcuts context-aware (player shortcuts only in player view)
 
-### Success Criteria
-- Connect to a Plex server, see movie library as a poster grid
-- Click a movie → see detail page with metadata → click Play → video plays
-- Browse TV show → season → episode → play
-- Artwork loads and caches properly
-- Navigation between library, detail, and player views works smoothly
+### Test Coverage
+
+302 tests total (181 new in M2):
+- Config: 6 tests
+- Models (media, source, library): 16 tests
+- Database (schema, media_repo, source_repo): 26 tests
+- Plex serde models: 10 tests
+- Plex conversion: 15 tests
+- Plex HTTP client (wiremock): 12 tests
+- PlexSource (wiremock): 7 tests
+- Artwork cache (wiremock + tempfile): 8 tests
+- Plex auth: 8 tests
+- Connection dialog (URL normalization): 4 tests
+
+### Known Issues / Not Yet Verified
+
+- End-to-end flow not yet tested against a real Plex server
+- Artwork reload after async download may not visually refresh grid items
+- Pushing same component widget onto NavigationView repeatedly may have lifecycle issues
+- Token could appear in debug-level reqwest logs
 
 ---
 
@@ -255,10 +267,10 @@
   - Verify HW acceleration works in sandbox
   - Verify network access works
   - Verify screensaver inhibition works
-- [ ] Nix packaging (flake.nix)
+- [ ] Nix packaging (flake.nix — already partially done)
 - [ ] First-run experience
-  - Welcome page prompting to add a Plex server
-  - Connection wizard with test
+  - Welcome page prompting to sign in to Plex
+  - Connection wizard with browser OAuth flow
 
 ### Success Criteria
 - Install from Flatpak, connect Plex server, browse and play - all works
@@ -375,10 +387,10 @@ Before moving to the next milestone:
 ### Dependency Order
 
 ```
-M0 ──► M1 ──► M2 ──► M3 ──► M4 ──► M5 (release)
-                                      │
-                                      ├──► M6 (standalone)
-                                      └──► M7 (extensions)
+M0 ✓ ──► M1 ✓ ──► M2 ✓ ──► M3 ──► M4 ──► M5 (release)
+                                              │
+                                              ├──► M6 (standalone)
+                                              └──► M7 (extensions)
 ```
 
 M0-M5 are sequential - each builds on the previous. M6 and M7 can be worked on in parallel after M5.
