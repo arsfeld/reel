@@ -65,6 +65,8 @@ pub enum LibraryViewMsg {
     SortChanged(SortOrder),
     ClearFilters,
     FocusSearch,
+    LoadCollections,
+    LoadCollectionItems(String),
 }
 
 impl std::fmt::Debug for LibraryViewMsg {
@@ -81,6 +83,8 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::SortChanged(s) => write!(f, "SortChanged({s:?})"),
             Self::ClearFilters => write!(f, "ClearFilters"),
             Self::FocusSearch => write!(f, "FocusSearch"),
+            Self::LoadCollections => write!(f, "LoadCollections"),
+            Self::LoadCollectionItems(key) => write!(f, "LoadCollectionItems({key})"),
         }
     }
 }
@@ -461,6 +465,49 @@ impl Component for LibraryView {
             LibraryViewMsg::FocusSearch => {
                 self.search_bar.set_search_mode(true);
                 self.search_entry.grab_focus();
+            }
+            LibraryViewMsg::LoadCollections => {
+                self.stack.set_visible_child(&self.loading_page);
+                self.all_items.clear();
+                self.filter_state.clear();
+                self.search_query.clear();
+
+                let Some(source) = self.source.clone() else {
+                    self.stack.set_visible_child(&self.empty_page);
+                    return;
+                };
+
+                // Fetch collections from all movie + show libraries
+                sender.oneshot_command(async move {
+                    let mut all_collections = Vec::new();
+                    match source.libraries().await {
+                        Ok(libs) => {
+                            for lib in &libs {
+                                if let Ok(cols) = source.collections(&lib.key).await {
+                                    all_collections.extend(cols);
+                                }
+                            }
+                            LibraryViewCmd::Loaded(all_collections)
+                        }
+                        Err(e) => LibraryViewCmd::Error(e.to_string()),
+                    }
+                });
+            }
+            LibraryViewMsg::LoadCollectionItems(collection_key) => {
+                self.stack.set_visible_child(&self.loading_page);
+                self.all_items.clear();
+
+                let Some(source) = self.source.clone() else {
+                    self.stack.set_visible_child(&self.empty_page);
+                    return;
+                };
+
+                sender.oneshot_command(async move {
+                    match source.collection_items(&collection_key).await {
+                        Ok(items) => LibraryViewCmd::Loaded(items),
+                        Err(e) => LibraryViewCmd::Error(e.to_string()),
+                    }
+                });
             }
         }
     }

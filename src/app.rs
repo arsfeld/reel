@@ -18,7 +18,7 @@ use crate::components::player::video_area::{VideoArea, VideoAreaMsg, VideoAreaOu
 use crate::components::sidebar::{Sidebar, SidebarOutput};
 use crate::db;
 use crate::models::library::LibraryType;
-use crate::models::media::{MediaType, SourceType};
+use crate::models::media::{MediaItem, MediaType, SourceType};
 use crate::models::source::{Source, SourceConfig};
 use crate::navigation::CurrentView;
 use crate::player::backend::{self, PlayState};
@@ -67,6 +67,19 @@ pub enum AppMsg {
     },
     ShowToast(String),
     FocusSearch,
+    ShowCollections,
+    ShowCollectionDetail(MediaItem),
+}
+
+#[derive(Debug)]
+pub enum AppCmd {
+    /// Validated (or re-discovered) server URL on startup.
+    SourceValidated {
+        url: String,
+        token: String,
+        name: String,
+    },
+    SourceValidationFailed(String),
 }
 
 #[relm4::component(pub)]
@@ -74,7 +87,7 @@ impl Component for App {
     type Init = Option<String>;
     type Input = AppMsg;
     type Output = ();
-    type CommandOutput = ();
+    type CommandOutput = AppCmd;
 
     view! {
         #[root]
@@ -99,6 +112,7 @@ impl Component for App {
             .launch(())
             .forward(sender.input_sender(), |output| match output {
                 SidebarOutput::Navigate(target) => AppMsg::Navigate(target),
+                SidebarOutput::ShowCollections => AppMsg::ShowCollections,
             });
 
         let library_view = LibraryView::builder().launch(()).forward(
@@ -107,6 +121,7 @@ impl Component for App {
                 LibraryViewOutput::ShowDetail(item) => match item.media_type {
                     MediaType::Movie => AppMsg::ShowMovieDetail(item),
                     MediaType::Show => AppMsg::ShowShowDetail(item),
+                    MediaType::Collection => AppMsg::ShowCollectionDetail(item),
                     _ => AppMsg::ShowToast("Unsupported media type".to_string()),
                 },
                 LibraryViewOutput::Error(msg) => AppMsg::ShowToast(msg),
@@ -283,27 +298,23 @@ impl Component for App {
         // Initialize database
         let db_conn = init_database();
 
-        // Load saved source if exists
+        // Load and validate saved source (async — tests connection, re-discovers if stale)
         if let Some(ref conn) = db_conn {
             let repo = crate::db::source_repo::SourceRepo::new(conn);
             if let Ok(sources) = repo.list()
                 && let Some(source) = sources.into_iter().find(|s| s.enabled)
             {
-                let client = PlexClient::new(&source.config.url, &source.config.token);
-                let plex_source = Arc::new(PlexSource::new(client, source.name.clone()));
-                let artwork_cache = Arc::new(ArtworkCache::new(crate::config::artwork_dir()));
-
-                library_view.emit(LibraryViewMsg::SetSource(
-                    plex_source.clone(),
-                    artwork_cache.clone(),
-                ));
-                movie_detail.emit(MovieDetailMsg::SetSource(
-                    plex_source.clone(),
-                    artwork_cache.clone(),
-                ));
-                show_detail.emit(ShowDetailMsg::SetSource(plex_source, artwork_cache));
-
-                info!("Loaded saved Plex source: {}", source.name);
+                info!(
+                    "Loaded saved Plex source: {} (url={})",
+                    source.name, source.config.url
+                );
+                let url = source.config.url.clone();
+                let token = source.config.token.clone();
+                let name = source.name.clone();
+                let data_dir = crate::config::data_dir();
+                sender.oneshot_command(async move {
+                    validate_or_rediscover_source(url, token, name, data_dir).await
+                });
             }
         }
 
@@ -528,6 +539,87 @@ impl Component for App {
             AppMsg::FocusSearch => {
                 self.library_view.emit(LibraryViewMsg::FocusSearch);
             }
+            AppMsg::ShowCollections => {
+                self.current_view = CurrentView::Collections;
+                self.stack.set_visible_child_name("shell");
+                root.set_fullscreened(false);
+                root.set_title(Some("Reel"));
+                self.library_view.emit(LibraryViewMsg::LoadCollections);
+            }
+            AppMsg::ShowCollectionDetail(item) => {
+                self.current_view = CurrentView::CollectionDetail(item.id.clone());
+                self.library_view.emit(LibraryViewMsg::LoadCollectionItems(
+                    item.external_id.clone(),
+                ));
+                let page = adw::NavigationPage::builder()
+                    .title(&item.title)
+                    .child(self.library_view.widget())
+                    .build();
+                self.nav_view.push(&page);
+            }
+        }
+    }
+
+    fn update_cmd(
+        &mut self,
+        cmd: Self::CommandOutput,
+        sender: ComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
+        match cmd {
+            AppCmd::SourceValidated { url, token, name } => {
+                info!("Plex source validated: {} (url={})", name, url);
+
+                // Update saved URL in DB (clear old entries — URL may have changed)
+                if let Some(ref conn) = self.db_conn {
+                    let repo = crate::db::source_repo::SourceRepo::new(conn);
+                    if let Ok(old_sources) = repo.list() {
+                        for s in &old_sources {
+                            let _ = repo.delete(&s.id);
+                        }
+                    }
+                    let source = Source {
+                        id: Source::make_id(&url),
+                        source_type: SourceType::Plex,
+                        name: name.clone(),
+                        config: SourceConfig {
+                            url: url.clone(),
+                            token: token.clone(),
+                        },
+                        enabled: true,
+                        last_synced_at: None,
+                    };
+                    if let Err(e) = repo.insert(&source) {
+                        tracing::warn!("Failed to update source: {e}");
+                    }
+                }
+
+                let client = PlexClient::new(&url, &token);
+                let plex_source = Arc::new(PlexSource::new(client, name));
+                let artwork_cache = Arc::new(ArtworkCache::new(crate::config::artwork_dir()));
+
+                self.library_view.emit(LibraryViewMsg::SetSource(
+                    plex_source.clone(),
+                    artwork_cache.clone(),
+                ));
+                self.movie_detail.emit(MovieDetailMsg::SetSource(
+                    plex_source.clone(),
+                    artwork_cache.clone(),
+                ));
+                self.show_detail
+                    .emit(ShowDetailMsg::SetSource(plex_source, artwork_cache));
+
+                if let CurrentView::Library(lt) = self.current_view {
+                    self.library_view.emit(LibraryViewMsg::LoadLibrary(lt));
+                } else {
+                    self.library_view
+                        .emit(LibraryViewMsg::LoadLibrary(LibraryType::Movie));
+                }
+            }
+            AppCmd::SourceValidationFailed(msg) => {
+                tracing::warn!("Saved Plex source not reachable: {msg}");
+                sender.input(AppMsg::ShowToast(format!("Plex server unreachable: {msg}")));
+            }
         }
     }
 }
@@ -655,4 +747,61 @@ fn show_file_chooser(window: &adw::ApplicationWindow, sender: relm4::Sender<AppM
             }
         },
     );
+}
+
+/// Test the saved URL; if unreachable, re-discover the server via plex.tv.
+async fn validate_or_rediscover_source(
+    url: String,
+    token: String,
+    name: String,
+    data_dir: std::path::PathBuf,
+) -> AppCmd {
+    use crate::services::plex::auth;
+
+    info!("Validating saved Plex connection: {url}");
+
+    // Quick connectivity test on the saved URL
+    let http = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(5))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+
+    if http.get(format!("{url}/")).send().await.is_ok() {
+        info!("Saved URL is reachable: {url}");
+        return AppCmd::SourceValidated { url, token, name };
+    }
+
+    info!("Saved URL unreachable ({url}), re-discovering server...");
+
+    let client_id = auth::client_identifier(&data_dir);
+    let servers = match auth::discover_servers(&client_id, &token).await {
+        Ok(s) => s,
+        Err(e) => {
+            return AppCmd::SourceValidationFailed(format!("Discovery failed: {e}"));
+        }
+    };
+
+    // Find the server by name, or take the first one
+    let server = servers.iter().find(|s| s.name == name).or(servers.first());
+
+    let Some(server) = server else {
+        return AppCmd::SourceValidationFailed("No servers found on account".to_string());
+    };
+
+    match auth::best_server_uri(server).await {
+        Some(new_url) => {
+            info!("Re-discovered server '{}' at {new_url}", server.name);
+            AppCmd::SourceValidated {
+                url: new_url,
+                token,
+                name: server.name.clone(),
+            }
+        }
+        None => AppCmd::SourceValidationFailed(format!(
+            "Server '{}' found but no connections reachable",
+            server.name
+        )),
+    }
 }

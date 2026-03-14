@@ -8,14 +8,17 @@ pub struct Sidebar {
 }
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum SidebarMsg {
     SelectMovies,
     SelectShows,
+    SelectCollections,
 }
 
 #[derive(Debug)]
 pub enum SidebarOutput {
     Navigate(LibraryType),
+    ShowCollections,
 }
 
 #[relm4::component(pub)]
@@ -79,11 +82,30 @@ impl SimpleComponent for Sidebar {
                     },
                 },
 
+                gtk4::ListBoxRow {
+                    set_selectable: true,
+                    gtk4::Box {
+                        set_orientation: gtk4::Orientation::Horizontal,
+                        set_spacing: 12,
+                        set_margin_all: 8,
+
+                        gtk4::Image {
+                            set_icon_name: Some("view-grid-symbolic"),
+                        },
+                        gtk4::Label {
+                            set_label: "Collections",
+                            set_hexpand: true,
+                            set_halign: gtk4::Align::Start,
+                        },
+                    },
+                },
+
                 connect_row_selected[sender] => move |_, row| {
                     if let Some(row) = row {
                         match row.index() {
                             0 => sender.input(SidebarMsg::SelectMovies),
                             1 => sender.input(SidebarMsg::SelectShows),
+                            2 => sender.input(SidebarMsg::SelectCollections),
                             _ => {}
                         }
                     }
@@ -118,6 +140,9 @@ impl SimpleComponent for Sidebar {
             SidebarMsg::SelectShows => {
                 self.selected = LibraryType::Show;
                 let _ = sender.output(SidebarOutput::Navigate(LibraryType::Show));
+            }
+            SidebarMsg::SelectCollections => {
+                let _ = sender.output(SidebarOutput::ShowCollections);
             }
         }
     }

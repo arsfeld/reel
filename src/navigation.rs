@@ -2,6 +2,7 @@ use crate::models::library::LibraryType;
 
 /// What the user is currently viewing.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum CurrentView {
     /// Library grid (movies or shows)
     Library(LibraryType),
@@ -9,6 +10,10 @@ pub enum CurrentView {
     MovieDetail(String),
     /// Show detail page
     ShowDetail(String),
+    /// Collections list
+    Collections,
+    /// Collection detail page (items in a collection)
+    CollectionDetail(String),
     /// Video player
     Player,
 }
