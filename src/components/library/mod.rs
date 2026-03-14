@@ -19,6 +19,7 @@ use crate::services::media_source::MediaSource;
 
 use media_card::MediaCardData;
 
+#[allow(dead_code)]
 pub struct LibraryView {
     grid: TypedGridView<MediaCardData, gtk4::SingleSelection>,
     library_type: LibraryType,
@@ -33,6 +34,16 @@ pub struct LibraryView {
     grid_page: gtk4::ScrolledWindow,
     search_bar: gtk4::SearchBar,
     search_entry: gtk4::SearchEntry,
+    // Filter/sort bar widgets
+    filter_bar: gtk4::Box,
+    genre_flow: gtk4::FlowBox,
+    decade_dropdown: gtk4::DropDown,
+    sort_dropdown: gtk4::DropDown,
+    clear_filters_btn: gtk4::Button,
+    /// Track genre names currently in the FlowBox to avoid unnecessary rebuilds.
+    current_genres: Vec<String>,
+    /// Track decade values currently in the dropdown.
+    current_decades: Vec<i32>,
     // State retention for search/filter/sort
     all_items: Vec<MediaItem>,
     search_query: String,
@@ -111,6 +122,7 @@ impl Component for LibraryView {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn init(
         _init: Self::Init,
         root: Self::Root,
@@ -200,6 +212,96 @@ impl Component for LibraryView {
             .build();
         search_bar.connect_entry(&search_entry);
 
+        // Filter/sort bar
+        let filter_bar = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(8)
+            .margin_start(12)
+            .margin_end(12)
+            .margin_top(4)
+            .margin_bottom(4)
+            .build();
+
+        // Genre chips in a FlowBox
+        let genre_flow = gtk4::FlowBox::builder()
+            .selection_mode(gtk4::SelectionMode::None)
+            .homogeneous(false)
+            .max_children_per_line(20)
+            .min_children_per_line(1)
+            .row_spacing(4)
+            .column_spacing(4)
+            .build();
+
+        // Controls row: decade dropdown + sort dropdown + clear button
+        let controls_row = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(8)
+            .build();
+
+        // Decade dropdown
+        let decade_dropdown = gtk4::DropDown::from_strings(&["All Years"]);
+        decade_dropdown.set_selected(0);
+
+        let sender_decade = sender.input_sender().clone();
+        decade_dropdown.connect_selected_notify(move |dd| {
+            let selected = dd.selected();
+            if selected == 0 {
+                let _ = sender_decade.send(LibraryViewMsg::DecadeFilterChanged(None));
+            } else {
+                // Position 1+ maps to decades stored in current_decades
+                // We'll send the decade value via the string model
+                if let Some(item) = dd.model().and_then(|m| m.item(selected))
+                    && let Ok(string_obj) = item.downcast::<gtk4::StringObject>()
+                {
+                    let text = string_obj.string();
+                    // Parse "2020s" → 2020
+                    if let Ok(decade) = text.trim_end_matches('s').parse::<i32>() {
+                        let _ = sender_decade.send(LibraryViewMsg::DecadeFilterChanged(Some(decade)));
+                    }
+                }
+            }
+        });
+
+        // Sort dropdown
+        let sort_labels: Vec<&str> = SortOrder::all().iter().map(|s| s.label()).collect();
+        let sort_dropdown = gtk4::DropDown::from_strings(&sort_labels);
+        sort_dropdown.set_selected(0); // TitleAsc
+
+        let sender_sort = sender.input_sender().clone();
+        sort_dropdown.connect_selected_notify(move |dd| {
+            let all = SortOrder::all();
+            let idx = dd.selected() as usize;
+            if idx < all.len() {
+                let _ = sender_sort.send(LibraryViewMsg::SortChanged(all[idx]));
+            }
+        });
+
+        // Clear filters button
+        let clear_filters_btn = gtk4::Button::builder()
+            .icon_name("edit-clear-symbolic")
+            .tooltip_text("Clear all filters")
+            .css_classes(["flat"])
+            .visible(false)
+            .build();
+        let sender_clear_bar = sender.input_sender().clone();
+        clear_filters_btn.connect_clicked(move |_| {
+            let _ = sender_clear_bar.send(LibraryViewMsg::ClearFilters);
+        });
+
+        let decade_label = gtk4::Label::new(Some("Decade:"));
+        decade_label.add_css_class("dim-label");
+        let sort_label = gtk4::Label::new(Some("Sort:"));
+        sort_label.add_css_class("dim-label");
+
+        controls_row.append(&decade_label);
+        controls_row.append(&decade_dropdown);
+        controls_row.append(&sort_label);
+        controls_row.append(&sort_dropdown);
+        controls_row.append(&clear_filters_btn);
+
+        filter_bar.append(&genre_flow);
+        filter_bar.append(&controls_row);
+
         stack.add_child(&loading_page);
         stack.add_child(&empty_page);
         stack.add_child(&error_page);
@@ -208,6 +310,7 @@ impl Component for LibraryView {
         stack.set_visible_child(&empty_page);
 
         root.append(&search_bar);
+        root.append(&filter_bar);
         root.append(&stack);
 
         let model = Self {
@@ -223,6 +326,13 @@ impl Component for LibraryView {
             grid_page,
             search_bar,
             search_entry,
+            filter_bar,
+            genre_flow,
+            decade_dropdown,
+            sort_dropdown,
+            clear_filters_btn,
+            current_genres: Vec::new(),
+            current_decades: Vec::new(),
             all_items: Vec::new(),
             search_query: String::new(),
             filter_state: FilterState::default(),
@@ -306,6 +416,8 @@ impl Component for LibraryView {
 
                 self.all_items = items;
                 info!("Library loaded: {} items", self.all_items.len());
+                self.rebuild_genre_chips(&sender);
+                self.rebuild_decade_dropdown();
                 self.rebuild_grid(&sender);
             }
             LibraryViewMsg::LoadError(msg) => {
@@ -324,11 +436,13 @@ impl Component for LibraryView {
                         selected_genres: genres,
                     });
                 }
+                self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
             }
             LibraryViewMsg::DecadeFilterChanged(decade) => {
                 self.filter_state.decade =
                     decade.map(|d| library_filter::DecadeFilter { decade_start: d });
+                self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
             }
             LibraryViewMsg::SortChanged(order) => {
@@ -340,6 +454,9 @@ impl Component for LibraryView {
                 self.search_query.clear();
                 self.search_bar.set_search_mode(false);
                 self.search_entry.set_text("");
+                self.decade_dropdown.set_selected(0);
+                self.deselect_all_genre_chips();
+                self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
             }
             LibraryViewMsg::FocusSearch => {
@@ -442,5 +559,88 @@ impl LibraryView {
         }
 
         self.stack.set_visible_child(&self.grid_page);
+    }
+
+    /// Rebuild genre toggle chips from current all_items.
+    fn rebuild_genre_chips(&mut self, sender: &ComponentSender<Self>) {
+        let genres = library_filter::extract_genres(&self.all_items);
+
+        if genres == self.current_genres {
+            return; // No change needed
+        }
+
+        // Remove all existing children
+        while let Some(child) = self.genre_flow.first_child() {
+            self.genre_flow.remove(&child);
+        }
+
+        for genre in &genres {
+            let btn = gtk4::ToggleButton::builder()
+                .label(genre)
+                .css_classes(["pill"])
+                .build();
+
+            let sender_genre = sender.input_sender().clone();
+            let flow_ref = self.genre_flow.clone();
+            btn.connect_toggled(move |_btn| {
+                // Collect all currently toggled genres
+                let mut selected = Vec::new();
+                let mut child = flow_ref.first_child();
+                while let Some(ref widget) = child {
+                    // FlowBoxChild wraps the ToggleButton
+                    if let Some(toggle) = widget.first_child()
+                        && let Ok(toggle) = toggle.downcast::<gtk4::ToggleButton>()
+                        && toggle.is_active()
+                    {
+                        selected.push(toggle.label().map(|l| l.to_string()).unwrap_or_default());
+                    }
+                    child = widget.next_sibling();
+                }
+                let _ = sender_genre.send(LibraryViewMsg::GenreFilterChanged(selected));
+            });
+
+            self.genre_flow.append(&btn);
+        }
+
+        self.current_genres = genres;
+    }
+
+    /// Rebuild decade dropdown from current all_items.
+    fn rebuild_decade_dropdown(&mut self) {
+        let decades = library_filter::extract_decades(&self.all_items);
+
+        if decades == self.current_decades {
+            return;
+        }
+
+        let mut labels: Vec<String> = vec!["All Years".to_string()];
+        for &d in &decades {
+            labels.push(format!("{d}s"));
+        }
+        let label_strs: Vec<&str> = labels.iter().map(String::as_str).collect();
+        let model = gtk4::StringList::new(&label_strs);
+        self.decade_dropdown.set_model(Some(&model));
+        self.decade_dropdown.set_selected(0);
+        self.current_decades = decades;
+    }
+
+    /// Deselect all genre toggle buttons.
+    fn deselect_all_genre_chips(&self) {
+        let mut child = self.genre_flow.first_child();
+        while let Some(ref widget) = child {
+            if let Some(toggle) = widget.first_child()
+                && let Ok(toggle) = toggle.downcast::<gtk4::ToggleButton>()
+            {
+                toggle.set_active(false);
+            }
+            child = widget.next_sibling();
+        }
+    }
+
+    /// Show/hide the clear filters button based on active filter state.
+    fn update_clear_button_visibility(&self) {
+        self.clear_filters_btn.set_visible(
+            self.filter_state.is_active() || !self.search_query.is_empty(),
+        );
     }
 }
