@@ -57,6 +57,8 @@ pub enum ConnectionDialogOutput {
 pub enum ConnectionDialogCmd {
     TokenReceived(Result<String, String>),
     ServersReady(Result<(String, Vec<auth::PlexResource>), String>),
+    /// Resolved the best URI for a server: (uri, token, server_name)
+    UriResolved(Option<String>, String, String),
 }
 
 #[relm4::component(pub)]
@@ -290,16 +292,22 @@ impl Component for ConnectionDialog {
                 };
 
                 if let Some(server) = self.servers.get(idx)
-                    && let Some(uri) = auth::best_server_uri(server)
                     && let Some(ref token) = self.auth_token
                 {
-                    info!("Connecting to server: {} at {}", server.name, uri);
-                    let _ = sender.output(ConnectionDialogOutput::ConnectionSaved {
-                        url: uri,
-                        token: token.clone(),
-                        name: server.name.clone(),
+                    self.status_label.set_label("Testing server connections...");
+                    self.status_label.set_visible(true);
+                    self.status_label.set_css_classes(&[]);
+                    self.spinner.set_visible(true);
+                    self.spinner.set_spinning(true);
+                    self.server_box.set_visible(false);
+                    self.sign_in_button.set_visible(false);
+
+                    let server = server.clone();
+                    let token = token.clone();
+                    sender.oneshot_command(async move {
+                        let uri = auth::best_server_uri(&server).await;
+                        ConnectionDialogCmd::UriResolved(uri, token, server.name.clone())
                     });
-                    root.close();
                 }
             }
 
@@ -323,26 +331,31 @@ impl Component for ConnectionDialog {
             },
             ConnectionDialogCmd::ServersReady(result) => match result {
                 Ok((token, servers)) => {
-                    self.auth_token = Some(token.clone());
-
-                    if servers.len() == 1 {
-                        // Auto-connect
-                        let server = &servers[0];
-                        if let Some(uri) = auth::best_server_uri(server) {
-                            let _ = sender.output(ConnectionDialogOutput::ConnectionSaved {
-                                url: uri,
-                                token,
-                                name: server.name.clone(),
-                            });
-                            root.close();
-                            return;
-                        }
-                    }
-
+                    self.auth_token = Some(token);
                     sender.input(ConnectionDialogMsg::ServersFound(servers));
                 }
                 Err(e) => sender.input(ConnectionDialogMsg::ServerDiscoveryFailed(e)),
             },
+            ConnectionDialogCmd::UriResolved(uri, token, name) => {
+                self.spinner.set_visible(false);
+                self.spinner.set_spinning(false);
+
+                if let Some(uri) = uri {
+                    info!("Connecting to server: {} at {}", name, uri);
+                    let _ = sender.output(ConnectionDialogOutput::ConnectionSaved {
+                        url: uri,
+                        token,
+                        name,
+                    });
+                    root.close();
+                } else {
+                    self.status_label
+                        .set_label("Could not reach any server connections. Check your network.");
+                    self.status_label.set_css_classes(&["error"]);
+                    self.sign_in_button.set_visible(true);
+                    self.sign_in_button.set_label("Try Again");
+                }
+            }
         }
     }
 }

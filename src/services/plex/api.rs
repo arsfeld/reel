@@ -93,10 +93,7 @@ impl PlexClient {
     }
 
     /// Get all collections in a library section.
-    pub async fn collections(
-        &self,
-        library_key: &str,
-    ) -> Result<Vec<PlexMetadata>, PlexError> {
+    pub async fn collections(&self, library_key: &str) -> Result<Vec<PlexMetadata>, PlexError> {
         let url = format!(
             "{}/library/sections/{}/collections",
             self.base_url, library_key

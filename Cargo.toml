@@ -45,10 +45,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # System
 libc = "0.2"
+futures = "0.3.32"
 
 [dev-dependencies]
+axum = "0.8"
 mockall = "0.13"
 tempfile = "3"
+tokio = { version = "1", features = ["net"] }
 wiremock = "0.6"
 
 [features]

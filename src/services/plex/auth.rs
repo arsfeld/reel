@@ -80,7 +80,7 @@ pub struct PinResponse {
     pub auth_token: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct PlexResource {
     pub name: String,
     #[serde(default)]
@@ -89,11 +89,14 @@ pub struct PlexResource {
     pub connections: Vec<PlexConnection>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PlexConnection {
+    #[serde(default)]
     pub uri: String,
     #[serde(default)]
     pub local: bool,
+    #[serde(default)]
+    pub relay: bool,
 }
 
 /// Request a PIN from plex.tv. Returns (pin_id, code, auth_url).
@@ -206,14 +209,78 @@ pub fn open_browser(url: &str) {
         .spawn();
 }
 
-/// Pick the best connection URI for a server (prefer local non-relay).
-pub fn best_server_uri(server: &PlexResource) -> Option<String> {
-    // Prefer local connections first
-    if let Some(local) = server.connections.iter().find(|c| c.local) {
-        return Some(local.uri.clone());
+/// Pick the best reachable connection URI for a server.
+///
+/// Tests all connections in parallel with a short timeout, then picks the
+/// best one that responded (preferring local, non-relay).
+pub async fn best_server_uri(server: &PlexResource) -> Option<String> {
+    use futures::future::join_all;
+
+    tracing::info!(
+        "Testing {} connections for server '{}'",
+        server.connections.len(),
+        server.name
+    );
+    for conn in &server.connections {
+        tracing::info!(
+            "  candidate: {} (local={}, relay={})",
+            conn.uri,
+            conn.local,
+            conn.relay
+        );
     }
-    // Fall back to first available
-    server.connections.first().map(|c| c.uri.clone())
+
+    let http = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(5))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .ok()?;
+
+    // Test all connections in parallel
+    let results = join_all(server.connections.iter().map(|conn| {
+        let http = http.clone();
+        let uri = conn.uri.clone();
+        async move {
+            let url = format!("{uri}/");
+            match http.get(&url).send().await {
+                Ok(resp) => {
+                    tracing::info!("  reachable: {uri} (status={})", resp.status());
+                    true
+                }
+                Err(e) => {
+                    tracing::info!("  unreachable: {uri} ({e})");
+                    false
+                }
+            }
+        }
+    }))
+    .await;
+
+    // Pick the best reachable connection: prefer local non-relay
+    let mut best: Option<&PlexConnection> = None;
+    for (conn, reachable) in server.connections.iter().zip(results.iter()) {
+        if *reachable {
+            let dominated =
+                best.is_some_and(|b| !conn.relay && (b.relay || (conn.local && !b.local)));
+            if best.is_none() || dominated {
+                best = Some(conn);
+            }
+        }
+    }
+
+    if let Some(conn) = best {
+        tracing::info!(
+            "Selected connection: {} (local={}, relay={})",
+            conn.uri,
+            conn.local,
+            conn.relay
+        );
+        return Some(conn.uri.clone());
+    }
+
+    tracing::warn!("No connections responded for server '{}'", server.name);
+    None
 }
 
 #[cfg(test)]
@@ -239,52 +306,57 @@ mod tests {
         assert!(id.matches('-').count() >= 4);
     }
 
-    #[test]
-    fn best_server_uri_prefers_local() {
+    #[tokio::test]
+    async fn best_server_uri_picks_reachable_server() {
+        let mock = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+
         let server = PlexResource {
             name: "My Server".to_string(),
             provides: "server".to_string(),
             connections: vec![
                 PlexConnection {
-                    uri: "https://remote.plex.direct:32400".to_string(),
-                    local: false,
+                    uri: "http://10.88.0.1:32400".to_string(), // unreachable
+                    local: true,
+                    ..Default::default()
                 },
                 PlexConnection {
-                    uri: "http://192.168.1.100:32400".to_string(),
+                    uri: mock.uri(), // reachable
                     local: true,
+                    ..Default::default()
                 },
             ],
         };
-        assert_eq!(
-            best_server_uri(&server),
-            Some("http://192.168.1.100:32400".to_string())
-        );
+        assert_eq!(best_server_uri(&server).await, Some(mock.uri()));
     }
 
-    #[test]
-    fn best_server_uri_falls_back_to_remote() {
+    #[tokio::test]
+    async fn best_server_uri_returns_none_when_none_reachable() {
         let server = PlexResource {
             name: "My Server".to_string(),
             provides: "server".to_string(),
             connections: vec![PlexConnection {
-                uri: "https://remote.plex.direct:32400".to_string(),
-                local: false,
+                uri: "http://192.0.2.1:32400".to_string(), // unreachable (TEST-NET)
+                local: true,
+                ..Default::default()
             }],
         };
-        assert_eq!(
-            best_server_uri(&server),
-            Some("https://remote.plex.direct:32400".to_string())
-        );
+        let result = best_server_uri(&server).await;
+        assert_eq!(result, None);
     }
 
-    #[test]
-    fn best_server_uri_returns_none_for_no_connections() {
+    #[tokio::test]
+    async fn best_server_uri_returns_none_for_no_connections() {
         let server = PlexResource {
             name: "Empty".to_string(),
             provides: "server".to_string(),
             connections: vec![],
         };
-        assert_eq!(best_server_uri(&server), None);
+        assert_eq!(best_server_uri(&server).await, None);
     }
 
     #[tokio::test]
