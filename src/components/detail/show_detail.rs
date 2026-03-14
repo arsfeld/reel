@@ -56,7 +56,10 @@ impl std::fmt::Debug for ShowDetailMsg {
 
 #[derive(Debug)]
 pub enum ShowDetailOutput {
-    PlayMedia(String),
+    PlayMedia {
+        url: String,
+        media_item: Option<crate::models::media::MediaItem>,
+    },
     Error(String),
 }
 
@@ -451,7 +454,10 @@ impl Component for ShowDetail {
                 {
                     let url = source.playback_url(file_path);
                     info!("Playing episode: {}", ep.title);
-                    let _ = sender.output(ShowDetailOutput::PlayMedia(url));
+                    let _ = sender.output(ShowDetailOutput::PlayMedia {
+                        url,
+                        media_item: Some(ep.clone()),
+                    });
                 }
             }
             ShowDetailMsg::LoadError(msg) => {

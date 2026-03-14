@@ -55,7 +55,10 @@ impl std::fmt::Debug for MovieDetailMsg {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum MovieDetailOutput {
-    PlayMedia(String),
+    PlayMedia {
+        url: String,
+        media_item: Option<crate::models::media::MediaItem>,
+    },
     Error(String),
 }
 
@@ -391,7 +394,10 @@ impl Component for MovieDetail {
                 {
                     let url = source.playback_url(file_path);
                     info!("Playing: {}", item.title);
-                    let _ = sender.output(MovieDetailOutput::PlayMedia(url));
+                    let _ = sender.output(MovieDetailOutput::PlayMedia {
+                        url,
+                        media_item: Some(item.clone()),
+                    });
                 }
             }
         }

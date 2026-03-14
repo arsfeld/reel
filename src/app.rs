@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use adw::prelude::*;
 use gtk4::glib;
@@ -17,15 +18,18 @@ use crate::components::player::shortcuts::{self, PlayerAction};
 use crate::components::player::video_area::{VideoArea, VideoAreaMsg, VideoAreaOutput};
 use crate::components::sidebar::{Sidebar, SidebarOutput};
 use crate::db;
+use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::library::LibraryType;
 use crate::models::media::{MediaItem, MediaType, SourceType};
 use crate::models::source::{Source, SourceConfig};
+use crate::models::watch::WatchProgress;
 use crate::navigation::CurrentView;
 use crate::player::backend::{self, PlayState};
 use crate::services::artwork::ArtworkCache;
 use crate::services::plex::api::PlexClient;
 use crate::services::plex::source::PlexSource;
 use crate::services::screensaver::ScreensaverInhibitor;
+use crate::services::watch_state::{PlaybackState, WatchStateEvent, WatchStateTracker};
 use crate::services::window_state::{self, WindowState};
 
 #[allow(dead_code)]
@@ -42,6 +46,10 @@ pub struct App {
     nav_view: adw::NavigationView,
     current_view: CurrentView,
     db_conn: Option<Connection>,
+    now_playing: Option<MediaItem>,
+    watch_tracker: WatchStateTracker,
+    /// Cached current position for save-on-exit.
+    last_position: f64,
 }
 
 #[derive(Debug)]
@@ -52,7 +60,10 @@ pub enum AppMsg {
     ShowShowDetail(crate::models::media::MediaItem),
     GoBack,
     VideoOutput(VideoAreaOutput),
-    PlayMedia(String),
+    PlayMedia {
+        url: String,
+        media_item: Option<MediaItem>,
+    },
     PlayerAction(VideoAreaMsg),
     OpenFile(String),
     ShowFileChooser,
@@ -131,7 +142,9 @@ impl Component for App {
         let movie_detail = MovieDetail::builder().launch(()).forward(
             sender.input_sender(),
             |output| match output {
-                MovieDetailOutput::PlayMedia(url) => AppMsg::PlayMedia(url),
+                MovieDetailOutput::PlayMedia { url, media_item } => {
+                    AppMsg::PlayMedia { url, media_item }
+                }
                 MovieDetailOutput::Error(msg) => AppMsg::ShowToast(msg),
             },
         );
@@ -139,7 +152,9 @@ impl Component for App {
         let show_detail = ShowDetail::builder().launch(()).forward(
             sender.input_sender(),
             |output| match output {
-                ShowDetailOutput::PlayMedia(url) => AppMsg::PlayMedia(url),
+                ShowDetailOutput::PlayMedia { url, media_item } => {
+                    AppMsg::PlayMedia { url, media_item }
+                }
                 ShowDetailOutput::Error(msg) => AppMsg::ShowToast(msg),
             },
         );
@@ -332,6 +347,9 @@ impl Component for App {
             nav_view,
             current_view: CurrentView::default(),
             db_conn,
+            now_playing: None,
+            watch_tracker: WatchStateTracker::new(),
+            last_position: 0.0,
         };
 
         // Handle CLI file arg or start with library
@@ -383,6 +401,10 @@ impl Component for App {
             }
             AppMsg::GoBack => {
                 if self.stack.visible_child_name().as_deref() == Some("player") {
+                    // Stop watch tracking when leaving player
+                    let events = self.watch_tracker.stop(self.last_position);
+                    dispatch_watch_events(&self.db_conn, events);
+                    self.now_playing = None;
                     self.stack.set_visible_child_name("shell");
                     root.set_fullscreened(false);
                     root.set_title(Some("Reel"));
@@ -390,8 +412,10 @@ impl Component for App {
                     self.nav_view.pop();
                 }
             }
-            AppMsg::PlayMedia(url) => {
+            AppMsg::PlayMedia { url, media_item } => {
                 info!("Playing media: {}...", &url[..url.len().min(80)]);
+                self.now_playing = media_item;
+                self.last_position = 0.0;
                 self.current_view = CurrentView::Player;
                 self.stack.set_visible_child_name("player");
                 self.video_area.emit(VideoAreaMsg::LoadFile(url));
@@ -425,22 +449,70 @@ impl Component for App {
             AppMsg::VideoOutput(output) => match output {
                 VideoAreaOutput::FileLoaded => {
                     self.screensaver.inhibit(root);
+                    // Start watch state tracking
+                    if let Some(ref item) = self.now_playing {
+                        let rating_key = if item.source_type == SourceType::Plex {
+                            Some(item.external_id.as_str())
+                        } else {
+                            None
+                        };
+                        let duration = item
+                            .runtime_minutes
+                            .map(|m| m as f64 * 60.0)
+                            .unwrap_or(0.0);
+                        self.watch_tracker
+                            .start(&item.id, rating_key, duration, Instant::now());
+                    }
                 }
-                VideoAreaOutput::PositionChanged { .. } => {}
+                VideoAreaOutput::PositionChanged { position, duration } => {
+                    self.last_position = position;
+                    // Update tracker duration from actual mpv value if we have it
+                    if let Some(ref item) = self.now_playing {
+                        if !self.watch_tracker.is_active() {
+                            let rating_key = if item.source_type == SourceType::Plex {
+                                Some(item.external_id.as_str())
+                            } else {
+                                None
+                            };
+                            self.watch_tracker
+                                .start(&item.id, rating_key, duration, Instant::now());
+                        }
+                    }
+                    let events = self.watch_tracker.process_position(position, Instant::now());
+                    dispatch_watch_events(&self.db_conn, events);
+                }
                 VideoAreaOutput::StateChanged(state) => {
                     if self.current_view == CurrentView::Player {
                         root.set_title(Some(backend::window_title_for_state(state)));
                     }
                     match state {
-                        PlayState::Playing => self.screensaver.inhibit(root),
+                        PlayState::Playing => {
+                            self.screensaver.inhibit(root);
+                            let events = self.watch_tracker.process_state_change(
+                                PlaybackState::Playing,
+                                self.last_position,
+                                Instant::now(),
+                            );
+                            dispatch_watch_events(&self.db_conn, events);
+                        }
                         PlayState::Paused | PlayState::Stopped => {
                             self.screensaver.uninhibit(root);
+                            let events = self.watch_tracker.process_state_change(
+                                PlaybackState::Paused,
+                                self.last_position,
+                                Instant::now(),
+                            );
+                            dispatch_watch_events(&self.db_conn, events);
                         }
                     }
                 }
                 VideoAreaOutput::EndOfFile(reason) => {
                     info!("Playback ended: {:?}", reason);
                     self.screensaver.uninhibit(root);
+                    // Stop watch tracking with final persist + scrobble check
+                    let events = self.watch_tracker.stop(self.last_position);
+                    dispatch_watch_events(&self.db_conn, events);
+                    self.now_playing = None;
                     if self.current_view == CurrentView::Player {
                         self.stack.set_visible_child_name("shell");
                         root.set_fullscreened(false);
@@ -661,6 +733,99 @@ fn dispatch_player_action_sender(sender: &relm4::Sender<AppMsg>, action: PlayerA
             let _ = sender.send(AppMsg::ExitFullscreen);
         }
     }
+}
+
+/// Dispatch watch state events to persistence and Plex API.
+/// All operations are fire-and-forget to avoid blocking the UI.
+fn dispatch_watch_events(db_conn: &Option<Connection>, events: Vec<WatchStateEvent>) {
+    for event in events {
+        match event {
+            WatchStateEvent::PersistProgress {
+                media_id,
+                position,
+                duration,
+            } => {
+                if let Some(conn) = db_conn {
+                    let repo = WatchProgressRepo::new(conn);
+                    let progress = WatchProgress {
+                        media_item_id: media_id,
+                        position_seconds: position,
+                        duration_seconds: duration,
+                        watched: false,
+                        last_watched_at: iso_now(),
+                    };
+                    if let Err(e) = repo.upsert(&progress) {
+                        tracing::warn!("Failed to persist watch progress: {e}");
+                    }
+                }
+            }
+            WatchStateEvent::Scrobble {
+                media_id,
+                rating_key,
+            } => {
+                // Mark as watched locally
+                if let Some(conn) = db_conn {
+                    let repo = WatchProgressRepo::new(conn);
+                    let timestamp = iso_now();
+                    if let Err(e) = repo.mark_watched(&media_id, &timestamp) {
+                        tracing::warn!("Failed to mark as watched: {e}");
+                    }
+                }
+                // Fire-and-forget Plex scrobble (if rating_key present)
+                if !rating_key.is_empty() {
+                    tracing::info!("Scrobble: rating_key={rating_key}");
+                    // TODO: Call PlexClient.scrobble() when source ref is available in App
+                }
+            }
+            WatchStateEvent::ReportTimeline {
+                rating_key,
+                state,
+                time_ms,
+                duration_ms,
+            } => {
+                if !rating_key.is_empty() {
+                    tracing::debug!(
+                        "Timeline: key={rating_key} state={state} time={time_ms}ms"
+                    );
+                    let _ = (duration_ms,); // TODO: Call PlexClient.report_timeline()
+                }
+            }
+        }
+    }
+}
+
+/// Generate a UTC ISO 8601 timestamp string.
+fn iso_now() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Simple ISO format sufficient for sort ordering
+    let secs_per_day = 86400;
+    let days_since_epoch = now / secs_per_day;
+    let time_of_day = now % secs_per_day;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+    // Approximate date calculation (sufficient for timestamping)
+    let (year, month, day) = days_to_ymd(days_since_epoch);
+    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
+}
+
+/// Convert days since Unix epoch to (year, month, day).
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    // Algorithm from http://howardhinnant.github.io/date_algorithms.html
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 fn init_database() -> Option<Connection> {
