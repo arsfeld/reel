@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::DbError;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 /// Initialize the database schema. Creates tables if they don't exist.
 /// Idempotent: safe to call on every app startup.
@@ -54,6 +54,18 @@ pub fn init_db(conn: &Connection) -> Result<(), DbError> {
             ON media_items(source_type, source_id);
         CREATE INDEX IF NOT EXISTS idx_media_items_added_at
             ON media_items(added_at DESC);
+
+        CREATE TABLE IF NOT EXISTS watch_progress (
+            media_item_id TEXT PRIMARY KEY,
+            position_seconds REAL NOT NULL DEFAULT 0.0,
+            duration_seconds REAL NOT NULL DEFAULT 0.0,
+            watched INTEGER NOT NULL DEFAULT 0,
+            last_watched_at TEXT NOT NULL,
+            FOREIGN KEY (media_item_id) REFERENCES media_items(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_watch_progress_last_watched
+            ON watch_progress(last_watched_at DESC);
         ",
     )?;
 
@@ -66,11 +78,42 @@ pub fn init_db(conn: &Connection) -> Result<(), DbError> {
         )?;
     }
 
+    // Run migrations
+    let current_version = schema_version(conn)?;
+    if current_version < 2 {
+        migrate_to_v2(conn)?;
+    }
+
+    Ok(())
+}
+
+/// Migrate schema from v1 to v2: add watch_progress table.
+fn migrate_to_v2(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS watch_progress (
+            media_item_id TEXT PRIMARY KEY,
+            position_seconds REAL NOT NULL DEFAULT 0.0,
+            duration_seconds REAL NOT NULL DEFAULT 0.0,
+            watched INTEGER NOT NULL DEFAULT 0,
+            last_watched_at TEXT NOT NULL,
+            FOREIGN KEY (media_item_id) REFERENCES media_items(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_watch_progress_last_watched
+            ON watch_progress(last_watched_at DESC);
+        ",
+    )?;
+
+    conn.execute(
+        "UPDATE schema_version SET version = ?1",
+        [2],
+    )?;
+
     Ok(())
 }
 
 /// Get the current schema version.
-#[allow(dead_code)]
 pub fn schema_version(conn: &Connection) -> Result<i32, DbError> {
     let version = conn.query_row("SELECT version FROM schema_version", [], |row| row.get(0))?;
     Ok(version)
@@ -132,5 +175,90 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn watch_progress_table_exists() {
+        let conn = test_db();
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM watch_progress", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn migrate_v1_to_v2_adds_watch_progress() {
+        // Simulate a v1 database by creating tables without watch_progress
+        let conn = Connection::open_in_memory().unwrap();
+
+        // Create v1 schema manually (without watch_progress)
+        conn.execute_batch(
+            "
+            CREATE TABLE schema_version (version INTEGER NOT NULL);
+            INSERT INTO schema_version (version) VALUES (1);
+
+            CREATE TABLE media_items (
+                id TEXT PRIMARY KEY,
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                year INTEGER,
+                overview TEXT,
+                content_rating TEXT,
+                rating REAL,
+                runtime_minutes INTEGER,
+                poster_path TEXT,
+                backdrop_path TEXT,
+                genres TEXT NOT NULL DEFAULT '[]',
+                parent_id TEXT,
+                season_number INTEGER,
+                episode_number INTEGER,
+                air_date TEXT,
+                file_path TEXT,
+                added_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE sources (
+                id TEXT PRIMARY KEY,
+                source_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                config TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                last_synced_at TEXT
+            );
+            ",
+        )
+        .unwrap();
+
+        assert_eq!(schema_version(&conn).unwrap(), 1);
+
+        // Run init_db which should migrate to v2
+        init_db(&conn).unwrap();
+
+        assert_eq!(schema_version(&conn).unwrap(), 2);
+
+        // Verify watch_progress table exists
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM watch_progress", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn watch_progress_foreign_key_references_media_items() {
+        let conn = test_db();
+        // Enable foreign key enforcement
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        // Try to insert watch_progress for non-existent media item
+        let result = conn.execute(
+            "INSERT INTO watch_progress (media_item_id, position_seconds, duration_seconds, watched, last_watched_at)
+             VALUES ('nonexistent', 100.0, 7200.0, 0, '2026-03-14T12:00:00Z')",
+            [],
+        );
+        assert!(result.is_err());
     }
 }
