@@ -78,6 +78,13 @@
     padding: 2px 10px;
 }
 
+/* --- Cast Photos --- */
+
+.cast-photo {
+    border-radius: 40px;
+    background-color: alpha(@card_bg_color, 0.5);
+}
+
 /* --- Toast Colors --- */
 
 .success {
