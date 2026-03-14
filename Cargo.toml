@@ -1,0 +1,50 @@
+[package]
+name = "reel"
+version = "0.1.0"
+edition = "2024"
+authors = ["Alexandre Rosenfeld <alex@rosenfeld.one>"]
+license = "GPL-3.0-or-later"
+description = "A modern, native media player for the Linux desktop"
+
+[dependencies]
+# UI
+relm4 = { version = "0.10", features = ["macros", "libadwaita"] }
+gtk4 = { version = "0.10", features = ["v4_14"] }
+libadwaita = { version = "0.8", features = ["v1_4"] }
+
+# Video backend (mpv)
+libmpv2 = { version = "5.0", features = ["render"] }
+libmpv2-sys = "4.0"
+
+# GL interop
+gdk4-wayland = { version = "0.10", optional = true }
+gdk4-x11 = { version = "0.10", optional = true }
+khronos-egl = { version = "6", features = ["dynamic"] }
+
+# Error handling
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# System
+libc = "0.2"
+
+[features]
+default = ["wayland", "x11"]
+wayland = ["dep:gdk4-wayland"]
+x11 = ["dep:gdk4-x11"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[lints.rust]
+warnings = "deny"
