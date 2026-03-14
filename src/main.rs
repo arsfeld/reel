@@ -1,6 +1,7 @@
 mod app;
 mod components;
 mod player;
+mod services;
 
 use tracing_subscriber::EnvFilter;
 

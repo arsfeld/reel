@@ -33,6 +33,7 @@ libc = "0.2"
 
 [dev-dependencies]
 mockall = "0.13"
+tempfile = "3"
 
 [features]
 default = ["wayland", "x11"]
