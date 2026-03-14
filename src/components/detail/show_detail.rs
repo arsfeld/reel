@@ -58,7 +58,7 @@ impl std::fmt::Debug for ShowDetailMsg {
 pub enum ShowDetailOutput {
     PlayMedia {
         url: String,
-        media_item: Option<crate::models::media::MediaItem>,
+        media_item: Box<Option<crate::models::media::MediaItem>>,
     },
     Error(String),
 }
@@ -456,7 +456,7 @@ impl Component for ShowDetail {
                     info!("Playing episode: {}", ep.title);
                     let _ = sender.output(ShowDetailOutput::PlayMedia {
                         url,
-                        media_item: Some(ep.clone()),
+                        media_item: Box::new(Some(ep.clone())),
                     });
                 }
             }

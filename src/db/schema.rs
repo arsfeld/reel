@@ -105,10 +105,7 @@ fn migrate_to_v2(conn: &Connection) -> Result<(), DbError> {
         ",
     )?;
 
-    conn.execute(
-        "UPDATE schema_version SET version = ?1",
-        [2],
-    )?;
+    conn.execute("UPDATE schema_version SET version = ?1", [2])?;
 
     Ok(())
 }

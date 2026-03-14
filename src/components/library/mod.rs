@@ -602,8 +602,7 @@ impl Component for LibraryView {
                 if let Some(item) = self.grid.get(position) {
                     let borrow = item.borrow();
                     if let Some(ref media_item) = borrow.media_item {
-                        let _ =
-                            sender.output(LibraryViewOutput::MarkUnwatched(media_item.clone()));
+                        let _ = sender.output(LibraryViewOutput::MarkUnwatched(media_item.clone()));
                     }
                 }
             }
@@ -916,13 +915,10 @@ impl LibraryView {
                     let sender = sender.command_sender().clone();
                     let fetch_url = url;
                     gtk4::glib::spawn_future_local(async move {
-                        if let Ok(path) = cache.get_or_download(&fetch_url).await {
-                            if let Ok(texture) =
-                                gtk4::gdk::Texture::from_filename(&path)
-                            {
-                                let _ = sender
-                                    .send(LibraryViewCmd::ArtworkReady(fetch_url, texture));
-                            }
+                        if let Ok(path) = cache.get_or_download(&fetch_url).await
+                            && let Ok(texture) = gtk4::gdk::Texture::from_filename(&path)
+                        {
+                            let _ = sender.send(LibraryViewCmd::ArtworkReady(fetch_url, texture));
                         }
                     });
                 }
@@ -944,7 +940,7 @@ impl LibraryView {
 
 /// Find which grid item is at the given (x, y) coordinates.
 /// Returns the position index if found.
-fn pick_grid_position(grid_view: &gtk4::GridView, x: f64, y: f64) -> Option<u32> {
+fn pick_grid_position(grid_view: &gtk4::GridView, _x: f64, _y: f64) -> Option<u32> {
     // Use the selection model to get the item at the click position
     // GTK GridView doesn't have a direct pick method, so we iterate
     // and check which child contains the point
@@ -954,25 +950,7 @@ fn pick_grid_position(grid_view: &gtk4::GridView, x: f64, y: f64) -> Option<u32>
         return None;
     }
 
-    // For simplicity, find the child widget at the position using pick()
-    if let Some(widget) = grid_view.pick(x, y, gtk4::PickFlags::DEFAULT) {
-        // Walk up to find the ListItem's child
-        let mut w = Some(widget);
-        while let Some(ref current) = w {
-            // Check if this widget's parent is a ListItem (GridView row)
-            if let Some(parent) = current.parent() {
-                if parent.type_().name() == "GtkGridViewCell" || parent.type_().name() == "GtkListItemWidget" {
-                    // Use the scroll position and item height to estimate the index
-                    // Alternatively, get position from the selection model
-                    // For now, use selected item approach
-                    break;
-                }
-            }
-            w = current.parent();
-        }
-    }
-
-    // Fallback: use the selected item
+    // Use the selected item from the selection model
     let selection = model.downcast_ref::<gtk4::SingleSelection>()?;
     let selected = selection.selected();
     if selected < n_items {
@@ -996,12 +974,7 @@ fn show_watch_context_menu(
 
     let popover = gtk4::PopoverMenu::from_model(Some(&menu));
     popover.set_parent(grid_view);
-    popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
-        x as i32,
-        y as i32,
-        1,
-        1,
-    )));
+    popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
     popover.set_has_arrow(true);
 
     // Action group for the popover
@@ -1024,4 +997,3 @@ fn show_watch_context_menu(
     grid_view.insert_action_group("watch", Some(&action_group));
     popover.popup();
 }
-

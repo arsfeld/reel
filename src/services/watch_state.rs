@@ -212,7 +212,9 @@ impl WatchStateTracker {
         });
 
         // Check scrobble one last time
-        if !self.scrobbled && self.duration > 0.0 && (position / self.duration) >= SCROBBLE_THRESHOLD
+        if !self.scrobbled
+            && self.duration > 0.0
+            && (position / self.duration) >= SCROBBLE_THRESHOLD
         {
             self.scrobbled = true;
             events.push(WatchStateEvent::Scrobble {
@@ -311,14 +313,22 @@ mod tests {
     fn no_timeline_for_local_file() {
         let (mut t, now) = tracker_local_file();
         let events = t.process_position(300.0, now + TIMELINE_INTERVAL);
-        assert!(!events.iter().any(|e| matches!(e, WatchStateEvent::ReportTimeline { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::ReportTimeline { .. }))
+        );
     }
 
     #[test]
     fn persist_still_fires_for_local_file() {
         let (mut t, now) = tracker_local_file();
         let events = t.process_position(300.0, now + PERSIST_INTERVAL);
-        assert!(events.iter().any(|e| matches!(e, WatchStateEvent::PersistProgress { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::PersistProgress { .. }))
+        );
     }
 
     #[test]
@@ -337,10 +347,18 @@ mod tests {
     fn scrobble_fires_once_per_session() {
         let (mut t, now) = tracker_with_plex();
         let events1 = t.process_position(DURATION * 0.91, now + PERSIST_INTERVAL);
-        assert!(events1.iter().any(|e| matches!(e, WatchStateEvent::Scrobble { .. })));
+        assert!(
+            events1
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::Scrobble { .. }))
+        );
 
         let events2 = t.process_position(DURATION * 0.95, now + PERSIST_INTERVAL * 2);
-        assert!(!events2.iter().any(|e| matches!(e, WatchStateEvent::Scrobble { .. })));
+        assert!(
+            !events2
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::Scrobble { .. }))
+        );
     }
 
     #[test]
@@ -348,7 +366,11 @@ mod tests {
         let (mut t, now) = tracker_with_plex();
         let position = DURATION * 0.89;
         let events = t.process_position(position, now + PERSIST_INTERVAL);
-        assert!(!events.iter().any(|e| matches!(e, WatchStateEvent::Scrobble { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::Scrobble { .. }))
+        );
     }
 
     #[test]
@@ -356,13 +378,18 @@ mod tests {
         let (mut t, now) = tracker_with_plex();
         let position = DURATION * SCROBBLE_THRESHOLD;
         let events = t.process_position(position, now + PERSIST_INTERVAL);
-        assert!(events.iter().any(|e| matches!(e, WatchStateEvent::Scrobble { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::Scrobble { .. }))
+        );
     }
 
     #[test]
     fn pause_persists_immediately() {
         let (mut t, now) = tracker_with_plex();
-        let events = t.process_state_change(PlaybackState::Paused, 500.0, now + Duration::from_secs(1));
+        let events =
+            t.process_state_change(PlaybackState::Paused, 500.0, now + Duration::from_secs(1));
         assert!(events.iter().any(|e| matches!(
             e,
             WatchStateEvent::PersistProgress { position, .. } if (*position - 500.0).abs() < f64::EPSILON
@@ -372,7 +399,8 @@ mod tests {
     #[test]
     fn pause_reports_timeline() {
         let (mut t, now) = tracker_with_plex();
-        let events = t.process_state_change(PlaybackState::Paused, 500.0, now + Duration::from_secs(1));
+        let events =
+            t.process_state_change(PlaybackState::Paused, 500.0, now + Duration::from_secs(1));
         assert!(events.iter().any(|e| matches!(
             e,
             WatchStateEvent::ReportTimeline { state, .. } if state == "paused"
@@ -383,7 +411,8 @@ mod tests {
     fn resume_reports_timeline_playing() {
         let (mut t, now) = tracker_with_plex();
         t.process_state_change(PlaybackState::Paused, 500.0, now + Duration::from_secs(1));
-        let events = t.process_state_change(PlaybackState::Playing, 500.0, now + Duration::from_secs(5));
+        let events =
+            t.process_state_change(PlaybackState::Playing, 500.0, now + Duration::from_secs(5));
         assert!(events.iter().any(|e| matches!(
             e,
             WatchStateEvent::ReportTimeline { state, .. } if state == "playing"
@@ -394,8 +423,13 @@ mod tests {
     fn resume_does_not_persist() {
         let (mut t, now) = tracker_with_plex();
         t.process_state_change(PlaybackState::Paused, 500.0, now + Duration::from_secs(1));
-        let events = t.process_state_change(PlaybackState::Playing, 500.0, now + Duration::from_secs(5));
-        assert!(!events.iter().any(|e| matches!(e, WatchStateEvent::PersistProgress { .. })));
+        let events =
+            t.process_state_change(PlaybackState::Playing, 500.0, now + Duration::from_secs(5));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::PersistProgress { .. }))
+        );
     }
 
     #[test]
@@ -422,21 +456,33 @@ mod tests {
     fn stop_no_timeline_for_local() {
         let (mut t, _now) = tracker_local_file();
         let events = t.stop(1000.0);
-        assert!(!events.iter().any(|e| matches!(e, WatchStateEvent::ReportTimeline { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::ReportTimeline { .. }))
+        );
     }
 
     #[test]
     fn stop_triggers_scrobble_if_past_threshold() {
         let (mut t, _now) = tracker_with_plex();
         let events = t.stop(DURATION * 0.95);
-        assert!(events.iter().any(|e| matches!(e, WatchStateEvent::Scrobble { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::Scrobble { .. }))
+        );
     }
 
     #[test]
     fn stop_no_scrobble_below_threshold() {
         let (mut t, _now) = tracker_with_plex();
         let events = t.stop(DURATION * 0.5);
-        assert!(!events.iter().any(|e| matches!(e, WatchStateEvent::Scrobble { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::Scrobble { .. }))
+        );
     }
 
     #[test]
@@ -446,7 +492,11 @@ mod tests {
         t.process_position(DURATION * 0.91, now + PERSIST_INTERVAL);
         // Stop should NOT scrobble again
         let events = t.stop(DURATION * 0.95);
-        assert!(!events.iter().any(|e| matches!(e, WatchStateEvent::Scrobble { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::Scrobble { .. }))
+        );
     }
 
     #[test]
@@ -483,8 +533,15 @@ mod tests {
     fn timeline_time_ms_conversion() {
         let (mut t, now) = tracker_with_plex();
         let events = t.process_position(100.5, now + TIMELINE_INTERVAL);
-        let timeline = events.iter().find(|e| matches!(e, WatchStateEvent::ReportTimeline { .. }));
-        if let Some(WatchStateEvent::ReportTimeline { time_ms, duration_ms, .. }) = timeline {
+        let timeline = events
+            .iter()
+            .find(|e| matches!(e, WatchStateEvent::ReportTimeline { .. }));
+        if let Some(WatchStateEvent::ReportTimeline {
+            time_ms,
+            duration_ms,
+            ..
+        }) = timeline
+        {
             assert_eq!(*time_ms, 100500);
             assert_eq!(*duration_ms, 7200000);
         } else {
@@ -497,15 +554,27 @@ mod tests {
         let (mut t, now) = tracker_with_plex();
         // First persist at 15s
         let events1 = t.process_position(100.0, now + PERSIST_INTERVAL);
-        assert!(events1.iter().any(|e| matches!(e, WatchStateEvent::PersistProgress { .. })));
+        assert!(
+            events1
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::PersistProgress { .. }))
+        );
 
         // No persist at 20s (only 5s since last persist)
         let events2 = t.process_position(200.0, now + PERSIST_INTERVAL + Duration::from_secs(5));
-        assert!(!events2.iter().any(|e| matches!(e, WatchStateEvent::PersistProgress { .. })));
+        assert!(
+            !events2
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::PersistProgress { .. }))
+        );
 
         // Persist again at 30s
         let events3 = t.process_position(300.0, now + PERSIST_INTERVAL * 2);
-        assert!(events3.iter().any(|e| matches!(e, WatchStateEvent::PersistProgress { .. })));
+        assert!(
+            events3
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::PersistProgress { .. }))
+        );
     }
 
     #[test]
@@ -517,11 +586,19 @@ mod tests {
 
         // At 15s from start (10s since pause-persist), should NOT persist yet
         let events = t.process_position(600.0, now + Duration::from_secs(15));
-        assert!(!events.iter().any(|e| matches!(e, WatchStateEvent::PersistProgress { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::PersistProgress { .. }))
+        );
 
         // At 20s from start (15s since pause-persist), SHOULD persist
         let events = t.process_position(700.0, now + Duration::from_secs(20));
-        assert!(events.iter().any(|e| matches!(e, WatchStateEvent::PersistProgress { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::PersistProgress { .. }))
+        );
     }
 
     #[test]
@@ -530,7 +607,11 @@ mod tests {
         let now = Instant::now();
         t.start("media:1", Some("123"), 0.0, now);
         let events = t.process_position(100.0, now + PERSIST_INTERVAL);
-        assert!(!events.iter().any(|e| matches!(e, WatchStateEvent::Scrobble { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, WatchStateEvent::Scrobble { .. }))
+        );
     }
 
     #[test]

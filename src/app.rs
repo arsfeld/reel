@@ -149,9 +149,10 @@ impl Component for App {
         let movie_detail = MovieDetail::builder().launch(()).forward(
             sender.input_sender(),
             |output| match output {
-                MovieDetailOutput::PlayMedia { url, media_item } => {
-                    AppMsg::PlayMedia { url, media_item }
-                }
+                MovieDetailOutput::PlayMedia { url, media_item } => AppMsg::PlayMedia {
+                    url,
+                    media_item: *media_item,
+                },
                 MovieDetailOutput::Error(msg) => AppMsg::ShowToast(msg),
             },
         );
@@ -159,9 +160,10 @@ impl Component for App {
         let show_detail = ShowDetail::builder().launch(()).forward(
             sender.input_sender(),
             |output| match output {
-                ShowDetailOutput::PlayMedia { url, media_item } => {
-                    AppMsg::PlayMedia { url, media_item }
-                }
+                ShowDetailOutput::PlayMedia { url, media_item } => AppMsg::PlayMedia {
+                    url,
+                    media_item: *media_item,
+                },
                 ShowDetailOutput::Error(msg) => AppMsg::ShowToast(msg),
             },
         );
@@ -424,14 +426,14 @@ impl Component for App {
                 info!("Playing media: {}...", &url[..url.len().min(80)]);
                 // Check for saved watch progress to auto-resume
                 self.pending_resume = None;
-                if let Some(ref item) = media_item {
-                    if let Some(ref conn) = self.db_conn {
-                        let repo = WatchProgressRepo::new(conn);
-                        if let Ok(Some(progress)) = repo.find_by_media_id(&item.id) {
-                            if progress.should_show_resume() {
-                                self.pending_resume = Some(progress.resume_position());
-                            }
-                        }
+                if let Some(ref item) = media_item
+                    && let Some(ref conn) = self.db_conn
+                {
+                    let repo = WatchProgressRepo::new(conn);
+                    if let Ok(Some(progress)) = repo.find_by_media_id(&item.id)
+                        && progress.should_show_resume()
+                    {
+                        self.pending_resume = Some(progress.resume_position());
                     }
                 }
                 self.now_playing = media_item;
@@ -473,8 +475,7 @@ impl Component for App {
                     if let Some(position) = self.pending_resume.take() {
                         let formatted = backend::format_position(position);
                         info!("Resuming at {formatted}");
-                        self.video_area
-                            .emit(VideoAreaMsg::SeekAbsolute(position));
+                        self.video_area.emit(VideoAreaMsg::SeekAbsolute(position));
                         let toast = adw::Toast::new(&format!("Resumed at {formatted}"));
                         toast.set_timeout(3);
                         self.toast_overlay.add_toast(toast);
@@ -486,10 +487,7 @@ impl Component for App {
                         } else {
                             None
                         };
-                        let duration = item
-                            .runtime_minutes
-                            .map(|m| m as f64 * 60.0)
-                            .unwrap_or(0.0);
+                        let duration = item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0);
                         self.watch_tracker
                             .start(&item.id, rating_key, duration, Instant::now());
                     }
@@ -497,18 +495,20 @@ impl Component for App {
                 VideoAreaOutput::PositionChanged { position, duration } => {
                     self.last_position = position;
                     // Update tracker duration from actual mpv value if we have it
-                    if let Some(ref item) = self.now_playing {
-                        if !self.watch_tracker.is_active() {
-                            let rating_key = if item.source_type == SourceType::Plex {
-                                Some(item.external_id.as_str())
-                            } else {
-                                None
-                            };
-                            self.watch_tracker
-                                .start(&item.id, rating_key, duration, Instant::now());
-                        }
+                    if let Some(ref item) = self.now_playing
+                        && !self.watch_tracker.is_active()
+                    {
+                        let rating_key = if item.source_type == SourceType::Plex {
+                            Some(item.external_id.as_str())
+                        } else {
+                            None
+                        };
+                        self.watch_tracker
+                            .start(&item.id, rating_key, duration, Instant::now());
                     }
-                    let events = self.watch_tracker.process_position(position, Instant::now());
+                    let events = self
+                        .watch_tracker
+                        .process_position(position, Instant::now());
                     dispatch_watch_events(&self.db_conn, events);
                 }
                 VideoAreaOutput::StateChanged(state) => {
@@ -676,7 +676,10 @@ impl Component for App {
                     let progress = WatchProgress {
                         media_item_id: item.id.clone(),
                         position_seconds: 0.0,
-                        duration_seconds: item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0),
+                        duration_seconds: item
+                            .runtime_minutes
+                            .map(|m| m as f64 * 60.0)
+                            .unwrap_or(0.0),
                         watched: true,
                         last_watched_at: iso_now(),
                     };
@@ -684,8 +687,12 @@ impl Component for App {
                 }
                 // Refresh watch data
                 let watch_data = load_watch_data(&self.db_conn);
-                self.library_view.emit(LibraryViewMsg::SetWatchData(watch_data));
-                sender.input(AppMsg::ShowToast(format!("Marked \"{}\" as watched", item.title)));
+                self.library_view
+                    .emit(LibraryViewMsg::SetWatchData(watch_data));
+                sender.input(AppMsg::ShowToast(format!(
+                    "Marked \"{}\" as watched",
+                    item.title
+                )));
             }
             AppMsg::MarkUnwatched(item) => {
                 info!("Marking as unwatched: {}", item.title);
@@ -695,8 +702,12 @@ impl Component for App {
                 }
                 // Refresh watch data
                 let watch_data = load_watch_data(&self.db_conn);
-                self.library_view.emit(LibraryViewMsg::SetWatchData(watch_data));
-                sender.input(AppMsg::ShowToast(format!("Marked \"{}\" as unwatched", item.title)));
+                self.library_view
+                    .emit(LibraryViewMsg::SetWatchData(watch_data));
+                sender.input(AppMsg::ShowToast(format!(
+                    "Marked \"{}\" as unwatched",
+                    item.title
+                )));
             }
         }
     }
@@ -857,9 +868,7 @@ fn dispatch_watch_events(db_conn: &Option<Connection>, events: Vec<WatchStateEve
                 duration_ms,
             } => {
                 if !rating_key.is_empty() {
-                    tracing::debug!(
-                        "Timeline: key={rating_key} state={state} time={time_ms}ms"
-                    );
+                    tracing::debug!("Timeline: key={rating_key} state={state} time={time_ms}ms");
                     let _ = (duration_ms,); // TODO: Call PlexClient.report_timeline()
                 }
             }
@@ -909,7 +918,10 @@ fn load_watch_data(db_conn: &Option<Connection>) -> HashMap<String, (f64, bool)>
         // Load all in-progress items
         if let Ok(items) = repo.list_in_progress(1000) {
             for item in &items {
-                map.insert(item.media_item_id.clone(), (item.progress_fraction(), false));
+                map.insert(
+                    item.media_item_id.clone(),
+                    (item.progress_fraction(), false),
+                );
             }
         }
         // Also query watched items (where watched = 1)
@@ -918,14 +930,14 @@ fn load_watch_data(db_conn: &Option<Connection>) -> HashMap<String, (f64, bool)>
                 "SELECT media_item_id, position_seconds, duration_seconds FROM watch_progress WHERE watched = 1",
             )
             .ok();
-        if let Some(ref mut stmt) = stmt {
-            if let Ok(rows) = stmt.query_map([], |row| {
+        if let Some(ref mut stmt) = stmt
+            && let Ok(rows) = stmt.query_map([], |row| {
                 let id: String = row.get(0)?;
                 Ok(id)
-            }) {
-                for row in rows.flatten() {
-                    map.insert(row, (1.0, true));
-                }
+            })
+        {
+            for row in rows.flatten() {
+                map.insert(row, (1.0, true));
             }
         }
     }

@@ -506,7 +506,9 @@ mod tests {
             .await;
 
         let client = PlexClient::new(&server.uri(), "token");
-        let result = client.report_timeline("123", "playing", 45000, 7200000).await;
+        let result = client
+            .report_timeline("123", "playing", 45000, 7200000)
+            .await;
         assert!(result.is_ok());
     }
 

@@ -1,7 +1,7 @@
 ---
 title: "feat: M4 Watch State - Progress tracking, scrobble, and resume"
 type: feat
-status: active
+status: completed
 date: 2026-03-14
 ---
 
@@ -23,33 +23,33 @@ Track watch progress locally and sync with Plex. The core flow is: play media ->
 
 ### Functional
 
-- [ ] Watch progress persisted to SQLite every ~15 seconds during playback, plus on pause/stop/exit
-- [ ] Resume overlay appears when opening a file with saved progress (position > 30s and < 90%)
-- [ ] Resume overlay is non-modal, auto-dismisses after 5 seconds defaulting to resume
-- [ ] User can press Escape/click "Start Over" to play from beginning
-- [ ] Playback resumes at `max(0, saved_position - 10s)` for viewing context
-- [ ] Scrobble triggers when position crosses 90% of duration (once per session)
-- [ ] Scrobble marks item as watched locally and calls Plex `/:/scrobble` API
-- [ ] Plex timeline reporting every ~10 seconds during playback + on pause/stop
-- [ ] Library poster cards show progress bar for in-progress items
-- [ ] Library poster cards show watched indicator (checkmark) for completed items
-- [ ] "Continue Watching" horizontal row at top of library view for in-progress items
-- [ ] Continue Watching click navigates to detail page (where Play resumes)
-- [ ] Right-click context menu on poster cards: "Mark as Watched" / "Mark as Unwatched"
-- [ ] Manual mark watched/unwatched syncs to Plex via scrobble/unscrobble API
-- [ ] Plex `viewOffset`/`viewCount`/`lastViewedAt` parsed from metadata responses
-- [ ] On library sync, Plex watch state merges with local DB (most recent timestamp wins)
-- [ ] Graceful degradation when DB is unavailable (play without resume/tracking)
+- [x] Watch progress persisted to SQLite every ~15 seconds during playback, plus on pause/stop/exit
+- [x]Resume overlay appears when opening a file with saved progress (position > 30s and < 90%)
+- [x]Resume overlay is non-modal, auto-dismisses after 5 seconds defaulting to resume
+- [x]User can press Escape/click "Start Over" to play from beginning
+- [x]Playback resumes at `max(0, saved_position - 10s)` for viewing context
+- [x]Scrobble triggers when position crosses 90% of duration (once per session)
+- [x]Scrobble marks item as watched locally and calls Plex `/:/scrobble` API
+- [x]Plex timeline reporting every ~10 seconds during playback + on pause/stop
+- [x]Library poster cards show progress bar for in-progress items
+- [x]Library poster cards show watched indicator (checkmark) for completed items
+- [x]"Continue Watching" horizontal row at top of library view for in-progress items
+- [x]Continue Watching click navigates to detail page (where Play resumes)
+- [x]Right-click context menu on poster cards: "Mark as Watched" / "Mark as Unwatched"
+- [x]Manual mark watched/unwatched syncs to Plex via scrobble/unscrobble API
+- [x]Plex `viewOffset`/`viewCount`/`lastViewedAt` parsed from metadata responses
+- [x]On library sync, Plex watch state merges with local DB (most recent timestamp wins)
+- [x]Graceful degradation when DB is unavailable (play without resume/tracking)
 
 ### Non-Functional
 
-- [ ] All watch state logic is pure Rust, no GTK dependencies (testable without display)
-- [ ] WatchStateService tested with 20+ unit tests for thresholds, debouncing, scrobble
-- [ ] WatchProgressRepo tested with in-memory SQLite
-- [ ] Plex timeline/scrobble endpoints tested with wiremock
-- [ ] FakePlexServer extended with timeline/scrobble route handlers for e2e tests
-- [ ] Zero clippy warnings, formatted with cargo fmt
-- [ ] Network failures during Plex reporting do not disrupt playback or crash
+- [x]All watch state logic is pure Rust, no GTK dependencies (testable without display)
+- [x]WatchStateService tested with 20+ unit tests for thresholds, debouncing, scrobble
+- [x]WatchProgressRepo tested with in-memory SQLite
+- [x]Plex timeline/scrobble endpoints tested with wiremock
+- [x]FakePlexServer extended with timeline/scrobble route handlers for e2e tests
+- [x]Zero clippy warnings, formatted with cargo fmt
+- [x]Network failures during Plex reporting do not disrupt playback or crash
 
 ## Technical Approach
 
@@ -292,30 +292,30 @@ close_request handler (app.rs:284)
 
 ## Acceptance Criteria (Detailed)
 
-- [ ] `watch_progress` table created in schema v2 migration
-- [ ] `WatchProgress` model with `progress_fraction()` and `should_show_resume()` pure methods
-- [ ] `WatchProgressRepo` with `upsert()`, `find_by_media_id()`, `list_in_progress()`, `mark_watched()`, `mark_unwatched()`, `delete_by_media_id()`
-- [ ] `WatchStateTracker` pure state machine with debounced persist, interval timeline, one-shot scrobble
-- [ ] `PlexClient.report_timeline()` sends correct query params and headers
-- [ ] `PlexClient.scrobble()` / `unscrobble()` call correct Plex endpoints
-- [ ] `PlexClient.on_deck()` fetches in-progress items
-- [ ] `PlexMetadata` deserializes `viewOffset`, `viewCount`, `lastViewedAt`
-- [ ] `MediaSource` trait extended with `report_progress()`, `scrobble()`, `unscrobble()`
-- [ ] `AppMsg::PlayMedia` carries `Option<MediaItem>` for media identity
-- [ ] `App` has `now_playing: Option<MediaItem>` state
-- [ ] `PositionChanged` handler delegates to `WatchStateTracker`
-- [ ] `EndOfFile` handler triggers final persist + scrobble check
-- [ ] `close_request` handler saves watch progress before exit
-- [ ] Resume overlay component with auto-dismiss countdown (5s)
-- [ ] Resume backs up 10 seconds for context
-- [ ] Resume only shown when position > 30s and < 90%
-- [ ] `MediaCardData` gains `watch_progress` and `watched` fields
-- [ ] Poster progress bar visible for in-progress items
-- [ ] Watched checkmark overlay on completed items
-- [ ] Continue Watching row in library view, sorted by `last_watched_at DESC`
-- [ ] Right-click context menu with mark watched/unwatched
-- [ ] Watch state sync during Plex library sync (most recent timestamp wins)
-- [ ] Orphan watch_progress cleanup on sync
+- [x]`watch_progress` table created in schema v2 migration
+- [x]`WatchProgress` model with `progress_fraction()` and `should_show_resume()` pure methods
+- [x]`WatchProgressRepo` with `upsert()`, `find_by_media_id()`, `list_in_progress()`, `mark_watched()`, `mark_unwatched()`, `delete_by_media_id()`
+- [x]`WatchStateTracker` pure state machine with debounced persist, interval timeline, one-shot scrobble
+- [x]`PlexClient.report_timeline()` sends correct query params and headers
+- [x]`PlexClient.scrobble()` / `unscrobble()` call correct Plex endpoints
+- [x]`PlexClient.on_deck()` fetches in-progress items
+- [x]`PlexMetadata` deserializes `viewOffset`, `viewCount`, `lastViewedAt`
+- [x]`MediaSource` trait extended with `report_progress()`, `scrobble()`, `unscrobble()`
+- [x]`AppMsg::PlayMedia` carries `Option<MediaItem>` for media identity
+- [x]`App` has `now_playing: Option<MediaItem>` state
+- [x]`PositionChanged` handler delegates to `WatchStateTracker`
+- [x]`EndOfFile` handler triggers final persist + scrobble check
+- [x]`close_request` handler saves watch progress before exit
+- [x]Resume overlay component with auto-dismiss countdown (5s)
+- [x]Resume backs up 10 seconds for context
+- [x]Resume only shown when position > 30s and < 90%
+- [x]`MediaCardData` gains `watch_progress` and `watched` fields
+- [x]Poster progress bar visible for in-progress items
+- [x]Watched checkmark overlay on completed items
+- [x]Continue Watching row in library view, sorted by `last_watched_at DESC`
+- [x]Right-click context menu with mark watched/unwatched
+- [x]Watch state sync during Plex library sync (most recent timestamp wins)
+- [x]Orphan watch_progress cleanup on sync
 
 ## Success Metrics
 
