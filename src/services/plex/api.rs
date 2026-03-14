@@ -92,6 +92,36 @@ impl PlexClient {
         Ok(body.media_container.metadata)
     }
 
+    /// Get all collections in a library section.
+    pub async fn collections(
+        &self,
+        library_key: &str,
+    ) -> Result<Vec<PlexMetadata>, PlexError> {
+        let url = format!(
+            "{}/library/sections/{}/collections",
+            self.base_url, library_key
+        );
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        let body: PlexMetadataResponse = resp.json().await?;
+        Ok(body.media_container.metadata)
+    }
+
+    /// Get items in a collection.
+    pub async fn collection_items(
+        &self,
+        collection_key: &str,
+    ) -> Result<Vec<PlexMetadata>, PlexError> {
+        let url = format!(
+            "{}/library/collections/{}/children",
+            self.base_url, collection_key
+        );
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        let body: PlexMetadataResponse = resp.json().await?;
+        Ok(body.media_container.metadata)
+    }
+
     /// Build a direct play URL for a media part.
     pub fn playback_url(&self, part_key: &str) -> String {
         format!(
@@ -350,5 +380,68 @@ mod tests {
         let client = PlexClient::new(&server.uri(), "token");
         let result = client.libraries().await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn collections_returns_collection_metadata() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/library/sections/1/collections"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                r#"{"MediaContainer":{"size":2,"Metadata":[
+                    {"ratingKey":"50","title":"Dune Collection","type":"collection","thumb":"/thumb/50"},
+                    {"ratingKey":"51","title":"Marvel","type":"collection"}
+                ]}}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token");
+        let cols = client.collections("1").await.unwrap();
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0].title, "Dune Collection");
+        assert_eq!(cols[0].metadata_type, "collection");
+        assert_eq!(cols[1].title, "Marvel");
+    }
+
+    #[tokio::test]
+    async fn collection_items_returns_children() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/library/collections/50/children"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                r#"{"MediaContainer":{"size":2,"Metadata":[
+                    {"ratingKey":"123","title":"Dune","type":"movie","year":2021},
+                    {"ratingKey":"124","title":"Dune: Part Two","type":"movie","year":2024}
+                ]}}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token");
+        let items = client.collection_items("50").await.unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, "Dune");
+        assert_eq!(items[1].title, "Dune: Part Two");
+    }
+
+    #[tokio::test]
+    async fn collections_empty_returns_empty_vec() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/library/sections/1/collections"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_string(r#"{"MediaContainer":{"size":0}}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token");
+        let cols = client.collections("1").await.unwrap();
+        assert!(cols.is_empty());
     }
 }

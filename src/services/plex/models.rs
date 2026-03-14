@@ -72,9 +72,21 @@ pub struct PlexMetadata {
     #[serde(rename = "originallyAvailableAt")]
     pub originally_available_at: Option<String>,
 
+    // Parent artwork (season art on episodes, show art on seasons)
+    #[serde(rename = "parentThumb")]
+    pub parent_thumb: Option<String>,
+
     // Nested structures
     #[serde(default, rename = "Genre")]
     pub genres: Vec<PlexTag>,
+    #[serde(default, rename = "Role")]
+    pub roles: Vec<PlexRole>,
+    #[serde(default, rename = "Director")]
+    pub directors: Vec<PlexTag>,
+    #[serde(default, rename = "Writer")]
+    pub writers: Vec<PlexTag>,
+    #[serde(default, rename = "Collection")]
+    pub collections: Vec<PlexTag>,
     #[serde(default, rename = "Media")]
     pub media: Vec<PlexMedia>,
 }
@@ -84,8 +96,28 @@ pub struct PlexTag {
     pub tag: String,
 }
 
+/// Cast member with character name and photo.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlexRole {
+    pub tag: String,
+    pub role: Option<String>,
+    pub thumb: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlexMedia {
+    #[serde(rename = "videoResolution")]
+    pub video_resolution: Option<String>,
+    #[serde(rename = "videoCodec")]
+    pub video_codec: Option<String>,
+    #[serde(rename = "audioCodec")]
+    pub audio_codec: Option<String>,
+    #[serde(rename = "audioChannels")]
+    pub audio_channels: Option<i32>,
+    pub bitrate: Option<i64>,
+    pub container: Option<String>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
     #[serde(default, rename = "Part")]
     pub parts: Vec<PlexPart>,
 }
@@ -290,6 +322,127 @@ mod tests {
         assert_eq!(show.metadata_type, "show");
         assert_eq!(show.year, Some(2008));
         assert_eq!(show.genres.len(), 2);
+    }
+
+    #[test]
+    fn deserialize_metadata_with_roles_directors_writers_collections() {
+        let json = r#"{
+            "MediaContainer": {
+                "size": 1,
+                "Metadata": [{
+                    "ratingKey": "123",
+                    "title": "Dune",
+                    "type": "movie",
+                    "Role": [
+                        {"tag": "Timothée Chalamet", "role": "Paul Atreides", "thumb": "/photo/1"},
+                        {"tag": "Zendaya", "role": "Chani"}
+                    ],
+                    "Director": [{"tag": "Denis Villeneuve"}],
+                    "Writer": [{"tag": "Jon Spaihts"}, {"tag": "Denis Villeneuve"}],
+                    "Collection": [{"tag": "Dune Collection"}]
+                }]
+            }
+        }"#;
+
+        let resp: PlexMetadataResponse = serde_json::from_str(json).unwrap();
+        let m = &resp.media_container.metadata[0];
+        assert_eq!(m.roles.len(), 2);
+        assert_eq!(m.roles[0].tag, "Timothée Chalamet");
+        assert_eq!(m.roles[0].role, Some("Paul Atreides".to_string()));
+        assert_eq!(m.roles[0].thumb, Some("/photo/1".to_string()));
+        assert_eq!(m.roles[1].tag, "Zendaya");
+        assert_eq!(m.roles[1].thumb, None);
+        assert_eq!(m.directors.len(), 1);
+        assert_eq!(m.directors[0].tag, "Denis Villeneuve");
+        assert_eq!(m.writers.len(), 2);
+        assert_eq!(m.collections.len(), 1);
+        assert_eq!(m.collections[0].tag, "Dune Collection");
+    }
+
+    #[test]
+    fn deserialize_media_with_technical_fields() {
+        let json = r#"{
+            "MediaContainer": {
+                "size": 1,
+                "Metadata": [{
+                    "ratingKey": "123",
+                    "title": "Dune",
+                    "type": "movie",
+                    "Media": [{
+                        "videoResolution": "1080",
+                        "videoCodec": "h264",
+                        "audioCodec": "aac",
+                        "audioChannels": 6,
+                        "bitrate": 12000,
+                        "container": "mkv",
+                        "width": 1920,
+                        "height": 1080,
+                        "Part": [{
+                            "key": "/library/parts/456/file.mkv",
+                            "file": "/data/Dune.mkv",
+                            "size": 15000000000
+                        }]
+                    }]
+                }]
+            }
+        }"#;
+
+        let resp: PlexMetadataResponse = serde_json::from_str(json).unwrap();
+        let media = &resp.media_container.metadata[0].media[0];
+        assert_eq!(media.video_resolution, Some("1080".to_string()));
+        assert_eq!(media.video_codec, Some("h264".to_string()));
+        assert_eq!(media.audio_codec, Some("aac".to_string()));
+        assert_eq!(media.audio_channels, Some(6));
+        assert_eq!(media.bitrate, Some(12000));
+        assert_eq!(media.container, Some("mkv".to_string()));
+        assert_eq!(media.width, Some(1920));
+        assert_eq!(media.height, Some(1080));
+    }
+
+    #[test]
+    fn deserialize_metadata_with_parent_thumb() {
+        let json = r#"{
+            "MediaContainer": {
+                "size": 1,
+                "Metadata": [{
+                    "ratingKey": "500",
+                    "title": "Pilot",
+                    "type": "episode",
+                    "parentThumb": "/library/metadata/400/thumb/1"
+                }]
+            }
+        }"#;
+
+        let resp: PlexMetadataResponse = serde_json::from_str(json).unwrap();
+        let m = &resp.media_container.metadata[0];
+        assert_eq!(
+            m.parent_thumb,
+            Some("/library/metadata/400/thumb/1".to_string())
+        );
+    }
+
+    #[test]
+    fn deserialize_missing_new_fields_uses_defaults() {
+        // Existing JSON without Role, Director, Writer, Collection, parentThumb
+        // should still deserialize successfully with empty defaults
+        let json = r#"{
+            "MediaContainer": {
+                "size": 1,
+                "Metadata": [{
+                    "ratingKey": "1",
+                    "title": "Old Movie",
+                    "type": "movie"
+                }]
+            }
+        }"#;
+
+        let resp: PlexMetadataResponse = serde_json::from_str(json).unwrap();
+        let m = &resp.media_container.metadata[0];
+        assert!(m.roles.is_empty());
+        assert!(m.directors.is_empty());
+        assert!(m.writers.is_empty());
+        assert!(m.collections.is_empty());
+        assert_eq!(m.parent_thumb, None);
     }
 
     #[test]
