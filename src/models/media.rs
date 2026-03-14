@@ -85,6 +85,8 @@ pub struct MediaItem {
     pub air_date: Option<String>,
     /// File path or Plex part key for playback
     pub file_path: Option<String>,
+    /// Video resolution from the primary media version (e.g., "1080", "4k").
+    pub video_resolution: Option<String>,
     pub added_at: String,
     pub updated_at: String,
 }
@@ -101,6 +103,18 @@ impl MediaItem {
     /// Build a composite ID from source info.
     pub fn make_id(source_type: SourceType, source_id: &str, external_id: &str) -> String {
         format!("{}:{}:{}", source_type.as_str(), source_id, external_id)
+    }
+
+    /// Format video resolution for display on badges.
+    /// "4k" → "4K", "1080" → "1080p", "720" → "720p", "480" → "SD", etc.
+    pub fn format_resolution(raw: &str) -> &'static str {
+        match raw.to_lowercase().as_str() {
+            "4k" => "4K",
+            "1080" => "1080p",
+            "720" => "720p",
+            "480" | "576" | "sd" => "SD",
+            _ => "HD",
+        }
     }
 
     /// Format runtime as "Xh Ym" or "Xm".
@@ -140,6 +154,7 @@ mod tests {
             episode_number: None,
             air_date: None,
             file_path: Some("/library/parts/456/file.mkv".to_string()),
+            video_resolution: Some("1080".to_string()),
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
         }
@@ -231,5 +246,33 @@ mod tests {
         let a = test_movie();
         let b = test_movie();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn format_resolution_4k() {
+        assert_eq!(MediaItem::format_resolution("4k"), "4K");
+        assert_eq!(MediaItem::format_resolution("4K"), "4K");
+    }
+
+    #[test]
+    fn format_resolution_1080p() {
+        assert_eq!(MediaItem::format_resolution("1080"), "1080p");
+    }
+
+    #[test]
+    fn format_resolution_720p() {
+        assert_eq!(MediaItem::format_resolution("720"), "720p");
+    }
+
+    #[test]
+    fn format_resolution_sd() {
+        assert_eq!(MediaItem::format_resolution("480"), "SD");
+        assert_eq!(MediaItem::format_resolution("576"), "SD");
+        assert_eq!(MediaItem::format_resolution("sd"), "SD");
+    }
+
+    #[test]
+    fn format_resolution_unknown_defaults_to_hd() {
+        assert_eq!(MediaItem::format_resolution("unknown"), "HD");
     }
 }

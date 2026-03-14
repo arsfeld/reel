@@ -37,6 +37,12 @@ pub fn plex_metadata_to_media_item(metadata: &PlexMetadata, source_id: &str) -> 
         .and_then(|m| m.parts.first())
         .map(|p| p.key.clone());
 
+    // Extract video resolution from first Media
+    let video_resolution = metadata
+        .media
+        .first()
+        .and_then(|m| m.video_resolution.clone());
+
     // Convert duration from milliseconds to minutes
     let runtime_minutes = metadata.duration.map(|ms| (ms / 60_000) as i32);
 
@@ -90,6 +96,7 @@ pub fn plex_metadata_to_media_item(metadata: &PlexMetadata, source_id: &str) -> 
         },
         air_date: metadata.originally_available_at.clone(),
         file_path,
+        video_resolution,
         added_at,
         updated_at,
     })
@@ -334,6 +341,36 @@ mod tests {
         let plex = test_plex_movie();
         let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
         assert_eq!(item.parent_id, None);
+    }
+
+    #[test]
+    fn convert_movie_extracts_video_resolution() {
+        let mut plex = test_plex_movie();
+        plex.media = vec![PlexMedia {
+            video_resolution: Some("1080".to_string()),
+            video_codec: None,
+            audio_codec: None,
+            audio_channels: None,
+            bitrate: None,
+            container: None,
+            width: None,
+            height: None,
+            parts: vec![PlexPart {
+                key: "/library/parts/456/file.mkv".to_string(),
+                file: None,
+                size: None,
+            }],
+        }];
+        let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(item.video_resolution, Some("1080".to_string()));
+    }
+
+    #[test]
+    fn convert_no_media_gives_none_video_resolution() {
+        let mut plex = test_plex_movie();
+        plex.media.clear();
+        let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(item.video_resolution, None);
     }
 
     #[test]

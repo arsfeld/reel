@@ -196,6 +196,7 @@ fn row_to_media_item(row: &rusqlite::Row) -> Result<MediaItem, DbError> {
         episode_number: row.get("episode_number")?,
         air_date: row.get("air_date")?,
         file_path: row.get("file_path")?,
+        video_resolution: row.get("video_resolution").ok().flatten(),
         added_at: row.get("added_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -233,6 +234,7 @@ mod tests {
             episode_number: None,
             air_date: None,
             file_path: Some("/library/parts/456/file.mkv".to_string()),
+            video_resolution: None,
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
         }
@@ -259,6 +261,7 @@ mod tests {
             episode_number: Some(episode),
             air_date: Some("2024-03-01".to_string()),
             file_path: Some(format!("/library/parts/{id}/file.mkv")),
+            video_resolution: None,
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
         }

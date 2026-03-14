@@ -324,6 +324,7 @@ mod tests {
             episode_number: None,
             air_date: None,
             file_path: None,
+            video_resolution: None,
             added_at: "1700000000".to_string(),
             updated_at: "1700000000".to_string(),
         }
