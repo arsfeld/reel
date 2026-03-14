@@ -10,6 +10,7 @@ use crate::models::media::{MediaItem, MediaType};
 use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
 
+#[allow(dead_code)]
 pub struct ShowDetail {
     show: Option<MediaItem>,
     seasons: Vec<MediaItem>,
@@ -22,7 +23,9 @@ pub struct ShowDetail {
     rating_label: gtk4::Label,
     content_rating_label: gtk4::Label,
     overview_label: gtk4::Label,
+    backdrop: gtk4::Picture,
     season_dropdown: gtk4::DropDown,
+    season_artwork: gtk4::Picture,
     episodes_list: gtk4::ListBox,
 }
 
@@ -60,7 +63,11 @@ pub enum ShowDetailOutput {
 pub enum ShowDetailCmd {
     SeasonsReady(Vec<MediaItem>),
     EpisodesReady(Vec<MediaItem>),
+    BackdropReady(gtk4::gdk::Texture),
+    SeasonArtworkReady(gtk4::gdk::Texture),
+    EpisodeThumbReady(usize, gtk4::gdk::Texture),
     Error(String),
+    Noop,
 }
 
 impl std::fmt::Debug for ShowDetailCmd {
@@ -85,6 +92,7 @@ impl Component for ShowDetail {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn init(
         _init: Self::Init,
         root: Self::Root,
@@ -108,6 +116,13 @@ impl Component for ShowDetail {
             .margin_end(16)
             .margin_top(16)
             .margin_bottom(16)
+            .build();
+
+        // Backdrop image
+        let backdrop = gtk4::Picture::builder()
+            .content_fit(gtk4::ContentFit::Cover)
+            .height_request(280)
+            .css_classes(["media-backdrop"])
             .build();
 
         let title_label = gtk4::Label::builder()
@@ -145,25 +160,41 @@ impl Component for ShowDetail {
             .visible(false)
             .build();
 
-        let season_dropdown = gtk4::DropDown::builder()
-            .halign(gtk4::Align::Start)
+        // Season row: dropdown + artwork
+        let season_row = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(12)
             .margin_top(8)
             .build();
+
+        let season_dropdown = gtk4::DropDown::builder().halign(gtk4::Align::Start).build();
 
         let sender_season = sender.input_sender().clone();
         season_dropdown.connect_selected_notify(move |dd| {
             let _ = sender_season.send(ShowDetailMsg::SelectSeason(dd.selected()));
         });
 
+        let season_artwork = gtk4::Picture::builder()
+            .content_fit(gtk4::ContentFit::Cover)
+            .width_request(60)
+            .height_request(90)
+            .visible(false)
+            .css_classes(["media-card-frame"])
+            .build();
+
+        season_row.append(&season_dropdown);
+        season_row.append(&season_artwork);
+
         let episodes_list = gtk4::ListBox::builder()
             .css_classes(["boxed-list"])
             .selection_mode(gtk4::SelectionMode::None)
             .build();
 
+        content_box.append(&backdrop);
         content_box.append(&title_label);
         content_box.append(&meta_box);
         content_box.append(&overview_label);
-        content_box.append(&season_dropdown);
+        content_box.append(&season_row);
         content_box.append(&episodes_list);
 
         clamp.set_child(Some(&content_box));
@@ -182,7 +213,9 @@ impl Component for ShowDetail {
             rating_label,
             content_rating_label,
             overview_label,
+            backdrop,
             season_dropdown,
+            season_artwork,
             episodes_list,
         };
 
@@ -227,6 +260,23 @@ impl Component for ShowDetail {
                     self.overview_label.set_visible(true);
                 } else {
                     self.overview_label.set_visible(false);
+                }
+
+                // Load show backdrop
+                if let (Some(art_path), Some(source), Some(cache)) =
+                    (&show.backdrop_path, &self.source, &self.artwork_cache)
+                {
+                    let url = source.artwork_url(art_path, 900, 280);
+                    let cache = Arc::clone(cache);
+                    sender.oneshot_command(async move {
+                        match cache.get_or_download(&url).await {
+                            Ok(path) => match gtk4::gdk::Texture::from_filename(&path) {
+                                Ok(tex) => ShowDetailCmd::BackdropReady(tex),
+                                Err(_) => ShowDetailCmd::Noop,
+                            },
+                            Err(_) => ShowDetailCmd::Noop,
+                        }
+                    });
                 }
 
                 let external_id = show.external_id.clone();
@@ -275,6 +325,25 @@ impl Component for ShowDetail {
                 let season = &self.seasons[idx];
                 let external_id = season.external_id.clone();
 
+                // Load season artwork
+                if let (Some(poster_path), Some(source), Some(cache)) =
+                    (&season.poster_path, &self.source, &self.artwork_cache)
+                {
+                    let url = source.artwork_url(poster_path, 60, 90);
+                    let cache = Arc::clone(cache);
+                    sender.oneshot_command(async move {
+                        match cache.get_or_download(&url).await {
+                            Ok(path) => match gtk4::gdk::Texture::from_filename(&path) {
+                                Ok(tex) => ShowDetailCmd::SeasonArtworkReady(tex),
+                                Err(_) => ShowDetailCmd::Noop,
+                            },
+                            Err(_) => ShowDetailCmd::Noop,
+                        }
+                    });
+                } else {
+                    self.season_artwork.set_visible(false);
+                }
+
                 if let Some(source) = self.source.clone() {
                     sender.oneshot_command(async move {
                         match source.children(&external_id).await {
@@ -301,13 +370,50 @@ impl Component for ShowDetail {
                     let ep_num = ep.episode_number.unwrap_or(0);
                     let title = format!("{ep_num}. {}", ep.title);
 
+                    // Build subtitle: air_date + description
+                    let mut subtitle_parts = Vec::new();
+                    if let Some(ref air_date) = ep.air_date {
+                        subtitle_parts.push(air_date.clone());
+                    }
+                    if let Some(ref overview) = ep.overview {
+                        subtitle_parts.push(overview.clone());
+                    }
+
                     let row = adw::ActionRow::builder()
                         .title(&title)
                         .activatable(ep.file_path.is_some())
                         .build();
 
-                    if let Some(ref air_date) = ep.air_date {
-                        row.set_subtitle(air_date);
+                    if !subtitle_parts.is_empty() {
+                        row.set_subtitle(&subtitle_parts.join("\n"));
+                        row.set_subtitle_lines(3);
+                    }
+
+                    // Episode thumbnail as prefix
+                    let thumb_picture = gtk4::Picture::builder()
+                        .content_fit(gtk4::ContentFit::Cover)
+                        .width_request(120)
+                        .height_request(68)
+                        .css_classes(["media-card-frame"])
+                        .build();
+                    row.add_prefix(&thumb_picture);
+
+                    // Load episode thumbnail
+                    if let (Some(thumb_path), Some(source), Some(cache)) =
+                        (&ep.poster_path, &self.source, &self.artwork_cache)
+                    {
+                        let url = source.artwork_url(thumb_path, 160, 90);
+                        let cache = Arc::clone(cache);
+                        let idx = i;
+                        sender.oneshot_command(async move {
+                            match cache.get_or_download(&url).await {
+                                Ok(path) => match gtk4::gdk::Texture::from_filename(&path) {
+                                    Ok(tex) => ShowDetailCmd::EpisodeThumbReady(idx, tex),
+                                    Err(_) => ShowDetailCmd::Noop,
+                                },
+                                Err(_) => ShowDetailCmd::Noop,
+                            }
+                        });
                     }
 
                     if let Some(ref runtime) = ep.format_runtime() {
@@ -367,9 +473,39 @@ impl Component for ShowDetail {
             ShowDetailCmd::EpisodesReady(episodes) => {
                 sender.input(ShowDetailMsg::EpisodesLoaded(episodes));
             }
+            ShowDetailCmd::BackdropReady(texture) => {
+                self.backdrop.set_paintable(Some(&texture));
+            }
+            ShowDetailCmd::SeasonArtworkReady(texture) => {
+                self.season_artwork.set_paintable(Some(&texture));
+                self.season_artwork.set_visible(true);
+            }
+            ShowDetailCmd::EpisodeThumbReady(idx, texture) => {
+                // Find the episode row at this index and set its thumbnail
+                if let Some(row_widget) = self.episodes_list.row_at_index(idx as i32) {
+                    // AdwActionRow prefix is the first child's first child
+                    // Navigate: ListBoxRow → ActionRow → Box → prefix area
+                    let mut child = row_widget.first_child();
+                    while let Some(ref widget) = child {
+                        if let Ok(picture) = widget.clone().downcast::<gtk4::Picture>() {
+                            picture.set_paintable(Some(&texture));
+                            break;
+                        }
+                        // Check inside action row
+                        if let Some(inner) = widget.first_child()
+                            && let Ok(picture) = inner.downcast::<gtk4::Picture>()
+                        {
+                            picture.set_paintable(Some(&texture));
+                            break;
+                        }
+                        child = widget.next_sibling();
+                    }
+                }
+            }
             ShowDetailCmd::Error(msg) => {
                 sender.input(ShowDetailMsg::LoadError(msg));
             }
+            ShowDetailCmd::Noop => {}
         }
     }
 }
