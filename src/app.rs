@@ -135,11 +135,15 @@ impl Component for App {
                 self.video_area.emit(VideoAreaMsg::SetSpeed(speed));
             }
             AppMsg::ToggleFullscreen => {
-                root.set_fullscreened(!root.is_fullscreen());
+                let new_fs = !root.is_fullscreen();
+                root.set_fullscreened(new_fs);
+                self.video_area
+                    .emit(VideoAreaMsg::FullscreenChanged(new_fs));
             }
             AppMsg::ExitFullscreen => {
                 if root.is_fullscreen() {
                     root.set_fullscreened(false);
+                    self.video_area.emit(VideoAreaMsg::FullscreenChanged(false));
                 }
             }
             AppMsg::VideoOutput(output) => match output {
@@ -155,7 +159,10 @@ impl Component for App {
                 }
                 VideoAreaOutput::VolumeChanged { .. } | VideoAreaOutput::SpeedChanged(_) => {}
                 VideoAreaOutput::ToggleFullscreen => {
-                    root.set_fullscreened(!root.is_fullscreen());
+                    let new_fs = !root.is_fullscreen();
+                    root.set_fullscreened(new_fs);
+                    self.video_area
+                        .emit(VideoAreaMsg::FullscreenChanged(new_fs));
                 }
             },
             AppMsg::ShowFileChooser => {

@@ -11,6 +11,7 @@ use relm4::prelude::*;
 use tracing::{debug, error, info, warn};
 
 use crate::components::player::controls::{ControlsInput, ControlsOutput, PlayerControls};
+use crate::components::player::overlay_controller::{self, OverlayAction, OverlayState};
 use crate::player::backend::{EndReason, PlayState};
 use crate::player::mpv::gl_render;
 use crate::player::playback_tracker::{PlaybackEvent, PlaybackTracker, PollData};
@@ -52,6 +53,10 @@ pub enum VideoAreaMsg {
     DisableSubtitles,
     SetChapter(i64),
     ToggleFullscreen,
+    MouseMoved,
+    HideTimeout,
+    FullscreenChanged(bool),
+    AddSubtitleFile(String),
 }
 
 #[derive(Debug)]
@@ -69,6 +74,8 @@ pub enum VideoAreaOutput {
 pub struct VideoArea {
     state: Rc<RefCell<MpvState>>,
     controls: Controller<PlayerControls>,
+    overlay_state: OverlayState,
+    hide_timer: Option<glib::SourceId>,
     #[allow(dead_code)]
     gl_area: gtk4::GLArea,
     #[allow(dead_code)]
@@ -244,9 +251,31 @@ impl Component for VideoArea {
         // Add controls widget as overlay
         widgets.overlay.add_overlay(controls.widget());
 
+        // Mouse motion controller for auto-hide
+        let motion_controller = gtk4::EventControllerMotion::new();
+        let sender_motion = sender.input_sender().clone();
+        motion_controller.connect_motion(move |_controller, _x, _y| {
+            let _ = sender_motion.send(VideoAreaMsg::MouseMoved);
+        });
+        widgets.overlay.add_controller(motion_controller);
+
+        // Double-click gesture for fullscreen toggle
+        let click_gesture = gtk4::GestureClick::new();
+        click_gesture.set_button(1); // Left button
+        let sender_click = sender.input_sender().clone();
+        click_gesture.connect_released(move |gesture, n_press, _x, _y| {
+            if n_press == 2 {
+                let _ = sender_click.send(VideoAreaMsg::ToggleFullscreen);
+                gesture.set_state(gtk4::EventSequenceState::Claimed);
+            }
+        });
+        gl_area.add_controller(click_gesture);
+
         let model = Self {
             state,
             controls,
+            overlay_state: OverlayState::default(),
+            hide_timer: None,
             gl_area,
             timer_handle: Some(timer_handle),
             poll_handle: Some(poll_handle),
@@ -366,6 +395,23 @@ impl Component for VideoArea {
             VideoAreaMsg::ToggleFullscreen => {
                 let _ = sender.output(VideoAreaOutput::ToggleFullscreen);
             }
+            VideoAreaMsg::MouseMoved => {
+                self.apply_overlay_action(&OverlayAction::MouseMoved, &sender);
+            }
+            VideoAreaMsg::HideTimeout => {
+                self.apply_overlay_action(&OverlayAction::TimeoutFired, &sender);
+            }
+            VideoAreaMsg::FullscreenChanged(fs) => {
+                self.apply_overlay_action(&OverlayAction::FullscreenChanged(fs), &sender);
+            }
+            VideoAreaMsg::AddSubtitleFile(path) => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv
+                    && let Err(e) = mpv.command("sub-add", &[&path, "select"])
+                {
+                    error!("Failed to add subtitle file: {:?}", e);
+                }
+            }
             VideoAreaMsg::PollState => {
                 // Collect all values from mpv with an immutable borrow first
                 let poll_data = {
@@ -411,6 +457,11 @@ impl Component for VideoArea {
                         PlaybackEvent::StateChanged(state) => {
                             info!("State changed: {:?}", state);
                             self.controls.emit(ControlsInput::PlayStateChanged(state));
+                            let is_paused = state == PlayState::Paused;
+                            self.apply_overlay_action(
+                                &OverlayAction::PauseChanged(is_paused),
+                                &sender,
+                            );
                             let _ = sender.output(VideoAreaOutput::StateChanged(state));
                         }
                         PlaybackEvent::EndOfFile(reason) => {
@@ -427,6 +478,52 @@ impl Component for VideoArea {
                     }
                 }
             }
+        }
+    }
+}
+
+impl VideoArea {
+    fn apply_overlay_action(&mut self, action: &OverlayAction, sender: &ComponentSender<Self>) {
+        let visible = overlay_controller::compute_overlay_visibility(&self.overlay_state, action);
+
+        // Update overlay state
+        match action {
+            OverlayAction::FullscreenChanged(fs) => self.overlay_state.is_fullscreen = *fs,
+            OverlayAction::PauseChanged(p) => self.overlay_state.is_paused = *p,
+            OverlayAction::PopoverOpened => self.overlay_state.popover_open = true,
+            OverlayAction::PopoverClosed => self.overlay_state.popover_open = false,
+            _ => {}
+        }
+        self.overlay_state.visible = visible;
+
+        // Show/hide controls
+        self.controls.widget().set_visible(visible);
+
+        // Cursor hiding in fullscreen
+        if overlay_controller::should_hide_cursor(self.overlay_state.is_fullscreen, visible) {
+            self.gl_area.set_cursor_from_name(Some("none"));
+        } else {
+            self.gl_area.set_cursor_from_name(Some("default"));
+        }
+
+        // Manage auto-hide timer
+        if let Some(handle) = self.hide_timer.take() {
+            handle.remove();
+        }
+
+        // Start new timer if visible and should auto-hide
+        if visible
+            && self.overlay_state.is_fullscreen
+            && !self.overlay_state.is_paused
+            && !self.overlay_state.popover_open
+        {
+            let sender_timeout = sender.input_sender().clone();
+            self.hide_timer = Some(glib::timeout_add_local_once(
+                Duration::from_secs(3),
+                move || {
+                    let _ = sender_timeout.send(VideoAreaMsg::HideTimeout);
+                },
+            ));
         }
     }
 }
