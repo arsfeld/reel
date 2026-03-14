@@ -1,3 +1,5 @@
+#![warn(clippy::too_many_lines)]
+
 mod app;
 mod components;
 mod player;
