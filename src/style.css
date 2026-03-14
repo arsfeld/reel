@@ -1,0 +1,36 @@
+.player-controls {
+    background: linear-gradient(to top, alpha(black, 0.7), alpha(black, 0.0));
+    padding-top: 24px;
+}
+
+.player-controls .progress-bar trough {
+    min-height: 4px;
+}
+
+.player-controls .progress-bar trough highlight {
+    background-color: @accent_color;
+}
+
+.player-controls .progress-bar:hover trough {
+    min-height: 8px;
+}
+
+.player-controls button {
+    color: white;
+    min-width: 36px;
+    min-height: 36px;
+}
+
+.player-controls label {
+    color: alpha(white, 0.9);
+    font-size: 12px;
+}
+
+.player-controls .volume-slider {
+    margin-left: 4px;
+    margin-right: 4px;
+}
+
+.player-controls .volume-slider trough {
+    min-height: 4px;
+}

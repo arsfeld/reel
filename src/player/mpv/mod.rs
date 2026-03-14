@@ -1,4 +1,5 @@
 pub mod gl_render;
+pub mod tracks;
 
 use libmpv2::Mpv;
 use tracing::{error, info};
