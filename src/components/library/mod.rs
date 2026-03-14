@@ -52,6 +52,10 @@ pub struct LibraryView {
     texture_cache: HashMap<String, gtk4::gdk::Texture>,
     /// Watch progress data keyed by media_item_id: (progress_fraction, watched).
     watch_data: HashMap<String, (f64, bool)>,
+    /// Continue Watching section container (label + horizontal scroll).
+    continue_watching_section: gtk4::Box,
+    /// Horizontal box inside the Continue Watching scrolled window.
+    continue_watching_box: gtk4::Box,
 }
 
 #[allow(dead_code)]
@@ -339,8 +343,41 @@ impl Component for LibraryView {
         stack.add_child(&grid_page);
         stack.set_visible_child(&empty_page);
 
+        // Continue Watching section (hidden initially)
+        let continue_watching_section = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(8)
+            .margin_start(16)
+            .margin_end(16)
+            .margin_top(8)
+            .margin_bottom(8)
+            .visible(false)
+            .build();
+
+        let cw_label = gtk4::Label::builder()
+            .label("Continue Watching")
+            .halign(gtk4::Align::Start)
+            .css_classes(["title-3"])
+            .build();
+
+        let continue_watching_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(12)
+            .build();
+
+        let cw_scroll = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Automatic)
+            .vscrollbar_policy(gtk4::PolicyType::Never)
+            .max_content_height(200)
+            .child(&continue_watching_box)
+            .build();
+
+        continue_watching_section.append(&cw_label);
+        continue_watching_section.append(&cw_scroll);
+
         root.append(&search_bar);
         root.append(&filter_bar);
+        root.append(&continue_watching_section);
         root.append(&stack);
 
         let model = Self {
@@ -370,6 +407,8 @@ impl Component for LibraryView {
             grid_density: GridDensity::default(),
             texture_cache: HashMap::new(),
             watch_data: HashMap::new(),
+            continue_watching_section,
+            continue_watching_box,
         };
 
         ComponentParts { model, widgets }
@@ -534,6 +573,8 @@ impl Component for LibraryView {
                 if !self.all_items.is_empty() {
                     self.rebuild_grid(&sender);
                 }
+                // Rebuild Continue Watching row
+                self.rebuild_continue_watching(&sender);
             }
             LibraryViewMsg::LoadCollectionItems(collection_key) => {
                 self.stack.set_visible_child(&self.loading_page);
@@ -739,5 +780,124 @@ impl LibraryView {
     fn update_clear_button_visibility(&self) {
         self.clear_filters_btn
             .set_visible(self.filter_state.is_active() || !self.search_query.is_empty());
+    }
+
+    /// Rebuild the Continue Watching horizontal row from watch_data + all_items.
+    fn rebuild_continue_watching(&mut self, sender: &ComponentSender<Self>) {
+        // Remove old children
+        while let Some(child) = self.continue_watching_box.first_child() {
+            self.continue_watching_box.remove(&child);
+        }
+
+        // Find in-progress items (not watched, has progress)
+        let mut in_progress: Vec<&MediaItem> = self
+            .all_items
+            .iter()
+            .filter(|item| {
+                if let Some(&(progress, watched)) = self.watch_data.get(&item.id) {
+                    !watched && progress > 0.0
+                } else {
+                    false
+                }
+            })
+            .take(20)
+            .collect();
+
+        // Sort by progress (most recently watched first — watch_data doesn't have timestamp,
+        // so just use insertion order which is last_watched_at DESC from the DB query)
+        let _ = &mut in_progress;
+
+        if in_progress.is_empty() {
+            self.continue_watching_section.set_visible(false);
+            return;
+        }
+
+        self.continue_watching_section.set_visible(true);
+
+        let source = self.source.clone();
+        let artwork_cache = self.artwork_cache.clone();
+
+        for item in &in_progress {
+            let progress = self
+                .watch_data
+                .get(&item.id)
+                .map(|&(p, _)| p)
+                .unwrap_or(0.0);
+
+            // Build a small poster card
+            let card = gtk4::Box::builder()
+                .orientation(gtk4::Orientation::Vertical)
+                .spacing(4)
+                .width_request(120)
+                .css_classes(["media-card"])
+                .build();
+
+            let picture = gtk4::Picture::builder()
+                .content_fit(gtk4::ContentFit::Cover)
+                .width_request(120)
+                .height_request(180)
+                .css_classes(["media-card-poster"])
+                .build();
+
+            let progress_bar = gtk4::ProgressBar::builder()
+                .halign(gtk4::Align::Fill)
+                .valign(gtk4::Align::End)
+                .fraction(progress)
+                .css_classes(["watch-progress"])
+                .build();
+
+            let overlay = gtk4::Overlay::new();
+            overlay.set_child(Some(&picture));
+            overlay.add_overlay(&progress_bar);
+
+            let frame = gtk4::Frame::builder()
+                .css_classes(["media-card-frame"])
+                .child(&overlay)
+                .build();
+
+            let title = gtk4::Label::builder()
+                .label(&item.title)
+                .halign(gtk4::Align::Start)
+                .ellipsize(gtk4::pango::EllipsizeMode::End)
+                .max_width_chars(14)
+                .css_classes(["caption"])
+                .build();
+
+            card.append(&frame);
+            card.append(&title);
+
+            // Load poster texture
+            if let (Some(poster_path), Some(src)) = (&item.poster_path, &source) {
+                let url = src.artwork_url(poster_path, 200, 300);
+                if let Some(texture) = self.texture_cache.get(&url) {
+                    picture.set_paintable(Some(texture));
+                } else if let Some(cache) = &artwork_cache {
+                    let cache = Arc::clone(cache);
+                    let sender = sender.command_sender().clone();
+                    let fetch_url = url;
+                    gtk4::glib::spawn_future_local(async move {
+                        if let Ok(path) = cache.get_or_download(&fetch_url).await {
+                            if let Ok(texture) =
+                                gtk4::gdk::Texture::from_filename(&path)
+                            {
+                                let _ = sender
+                                    .send(LibraryViewCmd::ArtworkReady(fetch_url, texture));
+                            }
+                        }
+                    });
+                }
+            }
+
+            // Click handler -> navigate to detail
+            let item_clone = (*item).clone();
+            let output_sender = sender.output_sender().clone();
+            let gesture = gtk4::GestureClick::new();
+            gesture.connect_released(move |_, _, _, _| {
+                let _ = output_sender.send(LibraryViewOutput::ShowDetail(item_clone.clone()));
+            });
+            card.add_controller(gesture);
+
+            self.continue_watching_box.append(&card);
+        }
     }
 }
