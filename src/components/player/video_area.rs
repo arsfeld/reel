@@ -11,8 +11,9 @@ use relm4::prelude::*;
 use tracing::{debug, error, info, warn};
 
 use crate::components::player::controls::{ControlsInput, ControlsOutput, PlayerControls};
+use crate::components::player::drop_target;
 use crate::components::player::overlay_controller::{self, OverlayAction, OverlayState};
-use crate::player::backend::{EndReason, PlayState};
+use crate::player::backend::{self, EndReason, PlayState};
 use crate::player::mpv::gl_render;
 use crate::player::playback_tracker::{PlaybackEvent, PlaybackTracker, PollData};
 
@@ -40,23 +41,36 @@ impl Drop for MpvState {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum VideoAreaMsg {
+    // Playback
     LoadFile(String),
     TogglePause,
-    PollState,
     SeekAbsolute(f64),
     SeekRelative(f64),
+    // Volume
     SetVolume(f64),
+    VolumeStep(f64),
     ToggleMute,
+    // Speed
     SetSpeed(f64),
+    SpeedUp,
+    SpeedDown,
+    SpeedReset,
+    // Tracks
     SetAudioTrack(i64),
     SetSubtitleTrack(i64),
     DisableSubtitles,
+    AddSubtitleFile(String),
+    // Chapters
     SetChapter(i64),
+    // Window
     ToggleFullscreen,
+    FullscreenChanged(bool),
+    // File drop
+    FilesDropped(String),
+    // Internal
+    PollState,
     MouseMoved,
     HideTimeout,
-    FullscreenChanged(bool),
-    AddSubtitleFile(String),
 }
 
 #[derive(Debug)]
@@ -76,6 +90,9 @@ pub struct VideoArea {
     controls: Controller<PlayerControls>,
     overlay_state: OverlayState,
     hide_timer: Option<glib::SourceId>,
+    current_volume: f64,
+    current_speed: f64,
+    has_video: bool,
     #[allow(dead_code)]
     gl_area: gtk4::GLArea,
     #[allow(dead_code)]
@@ -276,6 +293,9 @@ impl Component for VideoArea {
             controls,
             overlay_state: OverlayState::default(),
             hide_timer: None,
+            current_volume: 100.0,
+            current_speed: 1.0,
+            has_video: false,
             gl_area,
             timer_handle: Some(timer_handle),
             poll_handle: Some(poll_handle),
@@ -288,6 +308,8 @@ impl Component for VideoArea {
         match msg {
             VideoAreaMsg::LoadFile(uri) => {
                 info!("Loading file: {}", uri);
+                self.current_speed = 1.0;
+                self.has_video = false;
                 let mut st = self.state.borrow_mut();
                 let has_mpv = st.mpv.is_some();
                 if has_mpv {
@@ -336,9 +358,20 @@ impl Component for VideoArea {
                 }
             }
             VideoAreaMsg::SetVolume(vol) => {
+                self.current_volume = vol;
                 let st = self.state.borrow();
                 if let Some(ref mpv) = st.mpv
                     && let Err(e) = mpv.set_property("volume", vol)
+                {
+                    error!("Failed to set volume: {:?}", e);
+                }
+            }
+            VideoAreaMsg::VolumeStep(delta) => {
+                let new_vol = (self.current_volume + delta).clamp(0.0, 150.0);
+                self.current_volume = new_vol;
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv
+                    && let Err(e) = mpv.set_property("volume", new_vol)
                 {
                     error!("Failed to set volume: {:?}", e);
                 }
@@ -353,9 +386,39 @@ impl Component for VideoArea {
                 }
             }
             VideoAreaMsg::SetSpeed(speed) => {
+                self.current_speed = speed;
                 let st = self.state.borrow();
                 if let Some(ref mpv) = st.mpv
                     && let Err(e) = mpv.set_property("speed", speed)
+                {
+                    error!("Failed to set speed: {:?}", e);
+                }
+            }
+            VideoAreaMsg::SpeedUp => {
+                let new_speed = backend::next_speed(self.current_speed);
+                self.current_speed = new_speed;
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv
+                    && let Err(e) = mpv.set_property("speed", new_speed)
+                {
+                    error!("Failed to set speed: {:?}", e);
+                }
+            }
+            VideoAreaMsg::SpeedDown => {
+                let new_speed = backend::prev_speed(self.current_speed);
+                self.current_speed = new_speed;
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv
+                    && let Err(e) = mpv.set_property("speed", new_speed)
+                {
+                    error!("Failed to set speed: {:?}", e);
+                }
+            }
+            VideoAreaMsg::SpeedReset => {
+                self.current_speed = 1.0;
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv
+                    && let Err(e) = mpv.set_property("speed", 1.0)
                 {
                     error!("Failed to set speed: {:?}", e);
                 }
@@ -412,6 +475,18 @@ impl Component for VideoArea {
                     error!("Failed to add subtitle file: {:?}", e);
                 }
             }
+            VideoAreaMsg::FilesDropped(uri) => {
+                let action = drop_target::classify_drop(&uri, self.has_video);
+                match action {
+                    drop_target::DropAction::PlayVideo(path) => {
+                        sender.input(VideoAreaMsg::LoadFile(path));
+                    }
+                    drop_target::DropAction::LoadSubtitle(path) => {
+                        sender.input(VideoAreaMsg::AddSubtitleFile(path));
+                    }
+                    drop_target::DropAction::Unsupported => {}
+                }
+            }
             VideoAreaMsg::PollState => {
                 // Collect all values from mpv with an immutable borrow first
                 let poll_data = {
@@ -443,6 +518,7 @@ impl Component for VideoArea {
                     match event {
                         PlaybackEvent::FileLoaded { hwdec, .. } => {
                             info!("File loaded");
+                            self.has_video = true;
                             if let Some(ref h) = hwdec {
                                 info!("Hardware decoding: {}", h);
                             }
@@ -469,10 +545,12 @@ impl Component for VideoArea {
                             let _ = sender.output(VideoAreaOutput::EndOfFile(reason));
                         }
                         PlaybackEvent::VolumeChanged { volume, muted } => {
+                            self.current_volume = volume;
                             self.controls.emit(ControlsInput::Volume { volume, muted });
                             let _ = sender.output(VideoAreaOutput::VolumeChanged { volume, muted });
                         }
                         PlaybackEvent::SpeedChanged(speed) => {
+                            self.current_speed = speed;
                             let _ = sender.output(VideoAreaOutput::SpeedChanged(speed));
                         }
                     }

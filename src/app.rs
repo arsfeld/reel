@@ -14,29 +14,18 @@ use crate::services::window_state::{self, WindowState};
 pub struct App {
     video_area: Controller<VideoArea>,
     screensaver: ScreensaverInhibitor,
-    current_speed: f64,
-    current_volume: f64,
-    has_video: bool,
-    #[allow(dead_code)]
-    file_to_load: Option<String>,
 }
 
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum AppMsg {
-    TogglePause,
-    OpenFile(String),
     VideoOutput(VideoAreaOutput),
+    OpenFile(String),
     ShowFileChooser,
     ToggleFullscreen,
     ExitFullscreen,
-    SeekRelative(f64),
-    VolumeStep(f64),
-    ToggleMute,
-    SetSpeed(f64),
-    SpeedUp,
-    SpeedDown,
-    SpeedReset,
+    /// Keyboard/UI action forwarded directly to VideoArea
+    PlayerAction(VideoAreaMsg),
     FilesDropped(String),
 }
 
@@ -67,19 +56,7 @@ impl Component for App {
             add_controller = gtk4::EventControllerKey {
                 connect_key_pressed[sender] => move |_controller, key, _code, mods| {
                     if let Some(action) = shortcuts::map_key_to_action(key, mods, false) {
-                        match action {
-                            PlayerAction::TogglePause => sender.input(AppMsg::TogglePause),
-                            PlayerAction::SeekForward(s) => sender.input(AppMsg::SeekRelative(s)),
-                            PlayerAction::SeekBackward(s) => sender.input(AppMsg::SeekRelative(-s)),
-                            PlayerAction::VolumeUp(v) => sender.input(AppMsg::VolumeStep(v)),
-                            PlayerAction::VolumeDown(v) => sender.input(AppMsg::VolumeStep(-v)),
-                            PlayerAction::ToggleMute => sender.input(AppMsg::ToggleMute),
-                            PlayerAction::ToggleFullscreen => sender.input(AppMsg::ToggleFullscreen),
-                            PlayerAction::ExitFullscreen => sender.input(AppMsg::ExitFullscreen),
-                            PlayerAction::SpeedUp => sender.input(AppMsg::SpeedUp),
-                            PlayerAction::SpeedDown => sender.input(AppMsg::SpeedDown),
-                            PlayerAction::SpeedReset => sender.input(AppMsg::SpeedReset),
-                        }
+                        dispatch_player_action(&sender, action);
                         glib::Propagation::Stop
                     } else {
                         glib::Propagation::Proceed
@@ -119,10 +96,6 @@ impl Component for App {
         let model = Self {
             video_area,
             screensaver: ScreensaverInhibitor::new(),
-            current_speed: 1.0,
-            current_volume: ws.volume,
-            has_video: false,
-            file_to_load: file_arg.clone(),
         };
 
         let widgets = view_output!();
@@ -141,7 +114,7 @@ impl Component for App {
                 width,
                 height,
                 maximized: root_close.is_maximized(),
-                volume: 100.0, // TODO: track actual volume
+                volume: 100.0,
             };
             if let Err(e) = window_state::save(&state) {
                 tracing::warn!("Failed to save window state: {}", e);
@@ -149,7 +122,7 @@ impl Component for App {
             glib::Propagation::Proceed
         });
 
-        // Load file from CLI arg or show file chooser after a short delay
+        // Load file from CLI arg or show file chooser
         let sender_init = sender.clone();
         let root_clone = root.clone();
         glib::timeout_add_local_once(std::time::Duration::from_millis(200), move || {
@@ -165,42 +138,12 @@ impl Component for App {
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
-            AppMsg::TogglePause => {
-                self.video_area.emit(VideoAreaMsg::TogglePause);
+            AppMsg::PlayerAction(video_msg) => {
+                self.video_area.emit(video_msg);
             }
             AppMsg::OpenFile(path) => {
                 info!("Opening file: {}", path);
-                self.current_speed = 1.0;
                 self.video_area.emit(VideoAreaMsg::LoadFile(path));
-            }
-            AppMsg::SeekRelative(offset) => {
-                self.video_area.emit(VideoAreaMsg::SeekRelative(offset));
-            }
-            AppMsg::VolumeStep(delta) => {
-                let new_vol = (self.current_volume + delta).clamp(0.0, 150.0);
-                self.current_volume = new_vol;
-                self.video_area.emit(VideoAreaMsg::SetVolume(new_vol));
-            }
-            AppMsg::ToggleMute => {
-                self.video_area.emit(VideoAreaMsg::ToggleMute);
-            }
-            AppMsg::SetSpeed(speed) => {
-                self.current_speed = speed;
-                self.video_area.emit(VideoAreaMsg::SetSpeed(speed));
-            }
-            AppMsg::SpeedUp => {
-                let new_speed = backend::next_speed(self.current_speed);
-                self.current_speed = new_speed;
-                self.video_area.emit(VideoAreaMsg::SetSpeed(new_speed));
-            }
-            AppMsg::SpeedDown => {
-                let new_speed = backend::prev_speed(self.current_speed);
-                self.current_speed = new_speed;
-                self.video_area.emit(VideoAreaMsg::SetSpeed(new_speed));
-            }
-            AppMsg::SpeedReset => {
-                self.current_speed = 1.0;
-                self.video_area.emit(VideoAreaMsg::SetSpeed(1.0));
             }
             AppMsg::ToggleFullscreen => {
                 let new_fs = !root.is_fullscreen();
@@ -215,23 +158,10 @@ impl Component for App {
                 }
             }
             AppMsg::FilesDropped(uri) => {
-                let action = drop_target::classify_drop(&uri, self.has_video);
-                match action {
-                    drop_target::DropAction::PlayVideo(path) => {
-                        sender.input(AppMsg::OpenFile(path));
-                    }
-                    drop_target::DropAction::LoadSubtitle(path) => {
-                        self.video_area.emit(VideoAreaMsg::AddSubtitleFile(path));
-                    }
-                    drop_target::DropAction::Unsupported => {
-                        // Show toast via the ToastOverlay
-                    }
-                }
+                self.video_area.emit(VideoAreaMsg::FilesDropped(uri));
             }
             AppMsg::VideoOutput(output) => match output {
                 VideoAreaOutput::FileLoaded => {
-                    info!("File loaded in app");
-                    self.has_video = true;
                     self.screensaver.inhibit(root);
                 }
                 VideoAreaOutput::PositionChanged { .. } => {}
@@ -248,12 +178,7 @@ impl Component for App {
                     info!("Playback ended: {:?}", reason);
                     self.screensaver.uninhibit(root);
                 }
-                VideoAreaOutput::VolumeChanged { volume, .. } => {
-                    self.current_volume = volume;
-                }
-                VideoAreaOutput::SpeedChanged(speed) => {
-                    self.current_speed = speed;
-                }
+                VideoAreaOutput::VolumeChanged { .. } | VideoAreaOutput::SpeedChanged(_) => {}
                 VideoAreaOutput::ToggleFullscreen => {
                     let new_fs = !root.is_fullscreen();
                     root.set_fullscreened(new_fs);
@@ -265,6 +190,33 @@ impl Component for App {
                 show_file_chooser(root, sender.input_sender().clone());
             }
         }
+    }
+}
+
+/// Map a PlayerAction from keyboard shortcuts to the appropriate AppMsg.
+/// Playback-related actions go directly to VideoArea. Window-level actions stay in App.
+fn dispatch_player_action(sender: &ComponentSender<App>, action: PlayerAction) {
+    match action {
+        PlayerAction::TogglePause => sender.input(AppMsg::PlayerAction(VideoAreaMsg::TogglePause)),
+        PlayerAction::SeekForward(s) => {
+            sender.input(AppMsg::PlayerAction(VideoAreaMsg::SeekRelative(s)))
+        }
+        PlayerAction::SeekBackward(s) => {
+            sender.input(AppMsg::PlayerAction(VideoAreaMsg::SeekRelative(-s)))
+        }
+        PlayerAction::VolumeUp(v) => {
+            sender.input(AppMsg::PlayerAction(VideoAreaMsg::VolumeStep(v)))
+        }
+        PlayerAction::VolumeDown(v) => {
+            sender.input(AppMsg::PlayerAction(VideoAreaMsg::VolumeStep(-v)))
+        }
+        PlayerAction::ToggleMute => sender.input(AppMsg::PlayerAction(VideoAreaMsg::ToggleMute)),
+        PlayerAction::SpeedUp => sender.input(AppMsg::PlayerAction(VideoAreaMsg::SpeedUp)),
+        PlayerAction::SpeedDown => sender.input(AppMsg::PlayerAction(VideoAreaMsg::SpeedDown)),
+        PlayerAction::SpeedReset => sender.input(AppMsg::PlayerAction(VideoAreaMsg::SpeedReset)),
+        // Window-level actions
+        PlayerAction::ToggleFullscreen => sender.input(AppMsg::ToggleFullscreen),
+        PlayerAction::ExitFullscreen => sender.input(AppMsg::ExitFullscreen),
     }
 }
 
