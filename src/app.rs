@@ -66,6 +66,7 @@ pub enum AppMsg {
         name: String,
     },
     ShowToast(String),
+    FocusSearch,
 }
 
 #[relm4::component(pub)]
@@ -194,9 +195,20 @@ impl Component for App {
         let key_controller = gtk4::EventControllerKey::new();
         let sender_key = sender.input_sender().clone();
         let stack_key = stack.clone();
+        let root_key = root.clone();
         key_controller.connect_key_pressed(move |_controller, key, _code, mods| {
             let in_player = stack_key.visible_child_name().as_deref() == Some("player");
-            if let Some(action) = shortcuts::map_key_to_action(key, mods, false) {
+
+            // Detect if a text input widget has focus
+            let is_text_focused = gtk4::prelude::GtkWindowExt::focus(&root_key)
+                .is_some_and(|w| {
+                    w.is::<gtk4::SearchEntry>()
+                        || w.is::<gtk4::Entry>()
+                        || w.is::<gtk4::Text>()
+                        || w.is::<gtk4::TextView>()
+                });
+
+            if let Some(action) = shortcuts::map_key_to_action(key, mods, is_text_focused) {
                 if in_player {
                     dispatch_player_action_sender(&sender_key, action);
                     glib::Propagation::Stop
@@ -208,6 +220,20 @@ impl Component for App {
                         }
                         _ => glib::Propagation::Proceed,
                     }
+                }
+            } else if !in_player && !is_text_focused {
+                // Library-level shortcuts
+                let ctrl = mods.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
+                match key {
+                    gtk4::gdk::Key::f if ctrl => {
+                        let _ = sender_key.send(AppMsg::FocusSearch);
+                        glib::Propagation::Stop
+                    }
+                    gtk4::gdk::Key::slash if mods.is_empty() => {
+                        let _ = sender_key.send(AppMsg::FocusSearch);
+                        glib::Propagation::Stop
+                    }
+                    _ => glib::Propagation::Proceed,
                 }
             } else {
                 glib::Propagation::Proceed
@@ -438,6 +464,7 @@ impl Component for App {
                             AppMsg::ShowToast("Connection cancelled".to_string())
                         }
                     });
+                dialog.widget().present();
                 self.connection_dialog = Some(dialog);
             }
             AppMsg::ConnectionSaved { url, token, name } => {
@@ -498,6 +525,9 @@ impl Component for App {
             }
             AppMsg::ShowFileChooser => {
                 show_file_chooser(root, sender.input_sender().clone());
+            }
+            AppMsg::FocusSearch => {
+                self.library_view.emit(LibraryViewMsg::FocusSearch);
             }
         }
     }

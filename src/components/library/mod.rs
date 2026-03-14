@@ -31,6 +31,8 @@ pub struct LibraryView {
     error_page: adw::StatusPage,
     no_results_page: adw::StatusPage,
     grid_page: gtk4::ScrolledWindow,
+    search_bar: gtk4::SearchBar,
+    search_entry: gtk4::SearchEntry,
     // State retention for search/filter/sort
     all_items: Vec<MediaItem>,
     search_query: String,
@@ -175,6 +177,29 @@ impl Component for LibraryView {
             .child(&grid_view)
             .build();
 
+        // Search bar with entry
+        let search_entry = gtk4::SearchEntry::builder()
+            .placeholder_text("Search library...")
+            .hexpand(true)
+            .build();
+
+        let sender_search = sender.input_sender().clone();
+        search_entry.connect_search_changed(move |entry| {
+            let _ = sender_search.send(LibraryViewMsg::SearchChanged(entry.text().to_string()));
+        });
+
+        let sender_stop = sender.input_sender().clone();
+        search_entry.connect_stop_search(move |_| {
+            let _ = sender_stop.send(LibraryViewMsg::SearchChanged(String::new()));
+        });
+
+        let search_bar = gtk4::SearchBar::builder()
+            .search_mode_enabled(false)
+            .show_close_button(true)
+            .child(&search_entry)
+            .build();
+        search_bar.connect_entry(&search_entry);
+
         stack.add_child(&loading_page);
         stack.add_child(&empty_page);
         stack.add_child(&error_page);
@@ -182,6 +207,7 @@ impl Component for LibraryView {
         stack.add_child(&grid_page);
         stack.set_visible_child(&empty_page);
 
+        root.append(&search_bar);
         root.append(&stack);
 
         let model = Self {
@@ -195,6 +221,8 @@ impl Component for LibraryView {
             error_page,
             no_results_page,
             grid_page,
+            search_bar,
+            search_entry,
             all_items: Vec::new(),
             search_query: String::new(),
             filter_state: FilterState::default(),
@@ -224,6 +252,8 @@ impl Component for LibraryView {
                 if library_type != self.library_type {
                     self.filter_state.clear();
                     self.search_query.clear();
+                    self.search_bar.set_search_mode(false);
+                    self.search_entry.set_text("");
                 }
 
                 self.library_type = library_type;
@@ -308,10 +338,13 @@ impl Component for LibraryView {
             LibraryViewMsg::ClearFilters => {
                 self.filter_state.clear();
                 self.search_query.clear();
+                self.search_bar.set_search_mode(false);
+                self.search_entry.set_text("");
                 self.rebuild_grid(&sender);
             }
             LibraryViewMsg::FocusSearch => {
-                // Will be handled in Phase 3 when SearchBar widget is added
+                self.search_bar.set_search_mode(true);
+                self.search_entry.grab_focus();
             }
         }
     }
