@@ -62,6 +62,10 @@ pub enum VideoAreaMsg {
     AddSubtitleFile(String),
     // Chapters
     SetChapter(i64),
+    PrevChapter,
+    NextChapter,
+    // Subtitle file chooser
+    LoadSubtitleFile,
     // Window
     ToggleFullscreen,
     FullscreenChanged(bool),
@@ -83,6 +87,7 @@ pub enum VideoAreaOutput {
     VolumeChanged { volume: f64, muted: bool },
     SpeedChanged(f64),
     ToggleFullscreen,
+    LoadSubtitleFile,
 }
 
 pub struct VideoArea {
@@ -263,6 +268,13 @@ impl Component for VideoArea {
                     ControlsOutput::SetVolume(vol) => VideoAreaMsg::SetVolume(vol),
                     ControlsOutput::ToggleMute => VideoAreaMsg::ToggleMute,
                     ControlsOutput::ToggleFullscreen => VideoAreaMsg::ToggleFullscreen,
+                    ControlsOutput::SetSpeed(s) => VideoAreaMsg::SetSpeed(s),
+                    ControlsOutput::SelectAudioTrack(id) => VideoAreaMsg::SetAudioTrack(id),
+                    ControlsOutput::SelectSubtitleTrack(id) => VideoAreaMsg::SetSubtitleTrack(id),
+                    ControlsOutput::DisableSubtitles => VideoAreaMsg::DisableSubtitles,
+                    ControlsOutput::LoadSubtitleFile => VideoAreaMsg::LoadSubtitleFile,
+                    ControlsOutput::PrevChapter => VideoAreaMsg::PrevChapter,
+                    ControlsOutput::NextChapter => VideoAreaMsg::NextChapter,
                 });
 
         // Add controls widget as overlay
@@ -455,6 +467,33 @@ impl Component for VideoArea {
                     error!("Failed to set chapter: {:?}", e);
                 }
             }
+            VideoAreaMsg::PrevChapter => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv {
+                    let ch = mpv.get_property::<i64>("chapter").unwrap_or(0);
+                    if ch > 0
+                        && let Err(e) = mpv.set_property("chapter", ch - 1)
+                    {
+                        error!("Failed to set chapter: {:?}", e);
+                    }
+                }
+            }
+            VideoAreaMsg::NextChapter => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv {
+                    let ch = mpv.get_property::<i64>("chapter").unwrap_or(0);
+                    let count = mpv.get_property::<i64>("chapters").unwrap_or(0);
+                    if ch + 1 < count
+                        && let Err(e) = mpv.set_property("chapter", ch + 1)
+                    {
+                        error!("Failed to set chapter: {:?}", e);
+                    }
+                }
+            }
+            VideoAreaMsg::LoadSubtitleFile => {
+                // Emit to parent to show file chooser dialog
+                let _ = sender.output(VideoAreaOutput::LoadSubtitleFile);
+            }
             VideoAreaMsg::ToggleFullscreen => {
                 let _ = sender.output(VideoAreaOutput::ToggleFullscreen);
             }
@@ -522,6 +561,13 @@ impl Component for VideoArea {
                             if let Some(ref h) = hwdec {
                                 info!("Hardware decoding: {}", h);
                             }
+                            // Fetch track list and chapter count for controls
+                            let st = self.state.borrow();
+                            if let Some(ref mpv) = st.mpv {
+                                let chapters = mpv.get_property::<i64>("chapters").unwrap_or(0);
+                                self.controls.emit(ControlsInput::ChapterCount(chapters));
+                            }
+                            drop(st);
                             let _ = sender.output(VideoAreaOutput::FileLoaded);
                         }
                         PlaybackEvent::PositionChanged { position, duration } => {
@@ -551,6 +597,7 @@ impl Component for VideoArea {
                         }
                         PlaybackEvent::SpeedChanged(speed) => {
                             self.current_speed = speed;
+                            self.controls.emit(ControlsInput::Speed(speed));
                             let _ = sender.output(VideoAreaOutput::SpeedChanged(speed));
                         }
                     }

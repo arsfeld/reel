@@ -14,6 +14,7 @@ use crate::services::window_state::{self, WindowState};
 pub struct App {
     video_area: Controller<VideoArea>,
     screensaver: ScreensaverInhibitor,
+    toast_overlay: adw::ToastOverlay,
 }
 
 #[derive(Debug)]
@@ -27,6 +28,7 @@ pub enum AppMsg {
     /// Keyboard/UI action forwarded directly to VideoArea
     PlayerAction(VideoAreaMsg),
     FilesDropped(String),
+    ShowToast(String),
 }
 
 #[relm4::component(pub)]
@@ -93,12 +95,15 @@ impl Component for App {
         // Load window state
         let ws = window_state::load();
 
-        let model = Self {
+        // placeholder toast_overlay, replaced after view_output
+        let mut model = Self {
             video_area,
             screensaver: ScreensaverInhibitor::new(),
+            toast_overlay: adw::ToastOverlay::new(),
         };
 
         let widgets = view_output!();
+        model.toast_overlay = widgets.toast_overlay.clone();
 
         // Apply saved window state
         root.set_default_size(ws.width, ws.height);
@@ -185,7 +190,15 @@ impl Component for App {
                     self.video_area
                         .emit(VideoAreaMsg::FullscreenChanged(new_fs));
                 }
+                VideoAreaOutput::LoadSubtitleFile => {
+                    show_subtitle_chooser(root, &self.video_area);
+                }
             },
+            AppMsg::ShowToast(message) => {
+                let toast = adw::Toast::new(&message);
+                toast.set_timeout(3);
+                self.toast_overlay.add_toast(toast);
+            }
             AppMsg::ShowFileChooser => {
                 show_file_chooser(root, sender.input_sender().clone());
             }
@@ -218,6 +231,39 @@ fn dispatch_player_action(sender: &ComponentSender<App>, action: PlayerAction) {
         PlayerAction::ToggleFullscreen => sender.input(AppMsg::ToggleFullscreen),
         PlayerAction::ExitFullscreen => sender.input(AppMsg::ExitFullscreen),
     }
+}
+
+fn show_subtitle_chooser(window: &adw::ApplicationWindow, video_area: &Controller<VideoArea>) {
+    let dialog = gtk4::FileDialog::builder()
+        .title("Load Subtitle File")
+        .modal(true)
+        .build();
+
+    let filter = gtk4::FileFilter::new();
+    filter.set_name(Some("Subtitle Files"));
+    for ext in &["srt", "ass", "ssa", "vtt", "sub", "idx"] {
+        filter.add_suffix(ext);
+    }
+
+    let filters = gtk4::gio::ListStore::new::<gtk4::FileFilter>();
+    filters.append(&filter);
+    dialog.set_filters(Some(&filters));
+
+    let window_clone = window.clone();
+    let video_sender = video_area.sender().clone();
+    dialog.open(
+        Some(&window_clone),
+        gtk4::gio::Cancellable::NONE,
+        move |result| {
+            if let Ok(file) = result
+                && let Some(path) = file.path()
+            {
+                let _ = video_sender.send(VideoAreaMsg::AddSubtitleFile(
+                    path.to_string_lossy().to_string(),
+                ));
+            }
+        },
+    );
 }
 
 fn show_file_chooser(window: &adw::ApplicationWindow, sender: relm4::Sender<AppMsg>) {
