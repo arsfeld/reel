@@ -288,6 +288,7 @@ impl Component for App {
                 height,
                 maximized: root_close.is_maximized(),
                 volume: 100.0,
+                ..window_state::load()
             };
             if let Err(e) = window_state::save(&state) {
                 tracing::warn!("Failed to save window state: {}", e);

@@ -12,7 +12,7 @@ use tracing::info;
 use crate::models::library::LibraryType;
 use crate::models::media::MediaItem;
 use crate::services::artwork::ArtworkCache;
-use crate::services::library_filter::{self, FilterState, SortOrder};
+use crate::services::library_filter::{self, FilterState, GridDensity, SortOrder};
 use crate::services::media_source::MediaSource;
 
 use media_card::MediaCardData;
@@ -47,6 +47,7 @@ pub struct LibraryView {
     search_query: String,
     filter_state: FilterState,
     sort_order: SortOrder,
+    grid_density: GridDensity,
     /// Cached textures keyed by artwork URL to avoid re-fetching on grid rebuild.
     texture_cache: HashMap<String, gtk4::gdk::Texture>,
 }
@@ -65,6 +66,7 @@ pub enum LibraryViewMsg {
     SortChanged(SortOrder),
     ClearFilters,
     FocusSearch,
+    DensityChanged(GridDensity),
     LoadCollections,
     LoadCollectionItems(String),
 }
@@ -83,6 +85,7 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::SortChanged(s) => write!(f, "SortChanged({s:?})"),
             Self::ClearFilters => write!(f, "ClearFilters"),
             Self::FocusSearch => write!(f, "FocusSearch"),
+            Self::DensityChanged(d) => write!(f, "DensityChanged({d:?})"),
             Self::LoadCollections => write!(f, "LoadCollections"),
             Self::LoadCollectionItems(key) => write!(f, "LoadCollectionItems({key})"),
         }
@@ -296,10 +299,29 @@ impl Component for LibraryView {
         let sort_label = gtk4::Label::new(Some("Sort:"));
         sort_label.add_css_class("dim-label");
 
+        // Density dropdown
+        let density_labels: Vec<&str> = GridDensity::all().iter().map(|d| d.label()).collect();
+        let density_dropdown = gtk4::DropDown::from_strings(&density_labels);
+        density_dropdown.set_selected(1); // Medium (default)
+
+        let sender_density = sender.input_sender().clone();
+        density_dropdown.connect_selected_notify(move |dd| {
+            let all = GridDensity::all();
+            let idx = dd.selected() as usize;
+            if idx < all.len() {
+                let _ = sender_density.send(LibraryViewMsg::DensityChanged(all[idx]));
+            }
+        });
+
+        let density_label = gtk4::Label::new(Some("Size:"));
+        density_label.add_css_class("dim-label");
+
         controls_row.append(&decade_label);
         controls_row.append(&decade_dropdown);
         controls_row.append(&sort_label);
         controls_row.append(&sort_dropdown);
+        controls_row.append(&density_label);
+        controls_row.append(&density_dropdown);
         controls_row.append(&clear_filters_btn);
 
         filter_bar.append(&genre_flow);
@@ -340,6 +362,7 @@ impl Component for LibraryView {
             search_query: String::new(),
             filter_state: FilterState::default(),
             sort_order: SortOrder::default(),
+            grid_density: GridDensity::default(),
             texture_cache: HashMap::new(),
         };
 
@@ -450,6 +473,12 @@ impl Component for LibraryView {
             }
             LibraryViewMsg::SortChanged(order) => {
                 self.sort_order = order;
+                self.rebuild_grid(&sender);
+            }
+            LibraryViewMsg::DensityChanged(density) => {
+                self.grid_density = density;
+                // Update grid view column constraints
+                self.grid.view.set_min_columns(density.min_columns());
                 self.rebuild_grid(&sender);
             }
             LibraryViewMsg::ClearFilters => {
@@ -578,6 +607,8 @@ impl LibraryView {
         for &item_idx in &filtered_indices {
             let item = &self.all_items[item_idx];
             let mut card = MediaCardData::from_media_item(item);
+            card.card_width = self.grid_density.card_width();
+            card.card_height = self.grid_density.card_height();
 
             // Build the artwork URL and check texture cache
             if let (Some(poster_path), Some(source)) = (&item.poster_path, &source) {

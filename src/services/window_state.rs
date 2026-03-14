@@ -8,6 +8,8 @@ pub struct WindowState {
     pub height: i32,
     pub maximized: bool,
     pub volume: f64,
+    pub view_mode: String,
+    pub grid_density: String,
 }
 
 impl Default for WindowState {
@@ -17,6 +19,8 @@ impl Default for WindowState {
             height: 720,
             maximized: false,
             volume: 100.0,
+            view_mode: "grid".to_string(),
+            grid_density: "medium".to_string(),
         }
     }
 }
@@ -70,8 +74,13 @@ pub fn load() -> WindowState {
 /// Serialize window state to TOML.
 fn serialize(state: &WindowState) -> String {
     format!(
-        "width = {}\nheight = {}\nmaximized = {}\nvolume = {:.1}\n",
-        state.width, state.height, state.maximized, state.volume
+        "width = {}\nheight = {}\nmaximized = {}\nvolume = {:.1}\nview_mode = \"{}\"\ngrid_density = \"{}\"\n",
+        state.width,
+        state.height,
+        state.maximized,
+        state.volume,
+        state.view_mode,
+        state.grid_density
     )
 }
 
@@ -89,6 +98,8 @@ fn deserialize(content: &str) -> Option<WindowState> {
                 "height" => state.height = value.parse().ok()?,
                 "maximized" => state.maximized = value.parse().ok()?,
                 "volume" => state.volume = value.parse().ok()?,
+                "view_mode" => state.view_mode = value.trim_matches('"').to_string(),
+                "grid_density" => state.grid_density = value.trim_matches('"').to_string(),
                 _ => {} // ignore unknown keys
             }
         }
@@ -109,6 +120,8 @@ mod tests {
         assert!(toml.contains("height = 720"));
         assert!(toml.contains("maximized = false"));
         assert!(toml.contains("volume = 100.0"));
+        assert!(toml.contains("view_mode = \"grid\""));
+        assert!(toml.contains("grid_density = \"medium\""));
     }
 
     #[test]
@@ -118,12 +131,16 @@ mod tests {
             height: 1080,
             maximized: true,
             volume: 75.5,
+            view_mode: "list".to_string(),
+            grid_density: "large".to_string(),
         };
         let toml = serialize(&state);
         assert!(toml.contains("width = 1920"));
         assert!(toml.contains("height = 1080"));
         assert!(toml.contains("maximized = true"));
         assert!(toml.contains("volume = 75.5"));
+        assert!(toml.contains("view_mode = \"list\""));
+        assert!(toml.contains("grid_density = \"large\""));
     }
 
     #[test]
@@ -141,6 +158,8 @@ mod tests {
             height: 600,
             maximized: true,
             volume: 42.0,
+            view_mode: "list".to_string(),
+            grid_density: "small".to_string(),
         };
         let toml = serialize(&state);
         let parsed = deserialize(&toml).unwrap();
@@ -177,6 +196,8 @@ mod tests {
             height: 900,
             maximized: false,
             volume: 80.0,
+            view_mode: "list".to_string(),
+            grid_density: "large".to_string(),
         };
 
         // Save manually to temp dir

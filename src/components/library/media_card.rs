@@ -13,6 +13,9 @@ pub struct MediaCardData {
     pub poster_url: Option<String>,
     pub media_type: MediaType,
     pub media_item: Option<MediaItem>,
+    /// Card dimensions (set by density; default 180x270).
+    pub card_width: i32,
+    pub card_height: i32,
 }
 
 impl MediaCardData {
@@ -25,12 +28,16 @@ impl MediaCardData {
             poster_url: None,
             media_type: item.media_type,
             media_item: Some(item.clone()),
+            card_width: 180,
+            card_height: 270,
         }
     }
 }
 
+#[allow(dead_code)]
 pub struct MediaCardWidgets {
     picture: gtk4::Picture,
+    frame: gtk4::Frame,
     title_label: gtk4::Label,
     year_label: gtk4::Label,
 }
@@ -78,6 +85,7 @@ impl RelmGridItem for MediaCardData {
 
         let widgets = MediaCardWidgets {
             picture,
+            frame,
             title_label,
             year_label,
         };
@@ -85,7 +93,12 @@ impl RelmGridItem for MediaCardData {
         (container, widgets)
     }
 
-    fn bind(&mut self, widgets: &mut Self::Widgets, _root: &mut Self::Root) {
+    fn bind(&mut self, widgets: &mut Self::Widgets, root: &mut Self::Root) {
+        // Update card dimensions based on density
+        root.set_width_request(self.card_width);
+        widgets.picture.set_width_request(self.card_width);
+        widgets.picture.set_height_request(self.card_height);
+
         widgets.title_label.set_label(&self.title);
 
         if let Some(year) = self.year {

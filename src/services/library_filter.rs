@@ -43,6 +43,97 @@ impl SortOrder {
     }
 }
 
+/// Grid view mode: poster grid or compact list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    #[default]
+    Grid,
+    List,
+}
+
+impl ViewMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Grid => "grid",
+            Self::List => "list",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "list" => Self::List,
+            _ => Self::Grid,
+        }
+    }
+}
+
+/// Grid poster density: small, medium, or large.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GridDensity {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl GridDensity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Small => "small",
+            Self::Medium => "medium",
+            Self::Large => "large",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "small" => Self::Small,
+            "large" => Self::Large,
+            _ => Self::Medium,
+        }
+    }
+
+    /// Card width in pixels.
+    pub fn card_width(self) -> i32 {
+        match self {
+            Self::Small => 120,
+            Self::Medium => 180,
+            Self::Large => 240,
+        }
+    }
+
+    /// Card height in pixels (1.5:1 aspect ratio).
+    pub fn card_height(self) -> i32 {
+        match self {
+            Self::Small => 180,
+            Self::Medium => 270,
+            Self::Large => 360,
+        }
+    }
+
+    /// Minimum grid columns at this density.
+    pub fn min_columns(self) -> u32 {
+        match self {
+            Self::Small => 4,
+            Self::Medium => 3,
+            Self::Large => 2,
+        }
+    }
+
+    /// All available densities.
+    pub fn all() -> &'static [GridDensity] {
+        &[Self::Small, Self::Medium, Self::Large]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Small => "Small",
+            Self::Medium => "Medium",
+            Self::Large => "Large",
+        }
+    }
+}
+
 /// A genre filter with OR semantics: item matches if it has ANY selected genre.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenreFilter {
