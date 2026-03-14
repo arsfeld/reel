@@ -107,6 +107,9 @@ impl Component for App {
                 VideoAreaOutput::EndOfFile(reason) => {
                     info!("Playback ended: {:?}", reason);
                 }
+                VideoAreaOutput::VolumeChanged { .. } | VideoAreaOutput::SpeedChanged(_) => {
+                    // Will be forwarded to PlayerControls in Phase 1e
+                }
             },
             AppMsg::ShowFileChooser => {
                 show_file_chooser(root, sender.input_sender().clone());

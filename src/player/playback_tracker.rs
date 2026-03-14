@@ -10,6 +10,9 @@ pub struct PollData {
     pub paused: Option<bool>,
     pub eof_reached: Option<bool>,
     pub hwdec_current: Option<String>,
+    pub volume: Option<f64>,
+    pub muted: Option<bool>,
+    pub speed: Option<f64>,
 }
 
 /// Events produced by processing poll data.
@@ -27,6 +30,11 @@ pub enum PlaybackEvent {
     },
     StateChanged(PlayState),
     EndOfFile(EndReason),
+    VolumeChanged {
+        volume: f64,
+        muted: bool,
+    },
+    SpeedChanged(f64),
 }
 
 /// Pure playback state tracker. No I/O, no GTK, no mpv.
@@ -37,6 +45,9 @@ pub struct PlaybackTracker {
     pub file_loaded: bool,
     pub last_position: f64,
     pub last_paused: Option<bool>,
+    pub last_volume: Option<f64>,
+    pub last_muted: Option<bool>,
+    pub last_speed: Option<f64>,
 }
 
 impl PlaybackTracker {
@@ -45,6 +56,9 @@ impl PlaybackTracker {
             file_loaded: false,
             last_position: -1.0,
             last_paused: None,
+            last_volume: None,
+            last_muted: None,
+            last_speed: None,
         }
     }
 
@@ -90,6 +104,26 @@ impl PlaybackTracker {
             events.push(PlaybackEvent::StateChanged(state));
         }
 
+        // Detect volume/mute change
+        if let Some(vol) = data.volume {
+            let muted = data.muted.unwrap_or(false);
+            let vol_changed = self.last_volume.is_none_or(|lv| (lv - vol).abs() > 0.5);
+            let mute_changed = self.last_muted != Some(muted);
+            if vol_changed || mute_changed {
+                self.last_volume = Some(vol);
+                self.last_muted = Some(muted);
+                events.push(PlaybackEvent::VolumeChanged { volume: vol, muted });
+            }
+        }
+
+        // Detect speed change
+        if let Some(speed) = data.speed
+            && self.last_speed.is_none_or(|ls| (ls - speed).abs() > 0.001)
+        {
+            self.last_speed = Some(speed);
+            events.push(PlaybackEvent::SpeedChanged(speed));
+        }
+
         // Detect end of file
         if data.eof_reached == Some(true) && self.file_loaded {
             self.file_loaded = false;
@@ -104,6 +138,9 @@ impl PlaybackTracker {
         self.file_loaded = false;
         self.last_position = -1.0;
         self.last_paused = None;
+        self.last_volume = None;
+        self.last_muted = None;
+        self.last_speed = None;
     }
 }
 
@@ -118,7 +155,7 @@ mod tests {
             position: Some(position),
             paused: Some(false),
             eof_reached: Some(false),
-            hwdec_current: None,
+            ..Default::default()
         }
     }
 
@@ -631,5 +668,197 @@ mod tests {
 
         let events = tracker.process(&paused_state(0.1)); // Paused
         assert!(events.contains(&PlaybackEvent::StateChanged(PlayState::Paused)));
+    }
+
+    // --- Volume change detection ---
+
+    #[test]
+    fn detects_initial_volume() {
+        let mut tracker = PlaybackTracker::new();
+        let data = PollData {
+            volume: Some(100.0),
+            muted: Some(false),
+            ..playing_state(0.0)
+        };
+        let events = tracker.process(&data);
+
+        assert!(events.iter().any(|e| matches!(
+            e,
+            PlaybackEvent::VolumeChanged { volume, muted } if (*volume - 100.0).abs() < 0.01 && !muted
+        )));
+    }
+
+    #[test]
+    fn detects_volume_change() {
+        let mut tracker = PlaybackTracker::new();
+        let data1 = PollData {
+            volume: Some(100.0),
+            muted: Some(false),
+            ..playing_state(0.0)
+        };
+        tracker.process(&data1);
+
+        let data2 = PollData {
+            volume: Some(75.0),
+            muted: Some(false),
+            ..playing_state(1.0)
+        };
+        let events = tracker.process(&data2);
+
+        assert!(events.iter().any(|e| matches!(
+            e,
+            PlaybackEvent::VolumeChanged { volume, .. } if (*volume - 75.0).abs() < 0.01
+        )));
+    }
+
+    #[test]
+    fn ignores_small_volume_change() {
+        let mut tracker = PlaybackTracker::new();
+        let data1 = PollData {
+            volume: Some(100.0),
+            muted: Some(false),
+            ..playing_state(0.0)
+        };
+        tracker.process(&data1);
+
+        let data2 = PollData {
+            volume: Some(100.3), // < 0.5 threshold
+            muted: Some(false),
+            ..playing_state(1.0)
+        };
+        let events = tracker.process(&data2);
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, PlaybackEvent::VolumeChanged { .. }))
+        );
+    }
+
+    #[test]
+    fn detects_mute_toggle() {
+        let mut tracker = PlaybackTracker::new();
+        let data1 = PollData {
+            volume: Some(100.0),
+            muted: Some(false),
+            ..playing_state(0.0)
+        };
+        tracker.process(&data1);
+
+        let data2 = PollData {
+            volume: Some(100.0),
+            muted: Some(true),
+            ..playing_state(1.0)
+        };
+        let events = tracker.process(&data2);
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, PlaybackEvent::VolumeChanged { muted: true, .. }))
+        );
+    }
+
+    #[test]
+    fn no_volume_event_when_volume_is_none() {
+        let mut tracker = PlaybackTracker::new();
+        let data = PollData {
+            volume: None,
+            ..playing_state(0.0)
+        };
+        let events = tracker.process(&data);
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, PlaybackEvent::VolumeChanged { .. }))
+        );
+    }
+
+    // --- Speed change detection ---
+
+    #[test]
+    fn detects_initial_speed() {
+        let mut tracker = PlaybackTracker::new();
+        let data = PollData {
+            speed: Some(1.0),
+            ..playing_state(0.0)
+        };
+        let events = tracker.process(&data);
+
+        assert!(events.contains(&PlaybackEvent::SpeedChanged(1.0)));
+    }
+
+    #[test]
+    fn detects_speed_change() {
+        let mut tracker = PlaybackTracker::new();
+        let data1 = PollData {
+            speed: Some(1.0),
+            ..playing_state(0.0)
+        };
+        tracker.process(&data1);
+
+        let data2 = PollData {
+            speed: Some(2.0),
+            ..playing_state(1.0)
+        };
+        let events = tracker.process(&data2);
+
+        assert!(events.contains(&PlaybackEvent::SpeedChanged(2.0)));
+    }
+
+    #[test]
+    fn no_speed_event_when_unchanged() {
+        let mut tracker = PlaybackTracker::new();
+        let data1 = PollData {
+            speed: Some(1.0),
+            ..playing_state(0.0)
+        };
+        tracker.process(&data1);
+
+        let data2 = PollData {
+            speed: Some(1.0),
+            ..playing_state(1.0)
+        };
+        let events = tracker.process(&data2);
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, PlaybackEvent::SpeedChanged(_)))
+        );
+    }
+
+    #[test]
+    fn no_speed_event_when_speed_is_none() {
+        let mut tracker = PlaybackTracker::new();
+        let data = PollData {
+            speed: None,
+            ..playing_state(0.0)
+        };
+        let events = tracker.process(&data);
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, PlaybackEvent::SpeedChanged(_)))
+        );
+    }
+
+    #[test]
+    fn reset_clears_volume_and_speed() {
+        let mut tracker = PlaybackTracker::new();
+        let data = PollData {
+            volume: Some(80.0),
+            muted: Some(true),
+            speed: Some(1.5),
+            ..playing_state(0.0)
+        };
+        tracker.process(&data);
+
+        tracker.reset();
+        assert!(tracker.last_volume.is_none());
+        assert!(tracker.last_muted.is_none());
+        assert!(tracker.last_speed.is_none());
     }
 }

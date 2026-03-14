@@ -36,10 +36,20 @@ impl Drop for MpvState {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum VideoAreaMsg {
     LoadFile(String),
     TogglePause,
     PollState,
+    SeekAbsolute(f64),
+    SeekRelative(f64),
+    SetVolume(f64),
+    ToggleMute,
+    SetSpeed(f64),
+    SetAudioTrack(i64),
+    SetSubtitleTrack(i64),
+    DisableSubtitles,
+    SetChapter(i64),
 }
 
 #[derive(Debug)]
@@ -49,6 +59,8 @@ pub enum VideoAreaOutput {
     PositionChanged { position: f64, duration: f64 },
     FileLoaded,
     EndOfFile(EndReason),
+    VolumeChanged { volume: f64, muted: bool },
+    SpeedChanged(f64),
 }
 
 pub struct VideoArea {
@@ -247,6 +259,81 @@ impl Component for VideoArea {
                     error!("Failed to toggle pause: {:?}", e);
                 }
             }
+            VideoAreaMsg::SeekAbsolute(pos) => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv {
+                    let pos_str = format!("{pos}");
+                    if let Err(e) = mpv.command("seek", &[&pos_str, "absolute"]) {
+                        error!("Failed to seek: {:?}", e);
+                    }
+                }
+            }
+            VideoAreaMsg::SeekRelative(offset) => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv {
+                    let offset_str = format!("{offset}");
+                    if let Err(e) = mpv.command("seek", &[&offset_str, "relative"]) {
+                        error!("Failed to seek: {:?}", e);
+                    }
+                }
+            }
+            VideoAreaMsg::SetVolume(vol) => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv
+                    && let Err(e) = mpv.set_property("volume", vol)
+                {
+                    error!("Failed to set volume: {:?}", e);
+                }
+            }
+            VideoAreaMsg::ToggleMute => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv {
+                    let muted = mpv.get_property::<bool>("mute").unwrap_or(false);
+                    if let Err(e) = mpv.set_property("mute", !muted) {
+                        error!("Failed to toggle mute: {:?}", e);
+                    }
+                }
+            }
+            VideoAreaMsg::SetSpeed(speed) => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv
+                    && let Err(e) = mpv.set_property("speed", speed)
+                {
+                    error!("Failed to set speed: {:?}", e);
+                }
+            }
+            VideoAreaMsg::SetAudioTrack(track_id) => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv
+                    && let Err(e) = mpv.set_property("aid", track_id)
+                {
+                    error!("Failed to set audio track: {:?}", e);
+                }
+            }
+            VideoAreaMsg::SetSubtitleTrack(track_id) => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv
+                    && let Err(e) = mpv.set_property("sid", track_id)
+                {
+                    error!("Failed to set subtitle track: {:?}", e);
+                }
+            }
+            VideoAreaMsg::DisableSubtitles => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv
+                    && let Err(e) = mpv.set_property("sid", "no")
+                {
+                    error!("Failed to disable subtitles: {:?}", e);
+                }
+            }
+            VideoAreaMsg::SetChapter(chapter) => {
+                let st = self.state.borrow();
+                if let Some(ref mpv) = st.mpv
+                    && let Err(e) = mpv.set_property("chapter", chapter)
+                {
+                    error!("Failed to set chapter: {:?}", e);
+                }
+            }
             VideoAreaMsg::PollState => {
                 // Collect all values from mpv with an immutable borrow first
                 let poll_data = {
@@ -262,6 +349,9 @@ impl Component for VideoArea {
                         paused: mpv.get_property::<bool>("pause").ok(),
                         eof_reached: mpv.get_property::<bool>("eof-reached").ok(),
                         hwdec_current: mpv.get_property::<String>("hwdec-current").ok(),
+                        volume: mpv.get_property::<f64>("volume").ok(),
+                        muted: mpv.get_property::<bool>("mute").ok(),
+                        speed: mpv.get_property::<f64>("speed").ok(),
                     }
                 };
 
@@ -291,6 +381,12 @@ impl Component for VideoArea {
                         PlaybackEvent::EndOfFile(reason) => {
                             info!("End of file reached");
                             let _ = sender.output(VideoAreaOutput::EndOfFile(reason));
+                        }
+                        PlaybackEvent::VolumeChanged { volume, muted } => {
+                            let _ = sender.output(VideoAreaOutput::VolumeChanged { volume, muted });
+                        }
+                        PlaybackEvent::SpeedChanged(speed) => {
+                            let _ = sender.output(VideoAreaOutput::SpeedChanged(speed));
                         }
                     }
                 }
