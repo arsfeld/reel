@@ -15,7 +15,23 @@ pub fn build(b: *std.Build) void {
     core_mod.linkSystemLibrary("epoxy", .{});
     core_mod.linkSystemLibrary("sqlite3", .{});
 
-    // Main executable (GTK frontend)
+    // Static library for macOS Swift frontend consumption
+    const lib = b.addLibrary(.{
+        .name = "reel",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    lib.root_module.linkSystemLibrary("mpv", .{});
+    lib.root_module.linkSystemLibrary("epoxy", .{});
+    lib.root_module.linkSystemLibrary("sqlite3", .{});
+    b.installArtifact(lib);
+
+    // Main executable (GTK frontend — Linux only)
     const exe = b.addExecutable(.{
         .name = "reel",
         .root_module = b.createModule(.{

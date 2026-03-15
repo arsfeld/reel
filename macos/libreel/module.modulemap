@@ -1,0 +1,5 @@
+module ReelCore {
+    header "../../include/reel.h"
+    link "reel"
+    export *
+}
