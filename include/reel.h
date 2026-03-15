@@ -313,6 +313,19 @@ int32_t reel_plex_discover_servers(ReelPlexAuth* plex,
                                     ReelPlexServerC* out_ptr,
                                     int32_t max);
 
+/**
+ * Sync a Plex server's libraries into the local media_items table.
+ * Fetches all library sections, items, and children (seasons/episodes).
+ * Returns the number of items synced, or -1 on error.
+ */
+int32_t reel_plex_sync(ReelLibrary* lib,
+                        const char* server_id,
+                        const char* server_uri,
+                        const char* auth_token);
+
+/** Sync all stored Plex servers (reads auth tokens from DB). */
+int32_t reel_plex_sync_all(ReelLibrary* lib);
+
 ReelError reel_server_upsert(ReelLibrary* lib,
                               const char* id,
                               const char* name,

@@ -49,6 +49,16 @@ final class AppState {
         library = reel_library_create(db)
         downloader = reel_download_create(db)
         isInitialized = true
+
+        // Sync Plex servers in the background on launch
+        if let lib = library {
+            Task.detached {
+                let count = reel_plex_sync_all(lib)
+                if count > 0 {
+                    print("Synced \(count) items from Plex servers")
+                }
+            }
+        }
     }
 
     deinit {

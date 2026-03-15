@@ -143,6 +143,16 @@ struct SettingsView: View {
                             )
                         }
                     }
+                    // Sync library from each discovered server
+                    if let lib = appState.library {
+                        for i in 0..<Int(count) {
+                            let srvId = String(cString: serverBuf[i].id)
+                            let srvUri = String(cString: serverBuf[i].uri)
+                            let srvToken = String(cString: serverBuf[i].access_token)
+                            reel_plex_sync(lib, srvId, srvUri, srvToken)
+                        }
+                    }
+
                     reel_plex_destroy(plex)
                     await MainActor.run { reload() }
                     return

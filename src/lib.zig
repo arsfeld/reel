@@ -598,6 +598,207 @@ export fn reel_plex_discover_servers(
     return @intCast(count);
 }
 
+// ── Plex Sync ──────────────────────────────────────────
+
+/// Sync a Plex server's libraries into the local media_items table.
+/// Fetches all library sections, then all items in each section,
+/// then children (seasons/episodes) for shows.
+/// Returns the number of items synced, or -1 on error.
+export fn reel_plex_sync(
+    lib: ?*library.Library,
+    server_id: [*:0]const u8,
+    server_uri: [*:0]const u8,
+    auth_token: [*:0]const u8,
+) i32 {
+    const l = lib orelse return -1;
+    const sid = std.mem.span(server_id);
+    const uri = std.mem.span(server_uri);
+    const token = std.mem.span(auth_token);
+
+    // Read the client_identifier from settings (needed for Plex headers)
+    const client_id = blk: {
+        var s = settings.Settings.init(allocator, l.db);
+        break :blk (s.getString(settings.keys.client_identifier) catch null) orelse "reel-default";
+    };
+
+    var hc = http.HttpClient.init(allocator);
+    defer hc.deinit();
+
+    var client = plex_client.PlexClient.init(allocator, &hc, client_id, token);
+    client.setServerUri(uri);
+
+    // Get library sections
+    const libs = client.getLibraries() catch |err| {
+        std.log.err("plex_sync: getLibraries failed: {}", .{err});
+        return -1;
+    };
+    defer {
+        for (libs) |lb| {
+            allocator.free(lb.key);
+            allocator.free(lb.title);
+            allocator.free(lb.library_type);
+        }
+        allocator.free(libs);
+    }
+
+    var total_synced: i32 = 0;
+    const now = std.time.timestamp();
+
+    for (libs) |lb| {
+        // Get items in this section
+        const items = client.getItems(lb.key) catch |err| {
+            std.log.err("plex_sync: getItems for section '{s}' failed: {}", .{ lb.title, err });
+            continue;
+        };
+        defer client.freeMediaItems(items);
+
+        for (items) |plex_item| {
+            const mt = plexTypeToMediaType(plex_item.media_type);
+
+            // Construct poster/art URLs from Plex thumb paths
+            const poster_url = if (plex_item.thumb) |thumb|
+                std.fmt.allocPrint(allocator, "{s}{s}?X-Plex-Token={s}", .{ uri, thumb, token }) catch null
+            else
+                null;
+            defer if (poster_url) |p| allocator.free(p);
+
+            const art_url = if (plex_item.art) |art|
+                std.fmt.allocPrint(allocator, "{s}{s}?X-Plex-Token={s}", .{ uri, art, token }) catch null
+            else
+                null;
+            defer if (art_url) |a| allocator.free(a);
+
+            // Check if already exists
+            const existing = l.getBySourceId(.plex, plex_item.rating_key) catch null;
+            if (existing) |e| {
+                l.freeMediaItem(e);
+                continue; // Already synced
+            }
+
+            const parent_id: ?i64 = if (plex_item.parent_rating_key) |prk| blk: {
+                const parent = l.getBySourceId(.plex, prk) catch null;
+                if (parent) |p| {
+                    defer l.freeMediaItem(p);
+                    break :blk p.id;
+                }
+                break :blk null;
+            } else null;
+
+            const item_id = l.insertMediaItem(.{
+                .source = .plex,
+                .source_id = plex_item.rating_key,
+                .server_id = sid,
+                .media_type = mt,
+                .title = plex_item.title,
+                .year = plex_item.year,
+                .summary = plex_item.summary,
+                .rating = plex_item.rating,
+                .duration_ms = plex_item.duration_ms,
+                .poster_path = poster_url,
+                .backdrop_path = art_url,
+                .parent_id = parent_id,
+                .season_number = plex_item.parent_index,
+                .episode_number = plex_item.index,
+                .added_at = now,
+                .updated_at = now,
+            }) catch |err| {
+                std.log.err("plex_sync: insertMediaItem failed: {}", .{err});
+                continue;
+            };
+            total_synced += 1;
+
+            // For shows, fetch seasons and episodes
+            if (mt == .show) {
+                syncChildren(l, &client, plex_item.rating_key, item_id, sid, uri, token, now) catch |err| {
+                    std.log.err("plex_sync: syncChildren failed for '{s}': {}", .{ plex_item.title, err });
+                };
+            }
+        }
+    }
+
+    std.log.info("plex_sync: synced {d} items from server '{s}'", .{ total_synced, sid });
+    return total_synced;
+}
+
+fn syncChildren(
+    l: *library.Library,
+    client: *plex_client.PlexClient,
+    parent_rating_key: []const u8,
+    parent_db_id: i64,
+    server_id: []const u8,
+    uri: []const u8,
+    token: []const u8,
+    now: i64,
+) !void {
+    const children = client.getChildren(parent_rating_key) catch return;
+    defer client.freeMediaItems(children);
+
+    for (children) |child| {
+        const mt = plexTypeToMediaType(child.media_type);
+
+        // Check if already exists
+        const existing = l.getBySourceId(.plex, child.rating_key) catch null;
+        if (existing) |e| {
+            l.freeMediaItem(e);
+            continue;
+        }
+
+        const poster_url = if (child.thumb) |thumb|
+            std.fmt.allocPrint(allocator, "{s}{s}?X-Plex-Token={s}", .{ uri, thumb, token }) catch null
+        else
+            null;
+        defer if (poster_url) |p| allocator.free(p);
+
+        const child_id = l.insertMediaItem(.{
+            .source = .plex,
+            .source_id = child.rating_key,
+            .server_id = server_id,
+            .media_type = mt,
+            .title = child.title,
+            .year = child.year,
+            .summary = child.summary,
+            .rating = child.rating,
+            .duration_ms = child.duration_ms,
+            .poster_path = poster_url,
+            .parent_id = parent_db_id,
+            .season_number = child.parent_index orelse child.index,
+            .episode_number = child.index,
+            .added_at = now,
+            .updated_at = now,
+        }) catch continue;
+
+        // Recurse for seasons → episodes
+        if (mt == .season) {
+            syncChildren(l, client, child.rating_key, child_id, server_id, uri, token, now) catch {};
+        }
+    }
+}
+
+/// Sync all stored Plex servers. Reads auth tokens from the servers table.
+/// Returns total items synced across all servers, or -1 on error.
+export fn reel_plex_sync_all(lib: ?*library.Library) i32 {
+    const l = lib orelse return -1;
+    const servers = l.listServers() catch return -1;
+    defer l.freeServers(servers);
+
+    var total: i32 = 0;
+    for (servers) |srv| {
+        const uri = srv.connection_uri orelse continue;
+        const token = srv.auth_token orelse continue;
+        const result = reel_plex_sync(lib, @ptrCast(allocator.dupeZ(u8, srv.id) catch continue), @ptrCast(allocator.dupeZ(u8, uri) catch continue), @ptrCast(allocator.dupeZ(u8, token) catch continue));
+        if (result > 0) total += result;
+    }
+    return total;
+}
+
+fn plexTypeToMediaType(plex_type: []const u8) types.MediaType {
+    if (std.mem.eql(u8, plex_type, "movie")) return .movie;
+    if (std.mem.eql(u8, plex_type, "show")) return .show;
+    if (std.mem.eql(u8, plex_type, "season")) return .season;
+    if (std.mem.eql(u8, plex_type, "episode")) return .episode;
+    return .other;
+}
+
 // Server management
 
 const ReelServerC = extern struct {
