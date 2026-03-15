@@ -233,8 +233,8 @@ Sidebar Click
 6. **`other_view.zig`** — same poster grid, filtered to `.other` type.
 
 **Success criteria:**
-- [ ] Movies view shows poster grid with images
-- [ ] Sort and search work
+- [x] Movies view shows poster grid with images
+- [x] Sort and search work
 - [ ] Clicking a poster shows detail view with metadata
 - [ ] Clicking Play starts playback
 - [ ] Escape returns to library view
@@ -292,12 +292,12 @@ Sidebar Click
 7. **Add context menu to poster grid items**: Right-click → "Add to Favorites", "Mark as Watched/Unwatched", "Download" (Plex items)
 
 **Success criteria:**
-- [ ] Home view shows Continue Watching, Recently Added, On Deck
-- [ ] First-launch empty state guides user to Settings
-- [ ] Favorites can be added/removed via context menu
-- [ ] Files view shows Plex servers and local folders
-- [ ] Downloads view shows queue with progress
-- [ ] Settings allows full app configuration
+- [x] Home view shows Continue Watching, Recently Added, On Deck
+- [x] First-launch empty state guides user to Settings
+- [x] Favorites can be added/removed via context menu
+- [x] Files view shows Plex servers and local folders
+- [x] Downloads view shows queue with progress
+- [x] Settings allows full app configuration
 - [ ] Plex auth flow works end-to-end
 
 **Estimated effort:** Large
