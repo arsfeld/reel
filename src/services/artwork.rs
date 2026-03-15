@@ -43,6 +43,8 @@ impl ArtworkCache {
 
         // Acquire semaphore permit before downloading
         let wait_start = std::time::Instant::now();
+        // Semaphore is owned by ArtworkCache, so acquire only fails if the
+        // cache is dropped while a download is in progress (programming error).
         let _permit = self.download_semaphore.acquire().await.expect("semaphore closed");
         let wait_time = wait_start.elapsed();
 

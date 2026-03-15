@@ -1107,12 +1107,14 @@ async fn validate_or_rediscover_source(
     info!("Validating saved Plex connection: {url}");
 
     // Quick connectivity test on the saved URL
-    let http = reqwest::Client::builder()
+    let Ok(http) = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(3))
         .timeout(std::time::Duration::from_secs(5))
         .danger_accept_invalid_certs(true)
         .build()
-        .unwrap();
+    else {
+        return AppCmd::SourceValidationFailed("Failed to create HTTP client".into());
+    };
 
     if http.get(format!("{url}/")).send().await.is_ok() {
         info!("Saved URL is reachable: {url}");

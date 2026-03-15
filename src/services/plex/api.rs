@@ -26,10 +26,12 @@ impl PlexClient {
             default_headers.insert("X-Plex-Token", token);
         }
 
+        // reqwest Client::builder().build() only fails if the TLS backend
+        // cannot initialize, which indicates a broken system configuration.
         let http = reqwest::Client::builder()
             .default_headers(default_headers)
             .build()
-            .expect("Failed to build HTTP client");
+            .expect("TLS backend initialization failed");
 
         Self {
             http,

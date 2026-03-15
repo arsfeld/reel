@@ -1,6 +1,14 @@
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Debug, thiserror::Error)]
+pub enum WindowStateError {
+    #[error("Could not determine config directory")]
+    NoConfigDir,
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
 /// Window state to persist across sessions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowState {
@@ -46,15 +54,16 @@ fn dirs_config_dir() -> Option<PathBuf> {
 
 /// Save window state to disk.
 #[allow(dead_code)]
-pub fn save(state: &WindowState) -> Result<(), String> {
-    let path = state_file_path().ok_or("Could not determine config directory")?;
+pub fn save(state: &WindowState) -> Result<(), WindowStateError> {
+    let path = state_file_path().ok_or(WindowStateError::NoConfigDir)?;
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {e}"))?;
+        fs::create_dir_all(parent)?;
     }
 
     let content = serialize(state);
-    fs::write(&path, content).map_err(|e| format!("Failed to write window state: {e}"))
+    fs::write(&path, content)?;
+    Ok(())
 }
 
 /// Load window state from disk.

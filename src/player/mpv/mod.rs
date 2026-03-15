@@ -13,6 +13,7 @@ impl MpvBackend {
     pub fn new() -> Result<Self, libmpv2::Error> {
         // MPV requires LC_NUMERIC=C
         unsafe {
+            // Safe: "C" is a static string with no interior NUL bytes.
             let c_locale = std::ffi::CString::new("C").unwrap();
             libc::setlocale(libc::LC_NUMERIC, c_locale.as_ptr());
         }

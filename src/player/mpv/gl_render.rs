@@ -91,6 +91,7 @@ pub unsafe fn create_render_context(
     unsafe {
         let mut render_ctx: *mut mpv_render_context = ptr::null_mut();
 
+        // Safe: "opengl" is a static string with no interior NUL bytes.
         let api_type = CString::new("opengl").unwrap();
 
         let opengl_params = mpv_opengl_init_params {
