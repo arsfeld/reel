@@ -117,6 +117,63 @@ export fn reel_settings_set(db: ?*database.Database, key: [*:0]const u8, value: 
     return 0;
 }
 
+// Downloads
+
+export fn reel_download_create(db: ?*database.Database) ?*downloader.Downloader {
+    const d = db orelse return null;
+    const dl = allocator.create(downloader.Downloader) catch return null;
+    dl.* = downloader.Downloader.init(allocator, d);
+    return dl;
+}
+
+export fn reel_download_destroy(dl: ?*downloader.Downloader) void {
+    const d = dl orelse return;
+    allocator.destroy(d);
+}
+
+export fn reel_download_enqueue(
+    dl: ?*downloader.Downloader,
+    media_item_id: i64,
+    server_id: [*:0]const u8,
+    source_url: [*:0]const u8,
+    download_dir: [*:0]const u8,
+    filename: [*:0]const u8,
+) i64 {
+    const d = dl orelse return -1;
+    return d.enqueue(.{
+        .media_item_id = media_item_id,
+        .server_id = std.mem.span(server_id),
+        .source_url = std.mem.span(source_url),
+        .download_dir = std.mem.span(download_dir),
+        .filename = std.mem.span(filename),
+    }) catch return -1;
+}
+
+export fn reel_download_pause(dl: ?*downloader.Downloader, id: i64) c_int {
+    const d = dl orelse return -1;
+    d.pause(id) catch return -1;
+    return 0;
+}
+
+export fn reel_download_resume(dl: ?*downloader.Downloader, id: i64) c_int {
+    const d = dl orelse return -1;
+    d.resumeDownload(id) catch return -1;
+    return 0;
+}
+
+export fn reel_download_remove(dl: ?*downloader.Downloader, id: i64, delete_file: bool) c_int {
+    const d = dl orelse return -1;
+    d.remove(id, delete_file) catch return -1;
+    return 0;
+}
+
+export fn reel_download_get_local_path(dl: ?*downloader.Downloader, media_item_id: i64) ?[*:0]const u8 {
+    const d = dl orelse return null;
+    const path = (d.getCompletedLocalPath(media_item_id) catch return null) orelse return null;
+    // Caller responsible for memory (acceptable for bridging)
+    return @ptrCast(path.ptr);
+}
+
 // Helpers
 
 fn intToMediaType(val: c_int) ?types.MediaType {

@@ -157,6 +157,25 @@ ReelError reel_library_remove_scan_path(ReelLibrary* lib, int64_t id);
 const char* reel_settings_get(ReelDatabase* db, const char* key);
 ReelError reel_settings_set(ReelDatabase* db, const char* key, const char* value);
 
+/* ── Downloads ──────────────────────────────────────────── */
+
+typedef struct ReelDownloader ReelDownloader;
+
+ReelDownloader* reel_download_create(ReelDatabase* db);
+void reel_download_destroy(ReelDownloader* dl);
+
+int64_t reel_download_enqueue(ReelDownloader* dl,
+                               int64_t media_item_id,
+                               const char* server_id,
+                               const char* source_url,
+                               const char* download_dir,
+                               const char* filename);
+
+ReelError reel_download_pause(ReelDownloader* dl, int64_t id);
+ReelError reel_download_resume(ReelDownloader* dl, int64_t id);
+ReelError reel_download_remove(ReelDownloader* dl, int64_t id, int delete_file);
+const char* reel_download_get_local_path(ReelDownloader* dl, int64_t media_item_id);
+
 #ifdef __cplusplus
 }
 #endif
