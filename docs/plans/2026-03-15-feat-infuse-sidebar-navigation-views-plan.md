@@ -145,8 +145,8 @@ Sidebar Click
 7. **Fix hardcoded `platform = "Linux"`** in `src/net/plex/types.zig:6` — make it a comptime constant based on `@import("builtin").os.tag`.
 
 **Success criteria:**
-- [ ] All new library queries have unit tests
-- [ ] Favorites table created via migration
+- [x] All new library queries have unit tests
+- [x] Favorites table created via migration
 - [ ] Image cache downloads and serves a test image
 - [ ] `reel.h` header compiles when included from C
 - [ ] macOS `Package.swift` links against the expanded library without errors
@@ -185,10 +185,10 @@ Sidebar Click
 5. **Reconcile CLI file argument**: If `reel /path/to/file.mkv` is invoked, skip sidebar and go straight to player (preserve current behavior). If no argument, show sidebar with Home view.
 
 **Success criteria:**
-- [ ] App launches with sidebar visible
-- [ ] Clicking sidebar items switches the content area
-- [ ] Sidebar collapses on narrow windows (AdwOverlaySplitView adaptive)
-- [ ] `reel /path/to/file.mkv` still works (direct playback)
+- [x] App launches with sidebar visible
+- [x] Clicking sidebar items switches the content area
+- [x] Sidebar collapses on narrow windows (AdwOverlaySplitView adaptive)
+- [x] `reel /path/to/file.mkv` still works (direct playback)
 - [ ] Keyboard shortcuts 1-8 switch sidebar views
 
 **Estimated effort:** Medium
@@ -339,7 +339,7 @@ Sidebar Click
    - Menu bar integration (File > Open, Playback menu items)
 
 **Success criteria:**
-- [ ] macOS app launches with sidebar
+- [x] macOS app launches with sidebar
 - [ ] All 8 views functional with data from Zig core
 - [ ] Poster grid shows images
 - [ ] Detail view and playback work
