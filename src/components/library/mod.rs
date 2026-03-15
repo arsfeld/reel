@@ -56,6 +56,8 @@ pub struct LibraryView {
     continue_watching_section: gtk4::Box,
     /// Horizontal box inside the Continue Watching scrolled window.
     continue_watching_box: gtk4::Box,
+    /// Tracks poster downloads for logging: (completed_count, total_to_fetch, batch_start_time).
+    poster_load_tracker: Option<(usize, usize, std::time::Instant)>,
 }
 
 #[allow(dead_code)]
@@ -432,6 +434,7 @@ impl Component for LibraryView {
             watch_data: HashMap::new(),
             continue_watching_section,
             continue_watching_box,
+            poster_load_tracker: None,
         };
 
         ComponentParts { model, widgets }
@@ -470,22 +473,43 @@ impl Component for LibraryView {
 
                 let lt = library_type;
                 sender.oneshot_command(async move {
+                    let start = std::time::Instant::now();
                     match source.libraries().await {
                         Ok(libs) => {
                             let target_type = match lt {
                                 LibraryType::Movie => "movie",
                                 LibraryType::Show => "show",
                             };
-                            let mut all_items = Vec::new();
-                            for lib in libs
+                            let matching_libs: Vec<_> = libs
                                 .iter()
                                 .filter(|l| l.library_type.as_str() == target_type)
-                            {
-                                match source.library_items(&lib.key).await {
+                                .collect();
+
+                            // Fetch all library sections in parallel
+                            let fetch_start = std::time::Instant::now();
+                            let fetches: Vec<_> = matching_libs
+                                .iter()
+                                .map(|lib| source.library_items(&lib.key))
+                                .collect();
+                            let results = futures::future::join_all(fetches).await;
+                            info!(
+                                "Fetched {} library sections in {:?}",
+                                matching_libs.len(),
+                                fetch_start.elapsed()
+                            );
+
+                            let mut all_items = Vec::new();
+                            for result in results {
+                                match result {
                                     Ok(items) => all_items.extend(items),
                                     Err(e) => return LibraryViewCmd::Error(e.to_string()),
                                 }
                             }
+                            info!(
+                                "Library load complete: {} items in {:?}",
+                                all_items.len(),
+                                start.elapsed()
+                            );
                             LibraryViewCmd::Loaded(all_items)
                         }
                         Err(e) => LibraryViewCmd::Error(e.to_string()),
@@ -508,11 +532,13 @@ impl Component for LibraryView {
                     return;
                 }
 
+                let build_start = std::time::Instant::now();
                 self.all_items = items;
                 info!("Library loaded: {} items", self.all_items.len());
                 self.rebuild_genre_chips(&sender);
                 self.rebuild_decade_dropdown();
                 self.rebuild_grid(&sender);
+                info!("Full UI build (chips + decades + grid): {:?}", build_start.elapsed());
             }
             LibraryViewMsg::LoadError(msg) => {
                 self.error_page.set_description(Some(&msg));
@@ -666,6 +692,27 @@ impl Component for LibraryView {
                         }
                     }
                 }
+
+                // Log poster download progress at milestones
+                if let Some((ref mut done, total, batch_start)) = self.poster_load_tracker {
+                    *done += 1;
+                    let completed = *done;
+                    // Log at first, every 25%, and last
+                    if completed == 1
+                        || completed == total
+                        || (total >= 20 && completed % (total / 4).max(1) == 0)
+                    {
+                        info!(
+                            "Posters: {}/{} loaded ({:?} elapsed)",
+                            completed,
+                            total,
+                            batch_start.elapsed()
+                        );
+                    }
+                    if completed == total {
+                        self.poster_load_tracker = None;
+                    }
+                }
             }
         }
     }
@@ -674,6 +721,7 @@ impl Component for LibraryView {
 impl LibraryView {
     /// Rebuild the grid from all_items using current search/filter/sort state.
     fn rebuild_grid(&mut self, sender: &ComponentSender<Self>) {
+        let start = std::time::Instant::now();
         self.grid.clear();
 
         let filtered_indices = library_filter::apply_filters_and_sort(
@@ -696,6 +744,8 @@ impl LibraryView {
 
         let artwork_cache = self.artwork_cache.clone();
         let source = self.source.clone();
+        let mut posters_to_fetch = 0usize;
+        let mut posters_cached = 0usize;
 
         for &item_idx in &filtered_indices {
             let item = &self.all_items[item_idx];
@@ -717,8 +767,10 @@ impl LibraryView {
                 if let Some(texture) = self.texture_cache.get(&url) {
                     // Already cached — set immediately, no async fetch needed
                     card.poster_texture = Some(texture.clone());
+                    posters_cached += 1;
                 } else if let Some(cache) = &artwork_cache {
                     // Not cached — fetch asynchronously
+                    posters_to_fetch += 1;
                     let cache = Arc::clone(cache);
                     let fetch_url = url;
                     sender.oneshot_command(async move {
@@ -735,6 +787,19 @@ impl LibraryView {
 
             self.grid.append(card);
         }
+
+        // Start tracking poster downloads
+        if posters_to_fetch > 0 {
+            self.poster_load_tracker = Some((0, posters_to_fetch, std::time::Instant::now()));
+        }
+
+        info!(
+            "Grid rebuilt: {} items, {} posters cached (in-memory), {} posters to fetch, took {:?}",
+            filtered_indices.len(),
+            posters_cached,
+            posters_to_fetch,
+            start.elapsed()
+        );
 
         self.stack.set_visible_child(&self.grid_page);
     }
@@ -907,7 +972,7 @@ impl LibraryView {
 
             // Load poster texture
             if let (Some(poster_path), Some(src)) = (&item.poster_path, &source) {
-                let url = src.artwork_url(poster_path, 200, 300);
+                let url = src.artwork_url(poster_path, 300, 450);
                 if let Some(texture) = self.texture_cache.get(&url) {
                     picture.set_paintable(Some(texture));
                 } else if let Some(cache) = &artwork_cache {

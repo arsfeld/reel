@@ -1,5 +1,9 @@
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use tokio::sync::Semaphore;
+
+/// Maximum concurrent artwork downloads to avoid flooding the server.
+const MAX_CONCURRENT_DOWNLOADS: usize = 8;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ArtworkError {
@@ -14,6 +18,8 @@ pub enum ArtworkError {
 pub struct ArtworkCache {
     cache_dir: PathBuf,
     http: reqwest::Client,
+    /// Limits concurrent downloads to avoid overwhelming the server.
+    download_semaphore: Semaphore,
 }
 
 impl ArtworkCache {
@@ -21,14 +27,28 @@ impl ArtworkCache {
         Self {
             cache_dir,
             http: reqwest::Client::new(),
+            download_semaphore: Semaphore::new(MAX_CONCURRENT_DOWNLOADS),
         }
     }
 
     /// Get or download artwork. Returns the cached file path.
+    /// Downloads are limited to [`MAX_CONCURRENT_DOWNLOADS`] at a time.
     pub async fn get_or_download(&self, url: &str) -> Result<PathBuf, ArtworkError> {
         let path = self.path_for_url(url);
 
         if path.exists() {
+            tracing::debug!("Artwork cache hit (disk): {}", path.display());
+            return Ok(path);
+        }
+
+        // Acquire semaphore permit before downloading
+        let wait_start = std::time::Instant::now();
+        let _permit = self.download_semaphore.acquire().await.expect("semaphore closed");
+        let wait_time = wait_start.elapsed();
+
+        // Re-check after acquiring permit (another task may have downloaded it)
+        if path.exists() {
+            tracing::debug!("Artwork cache hit (after wait): {}", path.display());
             return Ok(path);
         }
 
@@ -36,8 +56,17 @@ impl ArtworkCache {
         std::fs::create_dir_all(&self.cache_dir)?;
 
         // Download
+        let dl_start = std::time::Instant::now();
         let bytes = self.http.get(url).send().await?.bytes().await?;
+        let dl_time = dl_start.elapsed();
         std::fs::write(&path, &bytes)?;
+
+        tracing::info!(
+            "Artwork downloaded: {} bytes, waited {:?} for slot, download {:?}",
+            bytes.len(),
+            wait_time,
+            dl_time,
+        );
 
         Ok(path)
     }

@@ -54,19 +54,34 @@ impl PlexClient {
 
     /// Get all library sections.
     pub async fn libraries(&self) -> Result<Vec<PlexLibrary>, PlexError> {
+        let start = std::time::Instant::now();
         let url = format!("{}/library/sections", self.base_url);
         let resp = self.http.get(&url).send().await?;
         Self::check_status(&resp)?;
         let body: PlexLibraryResponse = resp.json().await?;
+        tracing::info!(
+            "PlexClient::libraries() -> {} sections in {:?}",
+            body.media_container.directories.len(),
+            start.elapsed()
+        );
         Ok(body.media_container.directories)
     }
 
     /// Get all items in a library section.
     pub async fn library_items(&self, library_key: &str) -> Result<Vec<PlexMetadata>, PlexError> {
+        let start = std::time::Instant::now();
         let url = format!("{}/library/sections/{}/all", self.base_url, library_key);
         let resp = self.http.get(&url).send().await?;
+        let http_elapsed = start.elapsed();
         Self::check_status(&resp)?;
         let body: PlexMetadataResponse = resp.json().await?;
+        tracing::info!(
+            "PlexClient::library_items(key={}) -> {} items (http: {:?}, total: {:?})",
+            library_key,
+            body.media_container.metadata.len(),
+            http_elapsed,
+            start.elapsed()
+        );
         Ok(body.media_container.metadata)
     }
 
