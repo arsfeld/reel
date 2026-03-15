@@ -7,6 +7,7 @@ pub const types = @import("core/types.zig");
 pub const settings = @import("core/settings.zig");
 pub const library = @import("core/library.zig");
 pub const scanner = @import("core/scanner.zig");
+pub const downloader = @import("core/downloader.zig");
 
 // Network modules
 pub const http = @import("net/http.zig");
