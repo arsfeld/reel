@@ -119,8 +119,12 @@ pub const SettingsView = struct {
         const storage_group = c.adw_preferences_group_new();
         c.adw_preferences_group_set_title(@ptrCast(storage_group), "Storage");
 
-        const dl_path_row = c.adw_entry_row_new();
+        const dl_path_row = c.adw_action_row_new();
         c.adw_preferences_row_set_title(@ptrCast(dl_path_row), "Download Path");
+        c.adw_action_row_set_subtitle(@ptrCast(dl_path_row), @ptrCast(app.getDownloadDir().ptr));
+        c.adw_action_row_add_prefix(@ptrCast(dl_path_row),
+            c.gtk_image_new_from_icon_name("folder-download-symbolic"),
+        );
         c.adw_preferences_group_add(@ptrCast(storage_group), @ptrCast(dl_path_row));
 
         const cache_row = c.adw_action_row_new();

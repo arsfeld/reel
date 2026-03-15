@@ -88,12 +88,34 @@ pub const ImageCache = struct {
         return 0;
     }
 
-    /// Evict oldest cached images until total size is under max_bytes.
+    /// Pin an image URL so it won't be evicted by LRU (for downloaded items).
+    pub fn pin(self: *ImageCache, url: []const u8) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare("UPDATE image_cache SET pinned = 1 WHERE url = ?");
+        defer stmt.finalize();
+        stmt.bindText(1, url);
+        try stmt.exec();
+    }
+
+    /// Unpin an image URL so it can be evicted normally.
+    pub fn unpin(self: *ImageCache, url: []const u8) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare("UPDATE image_cache SET pinned = 0 WHERE url = ?");
+        defer stmt.finalize();
+        stmt.bindText(1, url);
+        try stmt.exec();
+    }
+
+    /// Evict oldest unpinned cached images until total size is under max_bytes.
     pub fn evictToSize(self: *ImageCache, max_bytes: i64) !void {
         while (try self.totalSize() > max_bytes) {
-            // Delete oldest entry
+            // Delete oldest unpinned entry
             var stmt = try self.db.prepare(
-                "SELECT url, local_path FROM image_cache ORDER BY cached_at ASC LIMIT 1"
+                "SELECT url, local_path FROM image_cache WHERE pinned = 0 ORDER BY cached_at ASC LIMIT 1"
             );
             defer stmt.finalize();
 
