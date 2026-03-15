@@ -9,6 +9,7 @@ mod models;
 mod navigation;
 mod player;
 mod services;
+mod settings;
 
 use tracing_subscriber::EnvFilter;
 

@@ -24,7 +24,6 @@ pub fn cache_dir() -> PathBuf {
 }
 
 /// `$XDG_CONFIG_HOME/reel` (default: `~/.config/reel`)
-#[allow(dead_code)]
 pub fn config_dir() -> PathBuf {
     xdg_dir("XDG_CONFIG_HOME", ".config")
 }
