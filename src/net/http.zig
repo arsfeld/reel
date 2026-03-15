@@ -59,11 +59,11 @@ pub const HttpClient = struct {
         var server_header_buffer: [16 * 1024]u8 = undefined;
 
         // Build extra headers
-        var extra = std.ArrayList(std.http.Header).init(self.allocator);
-        defer extra.deinit();
+        var extra: std.ArrayList(std.http.Header) = .{};
+        defer extra.deinit(self.allocator);
 
         for (extra_headers) |h| {
-            try extra.append(.{ .name = h.name, .value = h.value });
+            try extra.append(self.allocator, .{ .name = h.name, .value = h.value });
         }
 
         var req = self.client.open(method, uri, .{

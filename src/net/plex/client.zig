@@ -47,7 +47,7 @@ pub const PlexClient = struct {
 
         if (response.status != .ok) return error.RequestFailed;
 
-        var servers = std.ArrayList(plex_types.PlexServer).init(self.allocator);
+        var servers: std.ArrayList(plex_types.PlexServer) = .{};
 
         var parser = xml.XmlParser.init(response.body);
         while (parser.next()) |elem| {
@@ -55,7 +55,7 @@ pub const PlexClient = struct {
                 const provides = elem.attr("provides") orelse continue;
                 if (std.mem.indexOf(u8, provides, "server") == null) continue;
 
-                try servers.append(.{
+                try servers.append(self.allocator, .{
                     .name = try self.allocator.dupe(u8, elem.attr("name") orelse continue),
                     .machine_identifier = try self.allocator.dupe(u8, elem.attr("clientIdentifier") orelse continue),
                     .access_token = if (elem.attr("accessToken")) |t| try self.allocator.dupe(u8, t) else null,
@@ -63,7 +63,7 @@ pub const PlexClient = struct {
             }
         }
 
-        return servers.toOwnedSlice();
+        return servers.toOwnedSlice(self.allocator);
     }
 
     /// Get library sections from the connected server.
@@ -80,12 +80,12 @@ pub const PlexClient = struct {
 
         if (response.status != .ok) return error.RequestFailed;
 
-        var libraries = std.ArrayList(plex_types.PlexLibrary).init(self.allocator);
+        var libraries: std.ArrayList(plex_types.PlexLibrary) = .{};
 
         var parser = xml.XmlParser.init(response.body);
         while (parser.next()) |elem| {
             if (std.mem.eql(u8, elem.tag, "Directory")) {
-                try libraries.append(.{
+                try libraries.append(self.allocator, .{
                     .key = try self.allocator.dupe(u8, elem.attr("key") orelse continue),
                     .title = try self.allocator.dupe(u8, elem.attr("title") orelse continue),
                     .library_type = try self.allocator.dupe(u8, elem.attr("type") orelse continue),
@@ -93,7 +93,7 @@ pub const PlexClient = struct {
             }
         }
 
-        return libraries.toOwnedSlice();
+        return libraries.toOwnedSlice(self.allocator);
     }
 
     /// Browse items in a library section.
@@ -195,14 +195,14 @@ pub const PlexClient = struct {
 
         if (response.status != .ok) return error.RequestFailed;
 
-        var items = std.ArrayList(plex_types.PlexMediaItem).init(self.allocator);
+        var items: std.ArrayList(plex_types.PlexMediaItem) = .{};
 
         var parser = xml.XmlParser.init(response.body);
         while (parser.next()) |elem| {
             if (std.mem.eql(u8, elem.tag, "Video") or
                 std.mem.eql(u8, elem.tag, "Directory"))
             {
-                try items.append(.{
+                try items.append(self.allocator, .{
                     .rating_key = try self.allocator.dupe(u8, elem.attr("ratingKey") orelse continue),
                     .title = try self.allocator.dupe(u8, elem.attr("title") orelse continue),
                     .media_type = try self.allocator.dupe(u8, elem.attr("type") orelse "unknown"),
@@ -223,7 +223,7 @@ pub const PlexClient = struct {
             }
         }
 
-        return items.toOwnedSlice();
+        return items.toOwnedSlice(self.allocator);
     }
 
     pub fn freeMediaItems(self: *PlexClient, items: []plex_types.PlexMediaItem) void {
