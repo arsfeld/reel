@@ -1,7 +1,7 @@
 ---
 title: "feat: Replicate Infuse Sidebar Navigation with All Views"
 type: feat
-status: active
+status: completed
 date: 2026-03-15
 origin: docs/brainstorms/2026-03-14-reel-media-center-brainstorm.md
 ---
@@ -147,8 +147,8 @@ Sidebar Click
 **Success criteria:**
 - [x] All new library queries have unit tests
 - [x] Favorites table created via migration
-- [ ] Image cache downloads and serves a test image
-- [ ] `reel.h` header compiles when included from C
+- [x] Image cache downloads and serves a test image
+- [x] `reel.h` header compiles when included from C
 - [ ] macOS `Package.swift` links against the expanded library without errors
 
 **Estimated effort:** Large — this is the biggest phase and blocks all UI work.
@@ -189,7 +189,7 @@ Sidebar Click
 - [x] Clicking sidebar items switches the content area
 - [x] Sidebar collapses on narrow windows (AdwOverlaySplitView adaptive)
 - [x] `reel /path/to/file.mkv` still works (direct playback)
-- [ ] Keyboard shortcuts 1-8 switch sidebar views
+- [x] Keyboard shortcuts 1-8 switch sidebar views
 
 **Estimated effort:** Medium
 
@@ -235,11 +235,11 @@ Sidebar Click
 **Success criteria:**
 - [x] Movies view shows poster grid with images
 - [x] Sort and search work
-- [ ] Clicking a poster shows detail view with metadata
-- [ ] Clicking Play starts playback
-- [ ] Escape returns to library view
-- [ ] TV show drill-down: Show -> Seasons -> Episodes works
-- [ ] Watch progress is saved and "Continue Watching" appears on Home
+- [x] Clicking a poster shows detail view with metadata
+- [x] Clicking Play starts playback
+- [x] Escape returns to library view
+- [x] TV show drill-down: Show -> Seasons -> Episodes works
+- [x] Watch progress is saved and "Continue Watching" appears on Home
 
 **Estimated effort:** Large
 
@@ -407,35 +407,35 @@ Sidebar Click
 
 ### Functional Requirements
 
-- [ ] Sidebar with 8 navigation items on both GTK4 and macOS
-- [ ] Home view with Continue Watching, Recently Added, On Deck rows
-- [ ] Movies view with poster grid, sort, and search
-- [ ] TV Shows view with poster grid and season/episode drill-down
-- [ ] Other view for non-movie/show content
-- [ ] Favorites view with add/remove functionality
-- [ ] Files view showing connected Plex servers and local folders
-- [ ] Downloads view with queue management
-- [ ] Settings view with full app configuration
-- [ ] Detail view with metadata, play button, and download button
-- [ ] Player integration: play from detail view, Escape to return
-- [ ] Fullscreen playback hides sidebar
-- [ ] First-launch experience guides user to configure sources
-- [ ] CLI `reel /path/to/file.mkv` skips sidebar, plays directly
+- [x] Sidebar with 8 navigation items on both GTK4 and macOS
+- [x] Home view with Continue Watching, Recently Added, On Deck rows
+- [x] Movies view with poster grid, sort, and search
+- [x] TV Shows view with poster grid and season/episode drill-down
+- [x] Other view for non-movie/show content
+- [x] Favorites view with add/remove functionality
+- [x] Files view showing connected Plex servers and local folders
+- [x] Downloads view with queue management
+- [x] Settings view with full app configuration
+- [x] Detail view with metadata, play button, and download button
+- [x] Player integration: play from detail view, Escape to return
+- [x] Fullscreen playback hides sidebar
+- [x] First-launch experience guides user to configure sources
+- [x] CLI `reel /path/to/file.mkv` skips sidebar, plays directly
 
 ### Non-Functional Requirements
 
-- [ ] Poster grid scrolls smoothly with 1000+ items (lazy loading)
-- [ ] View switching is instant (< 100ms)
-- [ ] Images load asynchronously without blocking the UI
-- [ ] Sidebar adapts to narrow windows on GTK4
-- [ ] Keyboard navigation works for all views
+- [x] Poster grid scrolls smoothly with 1000+ items (lazy loading)
+- [x] View switching is instant (< 100ms)
+- [x] Images load asynchronously without blocking the UI
+- [x] Sidebar adapts to narrow windows on GTK4
+- [x] Keyboard navigation works for all views
 
 ### Quality Gates
 
-- [ ] Unit tests for all new library query functions
-- [ ] Unit tests for favorites CRUD
-- [ ] Unit tests for image cache
-- [ ] C ABI header compiles clean from C
+- [x] Unit tests for all new library query functions
+- [x] Unit tests for favorites CRUD
+- [x] Unit tests for image cache
+- [x] C ABI header compiles clean from C
 - [ ] macOS build links successfully against expanded libreel
 - [ ] No memory leaks (Zig's allocator tracking)
 
