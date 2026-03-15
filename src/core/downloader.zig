@@ -91,7 +91,7 @@ pub const Downloader = struct {
             };
 
             // Sleep 2 seconds between queue checks
-            std.time.sleep(2 * std.time.ns_per_s);
+            std.Thread.sleep(2 * std.time.ns_per_s);
         }
     }
 
@@ -205,7 +205,7 @@ pub const Downloader = struct {
                         // Transient error — retry with backoff
                         if (retries < max_retries) {
                             const delay_idx = @min(retries, retry_delays_ms.len - 1);
-                            std.time.sleep(retry_delays_ms[delay_idx] * std.time.ns_per_ms);
+                            std.Thread.sleep(retry_delays_ms[delay_idx] * std.time.ns_per_ms);
                             continue;
                         }
                         try self.setFailed(dl.id, "Download failed after retries");

@@ -15,9 +15,11 @@ pub const DetailView = struct {
     duration_label: *c.GtkWidget,
     type_label: *c.GtkWidget,
     play_button: *c.GtkWidget,
+    download_button: *c.GtkWidget,
     episodes_box: *c.GtkWidget,
     episodes_group: *c.GtkWidget,
     current_item_id: i64 = 0,
+    current_source: types.MediaSource = .local,
     current_file_path_buf: [1024]u8 = undefined,
     current_file_path_len: usize = 0,
 
@@ -88,7 +90,6 @@ pub const DetailView = struct {
         c.gtk_widget_add_css_class(@ptrCast(play_button), "suggested-action");
         c.gtk_widget_add_css_class(@ptrCast(play_button), "pill");
         c.gtk_widget_set_halign(@ptrCast(play_button), c.GTK_ALIGN_START);
-        c.gtk_widget_set_margin_top(@ptrCast(play_button), 8);
 
         // Connect play button click
         _ = c.g_signal_connect_data(
@@ -100,7 +101,29 @@ pub const DetailView = struct {
             c.G_CONNECT_DEFAULT,
         );
 
-        c.gtk_box_append(@ptrCast(info), @ptrCast(play_button));
+        // Button row (play + download)
+        const button_box = c.gtk_box_new(c.GTK_ORIENTATION_HORIZONTAL, 8);
+        c.gtk_widget_set_halign(@ptrCast(button_box), c.GTK_ALIGN_START);
+        c.gtk_widget_set_margin_top(@ptrCast(button_box), 8);
+        c.gtk_box_append(@ptrCast(button_box), @ptrCast(play_button));
+
+        // Download button
+        const download_button = c.gtk_button_new_from_icon_name("folder-download-symbolic");
+        c.gtk_widget_add_css_class(@ptrCast(download_button), "pill");
+        c.gtk_widget_set_tooltip_text(@ptrCast(download_button), "Download for offline viewing");
+        c.gtk_widget_set_visible(@ptrCast(download_button), 0); // hidden by default
+
+        _ = c.g_signal_connect_data(
+            @ptrCast(download_button),
+            "clicked",
+            @ptrCast(&onDownloadClicked),
+            null,
+            null,
+            c.G_CONNECT_DEFAULT,
+        );
+
+        c.gtk_box_append(@ptrCast(button_box), @ptrCast(download_button));
+        c.gtk_box_append(@ptrCast(info), @ptrCast(button_box));
 
         // Summary
         const summary_label = c.gtk_label_new("");
@@ -132,6 +155,7 @@ pub const DetailView = struct {
             .duration_label = @ptrCast(duration_label),
             .type_label = @ptrCast(type_label),
             .play_button = @ptrCast(play_button),
+            .download_button = @ptrCast(download_button),
             .episodes_box = episodes_box_widget,
             .episodes_group = @ptrCast(episodes_group),
         };
@@ -139,6 +163,7 @@ pub const DetailView = struct {
 
     pub fn showItem(self: *DetailView, item: types.MediaItem) void {
         self.current_item_id = item.id;
+        self.current_source = item.source;
 
         // Store file path for play button
         if (item.file_path) |fp| {
@@ -211,12 +236,57 @@ pub const DetailView = struct {
         c.gtk_widget_set_visible(@ptrCast(self.play_button),
             if (item.file_path != null) 1 else 0);
 
+        // Download button: show for Plex items (movies/episodes) that have a file path
+        const show_download = item.source == .plex and item.file_path != null and
+            (item.media_type == .movie or item.media_type == .episode);
+        c.gtk_widget_set_visible(@ptrCast(self.download_button), if (show_download) 1 else 0);
+
+        // Update download button state based on existing downloads
+        if (show_download) {
+            self.updateDownloadButton();
+        }
+
         // Episodes for TV shows
         if (item.media_type == .show) {
             self.loadEpisodes(item.id);
             c.gtk_widget_set_visible(self.episodes_box, 1);
         } else {
             c.gtk_widget_set_visible(self.episodes_box, 0);
+        }
+    }
+
+    fn updateDownloadButton(self: *DetailView) void {
+        var dl = app.getDownloader() orelse return;
+        const existing = dl.getByMediaItemId(self.current_item_id) catch return orelse {
+            // No existing download — show download icon
+            c.gtk_button_set_icon_name(@ptrCast(self.download_button), "folder-download-symbolic");
+            c.gtk_widget_set_tooltip_text(@ptrCast(self.download_button), "Download for offline viewing");
+            c.gtk_widget_set_sensitive(@ptrCast(self.download_button), 1);
+            return;
+        };
+        defer dl.freeDownload(existing);
+
+        switch (existing.status) {
+            .complete => {
+                c.gtk_button_set_icon_name(@ptrCast(self.download_button), "emblem-ok-symbolic");
+                c.gtk_widget_set_tooltip_text(@ptrCast(self.download_button), "Downloaded");
+                c.gtk_widget_set_sensitive(@ptrCast(self.download_button), 0);
+            },
+            .downloading, .queued => {
+                c.gtk_button_set_icon_name(@ptrCast(self.download_button), "content-loading-symbolic");
+                c.gtk_widget_set_tooltip_text(@ptrCast(self.download_button), "Downloading...");
+                c.gtk_widget_set_sensitive(@ptrCast(self.download_button), 0);
+            },
+            .paused => {
+                c.gtk_button_set_icon_name(@ptrCast(self.download_button), "media-playback-pause-symbolic");
+                c.gtk_widget_set_tooltip_text(@ptrCast(self.download_button), "Download paused");
+                c.gtk_widget_set_sensitive(@ptrCast(self.download_button), 0);
+            },
+            .failed => {
+                c.gtk_button_set_icon_name(@ptrCast(self.download_button), "folder-download-symbolic");
+                c.gtk_widget_set_tooltip_text(@ptrCast(self.download_button), "Retry download");
+                c.gtk_widget_set_sensitive(@ptrCast(self.download_button), 1);
+            },
         }
     }
 
@@ -255,5 +325,15 @@ fn onPlayClicked(_: *c.GtkButton, _: ?*anyopaque) callconv(.c) void {
     if (detail.current_file_path_len == 0) return;
 
     const path = detail.current_file_path_buf[0..detail.current_file_path_len];
-    app.switchToPlayer(path);
+    app.playMediaItem(detail.current_item_id, path);
+}
+
+fn onDownloadClicked(_: *c.GtkButton, _: ?*anyopaque) callconv(.c) void {
+    const detail = global_detail orelse return;
+    if (detail.current_item_id == 0) return;
+
+    app.enqueueDownload(detail.current_item_id);
+
+    // Update button state immediately
+    detail.updateDownloadButton();
 }

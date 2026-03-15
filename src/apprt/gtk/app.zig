@@ -9,6 +9,8 @@ const keys = @import("keys.zig");
 const player_mod = @import("../../core/player.zig");
 const database = @import("../../core/database.zig");
 const library_mod = @import("../../core/library.zig");
+const downloader_mod = @import("../../core/downloader.zig");
+const http_mod = @import("../../net/http.zig");
 const types = @import("../../core/types.zig");
 
 // View modules
@@ -69,6 +71,8 @@ const AppState = struct {
     // Data layer
     db: ?*database.Database = null,
     library: ?library_mod.Library = null,
+    downloader: ?downloader_mod.Downloader = null,
+    http_client: ?http_mod.HttpClient = null,
     allocator: std.mem.Allocator = std.heap.c_allocator,
 };
 
@@ -113,7 +117,21 @@ pub fn run(file_path: ?[]const u8) !void {
     };
     app_state.db = &db;
     app_state.library = library_mod.Library.init(app_state.allocator, &db);
-    defer db.close();
+    app_state.downloader = downloader_mod.Downloader.init(app_state.allocator, &db);
+    app_state.http_client = http_mod.HttpClient.init(app_state.allocator);
+
+    // Start download worker thread
+    if (app_state.downloader != null and app_state.http_client != null) {
+        app_state.downloader.?.startWorker(&app_state.http_client.?) catch |err| {
+            std.log.err("Failed to start download worker: {}", .{err});
+        };
+    }
+
+    defer {
+        if (app_state.downloader != null) app_state.downloader.?.stopWorker();
+        if (app_state.http_client != null) app_state.http_client.?.deinit();
+        db.close();
+    }
 
     return run_app();
 }
@@ -394,6 +412,67 @@ pub fn getAllocator() std.mem.Allocator {
     return app_state.allocator;
 }
 
+pub fn getDownloader() ?*downloader_mod.Downloader {
+    if (app_state.downloader != null) {
+        return &app_state.downloader.?;
+    }
+    return null;
+}
+
+var download_dir_buf: [512]u8 = undefined;
+var download_dir_val: ?[]const u8 = null;
+
+pub fn getDownloadDir() []const u8 {
+    if (download_dir_val) |d| return d;
+
+    const data_dir = std.posix.getenv("XDG_DATA_HOME") orelse blk: {
+        const home = std.posix.getenv("HOME") orelse "/tmp";
+        break :blk std.fmt.bufPrint(download_dir_buf[0..256], "{s}/.local/share", .{home}) catch "/tmp";
+    };
+    const dir = std.fmt.bufPrint(&download_dir_buf, "{s}/reel/downloads", .{data_dir}) catch "/tmp/reel/downloads";
+    std.fs.cwd().makePath(dir) catch {};
+    download_dir_val = dir;
+    return dir;
+}
+
+/// Enqueue a download for a Plex media item.
+pub fn enqueueDownload(media_item_id: i64) void {
+    var dl = getDownloader() orelse return;
+    var lib = getLibrary() orelse return;
+
+    const item = lib.getMediaItem(media_item_id) catch return orelse return;
+    defer lib.freeMediaItem(item);
+
+    if (item.source != .plex) return;
+
+    // Build filename: {id}_{sanitized_title}.{ext}
+    var filename_buf: [256]u8 = undefined;
+    const ext = if (item.file_path) |fp| blk: {
+        if (std.mem.lastIndexOfScalar(u8, fp, '.')) |dot| break :blk fp[dot..];
+        break :blk ".mkv";
+    } else ".mkv";
+
+    const filename = std.fmt.bufPrint(&filename_buf, "{d}_{s}{s}", .{
+        item.id,
+        if (item.title.len > 80) item.title[0..80] else item.title,
+        ext,
+    }) catch return;
+
+    _ = dl.enqueue(.{
+        .media_item_id = media_item_id,
+        .server_id = item.server_id orelse "",
+        .source_url = item.file_path orelse "", // Plex part key used as URL base
+        .download_dir = getDownloadDir(),
+        .filename = filename,
+        .part_key = item.file_path, // Store the Plex part key
+    }) catch |err| {
+        switch (err) {
+            error.AlreadyExists => std.log.info("Download already exists for item {d}", .{media_item_id}),
+            else => std.log.err("Failed to enqueue download: {}", .{err}),
+        }
+    };
+}
+
 pub fn switchToPlayer(file_path: []const u8) void {
     const stack: *c.GtkStack = @ptrCast(app_state.content_stack orelse return);
     app_state.active_view = .player;
@@ -404,6 +483,30 @@ pub fn switchToPlayer(file_path: []const u8) void {
     };
     app_state.controls.show();
     app_state.controls.scheduleHide();
+}
+
+/// Play a media item, preferring a completed local download over streaming.
+pub fn playMediaItem(item_id: i64, streaming_path: []const u8) void {
+    // Check for completed local download first
+    if (getDownloader()) |dl| {
+        if (dl.getCompletedLocalPath(item_id) catch null) |local_path| {
+            defer app_state.allocator.free(local_path);
+            // Verify the file actually exists on disk
+            std.fs.cwd().access(local_path, .{}) catch {
+                // File deleted externally, mark as failed
+                if (dl.getByMediaItemId(item_id) catch null) |download| {
+                    defer dl.freeDownload(download);
+                    dl.setFailed(download.id, "File not found") catch {};
+                }
+                // Fall through to streaming
+                switchToPlayer(streaming_path);
+                return;
+            };
+            switchToPlayer(local_path);
+            return;
+        }
+    }
+    switchToPlayer(streaming_path);
 }
 
 pub fn switchToView(view_name: [*:0]const u8) void {

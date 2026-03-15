@@ -35,7 +35,7 @@ pub const HttpClient = struct {
     pub fn init(allocator: std.mem.Allocator) HttpClient {
         return .{
             .allocator = allocator,
-            .client = std.http.Client{ .allocator = allocator },
+            .client = .{ .allocator = allocator },
         };
     }
 
@@ -44,11 +44,11 @@ pub const HttpClient = struct {
     }
 
     pub fn get(self: *HttpClient, url: []const u8, headers: []const Header) !Response {
-        return self.request(.GET, url, headers, null);
+        return self.doRequest(.GET, url, headers, null);
     }
 
     pub fn post(self: *HttpClient, url: []const u8, headers: []const Header, body: ?[]const u8) !Response {
-        return self.request(.POST, url, headers, body);
+        return self.doRequest(.POST, url, headers, body);
     }
 
     /// Download a URL to a file on disk with resume support and progress reporting.
@@ -65,9 +65,7 @@ pub const HttpClient = struct {
     ) HttpError!void {
         const uri = std.Uri.parse(url) catch return error.InvalidUrl;
 
-        var server_header_buffer: [16 * 1024]u8 = undefined;
-
-        // Build headers including Range for resume
+        // Build headers
         var headers_list: std.ArrayList(std.http.Header) = .{};
         defer headers_list.deinit(self.allocator);
 
@@ -82,32 +80,31 @@ pub const HttpClient = struct {
             headers_list.append(self.allocator, .{ .name = "Range", .value = range_val }) catch return error.OutOfMemory;
         }
 
-        var req = self.client.open(.GET, uri, .{
-            .server_header_buffer = &server_header_buffer,
+        var req = self.client.request(.GET, uri, .{
             .extra_headers = headers_list.items,
         }) catch return error.ConnectionFailed;
         defer req.deinit();
 
-        req.send() catch return error.RequestFailed;
-        req.finish() catch return error.RequestFailed;
-        req.wait() catch return error.RequestFailed;
+        req.sendBodiless() catch return error.RequestFailed;
+
+        var redirect_buf: [8 * 1024]u8 = undefined;
+        var response = req.receiveHead(&redirect_buf) catch return error.RequestFailed;
 
         // Check status
-        switch (req.status) {
+        switch (response.head.status) {
             .ok, .partial_content => {},
             .unauthorized => return error.AuthenticationFailed,
             .not_found => return error.NotFound,
             else => return error.RequestFailed,
         }
 
-        // Determine total size from Content-Length or Content-Range
+        // Determine total size
         var total_size: u64 = 0;
-        const content_length = req.response.content_length;
-        if (content_length) |cl| {
+        if (response.head.content_length) |cl| {
             total_size = resume_from + cl;
         }
 
-        // Open file for writing (append if resuming, create if new)
+        // Open file for writing
         const file = if (resume_from > 0)
             std.fs.cwd().openFile(file_path, .{ .mode = .write_only }) catch
                 std.fs.cwd().createFile(file_path, .{}) catch return error.WriteFailed
@@ -120,10 +117,12 @@ pub const HttpClient = struct {
             file.seekTo(resume_from) catch return error.WriteFailed;
         }
 
-        // Read and write in chunks
+        // Get response body reader
+        var transfer_buf: [64]u8 = undefined;
+        const reader = response.reader(&transfer_buf);
+
+        // Read and write in chunks using readVec
         var downloaded: u64 = resume_from;
-        var buf: [8192]u8 = undefined;
-        var reader = req.reader();
         var bytes_since_callback: u64 = 0;
 
         while (true) {
@@ -132,7 +131,9 @@ pub const HttpClient = struct {
                 if (@atomicLoad(bool, flag, .monotonic)) return error.Cancelled;
             }
 
-            const n = reader.read(&buf) catch return error.RequestFailed;
+            var buf: [8192]u8 = undefined;
+            var bufs = [_][]u8{buf[0..]};
+            const n = reader.readVec(&bufs) catch return error.RequestFailed;
             if (n == 0) break;
 
             file.writeAll(buf[0..n]) catch return error.WriteFailed;
@@ -156,17 +157,13 @@ pub const HttpClient = struct {
         }
     }
 
-    fn request(
+    fn doRequest(
         self: *HttpClient,
         method: std.http.Method,
         url: []const u8,
         extra_headers: []const Header,
         body: ?[]const u8,
     ) !Response {
-        const uri = std.Uri.parse(url) catch return error.InvalidUrl;
-
-        var server_header_buffer: [16 * 1024]u8 = undefined;
-
         // Build extra headers
         var extra: std.ArrayList(std.http.Header) = .{};
         defer extra.deinit(self.allocator);
@@ -175,29 +172,22 @@ pub const HttpClient = struct {
             try extra.append(self.allocator, .{ .name = h.name, .value = h.value });
         }
 
-        var req = self.client.open(method, uri, .{
-            .server_header_buffer = &server_header_buffer,
+        // Use the fetch API for simple request/response
+        var alloc_writer = std.Io.Writer.Allocating.init(self.allocator);
+        defer alloc_writer.deinit();
+
+        const result = self.client.fetch(.{
+            .location = .{ .url = url },
+            .method = method,
+            .payload = body,
             .extra_headers = extra.items,
-        }) catch return error.ConnectionFailed;
-        defer req.deinit();
+            .response_writer = &alloc_writer.writer,
+        }) catch return error.RequestFailed;
 
-        if (body) |b| {
-            req.transfer_encoding = .{ .content_length = b.len };
-        }
-
-        req.send() catch return error.RequestFailed;
-
-        if (body) |b| {
-            req.writer().writeAll(b) catch return error.RequestFailed;
-        }
-
-        req.finish() catch return error.RequestFailed;
-        req.wait() catch return error.RequestFailed;
-
-        const response_body = req.reader().readAllAlloc(self.allocator, 10 * 1024 * 1024) catch return error.OutOfMemory;
+        const response_body = alloc_writer.toOwnedSlice() catch return error.OutOfMemory;
 
         return Response{
-            .status = req.status,
+            .status = result.status,
             .body = response_body,
             .allocator = self.allocator,
         };
