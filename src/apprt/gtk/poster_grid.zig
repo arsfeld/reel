@@ -4,6 +4,7 @@ const c = @cImport({
     @cInclude("gtk/gtk.h");
 });
 const types = @import("../../core/types.zig");
+const app = @import("app.zig");
 
 /// A reusable poster grid widget that displays media items as a grid of
 /// poster cards (image + title + year). Used by Movies, TV Shows, Other, etc.
@@ -63,10 +64,30 @@ pub const PosterGrid = struct {
     }
 };
 
+fn onPosterClicked(_: *c.GtkButton, user_data: ?*anyopaque) callconv(.c) void {
+    const id_ptr: *i64 = @ptrCast(@alignCast(user_data orelse return));
+    app.showDetail(id_ptr.*);
+}
+
 fn createPosterCard(item: types.MediaItem) *c.GtkWidget {
+    const button = c.gtk_button_new();
+    c.gtk_widget_add_css_class(@ptrCast(button), "flat");
+    c.gtk_widget_set_size_request(@ptrCast(button), 150, -1);
+
+    // Store item ID - allocate a stable i64 for the callback
+    const id_ptr = std.heap.c_allocator.create(i64) catch return @ptrCast(button);
+    id_ptr.* = item.id;
+    _ = c.g_signal_connect_data(
+        @ptrCast(button),
+        "clicked",
+        @ptrCast(&onPosterClicked),
+        @ptrCast(id_ptr),
+        null,
+        c.G_CONNECT_DEFAULT,
+    );
+
     const card = c.gtk_box_new(c.GTK_ORIENTATION_VERTICAL, 4);
     c.gtk_widget_set_size_request(@ptrCast(card), 150, -1);
-    c.gtk_widget_add_css_class(@ptrCast(card), "card");
 
     // Poster image placeholder
     const frame = c.gtk_frame_new(null);
@@ -127,5 +148,6 @@ fn createPosterCard(item: types.MediaItem) *c.GtkWidget {
         c.gtk_box_append(@ptrCast(card), @ptrCast(year_label));
     }
 
-    return @ptrCast(card);
+    c.gtk_button_set_child(@ptrCast(button), @ptrCast(card));
+    return @ptrCast(button);
 }

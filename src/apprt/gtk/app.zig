@@ -20,6 +20,7 @@ const favorites_view = @import("favorites_view.zig");
 const files_view = @import("files_view.zig");
 const downloads_view = @import("downloads_view.zig");
 const settings_view = @import("settings_view.zig");
+const detail_view = @import("detail_view.zig");
 
 pub const ViewId = enum(u8) {
     home = 0,
@@ -64,6 +65,7 @@ const AppState = struct {
     split_view: ?*c.GtkWidget = null,
     active_view: ViewId = .home,
     direct_play: bool = false,
+    detail: ?detail_view.DetailView = null,
     // Data layer
     db: ?*database.Database = null,
     library: ?library_mod.Library = null,
@@ -267,6 +269,11 @@ fn buildSidebarLayout(window: *c.GtkWidget) void {
     const sv = settings_view.SettingsView.init();
     _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(sv.widget)), "settings");
 
+    // Detail page (shown when clicking a poster)
+    app_state.detail = detail_view.DetailView.init();
+    _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(app_state.detail.?.widget)), "detail");
+    detail_view.setGlobalDetail(&app_state.detail.?);
+
     // Player page (hidden by default, shown during playback)
     const player_overlay = c.gtk_overlay_new();
     app_state.video = video_area.VideoArea.init(&app_state.player);
@@ -391,4 +398,18 @@ pub fn switchToPlayer(file_path: []const u8) void {
 pub fn switchToView(view_name: [*:0]const u8) void {
     const stack: *c.GtkStack = @ptrCast(app_state.content_stack orelse return);
     c.gtk_stack_set_visible_child_name(stack, view_name);
+}
+
+pub fn showDetail(item_id: i64) void {
+    var lib = getLibrary() orelse return;
+    const item = lib.getMediaItem(item_id) catch return orelse return;
+    defer lib.freeMediaItem(item);
+
+    if (app_state.detail) |*detail| {
+        detail.showItem(item);
+    }
+
+    const stack: *c.GtkStack = @ptrCast(app_state.content_stack orelse return);
+    app_state.active_view = .home; // track previous
+    c.gtk_stack_set_visible_child_name(stack, "detail");
 }

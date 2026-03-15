@@ -22,12 +22,34 @@ fn onKeyPressed(
     _: *c.GtkEventControllerKey,
     keyval: c.guint,
     _: c.guint,
-    _: c.GdkModifierType,
+    modifier: c.GdkModifierType,
     user_data: ?*anyopaque,
 ) callconv(.c) c_int {
     const player: *player_mod.Player = @ptrCast(@alignCast(user_data orelse return 0));
 
+    // Ctrl+F for search focus (placeholder)
+    if (modifier & c.GDK_CONTROL_MASK != 0) {
+        switch (keyval) {
+            c.GDK_KEY_f => {
+                // TODO: focus search entry
+                return 1;
+            },
+            else => {},
+        }
+    }
+
     switch (keyval) {
+        // Sidebar navigation: 1-8
+        c.GDK_KEY_1 => { app.switchToView("home"); return 1; },
+        c.GDK_KEY_2 => { app.switchToView("movies"); return 1; },
+        c.GDK_KEY_3 => { app.switchToView("tv_shows"); return 1; },
+        c.GDK_KEY_4 => { app.switchToView("other"); return 1; },
+        c.GDK_KEY_5 => { app.switchToView("favorites"); return 1; },
+        c.GDK_KEY_6 => { app.switchToView("files"); return 1; },
+        c.GDK_KEY_7 => { app.switchToView("downloads"); return 1; },
+        c.GDK_KEY_8 => { app.switchToView("settings"); return 1; },
+
+        // Playback controls
         c.GDK_KEY_space => {
             player.togglePause() catch {};
             return 1;
@@ -55,6 +77,9 @@ fn onKeyPressed(
         c.GDK_KEY_Escape => {
             if (app.isFullscreen()) {
                 app.toggleFullscreen();
+            } else {
+                // Go back from detail/player to previous view
+                app.switchToView("home");
             }
             return 1;
         },
