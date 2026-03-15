@@ -8,6 +8,7 @@ pub const settings = @import("core/settings.zig");
 pub const library = @import("core/library.zig");
 pub const scanner = @import("core/scanner.zig");
 pub const downloader = @import("core/downloader.zig");
+pub const image_cache = @import("core/image_cache.zig");
 
 // Network modules
 pub const http = @import("net/http.zig");
