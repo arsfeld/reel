@@ -60,6 +60,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         playbackMenuItem.submenu = playbackMenu
         mainMenu.addItem(playbackMenuItem)
 
+        // View menu
+        let viewMenu = NSMenu(title: "View")
+        viewMenu.addItem(withTitle: "Toggle Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s")
+        viewMenu.items.last?.keyEquivalentModifierMask = [.command, .control]
+
+        let viewMenuItem = NSMenuItem()
+        viewMenuItem.submenu = viewMenu
+        mainMenu.addItem(viewMenuItem)
+
         NSApplication.shared.mainMenu = mainMenu
     }
 

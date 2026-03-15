@@ -5,6 +5,7 @@ pub const MediaType = enum {
     show,
     season,
     episode,
+    other,
 
     pub fn toString(self: MediaType) []const u8 {
         return switch (self) {
@@ -12,6 +13,7 @@ pub const MediaType = enum {
             .show => "show",
             .season => "season",
             .episode => "episode",
+            .other => "other",
         };
     }
 
@@ -20,6 +22,7 @@ pub const MediaType = enum {
         if (std.mem.eql(u8, s, "show")) return .show;
         if (std.mem.eql(u8, s, "season")) return .season;
         if (std.mem.eql(u8, s, "episode")) return .episode;
+        if (std.mem.eql(u8, s, "other")) return .other;
         return null;
     }
 };
@@ -126,6 +129,39 @@ pub const ScanPath = struct {
     id: i64 = 0,
     path: []const u8,
     last_scanned_at: ?i64 = null,
+};
+
+pub const FavoriteType = enum {
+    media_item,
+    plex_library,
+    scan_path,
+    filter,
+
+    pub fn toString(self: FavoriteType) []const u8 {
+        return switch (self) {
+            .media_item => "media_item",
+            .plex_library => "plex_library",
+            .scan_path => "scan_path",
+            .filter => "filter",
+        };
+    }
+
+    pub fn fromString(s: []const u8) ?FavoriteType {
+        if (std.mem.eql(u8, s, "media_item")) return .media_item;
+        if (std.mem.eql(u8, s, "plex_library")) return .plex_library;
+        if (std.mem.eql(u8, s, "scan_path")) return .scan_path;
+        if (std.mem.eql(u8, s, "filter")) return .filter;
+        return null;
+    }
+};
+
+pub const Favorite = struct {
+    id: i64 = 0,
+    item_type: FavoriteType,
+    item_id: []const u8,
+    display_name: []const u8,
+    sort_order: i32 = 0,
+    created_at: ?i64 = null,
 };
 
 test "MediaType round-trip" {

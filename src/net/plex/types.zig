@@ -2,7 +2,10 @@ const std = @import("std");
 
 pub const PlexHeaders = struct {
     pub const product = "Reel";
-    pub const platform = "Linux";
+    pub const platform = switch (@import("builtin").os.tag) {
+        .macos => "macOS",
+        else => "Linux",
+    };
     pub const device = "Desktop";
     pub const version = "0.1.0";
 

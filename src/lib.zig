@@ -8,6 +8,7 @@ pub const settings = @import("core/settings.zig");
 pub const library = @import("core/library.zig");
 pub const scanner = @import("core/scanner.zig");
 pub const downloader = @import("core/downloader.zig");
+pub const image_cache = @import("core/image_cache.zig");
 
 // Network modules
 pub const http = @import("net/http.zig");
@@ -18,6 +19,116 @@ pub const plex_auth = @import("net/plex/auth.zig");
 pub const plex_client = @import("net/plex/client.zig");
 pub const tmdb_types = @import("net/tmdb/types.zig");
 pub const tmdb_client = @import("net/tmdb/client.zig");
+
+// ── C ABI Exports ──────────────────────────────────────────
+
+const allocator = std.heap.c_allocator;
+
+// Database
+
+export fn reel_db_open(path: [*:0]const u8) ?*database.Database {
+    const db = allocator.create(database.Database) catch return null;
+    db.* = database.Database.open(path) catch {
+        allocator.destroy(db);
+        return null;
+    };
+    return db;
+}
+
+export fn reel_db_close(db: ?*database.Database) void {
+    const d = db orelse return;
+    d.close();
+    allocator.destroy(d);
+}
+
+// Library
+
+export fn reel_library_create(db: ?*database.Database) ?*library.Library {
+    const d = db orelse return null;
+    const lib = allocator.create(library.Library) catch return null;
+    lib.* = library.Library.init(allocator, d);
+    return lib;
+}
+
+export fn reel_library_destroy(lib: ?*library.Library) void {
+    const l = lib orelse return;
+    allocator.destroy(l);
+}
+
+export fn reel_library_get_item_count(lib: ?*library.Library, media_type: c_int) i32 {
+    const l = lib orelse return 0;
+    const mt = intToMediaType(media_type) orelse return 0;
+    return @intCast(l.getItemCount(mt) catch return 0);
+}
+
+export fn reel_library_server_count(lib: ?*library.Library) i32 {
+    const l = lib orelse return 0;
+    const servers = l.listServers() catch return 0;
+    defer l.freeServers(servers);
+    return @intCast(servers.len);
+}
+
+export fn reel_library_add_favorite(
+    lib: ?*library.Library,
+    item_type: [*:0]const u8,
+    item_id: [*:0]const u8,
+    display_name: [*:0]const u8,
+) i64 {
+    const l = lib orelse return -1;
+    const ft = types.FavoriteType.fromString(std.mem.span(item_type)) orelse return -1;
+    return l.addFavorite(.{
+        .item_type = ft,
+        .item_id = std.mem.span(item_id),
+        .display_name = std.mem.span(display_name),
+    }) catch return -1;
+}
+
+export fn reel_library_remove_favorite(lib: ?*library.Library, id: i64) c_int {
+    const l = lib orelse return -1;
+    l.removeFavorite(id) catch return -1;
+    return 0;
+}
+
+export fn reel_library_add_scan_path(lib: ?*library.Library, path: [*:0]const u8) i64 {
+    const l = lib orelse return -1;
+    return l.insertScanPath(std.mem.span(path)) catch return -1;
+}
+
+export fn reel_library_remove_scan_path(lib: ?*library.Library, id: i64) c_int {
+    const l = lib orelse return -1;
+    l.deleteScanPath(id) catch return -1;
+    return 0;
+}
+
+// Settings
+
+export fn reel_settings_get(db: ?*database.Database, key: [*:0]const u8) ?[*:0]const u8 {
+    const d = db orelse return null;
+    var s = settings.Settings.init(allocator, d);
+    const val = (s.getString(std.mem.span(key)) catch return null) orelse return null;
+    // Caller must free this string (or we leak — acceptable for simple bridging)
+    return @ptrCast(val.ptr);
+}
+
+export fn reel_settings_set(db: ?*database.Database, key: [*:0]const u8, value: [*:0]const u8) c_int {
+    const d = db orelse return -1;
+    var s = settings.Settings.init(allocator, d);
+    s.setString(std.mem.span(key), std.mem.span(value)) catch return -1;
+    return 0;
+}
+
+// Helpers
+
+fn intToMediaType(val: c_int) ?types.MediaType {
+    return switch (val) {
+        0 => .movie,
+        1 => .show,
+        2 => .season,
+        3 => .episode,
+        4 => .other,
+        else => null,
+    };
+}
 
 test {
     std.testing.refAllDecls(@This());

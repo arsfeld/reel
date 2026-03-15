@@ -138,6 +138,310 @@ pub const Library = struct {
         try stmt.exec();
     }
 
+    // Query operations
+
+    pub const SortField = enum {
+        title,
+        year,
+        rating,
+        added_at,
+    };
+
+    pub const SortOrder = enum {
+        asc,
+        desc,
+    };
+
+    pub fn getItemsByType(
+        self: *Library,
+        media_type: types.MediaType,
+        sort_by: SortField,
+        sort_order: SortOrder,
+        limit: u32,
+        offset: u32,
+    ) ![]types.MediaItem {
+        // Build SQL with sort clause. We use comptime-known sort strings
+        // but must pick at runtime, so use a buffer approach.
+        const order_clause = switch (sort_by) {
+            .title => "COALESCE(sort_title, title)",
+            .year => "year",
+            .rating => "rating",
+            .added_at => "added_at",
+        };
+        const direction = switch (sort_order) {
+            .asc => "ASC",
+            .desc => "DESC",
+        };
+
+        var sql_buf: [512]u8 = undefined;
+        const sql = std.fmt.bufPrintZ(&sql_buf,
+            \\SELECT id, source, source_id, server_id, media_type, title,
+            \\       sort_title, year, summary, rating, duration_ms,
+            \\       poster_path, backdrop_path, tmdb_id, parent_id,
+            \\       season_number, episode_number, file_path, added_at, updated_at
+            \\FROM media_items WHERE media_type = ?
+            \\ORDER BY {s} {s} LIMIT ? OFFSET ?
+        , .{ order_clause, direction }) catch return error.SqlFormatFailed;
+
+        var stmt = try self.db.prepare(sql);
+        defer stmt.finalize();
+        stmt.bindText(1, media_type.toString());
+        stmt.bindInt(2, @intCast(limit));
+        stmt.bindInt(3, @intCast(offset));
+
+        return self.collectMediaItems(&stmt);
+    }
+
+    pub fn getRecentlyAdded(self: *Library, limit: u32) ![]types.MediaItem {
+        var stmt = try self.db.prepare(
+            \\SELECT id, source, source_id, server_id, media_type, title,
+            \\       sort_title, year, summary, rating, duration_ms,
+            \\       poster_path, backdrop_path, tmdb_id, parent_id,
+            \\       season_number, episode_number, file_path, added_at, updated_at
+            \\FROM media_items
+            \\WHERE media_type IN ('movie', 'show')
+            \\ORDER BY added_at DESC LIMIT ?
+        );
+        defer stmt.finalize();
+        stmt.bindInt(1, @intCast(limit));
+
+        return self.collectMediaItems(&stmt);
+    }
+
+    pub fn getContinueWatching(self: *Library, limit: u32) ![]types.MediaItem {
+        var stmt = try self.db.prepare(
+            \\SELECT m.id, m.source, m.source_id, m.server_id, m.media_type, m.title,
+            \\       m.sort_title, m.year, m.summary, m.rating, m.duration_ms,
+            \\       m.poster_path, m.backdrop_path, m.tmdb_id, m.parent_id,
+            \\       m.season_number, m.episode_number, m.file_path, m.added_at, m.updated_at
+            \\FROM media_items m
+            \\JOIN watch_progress wp ON m.id = wp.media_item_id
+            \\WHERE wp.watched = 0 AND wp.position_ms > 0
+            \\ORDER BY wp.last_watched_at DESC LIMIT ?
+        );
+        defer stmt.finalize();
+        stmt.bindInt(1, @intCast(limit));
+
+        return self.collectMediaItems(&stmt);
+    }
+
+    pub fn searchItems(self: *Library, query: []const u8, media_type_filter: ?types.MediaType) ![]types.MediaItem {
+        if (media_type_filter) |mt| {
+            var stmt = try self.db.prepare(
+                \\SELECT id, source, source_id, server_id, media_type, title,
+                \\       sort_title, year, summary, rating, duration_ms,
+                \\       poster_path, backdrop_path, tmdb_id, parent_id,
+                \\       season_number, episode_number, file_path, added_at, updated_at
+                \\FROM media_items WHERE title LIKE ? AND media_type = ?
+                \\ORDER BY title LIMIT 50
+            );
+            defer stmt.finalize();
+
+            var pattern_buf: [256]u8 = undefined;
+            const pattern = std.fmt.bufPrint(&pattern_buf, "%{s}%", .{query}) catch return error.SqlFormatFailed;
+            stmt.bindText(1, pattern);
+            stmt.bindText(2, mt.toString());
+            return self.collectMediaItems(&stmt);
+        } else {
+            var stmt = try self.db.prepare(
+                \\SELECT id, source, source_id, server_id, media_type, title,
+                \\       sort_title, year, summary, rating, duration_ms,
+                \\       poster_path, backdrop_path, tmdb_id, parent_id,
+                \\       season_number, episode_number, file_path, added_at, updated_at
+                \\FROM media_items WHERE title LIKE ?
+                \\ORDER BY title LIMIT 50
+            );
+            defer stmt.finalize();
+
+            var pattern_buf: [256]u8 = undefined;
+            const pattern = std.fmt.bufPrint(&pattern_buf, "%{s}%", .{query}) catch return error.SqlFormatFailed;
+            stmt.bindText(1, pattern);
+            return self.collectMediaItems(&stmt);
+        }
+    }
+
+    pub fn getItemsByParent(self: *Library, parent_id: i64) ![]types.MediaItem {
+        var stmt = try self.db.prepare(
+            \\SELECT id, source, source_id, server_id, media_type, title,
+            \\       sort_title, year, summary, rating, duration_ms,
+            \\       poster_path, backdrop_path, tmdb_id, parent_id,
+            \\       season_number, episode_number, file_path, added_at, updated_at
+            \\FROM media_items WHERE parent_id = ?
+            \\ORDER BY season_number, episode_number, title
+        );
+        defer stmt.finalize();
+        stmt.bindInt64(1, parent_id);
+
+        return self.collectMediaItems(&stmt);
+    }
+
+    pub fn getItemCount(self: *Library, media_type: types.MediaType) !u32 {
+        var stmt = try self.db.prepare(
+            "SELECT COUNT(*) FROM media_items WHERE media_type = ?"
+        );
+        defer stmt.finalize();
+        stmt.bindText(1, media_type.toString());
+
+        if (stmt.step()) {
+            return @intCast(stmt.columnInt(0));
+        }
+        return 0;
+    }
+
+    pub fn listServers(self: *Library) ![]types.Server {
+        var stmt = try self.db.prepare(
+            \\SELECT id, name, client_identifier, auth_token, connection_uri, last_connected_at
+            \\FROM servers ORDER BY name
+        );
+        defer stmt.finalize();
+
+        var results: std.ArrayList(types.Server) = .{};
+        while (stmt.step()) {
+            try results.append(self.allocator, types.Server{
+                .id = try dupeText(self.allocator, stmt.columnText(0) orelse continue),
+                .name = try dupeText(self.allocator, stmt.columnText(1) orelse ""),
+                .client_identifier = try dupeText(self.allocator, stmt.columnText(2) orelse ""),
+                .auth_token = try dupeOptionalText(self.allocator, stmt.columnText(3)),
+                .connection_uri = try dupeOptionalText(self.allocator, stmt.columnText(4)),
+                .last_connected_at = stmt.columnOptionalInt64(5),
+            });
+        }
+        return results.toOwnedSlice(self.allocator);
+    }
+
+    pub fn freeServers(self: *Library, servers: []types.Server) void {
+        for (servers) |s| self.freeServer(s);
+        self.allocator.free(servers);
+    }
+
+    pub fn listScanPaths(self: *Library) ![]types.ScanPath {
+        var stmt = try self.db.prepare(
+            "SELECT id, path, last_scanned_at FROM scan_paths ORDER BY path"
+        );
+        defer stmt.finalize();
+
+        var results: std.ArrayList(types.ScanPath) = .{};
+        while (stmt.step()) {
+            try results.append(self.allocator, types.ScanPath{
+                .id = stmt.columnInt64(0),
+                .path = try dupeText(self.allocator, stmt.columnText(1) orelse continue),
+                .last_scanned_at = stmt.columnOptionalInt64(2),
+            });
+        }
+        return results.toOwnedSlice(self.allocator);
+    }
+
+    pub fn freeScanPaths(self: *Library, paths: []types.ScanPath) void {
+        for (paths) |p| self.allocator.free(p.path);
+        self.allocator.free(paths);
+    }
+
+    pub fn insertScanPath(self: *Library, path: []const u8) !i64 {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare(
+            "INSERT OR IGNORE INTO scan_paths (path) VALUES (?)"
+        );
+        defer stmt.finalize();
+        stmt.bindText(1, path);
+        try stmt.exec();
+        return stmt.lastInsertRowId();
+    }
+
+    pub fn deleteScanPath(self: *Library, id: i64) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare("DELETE FROM scan_paths WHERE id = ?");
+        defer stmt.finalize();
+        stmt.bindInt64(1, id);
+        try stmt.exec();
+    }
+
+    // Favorites operations
+
+    pub fn addFavorite(self: *Library, fav: types.Favorite) !i64 {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        // Get max sort_order
+        var max_stmt = try self.db.prepare("SELECT COALESCE(MAX(sort_order), -1) FROM favorites");
+        defer max_stmt.finalize();
+        var next_order: i32 = 0;
+        if (max_stmt.step()) {
+            next_order = max_stmt.columnInt(0) + 1;
+        }
+
+        var stmt = try self.db.prepare(
+            \\INSERT INTO favorites (item_type, item_id, display_name, sort_order, created_at)
+            \\VALUES (?, ?, ?, ?, ?)
+        );
+        defer stmt.finalize();
+        stmt.bindText(1, fav.item_type.toString());
+        stmt.bindText(2, fav.item_id);
+        stmt.bindText(3, fav.display_name);
+        stmt.bindInt(4, if (fav.sort_order != 0) fav.sort_order else next_order);
+        stmt.bindInt64(5, std.time.timestamp());
+
+        try stmt.exec();
+        return stmt.lastInsertRowId();
+    }
+
+    pub fn removeFavorite(self: *Library, id: i64) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare("DELETE FROM favorites WHERE id = ?");
+        defer stmt.finalize();
+        stmt.bindInt64(1, id);
+        try stmt.exec();
+    }
+
+    pub fn listFavorites(self: *Library) ![]types.Favorite {
+        var stmt = try self.db.prepare(
+            \\SELECT id, item_type, item_id, display_name, sort_order, created_at
+            \\FROM favorites ORDER BY sort_order ASC
+        );
+        defer stmt.finalize();
+
+        var results: std.ArrayList(types.Favorite) = .{};
+        while (stmt.step()) {
+            try results.append(self.allocator, types.Favorite{
+                .id = stmt.columnInt64(0),
+                .item_type = types.FavoriteType.fromString(stmt.columnText(1) orelse "media_item") orelse .media_item,
+                .item_id = try dupeText(self.allocator, stmt.columnText(2) orelse ""),
+                .display_name = try dupeText(self.allocator, stmt.columnText(3) orelse ""),
+                .sort_order = stmt.columnInt(4),
+                .created_at = stmt.columnOptionalInt64(5),
+            });
+        }
+        return results.toOwnedSlice(self.allocator);
+    }
+
+    pub fn freeFavorites(self: *Library, favs: []types.Favorite) void {
+        for (favs) |f| {
+            self.allocator.free(f.item_id);
+            self.allocator.free(f.display_name);
+        }
+        self.allocator.free(favs);
+    }
+
+    // Helpers
+
+    fn collectMediaItems(self: *Library, stmt: *database.Statement) ![]types.MediaItem {
+        var results: std.ArrayList(types.MediaItem) = .{};
+        while (stmt.step()) {
+            try results.append(self.allocator, try readMediaItem(self.allocator, stmt));
+        }
+        return results.toOwnedSlice(self.allocator);
+    }
+
+    pub fn freeMediaItems(self: *Library, items: []types.MediaItem) void {
+        for (items) |item| self.freeMediaItem(item);
+        self.allocator.free(items);
+    }
+
     // Server operations
     pub fn upsertServer(self: *Library, server: types.Server) !void {
         self.db.mutex.lock();
@@ -279,6 +583,240 @@ test "library watch progress" {
     const progress = (try lib.getWatchProgress(id)).?;
     try std.testing.expectEqual(@as(i64, 60000), progress.position_ms);
     try std.testing.expectEqual(false, progress.watched);
+}
+
+test "library getItemsByType" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    _ = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Alpha Movie",
+        .year = 2020,
+        .added_at = 100,
+    });
+    _ = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Beta Movie",
+        .year = 2022,
+        .added_at = 200,
+    });
+    _ = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .show,
+        .title = "Some Show",
+    });
+
+    const movies = try lib.getItemsByType(.movie, .title, .asc, 50, 0);
+    defer lib.freeMediaItems(movies);
+
+    try std.testing.expectEqual(@as(usize, 2), movies.len);
+    try std.testing.expectEqualStrings("Alpha Movie", movies[0].title);
+    try std.testing.expectEqualStrings("Beta Movie", movies[1].title);
+}
+
+test "library getRecentlyAdded" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    _ = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Old Movie",
+        .added_at = 100,
+    });
+    _ = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "New Movie",
+        .added_at = 200,
+    });
+
+    const recent = try lib.getRecentlyAdded(10);
+    defer lib.freeMediaItems(recent);
+
+    try std.testing.expectEqual(@as(usize, 2), recent.len);
+    try std.testing.expectEqualStrings("New Movie", recent[0].title);
+}
+
+test "library getContinueWatching" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    const id1 = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Partially Watched",
+    });
+    const id2 = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Unwatched",
+    });
+    _ = id2;
+
+    try lib.updateWatchProgress(.{
+        .media_item_id = id1,
+        .position_ms = 30000,
+        .duration_ms = 120000,
+        .watched = false,
+        .last_watched_at = 500,
+    });
+
+    const watching = try lib.getContinueWatching(10);
+    defer lib.freeMediaItems(watching);
+
+    try std.testing.expectEqual(@as(usize, 1), watching.len);
+    try std.testing.expectEqualStrings("Partially Watched", watching[0].title);
+}
+
+test "library searchItems" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    _ = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "The Matrix",
+    });
+    _ = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Interstellar",
+    });
+
+    const results = try lib.searchItems("Matrix", null);
+    defer lib.freeMediaItems(results);
+
+    try std.testing.expectEqual(@as(usize, 1), results.len);
+    try std.testing.expectEqualStrings("The Matrix", results[0].title);
+}
+
+test "library getItemsByParent" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    const show_id = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .show,
+        .title = "Breaking Bad",
+    });
+    _ = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .season,
+        .title = "Season 1",
+        .parent_id = show_id,
+        .season_number = 1,
+    });
+    _ = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .season,
+        .title = "Season 2",
+        .parent_id = show_id,
+        .season_number = 2,
+    });
+
+    const seasons = try lib.getItemsByParent(show_id);
+    defer lib.freeMediaItems(seasons);
+
+    try std.testing.expectEqual(@as(usize, 2), seasons.len);
+    try std.testing.expectEqualStrings("Season 1", seasons[0].title);
+}
+
+test "library getItemCount" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    _ = try lib.insertMediaItem(.{ .source = .local, .media_type = .movie, .title = "M1" });
+    _ = try lib.insertMediaItem(.{ .source = .local, .media_type = .movie, .title = "M2" });
+    _ = try lib.insertMediaItem(.{ .source = .local, .media_type = .show, .title = "S1" });
+
+    try std.testing.expectEqual(@as(u32, 2), try lib.getItemCount(.movie));
+    try std.testing.expectEqual(@as(u32, 1), try lib.getItemCount(.show));
+    try std.testing.expectEqual(@as(u32, 0), try lib.getItemCount(.other));
+}
+
+test "library favorites CRUD" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    const fav_id = try lib.addFavorite(.{
+        .item_type = .media_item,
+        .item_id = "42",
+        .display_name = "Favorite Movie",
+    });
+    try std.testing.expect(fav_id > 0);
+
+    _ = try lib.addFavorite(.{
+        .item_type = .scan_path,
+        .item_id = "/movies",
+        .display_name = "Movies Folder",
+    });
+
+    const favs = try lib.listFavorites();
+    defer lib.freeFavorites(favs);
+
+    try std.testing.expectEqual(@as(usize, 2), favs.len);
+    try std.testing.expectEqualStrings("Favorite Movie", favs[0].display_name);
+
+    try lib.removeFavorite(fav_id);
+
+    const after = try lib.listFavorites();
+    defer lib.freeFavorites(after);
+    try std.testing.expectEqual(@as(usize, 1), after.len);
+}
+
+test "library listServers" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    try lib.upsertServer(.{ .id = "s1", .name = "Server A", .client_identifier = "uuid1" });
+    try lib.upsertServer(.{ .id = "s2", .name = "Server B", .client_identifier = "uuid2" });
+
+    const servers = try lib.listServers();
+    defer lib.freeServers(servers);
+
+    try std.testing.expectEqual(@as(usize, 2), servers.len);
+}
+
+test "library scan paths" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    const id = try lib.insertScanPath("/home/user/movies");
+    try std.testing.expect(id > 0);
+
+    const paths = try lib.listScanPaths();
+    defer lib.freeScanPaths(paths);
+
+    try std.testing.expectEqual(@as(usize, 1), paths.len);
+    try std.testing.expectEqualStrings("/home/user/movies", paths[0].path);
+
+    try lib.deleteScanPath(paths[0].id);
+
+    const after = try lib.listScanPaths();
+    defer lib.freeScanPaths(after);
+    try std.testing.expectEqual(@as(usize, 0), after.len);
 }
 
 test "library server upsert" {

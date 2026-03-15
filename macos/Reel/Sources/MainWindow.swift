@@ -1,33 +1,75 @@
 import AppKit
 import ReelCore
 
-class MainWindow: NSWindowController {
+class MainWindow: NSWindowController, SidebarDelegate {
     private var videoView: VideoView!
     private var controlsView: PlayerControlsView!
     private var hideControlsTimer: Timer?
+    private var splitViewController: NSSplitViewController!
+    private var sidebarViewController: SidebarViewController!
+    private var contentViewController: NSViewController!
+    private var isDirectPlay = false
+    private var viewControllers: [SidebarItem: NSViewController] = [:]
 
     convenience init() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "Reel"
         window.center()
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 640, height: 360)
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.backgroundColor = .black
+        window.minSize = NSSize(width: 800, height: 500)
+        window.titlebarAppearsTransparent = false
+        window.toolbarStyle = .unified
 
         self.init(window: window)
-        setupViews()
+
+        let args = ProcessInfo.processInfo.arguments
+        if args.count > 1 {
+            isDirectPlay = true
+            setupPlayerOnlyLayout()
+        } else {
+            setupSidebarLayout()
+        }
+
         setupTrackingArea()
     }
 
-    private func setupViews() {
+    // MARK: - Layout modes
+
+    private func setupSidebarLayout() {
+        splitViewController = NSSplitViewController()
+
+        // Sidebar
+        sidebarViewController = SidebarViewController()
+        sidebarViewController.delegate = self
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarViewController)
+        sidebarItem.minimumThickness = 200
+        sidebarItem.maximumThickness = 280
+        sidebarItem.canCollapse = true
+        splitViewController.addSplitViewItem(sidebarItem)
+
+        // Content
+        contentViewController = PlaceholderViewController.home()
+        let contentItem = NSSplitViewItem(viewController: contentViewController)
+        contentItem.minimumThickness = 400
+        splitViewController.addSplitViewItem(contentItem)
+
+        // Store initial view controllers
+        viewControllers[.home] = contentViewController
+
+        window?.contentViewController = splitViewController
+    }
+
+    private func setupPlayerOnlyLayout() {
         guard let contentView = window?.contentView else { return }
+
+        window?.titlebarAppearsTransparent = true
+        window?.titleVisibility = .hidden
+        window?.backgroundColor = .black
 
         // Video view fills the entire window
         videoView = VideoView(frame: contentView.bounds)
@@ -60,12 +102,59 @@ class MainWindow: NSWindowController {
         contentView.addTrackingArea(trackingArea)
     }
 
+    // MARK: - SidebarDelegate
+
+    func sidebarDidSelectItem(_ item: SidebarItem) {
+        let vc = viewControllerForItem(item)
+
+        // Replace the content split view item
+        if splitViewController.splitViewItems.count > 1 {
+            splitViewController.removeSplitViewItem(splitViewController.splitViewItems[1])
+        }
+
+        let contentItem = NSSplitViewItem(viewController: vc)
+        contentItem.minimumThickness = 400
+        splitViewController.addSplitViewItem(contentItem)
+
+        contentViewController = vc
+    }
+
+    private func viewControllerForItem(_ item: SidebarItem) -> NSViewController {
+        if let existing = viewControllers[item] {
+            return existing
+        }
+
+        let vc: NSViewController
+        switch item {
+        case .home: vc = PlaceholderViewController.home()
+        case .movies: vc = PlaceholderViewController.movies()
+        case .tvShows: vc = PlaceholderViewController.tvShows()
+        case .other: vc = PlaceholderViewController.other()
+        case .favorites: vc = PlaceholderViewController.favorites()
+        case .files: vc = PlaceholderViewController.files()
+        case .downloads: vc = PlaceholderViewController.downloads()
+        case .settings: vc = PlaceholderViewController.settings()
+        }
+
+        viewControllers[item] = vc
+        return vc
+    }
+
+    // MARK: - Playback
+
     override func mouseMoved(with event: NSEvent) {
+        guard isDirectPlay else { return }
         showControls()
         scheduleHideControls()
     }
 
     func playFile(path: String) {
+        if !isDirectPlay {
+            // Switch to player mode within the sidebar layout
+            // For now, just log. Full player integration will come later.
+            NSLog("Play file: \(path)")
+            return
+        }
         videoView.loadFile(path: path)
         showControls()
         scheduleHideControls()
@@ -74,12 +163,12 @@ class MainWindow: NSWindowController {
     // MARK: - Controls visibility
 
     private func showControls() {
-        controlsView.animator().alphaValue = 1.0
+        controlsView?.animator().alphaValue = 1.0
         NSCursor.unhide()
     }
 
     private func hideControls() {
-        controlsView.animator().alphaValue = 0.0
+        controlsView?.animator().alphaValue = 0.0
         if window?.styleMask.contains(.fullScreen) == true {
             NSCursor.hide()
         }
@@ -95,15 +184,15 @@ class MainWindow: NSWindowController {
     // MARK: - Actions (menu bar / keyboard)
 
     @objc func togglePause() {
-        videoView.togglePause()
+        videoView?.togglePause()
     }
 
     @objc func seekForward() {
-        videoView.seek(seconds: 10)
+        videoView?.seek(seconds: 10)
     }
 
     @objc func seekBackward() {
-        videoView.seek(seconds: -10)
+        videoView?.seek(seconds: -10)
     }
 
     @objc func toggleFullscreen() {
@@ -118,34 +207,34 @@ class MainWindow: NSWindowController {
             return
         }
 
-        switch chars {
-        case " ":
-            togglePause()
-        case "f":
-            toggleFullscreen()
-        case "m":
-            videoView.toggleMute()
-        case "s":
-            videoView.cycleSub()
-        case "a":
-            videoView.cycleAudio()
-        default:
-            switch event.keyCode {
-            case 123: // Left arrow
-                seekBackward()
-            case 124: // Right arrow
-                seekForward()
-            case 126: // Up arrow
-                videoView.adjustVolume(delta: 5)
-            case 125: // Down arrow
-                videoView.adjustVolume(delta: -5)
-            case 53: // Escape
-                if window?.styleMask.contains(.fullScreen) == true {
-                    toggleFullscreen()
-                }
+        if isDirectPlay {
+            switch chars {
+            case " ":
+                togglePause()
+            case "f":
+                toggleFullscreen()
+            case "m":
+                videoView?.toggleMute()
+            case "s":
+                videoView?.cycleSub()
+            case "a":
+                videoView?.cycleAudio()
             default:
-                super.keyDown(with: event)
+                switch event.keyCode {
+                case 123: seekBackward()
+                case 124: seekForward()
+                case 126: videoView?.adjustVolume(delta: 5)
+                case 125: videoView?.adjustVolume(delta: -5)
+                case 53:
+                    if window?.styleMask.contains(.fullScreen) == true {
+                        toggleFullscreen()
+                    }
+                default:
+                    super.keyDown(with: event)
+                }
             }
+        } else {
+            super.keyDown(with: event)
         }
     }
 }

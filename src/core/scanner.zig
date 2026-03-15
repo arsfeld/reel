@@ -1,4 +1,5 @@
 const std = @import("std");
+const types = @import("types.zig");
 
 pub const video_extensions = [_][]const u8{
     ".mkv", ".mp4", ".avi", ".m4v", ".ts",
@@ -36,8 +37,8 @@ pub fn parseFilename(basename: []const u8) ParsedFilename {
     // Try movie pattern: "Title (Year)"
     if (parseMoviePattern(name)) |movie| return movie;
 
-    // Fallback: use the whole name as title
-    return .{ .title = name };
+    // Fallback: unrecognized pattern - will be categorized as "other"
+    return .{ .title = name, .is_tv = false };
 }
 
 fn parseTVPattern(name: []const u8) ?ParsedFilename {
@@ -106,6 +107,16 @@ fn parseMoviePattern(name: []const u8) ?ParsedFilename {
         }
     }
     return null;
+}
+
+/// Determine the MediaType from a parsed filename.
+/// - TV patterns (SxxExx) → .episode
+/// - Movie patterns (title + year) → .movie
+/// - Unrecognized → .other
+pub fn mediaTypeFromParsed(parsed: ParsedFilename) types.MediaType {
+    if (parsed.is_tv) return .episode;
+    if (parsed.year != null) return .movie;
+    return .other;
 }
 
 fn stripExtension(name: []const u8) []const u8 {
@@ -190,4 +201,10 @@ test "parseFilename no metadata" {
     const result = parseFilename("random_video.mp4");
     try std.testing.expectEqualStrings("random_video", result.title);
     try std.testing.expectEqual(@as(?i32, null), result.year);
+}
+
+test "mediaTypeFromParsed" {
+    try std.testing.expectEqual(types.MediaType.movie, mediaTypeFromParsed(parseFilename("The Matrix (1999).mkv")));
+    try std.testing.expectEqual(types.MediaType.episode, mediaTypeFromParsed(parseFilename("Breaking Bad - S01E01.mkv")));
+    try std.testing.expectEqual(types.MediaType.other, mediaTypeFromParsed(parseFilename("random_video.mp4")));
 }

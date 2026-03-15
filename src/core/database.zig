@@ -170,6 +170,23 @@ pub const Database = struct {
             );
             try self.setSchemaVersion(1);
         }
+
+        if (version < 2) {
+            try self.exec(
+                \\CREATE TABLE IF NOT EXISTS favorites (
+                \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                \\    item_type TEXT NOT NULL,
+                \\    item_id TEXT NOT NULL,
+                \\    display_name TEXT NOT NULL,
+                \\    sort_order INTEGER NOT NULL DEFAULT 0,
+                \\    created_at INTEGER
+                \\);
+                \\
+                \\CREATE INDEX IF NOT EXISTS idx_media_items_added ON media_items(added_at);
+                \\CREATE INDEX IF NOT EXISTS idx_media_items_title ON media_items(sort_title, title);
+            );
+            try self.setSchemaVersion(2);
+        }
     }
 };
 
@@ -300,7 +317,7 @@ test "database open and migrate" {
     defer db.close();
 
     const version = try db.getSchemaVersion();
-    try std.testing.expectEqual(@as(i32, 1), version);
+    try std.testing.expectEqual(@as(i32, 2), version);
 }
 
 test "database insert and query" {
