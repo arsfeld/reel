@@ -196,6 +196,63 @@ pub const Database = struct {
             try self.exec("ALTER TABLE image_cache ADD COLUMN pinned INTEGER DEFAULT 0");
             try self.setSchemaVersion(3);
         }
+
+        if (version < 4) {
+            // Genre storage
+            try self.exec(
+                \\CREATE TABLE IF NOT EXISTS genres (
+                \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                \\    name TEXT NOT NULL UNIQUE
+                \\);
+            );
+            try self.exec(
+                \\CREATE TABLE IF NOT EXISTS media_item_genres (
+                \\    media_item_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+                \\    genre_id INTEGER NOT NULL REFERENCES genres(id) ON DELETE CASCADE,
+                \\    PRIMARY KEY (media_item_id, genre_id)
+                \\);
+            );
+            try self.exec("CREATE INDEX IF NOT EXISTS idx_media_item_genres_genre ON media_item_genres(genre_id)");
+
+            // Match lock
+            try self.exec("ALTER TABLE media_items ADD COLUMN match_locked INTEGER NOT NULL DEFAULT 0");
+
+            // Collections
+            try self.exec(
+                \\CREATE TABLE IF NOT EXISTS collections (
+                \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                \\    name TEXT NOT NULL,
+                \\    collection_type TEXT NOT NULL DEFAULT 'manual',
+                \\    description TEXT,
+                \\    poster_path TEXT,
+                \\    show_on_home INTEGER NOT NULL DEFAULT 1,
+                \\    sort_order INTEGER NOT NULL DEFAULT 0,
+                \\    created_at INTEGER,
+                \\    updated_at INTEGER
+                \\);
+            );
+            try self.exec(
+                \\CREATE TABLE IF NOT EXISTS collection_items (
+                \\    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+                \\    media_item_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+                \\    sort_order INTEGER NOT NULL DEFAULT 0,
+                \\    added_at INTEGER,
+                \\    PRIMARY KEY (collection_id, media_item_id)
+                \\);
+            );
+            try self.exec(
+                \\CREATE TABLE IF NOT EXISTS collection_rules (
+                \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                \\    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+                \\    field TEXT NOT NULL,
+                \\    operator TEXT NOT NULL,
+                \\    value TEXT NOT NULL
+                \\);
+            );
+            try self.exec("CREATE INDEX IF NOT EXISTS idx_collection_rules_collection ON collection_rules(collection_id)");
+
+            try self.setSchemaVersion(4);
+        }
     }
 };
 
@@ -326,7 +383,7 @@ test "database open and migrate" {
     defer db.close();
 
     const version = try db.getSchemaVersion();
-    try std.testing.expectEqual(@as(i32, 3), version);
+    try std.testing.expectEqual(@as(i32, 4), version);
 }
 
 test "database insert and query" {

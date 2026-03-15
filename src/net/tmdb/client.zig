@@ -83,6 +83,7 @@ pub const TmdbClient = struct {
                 .integer => |i| @floatFromInt(i),
                 else => null,
             } else null,
+            .genres = try parseGenres(self.allocator, root.get("genres")),
         };
     }
 
@@ -128,6 +129,7 @@ pub const TmdbClient = struct {
                 .integer => |i| @intCast(i),
                 else => null,
             } else null,
+            .genres = try parseGenres(self.allocator, root.get("genres")),
         };
     }
 
@@ -137,6 +139,7 @@ pub const TmdbClient = struct {
         if (detail.release_date) |s| self.allocator.free(s);
         if (detail.poster_path) |s| self.allocator.free(s);
         if (detail.backdrop_path) |s| self.allocator.free(s);
+        freeGenres(self.allocator, detail.genres);
     }
 
     pub fn freeTVDetail(self: *TmdbClient, detail: tmdb_types.TVDetail) void {
@@ -145,6 +148,7 @@ pub const TmdbClient = struct {
         if (detail.first_air_date) |s| self.allocator.free(s);
         if (detail.poster_path) |s| self.allocator.free(s);
         if (detail.backdrop_path) |s| self.allocator.free(s);
+        freeGenres(self.allocator, detail.genres);
     }
 
     pub fn freeSearchResults(self: *TmdbClient, results: []tmdb_types.SearchResult) void {
@@ -216,6 +220,49 @@ pub const TmdbClient = struct {
         return results.toOwnedSlice(self.allocator);
     }
 };
+
+fn parseGenres(allocator: std.mem.Allocator, val: ?std.json.Value) ![]const tmdb_types.Genre {
+    const genres_val = val orelse return &.{};
+    const genres_arr = switch (genres_val) {
+        .array => |a| a,
+        else => return &.{},
+    };
+
+    var results: std.ArrayList(tmdb_types.Genre) = .{};
+    for (genres_arr.items) |item| {
+        const obj = switch (item) {
+            .object => |o| o,
+            else => continue,
+        };
+
+        const id_val = obj.get("id") orelse continue;
+        const id: i32 = switch (id_val) {
+            .integer => |i| @intCast(i),
+            else => continue,
+        };
+
+        const name_val = obj.get("name") orelse continue;
+        const name_str = switch (name_val) {
+            .string => |s| s,
+            else => continue,
+        };
+
+        try results.append(allocator, .{
+            .id = id,
+            .name = try allocator.dupe(u8, name_str),
+        });
+    }
+    return results.toOwnedSlice(allocator);
+}
+
+fn freeGenres(allocator: std.mem.Allocator, genres: []const tmdb_types.Genre) void {
+    for (genres) |g| {
+        allocator.free(g.name);
+    }
+    if (genres.len > 0) {
+        allocator.free(genres);
+    }
+}
 
 fn dupeJsonString(allocator: std.mem.Allocator, val: ?std.json.Value) ![]const u8 {
     if (val) |v| {

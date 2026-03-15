@@ -102,6 +102,7 @@ pub const MediaItem = struct {
     file_path: ?[]const u8 = null,
     added_at: ?i64 = null,
     updated_at: ?i64 = null,
+    match_locked: bool = false,
 };
 
 pub const WatchProgress = struct {
@@ -166,6 +167,49 @@ pub const Favorite = struct {
     created_at: ?i64 = null,
 };
 
+pub const CollectionType = enum {
+    manual,
+    smart,
+
+    pub fn toString(self: CollectionType) []const u8 {
+        return switch (self) {
+            .manual => "manual",
+            .smart => "smart",
+        };
+    }
+
+    pub fn fromString(s: []const u8) ?CollectionType {
+        if (std.mem.eql(u8, s, "manual")) return .manual;
+        if (std.mem.eql(u8, s, "smart")) return .smart;
+        return null;
+    }
+};
+
+pub const Collection = struct {
+    id: i64 = 0,
+    name: []const u8,
+    collection_type: CollectionType = .manual,
+    description: ?[]const u8 = null,
+    poster_path: ?[]const u8 = null,
+    show_on_home: bool = true,
+    sort_order: i32 = 0,
+    created_at: ?i64 = null,
+    updated_at: ?i64 = null,
+};
+
+pub const CollectionRule = struct {
+    id: i64 = 0,
+    collection_id: i64 = 0,
+    field: []const u8,
+    operator: []const u8,
+    value: []const u8,
+};
+
+pub const Genre = struct {
+    id: i64 = 0,
+    name: []const u8,
+};
+
 test "MediaType round-trip" {
     const mt = MediaType.movie;
     const s = mt.toString();
@@ -181,4 +225,9 @@ test "MediaSource round-trip" {
 test "DownloadStatus round-trip" {
     const ds = DownloadStatus.downloading;
     try std.testing.expectEqual(ds, DownloadStatus.fromString(ds.toString()).?);
+}
+
+test "CollectionType round-trip" {
+    const ct = CollectionType.smart;
+    try std.testing.expectEqual(ct, CollectionType.fromString(ct.toString()).?);
 }

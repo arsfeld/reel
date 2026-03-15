@@ -62,6 +62,7 @@ pub const TVDetail = struct {
     vote_average: ?f64 = null,
     number_of_seasons: ?i32 = null,
     number_of_episodes: ?i32 = null,
+    genres: []const Genre = &.{},
 };
 
 pub const Genre = struct {

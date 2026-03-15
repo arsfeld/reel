@@ -53,7 +53,7 @@ pub const Library = struct {
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, added_at, updated_at
+            \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
             \\FROM media_items WHERE id = ?
         );
         defer stmt.finalize();
@@ -70,7 +70,7 @@ pub const Library = struct {
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, added_at, updated_at
+            \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
             \\FROM media_items WHERE source = ? AND source_id = ?
         );
         defer stmt.finalize();
@@ -178,7 +178,7 @@ pub const Library = struct {
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, added_at, updated_at
+            \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
             \\FROM media_items WHERE media_type = ?
             \\ORDER BY {s} {s} LIMIT ? OFFSET ?
         , .{ order_clause, direction }) catch return error.SqlFormatFailed;
@@ -197,7 +197,7 @@ pub const Library = struct {
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, added_at, updated_at
+            \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
             \\FROM media_items
             \\WHERE media_type IN ('movie', 'show')
             \\ORDER BY added_at DESC LIMIT ?
@@ -213,7 +213,7 @@ pub const Library = struct {
             \\SELECT m.id, m.source, m.source_id, m.server_id, m.media_type, m.title,
             \\       m.sort_title, m.year, m.summary, m.rating, m.duration_ms,
             \\       m.poster_path, m.backdrop_path, m.tmdb_id, m.parent_id,
-            \\       m.season_number, m.episode_number, m.file_path, m.added_at, m.updated_at
+            \\       m.season_number, m.episode_number, m.file_path, m.added_at, m.updated_at, m.match_locked
             \\FROM media_items m
             \\JOIN watch_progress wp ON m.id = wp.media_item_id
             \\WHERE wp.watched = 0 AND wp.position_ms > 0
@@ -231,7 +231,7 @@ pub const Library = struct {
                 \\SELECT id, source, source_id, server_id, media_type, title,
                 \\       sort_title, year, summary, rating, duration_ms,
                 \\       poster_path, backdrop_path, tmdb_id, parent_id,
-                \\       season_number, episode_number, file_path, added_at, updated_at
+                \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
                 \\FROM media_items WHERE title LIKE ? AND media_type = ?
                 \\ORDER BY title LIMIT 50
             );
@@ -247,7 +247,7 @@ pub const Library = struct {
                 \\SELECT id, source, source_id, server_id, media_type, title,
                 \\       sort_title, year, summary, rating, duration_ms,
                 \\       poster_path, backdrop_path, tmdb_id, parent_id,
-                \\       season_number, episode_number, file_path, added_at, updated_at
+                \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
                 \\FROM media_items WHERE title LIKE ?
                 \\ORDER BY title LIMIT 50
             );
@@ -265,7 +265,7 @@ pub const Library = struct {
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, added_at, updated_at
+            \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
             \\FROM media_items WHERE parent_id = ?
             \\ORDER BY season_number, episode_number, title
         );
@@ -427,6 +427,437 @@ pub const Library = struct {
         self.allocator.free(favs);
     }
 
+    // Genre operations
+
+    pub fn insertGenre(self: *Library, name: []const u8) !i64 {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+        return self.insertGenreLocked(name);
+    }
+
+    /// Insert a genre without locking (caller must hold mutex).
+    fn insertGenreLocked(self: *Library, name: []const u8) !i64 {
+        var stmt = try self.db.prepare("INSERT OR IGNORE INTO genres (name) VALUES (?)");
+        defer stmt.finalize();
+        stmt.bindText(1, name);
+        try stmt.exec();
+
+        // Always look up the id — lastInsertRowId is unreliable with INSERT OR IGNORE
+        var lookup = try self.db.prepare("SELECT id FROM genres WHERE name = ?");
+        defer lookup.finalize();
+        lookup.bindText(1, name);
+        if (lookup.step()) {
+            return lookup.columnInt64(0);
+        }
+        return error.SqlExecFailed;
+    }
+
+    pub fn setMediaItemGenres(self: *Library, media_item_id: i64, genre_names: []const []const u8) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        // Delete existing associations
+        var del = try self.db.prepare("DELETE FROM media_item_genres WHERE media_item_id = ?");
+        defer del.finalize();
+        del.bindInt64(1, media_item_id);
+        try del.exec();
+
+        // Insert new associations
+        for (genre_names) |name| {
+            const genre_id = try self.insertGenreLocked(name);
+
+            var ins = try self.db.prepare(
+                "INSERT OR IGNORE INTO media_item_genres (media_item_id, genre_id) VALUES (?, ?)",
+            );
+            defer ins.finalize();
+            ins.bindInt64(1, media_item_id);
+            ins.bindInt64(2, genre_id);
+            try ins.exec();
+        }
+    }
+
+    pub fn getDistinctGenres(self: *Library) ![]types.Genre {
+        var stmt = try self.db.prepare(
+            \\SELECT g.id, g.name FROM genres g
+            \\INNER JOIN media_item_genres mig ON g.id = mig.genre_id
+            \\GROUP BY g.id, g.name
+            \\ORDER BY COUNT(mig.media_item_id) DESC
+        );
+        defer stmt.finalize();
+
+        var results: std.ArrayList(types.Genre) = .{};
+        while (stmt.step()) {
+            try results.append(self.allocator, types.Genre{
+                .id = stmt.columnInt64(0),
+                .name = try dupeText(self.allocator, stmt.columnText(1) orelse continue),
+            });
+        }
+        return results.toOwnedSlice(self.allocator);
+    }
+
+    pub fn freeGenres(self: *Library, genres: []types.Genre) void {
+        for (genres) |g| self.allocator.free(g.name);
+        self.allocator.free(genres);
+    }
+
+    pub fn getItemsByGenre(self: *Library, genre_name: []const u8, limit: u32) ![]types.MediaItem {
+        var stmt = try self.db.prepare(
+            \\SELECT m.id, m.source, m.source_id, m.server_id, m.media_type, m.title,
+            \\       m.sort_title, m.year, m.summary, m.rating, m.duration_ms,
+            \\       m.poster_path, m.backdrop_path, m.tmdb_id, m.parent_id,
+            \\       m.season_number, m.episode_number, m.file_path, m.added_at, m.updated_at, m.match_locked
+            \\FROM media_items m
+            \\INNER JOIN media_item_genres mig ON m.id = mig.media_item_id
+            \\INNER JOIN genres g ON mig.genre_id = g.id
+            \\WHERE g.name = ? AND m.media_type IN ('movie', 'show')
+            \\ORDER BY m.added_at DESC LIMIT ?
+        );
+        defer stmt.finalize();
+        stmt.bindText(1, genre_name);
+        stmt.bindInt(2, @intCast(limit));
+
+        return self.collectMediaItems(&stmt);
+    }
+
+    // Match lock operations
+
+    pub fn setMatchLocked(self: *Library, media_item_id: i64, locked: bool) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare("UPDATE media_items SET match_locked = ? WHERE id = ?");
+        defer stmt.finalize();
+        stmt.bindInt(1, if (locked) 1 else 0);
+        stmt.bindInt64(2, media_item_id);
+        try stmt.exec();
+    }
+
+    pub fn updateMediaItemMetadata(self: *Library, id: i64, item: types.MediaItem) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare(
+            \\UPDATE media_items SET
+            \\  title = ?, sort_title = ?, year = ?, summary = ?, rating = ?,
+            \\  duration_ms = ?, poster_path = ?, backdrop_path = ?, tmdb_id = ?,
+            \\  match_locked = ?, updated_at = ?
+            \\WHERE id = ?
+        );
+        defer stmt.finalize();
+
+        stmt.bindText(1, item.title);
+        stmt.bindOptionalText(2, item.sort_title);
+        stmt.bindOptionalInt(3, item.year);
+        stmt.bindOptionalText(4, item.summary);
+        stmt.bindOptionalDouble(5, item.rating);
+        stmt.bindOptionalInt64(6, item.duration_ms);
+        stmt.bindOptionalText(7, item.poster_path);
+        stmt.bindOptionalText(8, item.backdrop_path);
+        stmt.bindOptionalInt(9, item.tmdb_id);
+        stmt.bindInt(10, if (item.match_locked) 1 else 0);
+        stmt.bindInt64(11, std.time.timestamp());
+        stmt.bindInt64(12, id);
+
+        try stmt.exec();
+    }
+
+    // Collection operations
+
+    pub fn createCollection(self: *Library, name: []const u8, collection_type: types.CollectionType, description: ?[]const u8) !i64 {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        // Get max sort_order
+        var max_stmt = try self.db.prepare("SELECT COALESCE(MAX(sort_order), -1) FROM collections");
+        defer max_stmt.finalize();
+        var next_order: i32 = 0;
+        if (max_stmt.step()) {
+            next_order = max_stmt.columnInt(0) + 1;
+        }
+
+        var stmt = try self.db.prepare(
+            \\INSERT INTO collections (name, collection_type, description, sort_order, created_at, updated_at)
+            \\VALUES (?, ?, ?, ?, ?, ?)
+        );
+        defer stmt.finalize();
+        stmt.bindText(1, name);
+        stmt.bindText(2, collection_type.toString());
+        stmt.bindOptionalText(3, description);
+        stmt.bindInt(4, next_order);
+        const now = std.time.timestamp();
+        stmt.bindInt64(5, now);
+        stmt.bindInt64(6, now);
+
+        try stmt.exec();
+        return stmt.lastInsertRowId();
+    }
+
+    pub fn getCollection(self: *Library, id: i64) !?types.Collection {
+        var stmt = try self.db.prepare(
+            \\SELECT id, name, collection_type, description, poster_path,
+            \\       show_on_home, sort_order, created_at, updated_at
+            \\FROM collections WHERE id = ?
+        );
+        defer stmt.finalize();
+        stmt.bindInt64(1, id);
+
+        if (stmt.step()) {
+            return try readCollection(self.allocator, &stmt);
+        }
+        return null;
+    }
+
+    pub fn listCollections(self: *Library) ![]types.Collection {
+        var stmt = try self.db.prepare(
+            \\SELECT id, name, collection_type, description, poster_path,
+            \\       show_on_home, sort_order, created_at, updated_at
+            \\FROM collections ORDER BY sort_order ASC, name ASC
+        );
+        defer stmt.finalize();
+
+        var results: std.ArrayList(types.Collection) = .{};
+        while (stmt.step()) {
+            try results.append(self.allocator, try readCollection(self.allocator, &stmt));
+        }
+        return results.toOwnedSlice(self.allocator);
+    }
+
+    pub fn deleteCollection(self: *Library, id: i64) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare("DELETE FROM collections WHERE id = ?");
+        defer stmt.finalize();
+        stmt.bindInt64(1, id);
+        try stmt.exec();
+    }
+
+    pub fn freeCollection(self: *Library, col: types.Collection) void {
+        self.allocator.free(col.name);
+        if (col.description) |s| self.allocator.free(s);
+        if (col.poster_path) |s| self.allocator.free(s);
+    }
+
+    pub fn freeCollections(self: *Library, cols: []types.Collection) void {
+        for (cols) |col| self.freeCollection(col);
+        self.allocator.free(cols);
+    }
+
+    // Collection items
+
+    pub fn addToCollection(self: *Library, collection_id: i64, media_item_id: i64) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare(
+            \\INSERT OR IGNORE INTO collection_items (collection_id, media_item_id, added_at)
+            \\VALUES (?, ?, ?)
+        );
+        defer stmt.finalize();
+        stmt.bindInt64(1, collection_id);
+        stmt.bindInt64(2, media_item_id);
+        stmt.bindInt64(3, std.time.timestamp());
+        try stmt.exec();
+    }
+
+    pub fn removeFromCollection(self: *Library, collection_id: i64, media_item_id: i64) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare(
+            "DELETE FROM collection_items WHERE collection_id = ? AND media_item_id = ?",
+        );
+        defer stmt.finalize();
+        stmt.bindInt64(1, collection_id);
+        stmt.bindInt64(2, media_item_id);
+        try stmt.exec();
+    }
+
+    pub fn getCollectionItems(self: *Library, collection_id: i64) ![]types.MediaItem {
+        var stmt = try self.db.prepare(
+            \\SELECT m.id, m.source, m.source_id, m.server_id, m.media_type, m.title,
+            \\       m.sort_title, m.year, m.summary, m.rating, m.duration_ms,
+            \\       m.poster_path, m.backdrop_path, m.tmdb_id, m.parent_id,
+            \\       m.season_number, m.episode_number, m.file_path, m.added_at, m.updated_at, m.match_locked
+            \\FROM media_items m
+            \\INNER JOIN collection_items ci ON m.id = ci.media_item_id
+            \\WHERE ci.collection_id = ?
+            \\ORDER BY ci.sort_order ASC, ci.added_at DESC
+        );
+        defer stmt.finalize();
+        stmt.bindInt64(1, collection_id);
+
+        return self.collectMediaItems(&stmt);
+    }
+
+    // Collection rules
+
+    pub fn addCollectionRule(self: *Library, collection_id: i64, field: []const u8, operator: []const u8, value: []const u8) !i64 {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare(
+            \\INSERT INTO collection_rules (collection_id, field, operator, value)
+            \\VALUES (?, ?, ?, ?)
+        );
+        defer stmt.finalize();
+        stmt.bindInt64(1, collection_id);
+        stmt.bindText(2, field);
+        stmt.bindText(3, operator);
+        stmt.bindText(4, value);
+        try stmt.exec();
+        return stmt.lastInsertRowId();
+    }
+
+    pub fn getCollectionRules(self: *Library, collection_id: i64) ![]types.CollectionRule {
+        var stmt = try self.db.prepare(
+            \\SELECT id, collection_id, field, operator, value
+            \\FROM collection_rules WHERE collection_id = ?
+        );
+        defer stmt.finalize();
+        stmt.bindInt64(1, collection_id);
+
+        var results: std.ArrayList(types.CollectionRule) = .{};
+        while (stmt.step()) {
+            try results.append(self.allocator, types.CollectionRule{
+                .id = stmt.columnInt64(0),
+                .collection_id = stmt.columnInt64(1),
+                .field = try dupeText(self.allocator, stmt.columnText(2) orelse continue),
+                .operator = try dupeText(self.allocator, stmt.columnText(3) orelse continue),
+                .value = try dupeText(self.allocator, stmt.columnText(4) orelse continue),
+            });
+        }
+        return results.toOwnedSlice(self.allocator);
+    }
+
+    pub fn removeCollectionRule(self: *Library, rule_id: i64) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare("DELETE FROM collection_rules WHERE id = ?");
+        defer stmt.finalize();
+        stmt.bindInt64(1, rule_id);
+        try stmt.exec();
+    }
+
+    pub fn freeCollectionRules(self: *Library, rules: []types.CollectionRule) void {
+        for (rules) |r| {
+            self.allocator.free(r.field);
+            self.allocator.free(r.operator);
+            self.allocator.free(r.value);
+        }
+        self.allocator.free(rules);
+    }
+
+    /// Evaluate a smart collection's rules and return matching media items.
+    pub fn evaluateSmartCollection(self: *Library, collection_id: i64) ![]types.MediaItem {
+        const rules = try self.getCollectionRules(collection_id);
+        defer self.freeCollectionRules(rules);
+
+        if (rules.len == 0) return self.allocator.alloc(types.MediaItem, 0);
+
+        // Build dynamic WHERE clause
+        var sql_buf: [2048]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&sql_buf);
+        const fba_alloc = fba.allocator();
+
+        var where_parts: std.ArrayList([]const u8) = .{};
+        var needs_genre_join = false;
+        var needs_watch_join = false;
+
+        for (rules) |rule| {
+            if (std.mem.eql(u8, rule.field, "genre")) {
+                needs_genre_join = true;
+                try where_parts.append(fba_alloc, "g.name = ?");
+            } else if (std.mem.eql(u8, rule.field, "year")) {
+                const op_str = sqlOperator(rule.operator);
+                const part = try std.fmt.allocPrint(fba_alloc, "m.year {s} ?", .{op_str});
+                try where_parts.append(fba_alloc, part);
+            } else if (std.mem.eql(u8, rule.field, "media_type")) {
+                try where_parts.append(fba_alloc, "m.media_type = ?");
+            } else if (std.mem.eql(u8, rule.field, "source")) {
+                try where_parts.append(fba_alloc, "m.source = ?");
+            } else if (std.mem.eql(u8, rule.field, "watched")) {
+                needs_watch_join = true;
+                try where_parts.append(fba_alloc, "COALESCE(wp.watched, 0) = ?");
+            }
+        }
+
+        if (where_parts.items.len == 0) return self.allocator.alloc(types.MediaItem, 0);
+
+        // Build full SQL
+        var full_sql: std.ArrayList(u8) = .{};
+        try full_sql.appendSlice(self.allocator,
+            \\SELECT m.id, m.source, m.source_id, m.server_id, m.media_type, m.title,
+            \\       m.sort_title, m.year, m.summary, m.rating, m.duration_ms,
+            \\       m.poster_path, m.backdrop_path, m.tmdb_id, m.parent_id,
+            \\       m.season_number, m.episode_number, m.file_path, m.added_at, m.updated_at, m.match_locked
+            \\FROM media_items m
+        );
+
+        if (needs_genre_join) {
+            try full_sql.appendSlice(self.allocator,
+                \\ INNER JOIN media_item_genres mig ON m.id = mig.media_item_id
+                \\ INNER JOIN genres g ON mig.genre_id = g.id
+            );
+        }
+        if (needs_watch_join) {
+            try full_sql.appendSlice(self.allocator,
+                \\ LEFT JOIN watch_progress wp ON m.id = wp.media_item_id
+            );
+        }
+
+        try full_sql.appendSlice(self.allocator, " WHERE ");
+
+        for (where_parts.items, 0..) |part, i| {
+            if (i > 0) try full_sql.appendSlice(self.allocator, " AND ");
+            try full_sql.appendSlice(self.allocator, part);
+        }
+
+        try full_sql.appendSlice(self.allocator, " ORDER BY m.added_at DESC LIMIT 100");
+        try full_sql.append(self.allocator, 0); // null terminator
+
+        const sql_z: [*:0]const u8 = @ptrCast(full_sql.items.ptr);
+        defer full_sql.deinit(self.allocator);
+
+        var stmt = try self.db.prepare(sql_z);
+        defer stmt.finalize();
+
+        // Bind rule values
+        var bind_idx: c_int = 1;
+        for (rules) |rule| {
+            if (std.mem.eql(u8, rule.field, "genre") or
+                std.mem.eql(u8, rule.field, "media_type") or
+                std.mem.eql(u8, rule.field, "source"))
+            {
+                stmt.bindText(bind_idx, rule.value);
+                bind_idx += 1;
+            } else if (std.mem.eql(u8, rule.field, "year") or
+                std.mem.eql(u8, rule.field, "watched"))
+            {
+                const int_val = std.fmt.parseInt(i32, rule.value, 10) catch 0;
+                stmt.bindInt(bind_idx, int_val);
+                bind_idx += 1;
+            }
+        }
+
+        return self.collectMediaItems(&stmt);
+    }
+
+    fn readCollection(allocator: std.mem.Allocator, stmt: *database.Statement) !types.Collection {
+        return types.Collection{
+            .id = stmt.columnInt64(0),
+            .name = try dupeText(allocator, stmt.columnText(1) orelse ""),
+            .collection_type = types.CollectionType.fromString(stmt.columnText(2) orelse "manual") orelse .manual,
+            .description = try dupeOptionalText(allocator, stmt.columnText(3)),
+            .poster_path = try dupeOptionalText(allocator, stmt.columnText(4)),
+            .show_on_home = stmt.columnBool(5),
+            .sort_order = stmt.columnInt(6),
+            .created_at = stmt.columnOptionalInt64(7),
+            .updated_at = stmt.columnOptionalInt64(8),
+        };
+    }
+
     // Helpers
 
     fn collectMediaItems(self: *Library, stmt: *database.Statement) ![]types.MediaItem {
@@ -526,9 +957,20 @@ pub const Library = struct {
             .file_path = try dupeOptionalText(allocator, stmt.columnText(17)),
             .added_at = stmt.columnOptionalInt64(18),
             .updated_at = stmt.columnOptionalInt64(19),
+            .match_locked = stmt.columnBool(20),
         };
     }
 };
+
+fn sqlOperator(op: []const u8) []const u8 {
+    if (std.mem.eql(u8, op, "eq")) return "=";
+    if (std.mem.eql(u8, op, "neq")) return "!=";
+    if (std.mem.eql(u8, op, "gt")) return ">";
+    if (std.mem.eql(u8, op, "gte")) return ">=";
+    if (std.mem.eql(u8, op, "lt")) return "<";
+    if (std.mem.eql(u8, op, "lte")) return "<=";
+    return "=";
+}
 
 fn dupeText(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return allocator.dupe(u8, text);
@@ -838,4 +1280,189 @@ test "library server upsert" {
 
     try std.testing.expectEqualStrings("My Plex", server.name);
     try std.testing.expectEqualStrings("token-abc", server.auth_token.?);
+}
+
+test "library genre insert and query" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    const id1 = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Sci-Fi Movie",
+        .year = 2024,
+    });
+    const id2 = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Action Movie",
+        .year = 2023,
+    });
+
+    try lib.setMediaItemGenres(id1, &.{ "Science Fiction", "Action" });
+    try lib.setMediaItemGenres(id2, &.{"Action"});
+
+    // Get distinct genres — Action should come first (2 items) then Sci-Fi (1 item)
+    const genres = try lib.getDistinctGenres();
+    defer lib.freeGenres(genres);
+
+    try std.testing.expectEqual(@as(usize, 2), genres.len);
+    try std.testing.expectEqualStrings("Action", genres[0].name);
+    try std.testing.expectEqualStrings("Science Fiction", genres[1].name);
+
+    // Get items by genre
+    const action_items = try lib.getItemsByGenre("Action", 20);
+    defer lib.freeMediaItems(action_items);
+    try std.testing.expectEqual(@as(usize, 2), action_items.len);
+
+    const scifi_items = try lib.getItemsByGenre("Science Fiction", 20);
+    defer lib.freeMediaItems(scifi_items);
+    try std.testing.expectEqual(@as(usize, 1), scifi_items.len);
+}
+
+test "library collection CRUD" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    const col_id = try lib.createCollection("My Collection", .manual, "Test collection");
+    try std.testing.expect(col_id > 0);
+
+    const col = (try lib.getCollection(col_id)).?;
+    defer lib.freeCollection(col);
+    try std.testing.expectEqualStrings("My Collection", col.name);
+    try std.testing.expectEqual(types.CollectionType.manual, col.collection_type);
+    try std.testing.expectEqualStrings("Test collection", col.description.?);
+    try std.testing.expectEqual(true, col.show_on_home);
+
+    _ = try lib.createCollection("Second Collection", .smart, null);
+
+    const all = try lib.listCollections();
+    defer lib.freeCollections(all);
+    try std.testing.expectEqual(@as(usize, 2), all.len);
+
+    try lib.deleteCollection(col_id);
+
+    const after = try lib.listCollections();
+    defer lib.freeCollections(after);
+    try std.testing.expectEqual(@as(usize, 1), after.len);
+}
+
+test "library collection items" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    const col_id = try lib.createCollection("Favorites 2", .manual, null);
+    const item_id1 = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Movie A",
+    });
+    const item_id2 = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Movie B",
+    });
+
+    try lib.addToCollection(col_id, item_id1);
+    try lib.addToCollection(col_id, item_id2);
+
+    const items = try lib.getCollectionItems(col_id);
+    defer lib.freeMediaItems(items);
+    try std.testing.expectEqual(@as(usize, 2), items.len);
+
+    try lib.removeFromCollection(col_id, item_id1);
+
+    const after = try lib.getCollectionItems(col_id);
+    defer lib.freeMediaItems(after);
+    try std.testing.expectEqual(@as(usize, 1), after.len);
+    try std.testing.expectEqualStrings("Movie B", after[0].title);
+}
+
+test "library smart collection evaluation" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    // Create movies with genres
+    const id1 = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Blade Runner 2049",
+        .year = 2017,
+    });
+    const id2 = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "The Matrix",
+        .year = 1999,
+    });
+    const id3 = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .show,
+        .title = "Westworld",
+        .year = 2016,
+    });
+
+    try lib.setMediaItemGenres(id1, &.{ "Science Fiction", "Drama" });
+    try lib.setMediaItemGenres(id2, &.{ "Science Fiction", "Action" });
+    try lib.setMediaItemGenres(id3, &.{"Science Fiction"});
+
+    // Smart collection: Sci-Fi movies
+    const col_id = try lib.createCollection("Sci-Fi Movies", .smart, null);
+    _ = try lib.addCollectionRule(col_id, "genre", "eq", "Science Fiction");
+    _ = try lib.addCollectionRule(col_id, "media_type", "eq", "movie");
+
+    const results = try lib.evaluateSmartCollection(col_id);
+    defer lib.freeMediaItems(results);
+
+    // Should only include the two movies, not the show
+    try std.testing.expectEqual(@as(usize, 2), results.len);
+
+    // Smart collection: year >= 2010
+    const col2 = try lib.createCollection("2010s+", .smart, null);
+    _ = try lib.addCollectionRule(col2, "year", "gte", "2010");
+
+    const results2 = try lib.evaluateSmartCollection(col2);
+    defer lib.freeMediaItems(results2);
+    try std.testing.expectEqual(@as(usize, 2), results2.len); // Blade Runner 2049 + Westworld
+}
+
+test "library match locked flag" {
+    var db = try database.Database.open(":memory:");
+    defer db.close();
+
+    var lib = Library.init(std.testing.allocator, &db);
+
+    const id = try lib.insertMediaItem(.{
+        .source = .local,
+        .media_type = .movie,
+        .title = "Test Movie",
+        .tmdb_id = 12345,
+    });
+
+    // Default should be unlocked
+    const item1 = (try lib.getMediaItem(id)).?;
+    defer lib.freeMediaItem(item1);
+    try std.testing.expectEqual(false, item1.match_locked);
+
+    // Lock it
+    try lib.setMatchLocked(id, true);
+
+    const item2 = (try lib.getMediaItem(id)).?;
+    defer lib.freeMediaItem(item2);
+    try std.testing.expectEqual(true, item2.match_locked);
+
+    // Unlock it
+    try lib.setMatchLocked(id, false);
+
+    const item3 = (try lib.getMediaItem(id)).?;
+    defer lib.freeMediaItem(item3);
+    try std.testing.expectEqual(false, item3.match_locked);
 }
