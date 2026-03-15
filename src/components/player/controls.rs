@@ -21,6 +21,7 @@ pub enum ControlsInput {
 pub enum ControlsOutput {
     TogglePause,
     SeekTo(f64),
+    SeekRelative(f64),
     SetVolume(f64),
     ToggleMute,
     ToggleFullscreen,
@@ -88,6 +89,17 @@ impl SimpleComponent for PlayerControls {
                 set_margin_bottom: 8,
                 set_margin_top: 4,
 
+                // Skip back button
+                gtk4::Button {
+                    set_icon_name: "media-seek-backward-symbolic",
+                    add_css_class: "flat",
+                    add_css_class: "circular",
+                    set_tooltip_text: Some("Skip Back 10s"),
+                    connect_clicked[sender] => move |_| {
+                        let _ = sender.output(ControlsOutput::SeekRelative(-10.0));
+                    },
+                },
+
                 // Play/pause button
                 #[name = "play_pause_btn"]
                 gtk4::Button {
@@ -97,6 +109,17 @@ impl SimpleComponent for PlayerControls {
                     set_tooltip_text: Some("Play/Pause (Space)"),
                     connect_clicked[sender] => move |_| {
                         let _ = sender.output(ControlsOutput::TogglePause);
+                    },
+                },
+
+                // Skip forward button
+                gtk4::Button {
+                    set_icon_name: "media-seek-forward-symbolic",
+                    add_css_class: "flat",
+                    add_css_class: "circular",
+                    set_tooltip_text: Some("Skip Forward 10s"),
+                    connect_clicked[sender] => move |_| {
+                        let _ = sender.output(ControlsOutput::SeekRelative(10.0));
                     },
                 },
 

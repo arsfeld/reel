@@ -17,6 +17,21 @@ pub enum PlayerAction {
     SpeedReset,
 }
 
+/// Skip interval configuration for keyboard shortcuts.
+pub struct SkipIntervals {
+    pub short_secs: f64,
+    pub long_secs: f64,
+}
+
+impl Default for SkipIntervals {
+    fn default() -> Self {
+        Self {
+            short_secs: 10.0,
+            long_secs: 60.0,
+        }
+    }
+}
+
 /// Map a key press to a player action. Returns None if not a shortcut.
 ///
 /// Pure function - fully testable without GTK runtime.
@@ -25,6 +40,17 @@ pub fn map_key_to_action(
     key: gdk::Key,
     modifiers: gdk::ModifierType,
     is_text_input_focused: bool,
+) -> Option<PlayerAction> {
+    map_key_to_action_with_intervals(key, modifiers, is_text_input_focused, &SkipIntervals::default())
+}
+
+/// Map a key press to a player action using configurable skip intervals.
+#[allow(dead_code)]
+pub fn map_key_to_action_with_intervals(
+    key: gdk::Key,
+    modifiers: gdk::ModifierType,
+    is_text_input_focused: bool,
+    intervals: &SkipIntervals,
 ) -> Option<PlayerAction> {
     if is_text_input_focused {
         return None;
@@ -36,10 +62,10 @@ pub fn map_key_to_action(
 
     match key {
         gdk::Key::space if no_mods => Some(PlayerAction::TogglePause),
-        gdk::Key::Right if no_mods => Some(PlayerAction::SeekForward(10.0)),
-        gdk::Key::Left if no_mods => Some(PlayerAction::SeekBackward(10.0)),
-        gdk::Key::Right if shift => Some(PlayerAction::SeekForward(60.0)),
-        gdk::Key::Left if shift => Some(PlayerAction::SeekBackward(60.0)),
+        gdk::Key::Right if no_mods => Some(PlayerAction::SeekForward(intervals.short_secs)),
+        gdk::Key::Left if no_mods => Some(PlayerAction::SeekBackward(intervals.short_secs)),
+        gdk::Key::Right if shift => Some(PlayerAction::SeekForward(intervals.long_secs)),
+        gdk::Key::Left if shift => Some(PlayerAction::SeekBackward(intervals.long_secs)),
         gdk::Key::Up if no_mods => Some(PlayerAction::VolumeUp(5.0)),
         gdk::Key::Down if no_mods => Some(PlayerAction::VolumeDown(5.0)),
         gdk::Key::m if no_mods => Some(PlayerAction::ToggleMute),
@@ -225,5 +251,33 @@ mod tests {
     #[test]
     fn enter_returns_none() {
         assert_eq!(map_key_to_action(gdk::Key::Return, NONE, false), None);
+    }
+
+    // --- Configurable intervals ---
+
+    #[test]
+    fn custom_short_skip_interval() {
+        let intervals = SkipIntervals { short_secs: 5.0, long_secs: 30.0 };
+        assert_eq!(
+            map_key_to_action_with_intervals(gdk::Key::Right, NONE, false, &intervals),
+            Some(PlayerAction::SeekForward(5.0))
+        );
+        assert_eq!(
+            map_key_to_action_with_intervals(gdk::Key::Left, NONE, false, &intervals),
+            Some(PlayerAction::SeekBackward(5.0))
+        );
+    }
+
+    #[test]
+    fn custom_long_skip_interval() {
+        let intervals = SkipIntervals { short_secs: 5.0, long_secs: 30.0 };
+        assert_eq!(
+            map_key_to_action_with_intervals(gdk::Key::Right, SHIFT, false, &intervals),
+            Some(PlayerAction::SeekForward(30.0))
+        );
+        assert_eq!(
+            map_key_to_action_with_intervals(gdk::Key::Left, SHIFT, false, &intervals),
+            Some(PlayerAction::SeekBackward(30.0))
+        );
     }
 }

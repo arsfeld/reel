@@ -369,11 +369,13 @@ impl Component for App {
         let db_conn = init_database();
 
         // Load and validate saved source (async — tests connection, re-discovers if stale)
+        let mut has_sources = false;
         if let Some(ref conn) = db_conn {
             let repo = crate::db::source_repo::SourceRepo::new(conn);
             if let Ok(sources) = repo.list()
                 && let Some(source) = sources.into_iter().find(|s| s.enabled)
             {
+                has_sources = true;
                 info!(
                     "Loaded saved Plex source: {} (url={})",
                     source.name, source.config.url
@@ -426,6 +428,9 @@ impl Component for App {
         glib::timeout_add_local_once(std::time::Duration::from_millis(200), move || {
             if let Some(path) = file_arg {
                 sender_init.input(AppMsg::OpenFile(path));
+            } else if !has_sources {
+                // First run: auto-prompt Plex connection
+                sender_init.input(AppMsg::ShowConnectionDialog);
             } else {
                 sender_init.input(AppMsg::Navigate(LibraryType::Movie));
             }

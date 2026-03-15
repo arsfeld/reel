@@ -360,6 +360,7 @@ impl VideoArea {
             .forward(sender.input_sender(), |output| match output {
                 ControlsOutput::TogglePause => VideoAreaMsg::TogglePause,
                 ControlsOutput::SeekTo(pos) => VideoAreaMsg::SeekAbsolute(pos),
+                ControlsOutput::SeekRelative(offset) => VideoAreaMsg::SeekRelative(offset),
                 ControlsOutput::SetVolume(vol) => VideoAreaMsg::SetVolume(vol),
                 ControlsOutput::ToggleMute => VideoAreaMsg::ToggleMute,
                 ControlsOutput::ToggleFullscreen => VideoAreaMsg::ToggleFullscreen,

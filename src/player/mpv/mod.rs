@@ -37,6 +37,27 @@ impl MpvBackend {
         Ok(Self { mpv })
     }
 
+    /// Apply subtitle settings to mpv.
+    #[allow(dead_code)]
+    pub fn apply_subtitle_settings(
+        &self,
+        font_family: &str,
+        font_size: u32,
+        preferred_language: Option<&str>,
+    ) {
+        if let Err(e) = self.mpv.set_property("sub-font", font_family) {
+            tracing::warn!("Failed to set sub-font: {e}");
+        }
+        if let Err(e) = self.mpv.set_property("sub-font-size", font_size as i64) {
+            tracing::warn!("Failed to set sub-font-size: {e}");
+        }
+        if let Some(lang) = preferred_language {
+            if let Err(e) = self.mpv.set_property("slang", lang) {
+                tracing::warn!("Failed to set slang: {e}");
+            }
+        }
+    }
+
     #[allow(dead_code)]
     pub fn load_file(&self, uri: &str) {
         if let Err(e) = self.mpv.command("loadfile", &[uri, "replace"]) {
