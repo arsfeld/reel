@@ -1,0 +1,10 @@
+zig-out/
+zig-cache/
+.zig-cache/
+result
+result-*
+.direnv/
+*.o
+*.a
+*.so
+*.dylib
