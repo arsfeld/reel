@@ -1,7 +1,7 @@
 ---
 title: "feat: M5 Polish - MPRIS, Settings, Error Audit, Desktop Integration"
 type: feat
-status: active
+status: completed
 date: 2026-03-14
 ---
 
