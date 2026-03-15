@@ -123,6 +123,8 @@ pub const Download = struct {
     status: DownloadStatus = .queued,
     created_at: ?i64 = null,
     completed_at: ?i64 = null,
+    error_message: ?[]const u8 = null,
+    part_key: ?[]const u8 = null,
 };
 
 pub const ScanPath = struct {

@@ -187,6 +187,15 @@ pub const Database = struct {
             );
             try self.setSchemaVersion(2);
         }
+
+        if (version < 3) {
+            try self.exec("ALTER TABLE downloads ADD COLUMN error_message TEXT");
+            try self.exec("ALTER TABLE downloads ADD COLUMN part_key TEXT");
+            try self.exec("CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)");
+            try self.exec("CREATE INDEX IF NOT EXISTS idx_downloads_media_item_id ON downloads(media_item_id)");
+            try self.exec("ALTER TABLE image_cache ADD COLUMN pinned INTEGER DEFAULT 0");
+            try self.setSchemaVersion(3);
+        }
     }
 };
 
@@ -317,7 +326,7 @@ test "database open and migrate" {
     defer db.close();
 
     const version = try db.getSchemaVersion();
-    try std.testing.expectEqual(@as(i32, 2), version);
+    try std.testing.expectEqual(@as(i32, 3), version);
 }
 
 test "database insert and query" {
