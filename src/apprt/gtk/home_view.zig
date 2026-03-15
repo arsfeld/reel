@@ -2,14 +2,18 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("adwaita.h");
     @cInclude("gtk/gtk.h");
+    @cInclude("gdk-pixbuf/gdk-pixbuf.h");
 });
 const app = @import("app.zig");
+const image_loader = @import("image_loader.zig");
 const types = @import("../../core/types.zig");
+const tmdb_types = @import("../../net/tmdb/types.zig");
 
 pub const HomeView = struct {
     widget: *c.GtkWidget,
     content_stack: *c.GtkWidget,
     rows_box: *c.GtkWidget,
+    backdrop_picture: *c.GtkWidget,
 
     pub fn init() HomeView {
         const content_stack = c.gtk_stack_new();
@@ -25,7 +29,19 @@ pub const HomeView = struct {
         );
         _ = c.gtk_stack_add_named(@ptrCast(content_stack), @ptrCast(status), "empty");
 
-        // Content with rows
+        // Content with backdrop overlay
+        const overlay = c.gtk_overlay_new();
+        c.gtk_widget_set_vexpand(@ptrCast(overlay), 1);
+
+        // Backdrop image (full-bleed, dimmed)
+        const backdrop_picture = c.gtk_picture_new();
+        c.gtk_picture_set_content_fit(@ptrCast(backdrop_picture), c.GTK_CONTENT_FIT_COVER);
+        c.gtk_widget_set_opacity(@ptrCast(backdrop_picture), 0.2);
+        c.gtk_widget_set_vexpand(@ptrCast(backdrop_picture), 1);
+        c.gtk_widget_set_hexpand(@ptrCast(backdrop_picture), 1);
+        c.gtk_overlay_set_child(@ptrCast(overlay), @ptrCast(backdrop_picture));
+
+        // Scrollable content on top of backdrop
         const scrolled = c.gtk_scrolled_window_new();
         c.gtk_widget_set_vexpand(@ptrCast(scrolled), 1);
 
@@ -40,7 +56,9 @@ pub const HomeView = struct {
 
         c.adw_clamp_set_child(@ptrCast(clamp), @ptrCast(rows_box));
         c.gtk_scrolled_window_set_child(@ptrCast(scrolled), @ptrCast(clamp));
-        _ = c.gtk_stack_add_named(@ptrCast(content_stack), scrolled, "content");
+        c.gtk_overlay_add_overlay(@ptrCast(overlay), scrolled);
+
+        _ = c.gtk_stack_add_named(@ptrCast(content_stack), @ptrCast(overlay), "content");
 
         c.gtk_stack_set_visible_child_name(@ptrCast(content_stack), "empty");
 
@@ -48,6 +66,7 @@ pub const HomeView = struct {
             .widget = @ptrCast(content_stack),
             .content_stack = @ptrCast(content_stack),
             .rows_box = @ptrCast(rows_box),
+            .backdrop_picture = @ptrCast(backdrop_picture),
         };
     }
 
@@ -65,6 +84,7 @@ pub const HomeView = struct {
         };
 
         var has_content = false;
+        var first_backdrop_set = false;
 
         // Continue Watching row
         if (lib.getContinueWatching(20)) |items| {
@@ -72,6 +92,10 @@ pub const HomeView = struct {
             if (items.len > 0) {
                 addRow(self.rows_box, "Continue Watching", items);
                 has_content = true;
+                if (!first_backdrop_set) {
+                    self.setBackdrop(items[0].backdrop_path);
+                    first_backdrop_set = true;
+                }
             }
         } else |_| {}
 
@@ -81,6 +105,79 @@ pub const HomeView = struct {
             if (items.len > 0) {
                 addRow(self.rows_box, "Recently Added", items);
                 has_content = true;
+                if (!first_backdrop_set) {
+                    self.setBackdrop(items[0].backdrop_path);
+                    first_backdrop_set = true;
+                }
+            }
+        } else |_| {}
+
+        // Favorites row (media_item type only)
+        if (lib.listFavorites()) |favs| {
+            defer lib.freeFavorites(favs);
+            if (favs.len > 0) {
+                // Resolve favorites to media items
+                var fav_items = std.ArrayList(types.MediaItem).init(app.getAllocator());
+                defer {
+                    for (fav_items.items) |item| lib.freeMediaItem(item);
+                    fav_items.deinit();
+                }
+
+                for (favs) |fav| {
+                    if (fav.item_type != .media_item) continue;
+                    const fav_id = std.fmt.parseInt(i64, fav.item_id, 10) catch continue;
+                    if (lib.getMediaItem(fav_id) catch null) |item| {
+                        fav_items.append(item) catch continue;
+                    }
+                }
+
+                if (fav_items.items.len > 0) {
+                    addRow(self.rows_box, "Favorites", fav_items.items);
+                    has_content = true;
+                }
+            }
+        } else |_| {}
+
+        // Genre rows (top 10 by item count)
+        if (lib.getDistinctGenres()) |genres| {
+            defer lib.freeGenres(genres);
+            const max_genre_rows: usize = 10;
+            const genre_count = @min(genres.len, max_genre_rows);
+
+            for (genres[0..genre_count]) |genre| {
+                if (lib.getItemsByGenre(genre.name, 20)) |items| {
+                    defer lib.freeMediaItems(items);
+                    if (items.len > 0) {
+                        // Need null-terminated string for GTK label
+                        const allocator = app.getAllocator();
+                        const label = allocator.dupeZ(u8, genre.name) catch continue;
+                        defer allocator.free(label);
+                        addRow(self.rows_box, label, items);
+                        has_content = true;
+                    }
+                } else |_| {}
+            }
+        } else |_| {}
+
+        // Collection rows (show_on_home = true)
+        if (lib.listCollections()) |collections| {
+            defer lib.freeCollections(collections);
+            for (collections) |col| {
+                if (!col.show_on_home) continue;
+
+                const col_items = if (col.collection_type == .smart)
+                    lib.evaluateSmartCollection(col.id) catch continue
+                else
+                    lib.getCollectionItems(col.id) catch continue;
+                defer lib.freeMediaItems(col_items);
+
+                if (col_items.len > 0) {
+                    const allocator = app.getAllocator();
+                    const label = allocator.dupeZ(u8, col.name) catch continue;
+                    defer allocator.free(label);
+                    addRow(self.rows_box, label, col_items);
+                    has_content = true;
+                }
             }
         } else |_| {}
 
@@ -89,6 +186,10 @@ pub const HomeView = struct {
         } else {
             c.gtk_stack_set_visible_child_name(@ptrCast(self.content_stack), "empty");
         }
+    }
+
+    fn setBackdrop(self: *HomeView, backdrop_path: ?[]const u8) void {
+        _ = image_loader.loadTmdbImage(self.backdrop_picture, backdrop_path, .w1280, -1, -1);
     }
 };
 
@@ -120,36 +221,58 @@ fn addRow(container: *c.GtkWidget, title: [*:0]const u8, items: []const types.Me
 }
 
 fn createSmallPosterCard(item: types.MediaItem) *c.GtkWidget {
+    const allocator = app.getAllocator();
+
+    // Clickable button wrapping the card
+    const button = c.gtk_button_new();
+    c.gtk_widget_add_css_class(@ptrCast(button), "flat");
+    c.gtk_widget_set_size_request(@ptrCast(button), 130, -1);
+
     const card = c.gtk_box_new(c.GTK_ORIENTATION_VERTICAL, 4);
-    c.gtk_widget_set_size_request(@ptrCast(card), 130, -1);
 
-    // Poster frame
-    const frame = c.gtk_frame_new(null);
-    c.gtk_widget_set_size_request(@ptrCast(frame), 130, 195);
-    c.gtk_widget_set_overflow(@ptrCast(frame), c.GTK_OVERFLOW_HIDDEN);
-
+    // Poster image (from cache) or placeholder
     const icon_name: [*:0]const u8 = switch (item.media_type) {
         .movie => "camera-video-symbolic",
         .show => "tv-symbolic",
         .episode => "media-playback-start-symbolic",
         else => "folder-videos-symbolic",
     };
-    const icon = c.gtk_image_new_from_icon_name(icon_name);
-    c.gtk_image_set_pixel_size(@ptrCast(icon), 36);
-    c.gtk_widget_set_opacity(@ptrCast(icon), 0.3);
-    c.gtk_widget_set_halign(@ptrCast(icon), c.GTK_ALIGN_CENTER);
-    c.gtk_widget_set_valign(@ptrCast(icon), c.GTK_ALIGN_CENTER);
-    c.gtk_frame_set_child(@ptrCast(frame), @ptrCast(icon));
+    const poster_widget = image_loader.createPosterPicture(item.poster_path, 130, 195, icon_name);
+    c.gtk_box_append(@ptrCast(card), poster_widget);
 
-    c.gtk_box_append(@ptrCast(card), @ptrCast(frame));
-
-    // Title
-    const title_label = c.gtk_label_new(item.title.ptr);
+    // Title — need to copy since item may be freed before GTK renders
+    const title_z = allocator.dupeZ(u8, item.title) catch item.title.ptr;
+    const title_label = c.gtk_label_new(title_z.ptr);
+    if (title_z.ptr != item.title.ptr) allocator.free(title_z);
     c.gtk_label_set_ellipsize(@ptrCast(title_label), c.PANGO_ELLIPSIZE_END);
     c.gtk_label_set_max_width_chars(@ptrCast(title_label), 18);
     c.gtk_widget_set_halign(@ptrCast(title_label), c.GTK_ALIGN_START);
     c.gtk_widget_set_margin_top(@ptrCast(title_label), 2);
     c.gtk_box_append(@ptrCast(card), @ptrCast(title_label));
 
-    return @ptrCast(card);
+    c.gtk_button_set_child(@ptrCast(button), @ptrCast(card));
+
+    // Connect click to show detail
+    const id_ptr = allocator.create(i64) catch return @ptrCast(button);
+    id_ptr.* = item.id;
+    _ = c.g_signal_connect_data(
+        @ptrCast(button),
+        "clicked",
+        @ptrCast(&onPosterClicked),
+        @ptrCast(id_ptr),
+        @ptrCast(&onPosterDestroy),
+        c.G_CONNECT_DEFAULT,
+    );
+
+    return @ptrCast(button);
+}
+
+fn onPosterClicked(_: *c.GtkButton, user_data: ?*anyopaque) callconv(.c) void {
+    const id_ptr: *i64 = @ptrCast(@alignCast(user_data orelse return));
+    app.showDetail(id_ptr.*);
+}
+
+fn onPosterDestroy(user_data: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+    const id_ptr: *i64 = @ptrCast(@alignCast(user_data orelse return));
+    app.getAllocator().destroy(id_ptr);
 }

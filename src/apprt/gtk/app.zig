@@ -11,6 +11,7 @@ const database = @import("../../core/database.zig");
 const library_mod = @import("../../core/library.zig");
 const downloader_mod = @import("../../core/downloader.zig");
 const http_mod = @import("../../net/http.zig");
+const image_cache_mod = @import("../../core/image_cache.zig");
 const types = @import("../../core/types.zig");
 
 // View modules
@@ -74,6 +75,7 @@ const AppState = struct {
     library: ?library_mod.Library = null,
     downloader: ?downloader_mod.Downloader = null,
     http_client: ?http_mod.HttpClient = null,
+    image_cache: ?image_cache_mod.ImageCache = null,
     allocator: std.mem.Allocator = std.heap.c_allocator,
 };
 
@@ -120,6 +122,7 @@ pub fn run(file_path: ?[]const u8) !void {
     app_state.library = library_mod.Library.init(app_state.allocator, &db);
     app_state.downloader = downloader_mod.Downloader.init(app_state.allocator, &db);
     app_state.http_client = http_mod.HttpClient.init(app_state.allocator);
+    app_state.image_cache = image_cache_mod.ImageCache.init(app_state.allocator, &db, getImageCacheDir());
 
     // Start download worker thread
     if (app_state.downloader != null and app_state.http_client != null) {
@@ -412,6 +415,29 @@ pub fn getLibrary() ?*library_mod.Library {
 
 pub fn getAllocator() std.mem.Allocator {
     return app_state.allocator;
+}
+
+pub fn getImageCache() ?*image_cache_mod.ImageCache {
+    if (app_state.image_cache != null) {
+        return &app_state.image_cache.?;
+    }
+    return null;
+}
+
+var image_cache_dir_buf: [512]u8 = undefined;
+var image_cache_dir_val: ?[]const u8 = null;
+
+fn getImageCacheDir() []const u8 {
+    if (image_cache_dir_val) |d| return d;
+
+    const data_dir = std.posix.getenv("XDG_CACHE_HOME") orelse blk: {
+        const home = std.posix.getenv("HOME") orelse "/tmp";
+        break :blk std.fmt.bufPrint(image_cache_dir_buf[0..256], "{s}/.cache", .{home}) catch "/tmp";
+    };
+    const dir = std.fmt.bufPrint(&image_cache_dir_buf, "{s}/reel/images", .{data_dir}) catch "/tmp/reel/images";
+    std.fs.cwd().makePath(dir) catch {};
+    image_cache_dir_val = dir;
+    return dir;
 }
 
 pub fn getDownloader() ?*downloader_mod.Downloader {
