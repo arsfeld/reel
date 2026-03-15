@@ -68,6 +68,7 @@ const AppState = struct {
     active_view: ViewId = .home,
     direct_play: bool = false,
     detail: ?detail_view.DetailView = null,
+    downloads: ?downloads_view.DownloadsView = null,
     // Data layer
     db: ?*database.Database = null,
     library: ?library_mod.Library = null,
@@ -292,8 +293,9 @@ fn buildSidebarLayout(window: *c.GtkWidget) void {
     const fv = files_view.FilesView.init();
     _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(fv.widget)), "files");
 
-    const dv = downloads_view.DownloadsView.init();
-    _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(dv.widget)), "downloads");
+    app_state.downloads = downloads_view.DownloadsView.init();
+    _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(app_state.downloads.?.widget)), "downloads");
+    downloads_view.setGlobalDownloadsView(&app_state.downloads.?);
 
     const sv = settings_view.SettingsView.init();
     _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(sv.widget)), "settings");
