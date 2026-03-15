@@ -144,20 +144,9 @@ pub const Downloader = struct {
             return;
         };
 
-        // Create a progress context that updates the database
-        const ProgressCtx = struct {
-            downloader: *Downloader,
-            download_id: i64,
-
-            fn callback(downloaded: u64, total: u64) bool {
-                // We can't use the context pointer pattern with a simple fn pointer,
-                // so we use the thread-local approach below instead.
-                _ = downloaded;
-                _ = total;
-                return true;
-            }
-        };
-        _ = ProgressCtx;
+        // Store context for the progress callback via threadlocal
+        tl_downloader = self;
+        tl_download_id = dl.id;
 
         // Retry loop
         var retries: u32 = 0;
@@ -179,7 +168,7 @@ pub const Downloader = struct {
                 file_path,
                 current_offset,
                 &.{},
-                null,
+                &progressCallback,
                 &self.cancel_current,
             ) catch |err| {
                 switch (err) {
@@ -214,17 +203,15 @@ pub const Downloader = struct {
                 }
             };
 
-            // Download completed successfully
-            try self.setStatus(dl.id, .complete);
-
-            // Update final progress
-            if (try self.getDownload(dl.id)) |final_dl| {
-                defer self.freeDownload(final_dl);
-                if (final_dl.local_path) |path| {
-                    const file_stat = std.fs.cwd().statFile(path) catch break;
-                    try self.updateProgress(dl.id, @intCast(file_stat.size), @intCast(file_stat.size));
-                }
+            // Download completed successfully — verify file and update final size
+            if (dl.local_path) |path| {
+                const file_stat = std.fs.cwd().statFile(path) catch {
+                    try self.setFailed(dl.id, "Downloaded file not found");
+                    return;
+                };
+                try self.updateProgress(dl.id, @intCast(file_stat.size), @intCast(file_stat.size));
             }
+            try self.setStatus(dl.id, .complete);
             return;
         }
     }
@@ -508,6 +495,21 @@ pub const Downloader = struct {
         };
     }
 };
+
+// Thread-local state for progress callback (needed because fn pointers can't capture context)
+threadlocal var tl_downloader: ?*Downloader = null;
+threadlocal var tl_download_id: i64 = 0;
+
+fn progressCallback(downloaded: u64, total: u64) bool {
+    const dl = tl_downloader orelse return true;
+    const id = tl_download_id;
+
+    // Update progress in database
+    const total_i: ?i64 = if (total > 0) @intCast(total) else null;
+    dl.updateProgress(id, @intCast(downloaded), total_i) catch {};
+
+    return true;
+}
 
 test "downloader enqueue and retrieve" {
     var db = try database.Database.open(":memory:");
