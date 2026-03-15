@@ -720,6 +720,7 @@ impl Component for App {
     ) {
         match cmd {
             AppCmd::SourceValidated { url, token, name } => {
+                let source_start = Instant::now();
                 info!("Plex source validated: {} (url={})", name, url);
 
                 // Update saved URL in DB (clear old entries — URL may have changed)
@@ -765,6 +766,8 @@ impl Component for App {
                 let watch_data = load_watch_data(&self.db_conn);
                 self.library_view
                     .emit(LibraryViewMsg::SetWatchData(watch_data));
+
+                info!("Source setup took {:?} (DB save + watch data)", source_start.elapsed());
 
                 if let CurrentView::Library(lt) = self.current_view {
                     self.library_view.emit(LibraryViewMsg::LoadLibrary(lt));
@@ -912,6 +915,7 @@ fn days_to_ymd(days: u64) -> (u64, u64, u64) {
 
 /// Load all watch progress from DB into a HashMap for the library view.
 fn load_watch_data(db_conn: &Option<Connection>) -> HashMap<String, (f64, bool)> {
+    let start = Instant::now();
     let mut map = HashMap::new();
     if let Some(conn) = db_conn {
         let repo = WatchProgressRepo::new(conn);
@@ -941,6 +945,7 @@ fn load_watch_data(db_conn: &Option<Connection>) -> HashMap<String, (f64, bool)>
             }
         }
     }
+    info!("load_watch_data: {} entries in {:?}", map.len(), start.elapsed());
     map
 }
 
