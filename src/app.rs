@@ -17,6 +17,7 @@ use crate::components::library::{LibraryView, LibraryViewMsg, LibraryViewOutput}
 use crate::components::player::drop_target;
 use crate::components::player::shortcuts::{self, PlayerAction};
 use crate::components::player::video_area::{VideoArea, VideoAreaMsg, VideoAreaOutput};
+use crate::components::settings_dialog;
 use crate::components::sidebar::{Sidebar, SidebarOutput};
 use crate::db;
 use crate::db::watch_progress_repo::WatchProgressRepo;
@@ -30,6 +31,7 @@ use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
 use crate::services::plex::api::PlexClient;
 use crate::services::plex::source::PlexSource;
+use crate::settings::Settings;
 use crate::services::screensaver::ScreensaverInhibitor;
 use crate::services::watch_state::{PlaybackState, WatchStateEvent, WatchStateTracker};
 use crate::services::window_state::{self, WindowState};
@@ -56,6 +58,8 @@ pub struct App {
     pending_resume: Option<f64>,
     /// Active media source for scrobble/timeline reporting.
     active_source: Option<Arc<PlexSource>>,
+    /// Application settings.
+    settings: Settings,
 }
 
 #[derive(Debug)]
@@ -88,6 +92,8 @@ pub enum AppMsg {
     ShowCollectionDetail(MediaItem),
     MarkWatched(MediaItem),
     MarkUnwatched(MediaItem),
+    OpenPreferences,
+    OpenAbout,
 }
 
 #[derive(Debug)]
@@ -197,15 +203,45 @@ impl Component for App {
         let library_toolbar = adw::ToolbarView::new();
         let library_header = adw::HeaderBar::new();
 
-        let settings_button = gtk4::Button::builder()
-            .icon_name("emblem-system-symbolic")
-            .tooltip_text("Plex Settings")
+        // Hamburger menu
+        let menu = gtk4::gio::Menu::new();
+        menu.append(Some("Preferences"), Some("app.preferences"));
+        menu.append(Some("Plex Connection"), Some("app.plex-connection"));
+        menu.append(Some("About Reel"), Some("app.about"));
+
+        let menu_button = gtk4::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .tooltip_text("Menu")
+            .menu_model(&menu)
+            .primary(true)
             .build();
-        let sender_settings = sender.input_sender().clone();
-        settings_button.connect_clicked(move |_| {
-            let _ = sender_settings.send(AppMsg::ShowConnectionDialog);
+        library_header.pack_end(&menu_button);
+
+        // Register menu actions
+        let action_group = gtk4::gio::SimpleActionGroup::new();
+
+        let prefs_action = gtk4::gio::SimpleAction::new("preferences", None);
+        let sender_prefs = sender.input_sender().clone();
+        prefs_action.connect_activate(move |_, _| {
+            let _ = sender_prefs.send(AppMsg::OpenPreferences);
         });
-        library_header.pack_end(&settings_button);
+        action_group.add_action(&prefs_action);
+
+        let conn_action = gtk4::gio::SimpleAction::new("plex-connection", None);
+        let sender_conn = sender.input_sender().clone();
+        conn_action.connect_activate(move |_, _| {
+            let _ = sender_conn.send(AppMsg::ShowConnectionDialog);
+        });
+        action_group.add_action(&conn_action);
+
+        let about_action = gtk4::gio::SimpleAction::new("about", None);
+        let sender_about = sender.input_sender().clone();
+        about_action.connect_activate(move |_, _| {
+            let _ = sender_about.send(AppMsg::OpenAbout);
+        });
+        action_group.add_action(&about_action);
+
+        root.insert_action_group("app", Some(&action_group));
         library_toolbar.add_top_bar(&library_header);
         library_toolbar.set_content(Some(library_view.widget()));
 
@@ -366,6 +402,7 @@ impl Component for App {
             last_position: 0.0,
             pending_resume: None,
             active_source: None,
+            settings: Settings::load(),
         };
 
         // Handle CLI file arg or start with library
@@ -740,6 +777,12 @@ impl Component for App {
                     "Marked \"{}\" as unwatched",
                     item.title
                 )));
+            }
+            AppMsg::OpenPreferences => {
+                self.settings = settings_dialog::show_preferences(root, &self.settings);
+            }
+            AppMsg::OpenAbout => {
+                settings_dialog::show_about(root);
             }
         }
     }

@@ -130,21 +130,25 @@ impl Settings {
 // --- Validation helpers ---
 
 /// Clamp volume to valid range (0-150).
+#[allow(dead_code)]
 pub fn clamp_volume(v: f64) -> f64 {
     v.clamp(0.0, 150.0)
 }
 
 /// Clamp skip interval to valid range (1-120 seconds).
+#[allow(dead_code)]
 pub fn clamp_skip_interval(v: f64) -> f64 {
     v.clamp(1.0, 120.0)
 }
 
 /// Clamp playback speed to valid range (0.25-4.0).
+#[allow(dead_code)]
 pub fn clamp_speed(v: f64) -> f64 {
     v.clamp(0.25, 4.0)
 }
 
 /// Clamp subtitle font size to valid range (16-72).
+#[allow(dead_code)]
 pub fn clamp_font_size(v: u32) -> u32 {
     v.clamp(16, 72)
 }
