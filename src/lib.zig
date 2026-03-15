@@ -174,6 +174,130 @@ export fn reel_download_get_local_path(dl: ?*downloader.Downloader, media_item_i
     return @ptrCast(path.ptr);
 }
 
+// Collections
+
+export fn reel_collection_create(
+    lib: ?*library.Library,
+    name: [*:0]const u8,
+    collection_type: c_int,
+    description: ?[*:0]const u8,
+) i64 {
+    const l = lib orelse return -1;
+    const ct: types.CollectionType = switch (collection_type) {
+        0 => .manual,
+        1 => .smart,
+        else => return -1,
+    };
+    const desc: ?[]const u8 = if (description) |d| std.mem.span(d) else null;
+    return l.createCollection(std.mem.span(name), ct, desc) catch return -1;
+}
+
+export fn reel_collection_delete(lib: ?*library.Library, id: i64) c_int {
+    const l = lib orelse return -1;
+    l.deleteCollection(id) catch return -1;
+    return 0;
+}
+
+/// Writes a flat array of ReelCollectionC structs into caller-provided output.
+/// Returns the number of collections written, or -1 on error.
+const ReelCollectionC = extern struct {
+    id: i64,
+    name: [*:0]const u8,
+    collection_type: c_int, // 0=manual, 1=smart
+    description: ?[*:0]const u8,
+};
+
+export fn reel_collection_list(
+    lib: ?*library.Library,
+    out_ptr: ?[*]ReelCollectionC,
+    out_count: ?*i32,
+) c_int {
+    const l = lib orelse return -1;
+    const count_ptr = out_count orelse return -1;
+
+    const cols = l.listCollections() catch return -1;
+
+    // If out_ptr is null, just return the count
+    if (out_ptr == null) {
+        count_ptr.* = @intCast(cols.len);
+        l.freeCollections(cols);
+        return 0;
+    }
+
+    const out = out_ptr.?;
+    for (cols, 0..) |col, i| {
+        out[i] = .{
+            .id = col.id,
+            .name = @ptrCast(allocator.dupeZ(u8, col.name) catch {
+                l.freeCollections(cols);
+                return -1;
+            }),
+            .collection_type = switch (col.collection_type) {
+                .manual => 0,
+                .smart => 1,
+            },
+            .description = if (col.description) |d|
+                @ptrCast(allocator.dupeZ(u8, d) catch {
+                    l.freeCollections(cols);
+                    return -1;
+                })
+            else
+                null,
+        };
+    }
+    count_ptr.* = @intCast(cols.len);
+    l.freeCollections(cols);
+    return 0;
+}
+
+export fn reel_collection_add_item(lib: ?*library.Library, collection_id: i64, media_item_id: i64) c_int {
+    const l = lib orelse return -1;
+    l.addToCollection(collection_id, media_item_id) catch return -1;
+    return 0;
+}
+
+export fn reel_collection_remove_item(lib: ?*library.Library, collection_id: i64, media_item_id: i64) c_int {
+    const l = lib orelse return -1;
+    l.removeFromCollection(collection_id, media_item_id) catch return -1;
+    return 0;
+}
+
+// Genres
+
+export fn reel_genre_set(
+    lib: ?*library.Library,
+    media_item_id: i64,
+    genre_names: ?[*]const [*:0]const u8,
+    count: c_int,
+) c_int {
+    const l = lib orelse return -1;
+    if (count < 0) return -1;
+    const cnt: usize = @intCast(count);
+    if (cnt == 0) {
+        // Clear all genres for this item
+        l.setMediaItemGenres(media_item_id, &.{}) catch return -1;
+        return 0;
+    }
+    const names_ptr = genre_names orelse return -1;
+
+    // Convert C string array to Zig slices
+    var name_slices = allocator.alloc([]const u8, cnt) catch return -1;
+    defer allocator.free(name_slices);
+    for (0..cnt) |i| {
+        name_slices[i] = std.mem.span(names_ptr[i]);
+    }
+    l.setMediaItemGenres(media_item_id, name_slices) catch return -1;
+    return 0;
+}
+
+// Match lock
+
+export fn reel_match_set_locked(lib: ?*library.Library, media_item_id: i64, locked: bool) c_int {
+    const l = lib orelse return -1;
+    l.setMatchLocked(media_item_id, locked) catch return -1;
+    return 0;
+}
+
 // Helpers
 
 fn intToMediaType(val: c_int) ?types.MediaType {

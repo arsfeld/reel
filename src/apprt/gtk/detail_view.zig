@@ -5,6 +5,7 @@ const c = @cImport({
 });
 const app = @import("app.zig");
 const types = @import("../../core/types.zig");
+const fix_match_dialog = @import("fix_match_dialog.zig");
 
 pub const DetailView = struct {
     widget: *c.GtkWidget,
@@ -17,14 +18,18 @@ pub const DetailView = struct {
     play_button: *c.GtkWidget,
     download_button: *c.GtkWidget,
     fix_match_button: *c.GtkWidget,
+    add_to_collection_button: *c.GtkWidget,
     lock_icon: *c.GtkWidget,
     episodes_box: *c.GtkWidget,
     episodes_group: *c.GtkWidget,
     current_item_id: i64 = 0,
     current_source: types.MediaSource = .local,
+    current_media_type: types.MediaType = .movie,
     current_match_locked: bool = false,
     current_file_path_buf: [1024]u8 = undefined,
     current_file_path_len: usize = 0,
+    current_title_buf: [512]u8 = undefined,
+    current_title_len: usize = 0,
 
     pub fn init() DetailView {
         const scrolled = c.gtk_scrolled_window_new();
@@ -151,6 +156,20 @@ pub const DetailView = struct {
         c.gtk_widget_set_valign(@ptrCast(lock_icon), c.GTK_ALIGN_CENTER);
         c.gtk_box_append(@ptrCast(button_box), @ptrCast(lock_icon));
 
+        // Add to Collection button
+        const add_to_collection_button = c.gtk_button_new_from_icon_name("list-add-symbolic");
+        c.gtk_widget_add_css_class(@ptrCast(add_to_collection_button), "flat");
+        c.gtk_widget_set_tooltip_text(@ptrCast(add_to_collection_button), "Add to Collection");
+        _ = c.g_signal_connect_data(
+            @ptrCast(add_to_collection_button),
+            "clicked",
+            @ptrCast(&onAddToCollectionClicked),
+            null,
+            null,
+            c.G_CONNECT_DEFAULT,
+        );
+        c.gtk_box_append(@ptrCast(button_box), @ptrCast(add_to_collection_button));
+
         c.gtk_box_append(@ptrCast(info), @ptrCast(button_box));
 
         // Summary
@@ -185,6 +204,7 @@ pub const DetailView = struct {
             .play_button = @ptrCast(play_button),
             .download_button = @ptrCast(download_button),
             .fix_match_button = @ptrCast(fix_match_button),
+            .add_to_collection_button = @ptrCast(add_to_collection_button),
             .lock_icon = @ptrCast(lock_icon),
             .episodes_box = episodes_box_widget,
             .episodes_group = @ptrCast(episodes_group),
@@ -194,6 +214,15 @@ pub const DetailView = struct {
     pub fn showItem(self: *DetailView, item: types.MediaItem) void {
         self.current_item_id = item.id;
         self.current_source = item.source;
+        self.current_media_type = item.media_type;
+
+        // Store title for fix match dialog
+        {
+            const len = @min(item.title.len, self.current_title_buf.len - 1);
+            @memcpy(self.current_title_buf[0..len], item.title[0..len]);
+            self.current_title_buf[len] = 0;
+            self.current_title_len = len;
+        }
 
         // Store file path for play button
         if (item.file_path) |fp| {
@@ -350,7 +379,7 @@ pub const DetailView = struct {
 };
 
 // Global detail view pointer for the play button callback
-var global_detail: ?*DetailView = null;
+pub var global_detail: ?*DetailView = null;
 
 pub fn setGlobalDetail(d: *DetailView) void {
     global_detail = d;
@@ -387,7 +416,137 @@ fn onFixMatchClicked(_: *c.GtkButton, _: ?*anyopaque) callconv(.c) void {
         return;
     }
 
-    // TODO: Open TMDB search dialog for match correction
-    // For now, log that the button was clicked
-    std.log.info("Fix Match clicked for item {d}", .{detail.current_item_id});
+    // Open TMDB search dialog for match correction
+    const title = detail.current_title_buf[0..detail.current_title_len];
+    fix_match_dialog.open(detail.current_item_id, title, detail.current_media_type);
+}
+
+// State for the "Add to Collection" dialog
+const CollectionDialogState = struct {
+    dialog_window: *c.GtkWidget,
+    list_box: *c.GtkWidget,
+    // Store collection IDs paired with check buttons (max 64 collections)
+    collection_ids: [64]i64 = undefined,
+    check_buttons: [64]*c.GtkWidget = undefined,
+    count: usize = 0,
+    media_item_id: i64 = 0,
+};
+
+var collection_dialog_state: ?CollectionDialogState = null;
+
+fn onAddToCollectionClicked(_: *c.GtkButton, _: ?*anyopaque) callconv(.c) void {
+    const detail = global_detail orelse return;
+    if (detail.current_item_id == 0) return;
+
+    var lib = app.getLibrary() orelse return;
+    const collections = lib.listCollections() catch return;
+    defer lib.freeCollections(collections);
+
+    const parent_window = app.getWindow();
+
+    // Create dialog window
+    const dialog_win = c.gtk_window_new();
+    c.gtk_window_set_title(@ptrCast(dialog_win), "Add to Collection");
+    c.gtk_window_set_default_size(@ptrCast(dialog_win), 350, 300);
+    c.gtk_window_set_modal(@ptrCast(dialog_win), 1);
+    if (parent_window) |pw| {
+        c.gtk_window_set_transient_for(@ptrCast(dialog_win), @ptrCast(pw));
+    }
+
+    const vbox = c.gtk_box_new(c.GTK_ORIENTATION_VERTICAL, 8);
+    c.gtk_widget_set_margin_top(@ptrCast(vbox), 16);
+    c.gtk_widget_set_margin_bottom(@ptrCast(vbox), 16);
+    c.gtk_widget_set_margin_start(@ptrCast(vbox), 16);
+    c.gtk_widget_set_margin_end(@ptrCast(vbox), 16);
+
+    const scrolled = c.gtk_scrolled_window_new();
+    c.gtk_widget_set_vexpand(@ptrCast(scrolled), 1);
+
+    const list_box = c.gtk_list_box_new();
+    c.gtk_list_box_set_selection_mode(@ptrCast(list_box), c.GTK_SELECTION_NONE);
+    c.gtk_widget_add_css_class(@ptrCast(list_box), "boxed-list");
+
+    // Initialize dialog state
+    collection_dialog_state = .{
+        .dialog_window = @ptrCast(dialog_win),
+        .list_box = @ptrCast(list_box),
+        .media_item_id = detail.current_item_id,
+    };
+
+    const allocator = app.getAllocator();
+    var manual_count: usize = 0;
+
+    for (collections) |col| {
+        // Only show manual collections
+        if (col.collection_type != .manual) continue;
+        if (manual_count >= 64) break;
+
+        const name_z = allocator.dupeZ(u8, col.name) catch continue;
+        defer allocator.free(name_z);
+
+        const row = c.adw_action_row_new();
+        c.adw_preferences_row_set_title(@ptrCast(row), name_z.ptr);
+
+        const check = c.gtk_check_button_new();
+        c.adw_action_row_add_prefix(@ptrCast(row), @ptrCast(check));
+        c.adw_action_row_set_activatable_widget(@ptrCast(row), @ptrCast(check));
+
+        c.gtk_list_box_append(@ptrCast(list_box), @ptrCast(row));
+
+        if (collection_dialog_state) |*state| {
+            state.collection_ids[manual_count] = col.id;
+            state.check_buttons[manual_count] = @ptrCast(check);
+            state.count = manual_count + 1;
+        }
+        manual_count += 1;
+    }
+
+    c.gtk_scrolled_window_set_child(@ptrCast(scrolled), @ptrCast(list_box));
+    c.gtk_box_append(@ptrCast(vbox), @ptrCast(scrolled));
+
+    // Done button
+    const done_btn = c.gtk_button_new_with_label("Done");
+    c.gtk_widget_add_css_class(@ptrCast(done_btn), "suggested-action");
+    c.gtk_widget_add_css_class(@ptrCast(done_btn), "pill");
+    c.gtk_widget_set_halign(@ptrCast(done_btn), c.GTK_ALIGN_END);
+    c.gtk_widget_set_margin_top(@ptrCast(done_btn), 8);
+    _ = c.g_signal_connect_data(
+        @ptrCast(done_btn),
+        "clicked",
+        @ptrCast(&onCollectionDoneClicked),
+        null,
+        null,
+        c.G_CONNECT_DEFAULT,
+    );
+    c.gtk_box_append(@ptrCast(vbox), @ptrCast(done_btn));
+
+    // Show empty message if no manual collections
+    if (manual_count == 0) {
+        const empty_label = c.gtk_label_new("No manual collections. Create one first.");
+        c.gtk_widget_add_css_class(@ptrCast(empty_label), "dim-label");
+        c.gtk_widget_set_margin_top(@ptrCast(empty_label), 24);
+        c.gtk_box_prepend(@ptrCast(vbox), @ptrCast(empty_label));
+    }
+
+    c.gtk_window_set_child(@ptrCast(dialog_win), @ptrCast(vbox));
+    c.gtk_window_present(@ptrCast(dialog_win));
+}
+
+fn onCollectionDoneClicked(_: *c.GtkButton, _: ?*anyopaque) callconv(.c) void {
+    const state = &(collection_dialog_state orelse return);
+    var lib = app.getLibrary() orelse return;
+
+    // Add to each checked collection
+    for (0..state.count) |i| {
+        const active = c.gtk_check_button_get_active(@ptrCast(state.check_buttons[i]));
+        if (active != 0) {
+            lib.addToCollection(state.collection_ids[i], state.media_item_id) catch |err| {
+                std.log.err("Failed to add to collection: {}", .{err});
+            };
+        }
+    }
+
+    // Close dialog
+    c.gtk_window_close(@ptrCast(state.dialog_window));
+    collection_dialog_state = null;
 }

@@ -13,6 +13,8 @@ const downloader_mod = @import("../../core/downloader.zig");
 const http_mod = @import("../../net/http.zig");
 const image_cache_mod = @import("../../core/image_cache.zig");
 const types = @import("../../core/types.zig");
+const tmdb_client_mod = @import("../../net/tmdb/client.zig");
+const settings_mod = @import("../../core/settings.zig");
 
 // View modules
 const home_view = @import("home_view.zig");
@@ -73,12 +75,15 @@ const AppState = struct {
     direct_play: bool = false,
     detail: ?detail_view.DetailView = null,
     downloads: ?downloads_view.DownloadsView = null,
+    collections: ?collections_view.CollectionsView = null,
     // Data layer
     db: ?*database.Database = null,
     library: ?library_mod.Library = null,
     downloader: ?downloader_mod.Downloader = null,
     http_client: ?http_mod.HttpClient = null,
     image_cache: ?image_cache_mod.ImageCache = null,
+    tmdb_client: ?tmdb_client_mod.TmdbClient = null,
+    settings: ?settings_mod.Settings = null,
     allocator: std.mem.Allocator = std.heap.c_allocator,
 };
 
@@ -126,6 +131,22 @@ pub fn run(file_path: ?[]const u8) !void {
     app_state.downloader = downloader_mod.Downloader.init(app_state.allocator, &db);
     app_state.http_client = http_mod.HttpClient.init(app_state.allocator);
     app_state.image_cache = image_cache_mod.ImageCache.init(app_state.allocator, &db, getImageCacheDir());
+    app_state.settings = settings_mod.Settings.init(app_state.allocator, &db);
+
+    // Initialize TMDB client if API key is configured
+    if (app_state.settings) |*settings| {
+        if (settings.getString(settings_mod.keys.tmdb_api_key) catch null) |api_key| {
+            if (api_key.len > 0) {
+                app_state.tmdb_client = tmdb_client_mod.TmdbClient.init(
+                    app_state.allocator,
+                    &app_state.http_client.?,
+                    api_key,
+                );
+            } else {
+                app_state.allocator.free(api_key);
+            }
+        }
+    }
 
     // Start download worker thread
     if (app_state.downloader != null and app_state.http_client != null) {
@@ -296,8 +317,9 @@ fn buildSidebarLayout(window: *c.GtkWidget) void {
     const fav = favorites_view.FavoritesView.init();
     _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(fav.widget)), "favorites");
 
-    const cv = collections_view.CollectionsView.init();
-    _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(cv.widget)), "collections");
+    app_state.collections = collections_view.CollectionsView.init();
+    _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(app_state.collections.?.widget)), "collections");
+    collections_view.setGlobalCollectionsView(&app_state.collections.?);
 
     const fv = files_view.FilesView.init();
     _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(fv.widget)), "files");
@@ -430,6 +452,13 @@ pub fn getImageCache() ?*image_cache_mod.ImageCache {
     return null;
 }
 
+pub fn getTmdbClient() ?*tmdb_client_mod.TmdbClient {
+    if (app_state.tmdb_client != null) {
+        return &app_state.tmdb_client.?;
+    }
+    return null;
+}
+
 var image_cache_dir_buf: [512]u8 = undefined;
 var image_cache_dir_val: ?[]const u8 = null;
 
@@ -444,6 +473,13 @@ fn getImageCacheDir() []const u8 {
     std.fs.cwd().makePath(dir) catch {};
     image_cache_dir_val = dir;
     return dir;
+}
+
+pub fn getWindow() ?*c.GtkWindow {
+    if (app_state.window) |w| {
+        return @ptrCast(w);
+    }
+    return null;
 }
 
 pub fn getDownloader() ?*downloader_mod.Downloader {

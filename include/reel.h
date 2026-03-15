@@ -157,6 +157,68 @@ ReelError reel_library_remove_scan_path(ReelLibrary* lib, int64_t id);
 const char* reel_settings_get(ReelDatabase* db, const char* key);
 ReelError reel_settings_set(ReelDatabase* db, const char* key, const char* value);
 
+/* ── Collections ────────────────────────────────────────── */
+
+typedef enum {
+    REEL_COLLECTION_MANUAL = 0,
+    REEL_COLLECTION_SMART = 1,
+} ReelCollectionType;
+
+typedef struct {
+    int64_t id;
+    const char* name;
+    int collection_type;    /* 0=manual, 1=smart */
+    const char* description; /* nullable */
+} ReelCollectionC;
+
+/** Create a collection. Returns the new collection id, or -1 on error. */
+int64_t reel_collection_create(ReelLibrary* lib,
+                                const char* name,
+                                int collection_type,
+                                const char* description);
+
+/** Delete a collection by id. Returns REEL_OK or error. */
+ReelError reel_collection_delete(ReelLibrary* lib, int64_t id);
+
+/**
+ * List all collections.
+ * Pass out_ptr=NULL to query just the count.
+ * Caller must allocate out_ptr with enough space.
+ * Returns REEL_OK or error.
+ */
+ReelError reel_collection_list(ReelLibrary* lib,
+                                ReelCollectionC* out_ptr,
+                                int32_t* out_count);
+
+/** Add a media item to a collection. Returns REEL_OK or error. */
+ReelError reel_collection_add_item(ReelLibrary* lib,
+                                    int64_t collection_id,
+                                    int64_t media_item_id);
+
+/** Remove a media item from a collection. Returns REEL_OK or error. */
+ReelError reel_collection_remove_item(ReelLibrary* lib,
+                                       int64_t collection_id,
+                                       int64_t media_item_id);
+
+/* ── Genres ─────────────────────────────────────────────── */
+
+/**
+ * Set genres for a media item (replaces existing).
+ * genre_names is an array of null-terminated strings with `count` elements.
+ * Returns REEL_OK or error.
+ */
+ReelError reel_genre_set(ReelLibrary* lib,
+                          int64_t media_item_id,
+                          const char* const* genre_names,
+                          int count);
+
+/* ── Match lock ─────────────────────────────────────────── */
+
+/** Lock or unlock metadata matching for a media item. */
+ReelError reel_match_set_locked(ReelLibrary* lib,
+                                 int64_t media_item_id,
+                                 int locked);
+
 /* ── Downloads ──────────────────────────────────────────── */
 
 typedef struct ReelDownloader ReelDownloader;
