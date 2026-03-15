@@ -51,10 +51,10 @@ impl MpvBackend {
         if let Err(e) = self.mpv.set_property("sub-font-size", font_size as i64) {
             tracing::warn!("Failed to set sub-font-size: {e}");
         }
-        if let Some(lang) = preferred_language {
-            if let Err(e) = self.mpv.set_property("slang", lang) {
-                tracing::warn!("Failed to set slang: {e}");
-            }
+        if let Some(lang) = preferred_language
+            && let Err(e) = self.mpv.set_property("slang", lang)
+        {
+            tracing::warn!("Failed to set slang: {e}");
         }
     }
 

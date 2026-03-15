@@ -5,6 +5,7 @@ use libadwaita as adw;
 use crate::settings::Settings;
 
 /// Build and present the preferences dialog.
+#[allow(clippy::too_many_lines)]
 pub fn show_preferences(parent: &impl IsA<gtk4::Widget>, settings: &Settings) -> Settings {
     let dialog = adw::PreferencesDialog::builder()
         .title("Preferences")
@@ -18,9 +19,7 @@ pub fn show_preferences(parent: &impl IsA<gtk4::Widget>, settings: &Settings) ->
         .name("playback")
         .build();
 
-    let general_group = adw::PreferencesGroup::builder()
-        .title("General")
-        .build();
+    let general_group = adw::PreferencesGroup::builder().title("General").build();
 
     let resume_switch = adw::SwitchRow::builder()
         .title("Resume Playback")
@@ -72,9 +71,7 @@ pub fn show_preferences(parent: &impl IsA<gtk4::Widget>, settings: &Settings) ->
         .name("subtitles")
         .build();
 
-    let sub_group = adw::PreferencesGroup::builder()
-        .title("Subtitles")
-        .build();
+    let sub_group = adw::PreferencesGroup::builder().title("Subtitles").build();
 
     let sub_lang_entry = adw::EntryRow::builder()
         .title("Preferred Language (e.g. en, es)")
@@ -107,9 +104,7 @@ pub fn show_preferences(parent: &impl IsA<gtk4::Widget>, settings: &Settings) ->
         .name("library")
         .build();
 
-    let display_group = adw::PreferencesGroup::builder()
-        .title("Display")
-        .build();
+    let display_group = adw::PreferencesGroup::builder().title("Display").build();
 
     let sort_model = gtk4::StringList::new(&["Title", "Year", "Date Added", "Rating"]);
     let sort_combo = adw::ComboRow::builder()

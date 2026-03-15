@@ -12,7 +12,7 @@ pub enum SettingsError {
 }
 
 /// Application settings persisted to `config_dir()/settings.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub playback: PlaybackSettings,
@@ -57,15 +57,7 @@ pub struct LibrarySettings {
     pub sort_ascending: bool,
 }
 
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            playback: PlaybackSettings::default(),
-            subtitles: SubtitleSettings::default(),
-            library: LibrarySettings::default(),
-        }
-    }
-}
+// Settings has Default derived from its fields' defaults.
 
 impl Default for PlaybackSettings {
     fn default() -> Self {

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Reel
+GenericName=Media Player
+Comment=A modern, native media player for the Linux desktop
+Icon=dev.arsfeld.Reel
+Exec=reel %U
+Terminal=false
+Categories=AudioVideo;Video;Player;GTK;
+Keywords=video;media;player;movie;mpv;plex;
+StartupNotify=true
+StartupWMClass=dev.arsfeld.Reel
+MimeType=video/mp4;video/x-matroska;video/webm;video/x-msvideo;video/mpeg;video/ogg;video/quicktime;video/x-m4v;video/mp2t;application/x-matroska;

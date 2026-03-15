@@ -32,10 +32,10 @@ use crate::services::media_source::MediaSource;
 use crate::services::mpris::{self, MprisBridge, MprisCommand};
 use crate::services::plex::api::PlexClient;
 use crate::services::plex::source::PlexSource;
-use crate::settings::Settings;
 use crate::services::screensaver::ScreensaverInhibitor;
 use crate::services::watch_state::{PlaybackState, WatchStateEvent, WatchStateTracker};
 use crate::services::window_state::{self, WindowState};
+use crate::settings::Settings;
 
 #[allow(dead_code)]
 pub struct App {
@@ -536,10 +536,8 @@ impl Component for App {
                     self.screensaver.inhibit(root);
                     // Update MPRIS metadata
                     if let Some(ref item) = self.now_playing {
-                        let duration =
-                            item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0);
-                        let meta =
-                            mpris::metadata_from_media_item(item, duration, None);
+                        let duration = item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0);
+                        let meta = mpris::metadata_from_media_item(item, duration, None);
                         let _ = self.mpris.metadata_tx.send(meta);
                     }
                     // Auto-resume from saved position
@@ -601,7 +599,12 @@ impl Component for App {
                                 self.last_position,
                                 Instant::now(),
                             );
-                            dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
+                            dispatch_watch_events(
+                                &self.db_conn,
+                                events,
+                                &self.active_source,
+                                &sender,
+                            );
                         }
                         PlayState::Paused | PlayState::Stopped => {
                             self.screensaver.uninhibit(root);
@@ -610,7 +613,12 @@ impl Component for App {
                                 self.last_position,
                                 Instant::now(),
                             );
-                            dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
+                            dispatch_watch_events(
+                                &self.db_conn,
+                                events,
+                                &self.active_source,
+                                &sender,
+                            );
                         }
                     }
                 }
@@ -619,10 +627,7 @@ impl Component for App {
                     self.screensaver.uninhibit(root);
                     // Update MPRIS
                     let _ = self.mpris.status_tx.send(PlayState::Stopped);
-                    let _ = self
-                        .mpris
-                        .metadata_tx
-                        .send(mpris::MprisMetadata::default());
+                    let _ = self.mpris.metadata_tx.send(mpris::MprisMetadata::default());
                     let _ = self.mpris.position_tx.send(0);
                     // Stop watch tracking with final persist + scrobble check
                     let events = self.watch_tracker.stop(self.last_position);
@@ -773,16 +778,16 @@ impl Component for App {
                     let _ = repo.upsert(&progress);
                 }
                 // Fire-and-forget Plex scrobble
-                if item.source_type == SourceType::Plex {
-                    if let Some(source) = self.active_source.clone() {
-                        let key = item.external_id.clone();
-                        sender.oneshot_command(async move {
-                            if let Err(e) = source.scrobble(&key).await {
-                                tracing::warn!("Plex scrobble failed: {e}");
-                            }
-                            AppCmd::Noop
-                        });
-                    }
+                if item.source_type == SourceType::Plex
+                    && let Some(source) = self.active_source.clone()
+                {
+                    let key = item.external_id.clone();
+                    sender.oneshot_command(async move {
+                        if let Err(e) = source.scrobble(&key).await {
+                            tracing::warn!("Plex scrobble failed: {e}");
+                        }
+                        AppCmd::Noop
+                    });
                 }
                 // Refresh watch data
                 let watch_data = load_watch_data(&self.db_conn);
@@ -800,16 +805,16 @@ impl Component for App {
                     let _ = repo.mark_unwatched(&item.id);
                 }
                 // Fire-and-forget Plex unscrobble
-                if item.source_type == SourceType::Plex {
-                    if let Some(source) = self.active_source.clone() {
-                        let key = item.external_id.clone();
-                        sender.oneshot_command(async move {
-                            if let Err(e) = source.unscrobble(&key).await {
-                                tracing::warn!("Plex unscrobble failed: {e}");
-                            }
-                            AppCmd::Noop
-                        });
-                    }
+                if item.source_type == SourceType::Plex
+                    && let Some(source) = self.active_source.clone()
+                {
+                    let key = item.external_id.clone();
+                    sender.oneshot_command(async move {
+                        if let Err(e) = source.unscrobble(&key).await {
+                            tracing::warn!("Plex unscrobble failed: {e}");
+                        }
+                        AppCmd::Noop
+                    });
                 }
                 // Refresh watch data
                 let watch_data = load_watch_data(&self.db_conn);
@@ -918,7 +923,10 @@ impl Component for App {
                 self.library_view
                     .emit(LibraryViewMsg::SetWatchData(watch_data));
 
-                info!("Source setup took {:?} (DB save + watch data)", source_start.elapsed());
+                info!(
+                    "Source setup took {:?} (DB save + watch data)",
+                    source_start.elapsed()
+                );
 
                 if let CurrentView::Library(lt) = self.current_view {
                     self.library_view.emit(LibraryViewMsg::LoadLibrary(lt));
@@ -1016,16 +1024,16 @@ fn dispatch_watch_events(
                     }
                 }
                 // Fire-and-forget Plex scrobble
-                if !rating_key.is_empty() {
-                    if let Some(source) = source.clone() {
-                        tracing::info!("Scrobble: rating_key={rating_key}");
-                        sender.oneshot_command(async move {
-                            if let Err(e) = source.scrobble(&rating_key).await {
-                                tracing::warn!("Plex scrobble failed: {e}");
-                            }
-                            AppCmd::Noop
-                        });
-                    }
+                if !rating_key.is_empty()
+                    && let Some(source) = source.clone()
+                {
+                    tracing::info!("Scrobble: rating_key={rating_key}");
+                    sender.oneshot_command(async move {
+                        if let Err(e) = source.scrobble(&rating_key).await {
+                            tracing::warn!("Plex scrobble failed: {e}");
+                        }
+                        AppCmd::Noop
+                    });
                 }
             }
             WatchStateEvent::ReportTimeline {
@@ -1034,21 +1042,19 @@ fn dispatch_watch_events(
                 time_ms,
                 duration_ms,
             } => {
-                if !rating_key.is_empty() {
-                    if let Some(source) = source.clone() {
-                        tracing::debug!(
-                            "Timeline: key={rating_key} state={state} time={time_ms}ms"
-                        );
-                        sender.oneshot_command(async move {
-                            if let Err(e) = source
-                                .report_progress(&rating_key, &state, time_ms, duration_ms)
-                                .await
-                            {
-                                tracing::warn!("Plex timeline report failed: {e}");
-                            }
-                            AppCmd::Noop
-                        });
-                    }
+                if !rating_key.is_empty()
+                    && let Some(source) = source.clone()
+                {
+                    tracing::debug!("Timeline: key={rating_key} state={state} time={time_ms}ms");
+                    sender.oneshot_command(async move {
+                        if let Err(e) = source
+                            .report_progress(&rating_key, &state, time_ms, duration_ms)
+                            .await
+                        {
+                            tracing::warn!("Plex timeline report failed: {e}");
+                        }
+                        AppCmd::Noop
+                    });
                 }
             }
         }
@@ -1121,7 +1127,11 @@ fn load_watch_data(db_conn: &Option<Connection>) -> HashMap<String, (f64, bool)>
             }
         }
     }
-    info!("load_watch_data: {} entries in {:?}", map.len(), start.elapsed());
+    info!(
+        "load_watch_data: {} entries in {:?}",
+        map.len(),
+        start.elapsed()
+    );
     map
 }
 

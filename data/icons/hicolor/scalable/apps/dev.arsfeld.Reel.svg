@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Background rounded rectangle -->
+  <rect width="128" height="128" rx="24" fill="#1a5fb4"/>
+
+  <!-- Film reel circle -->
+  <circle cx="64" cy="64" r="36" fill="none" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="64" cy="64" r="12" fill="#ffffff" opacity="0.9"/>
+
+  <!-- Film reel holes -->
+  <circle cx="64" cy="36" r="6" fill="#1a5fb4"/>
+  <circle cx="64" cy="92" r="6" fill="#1a5fb4"/>
+  <circle cx="36" cy="64" r="6" fill="#1a5fb4"/>
+  <circle cx="92" cy="64" r="6" fill="#1a5fb4"/>
+
+  <!-- Play triangle -->
+  <polygon points="58,52 58,76 78,64" fill="#1a5fb4"/>
+</svg>

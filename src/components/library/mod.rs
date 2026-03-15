@@ -538,7 +538,10 @@ impl Component for LibraryView {
                 self.rebuild_genre_chips(&sender);
                 self.rebuild_decade_dropdown();
                 self.rebuild_grid(&sender);
-                info!("Full UI build (chips + decades + grid): {:?}", build_start.elapsed());
+                info!(
+                    "Full UI build (chips + decades + grid): {:?}",
+                    build_start.elapsed()
+                );
             }
             LibraryViewMsg::LoadError(msg) => {
                 self.error_page.set_description(Some(&msg));

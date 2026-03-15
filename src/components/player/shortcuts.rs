@@ -41,7 +41,12 @@ pub fn map_key_to_action(
     modifiers: gdk::ModifierType,
     is_text_input_focused: bool,
 ) -> Option<PlayerAction> {
-    map_key_to_action_with_intervals(key, modifiers, is_text_input_focused, &SkipIntervals::default())
+    map_key_to_action_with_intervals(
+        key,
+        modifiers,
+        is_text_input_focused,
+        &SkipIntervals::default(),
+    )
 }
 
 /// Map a key press to a player action using configurable skip intervals.
@@ -257,7 +262,10 @@ mod tests {
 
     #[test]
     fn custom_short_skip_interval() {
-        let intervals = SkipIntervals { short_secs: 5.0, long_secs: 30.0 };
+        let intervals = SkipIntervals {
+            short_secs: 5.0,
+            long_secs: 30.0,
+        };
         assert_eq!(
             map_key_to_action_with_intervals(gdk::Key::Right, NONE, false, &intervals),
             Some(PlayerAction::SeekForward(5.0))
@@ -270,7 +278,10 @@ mod tests {
 
     #[test]
     fn custom_long_skip_interval() {
-        let intervals = SkipIntervals { short_secs: 5.0, long_secs: 30.0 };
+        let intervals = SkipIntervals {
+            short_secs: 5.0,
+            long_secs: 30.0,
+        };
         assert_eq!(
             map_key_to_action_with_intervals(gdk::Key::Right, SHIFT, false, &intervals),
             Some(PlayerAction::SeekForward(30.0))

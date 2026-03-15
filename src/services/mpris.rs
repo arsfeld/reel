@@ -37,8 +37,7 @@ pub struct MprisMetadata {
 
 /// Build MPRIS Metadata from our struct.
 pub fn build_metadata(meta: &MprisMetadata) -> Metadata {
-    let track_id: TrackId = TrackId::try_from(meta.track_id.as_str())
-        .unwrap_or(TrackId::NO_TRACK);
+    let track_id: TrackId = TrackId::try_from(meta.track_id.as_str()).unwrap_or(TrackId::NO_TRACK);
 
     let mut builder = Metadata::builder().trackid(track_id);
 
@@ -69,7 +68,13 @@ pub fn metadata_from_media_item(
     let safe_id: String = item
         .id
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let track_id = format!("/org/reel/track/{safe_id}");
 
@@ -89,15 +94,13 @@ pub fn metadata_from_file(
     media_title: Option<&str>,
     duration_secs: f64,
 ) -> MprisMetadata {
-    let title = media_title
-        .map(String::from)
-        .unwrap_or_else(|| {
-            std::path::Path::new(path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("Unknown")
-                .to_string()
-        });
+    let title = media_title.map(String::from).unwrap_or_else(|| {
+        std::path::Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Unknown")
+            .to_string()
+    });
 
     MprisMetadata {
         track_id: "/org/reel/track/local".to_string(),
@@ -538,7 +541,10 @@ mod tests {
         assert_eq!(meta.title, Some("My Movie".into()));
         assert_eq!(meta.track_id, "/org/reel/track/local");
         assert_eq!(meta.duration_secs, Some(7200.0));
-        assert_eq!(meta.url, Some("file:///home/user/movies/My Movie.mkv".into()));
+        assert_eq!(
+            meta.url,
+            Some("file:///home/user/movies/My Movie.mkv".into())
+        );
     }
 
     #[test]
