@@ -74,15 +74,26 @@ const AppState = struct {
 
 var app_state: AppState = undefined;
 
+var db_path_buf: [512]u8 = undefined;
+var db_path_val: ?[*:0]const u8 = null;
+
 fn getDbPath() [*:0]const u8 {
-    // Use XDG data dir or fallback
-    const data_dir = std.posix.getenv("XDG_DATA_HOME") orelse {
+    if (db_path_val) |p| return p;
+
+    const data_dir = std.posix.getenv("XDG_DATA_HOME") orelse blk: {
         const home = std.posix.getenv("HOME") orelse "/tmp";
-        _ = home;
+        break :blk std.fmt.bufPrint(db_path_buf[0..256], "{s}/.local/share", .{home}) catch "/tmp";
+    };
+    const full = std.fmt.bufPrintZ(&db_path_buf, "{s}/reel/reel.db", .{data_dir}) catch {
         return "/tmp/reel.db";
     };
-    _ = data_dir;
-    return "/tmp/reel.db";
+
+    // Ensure directory exists
+    const dir_end = std.mem.lastIndexOfScalar(u8, full[0..full.len], '/') orelse return full;
+    std.fs.cwd().makePath(full[0..dir_end]) catch {};
+
+    db_path_val = full;
+    return full;
 }
 
 pub fn run(file_path: ?[]const u8) !void {
