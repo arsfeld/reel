@@ -7,6 +7,9 @@ const video_area = @import("video_area.zig");
 const player_controls = @import("player_controls.zig");
 const keys = @import("keys.zig");
 const player_mod = @import("../../core/player.zig");
+const database = @import("../../core/database.zig");
+const library_mod = @import("../../core/library.zig");
+const types = @import("../../core/types.zig");
 
 // View modules
 const home_view = @import("home_view.zig");
@@ -61,9 +64,24 @@ const AppState = struct {
     split_view: ?*c.GtkWidget = null,
     active_view: ViewId = .home,
     direct_play: bool = false,
+    // Data layer
+    db: ?*database.Database = null,
+    library: ?library_mod.Library = null,
+    allocator: std.mem.Allocator = std.heap.c_allocator,
 };
 
 var app_state: AppState = undefined;
+
+fn getDbPath() [*:0]const u8 {
+    // Use XDG data dir or fallback
+    const data_dir = std.posix.getenv("XDG_DATA_HOME") orelse {
+        const home = std.posix.getenv("HOME") orelse "/tmp";
+        _ = home;
+        return "/tmp/reel.db";
+    };
+    _ = data_dir;
+    return "/tmp/reel.db";
+}
 
 pub fn run(file_path: ?[]const u8) !void {
     app_state = .{
@@ -72,6 +90,22 @@ pub fn run(file_path: ?[]const u8) !void {
         .direct_play = file_path != null,
     };
 
+    // Initialize database
+    var db = database.Database.open(getDbPath()) catch |err| {
+        std.log.err("Failed to open database: {}", .{err});
+        // Continue without database - views will show empty state
+        app_state.db = null;
+        app_state.library = null;
+        return run_app();
+    };
+    app_state.db = &db;
+    app_state.library = library_mod.Library.init(app_state.allocator, &db);
+    defer db.close();
+
+    return run_app();
+}
+
+fn run_app() !void {
     const app = c.adw_application_new("dev.reel.player", c.G_APPLICATION_DEFAULT_FLAGS) orelse
         return error.AppCreateFailed;
     defer c.g_object_unref(@ptrCast(app));
@@ -329,4 +363,32 @@ pub fn toggleFullscreen() void {
 
 pub fn isFullscreen() bool {
     return app_state.fullscreen;
+}
+
+pub fn getLibrary() ?*library_mod.Library {
+    if (app_state.library != null) {
+        return &app_state.library.?;
+    }
+    return null;
+}
+
+pub fn getAllocator() std.mem.Allocator {
+    return app_state.allocator;
+}
+
+pub fn switchToPlayer(file_path: []const u8) void {
+    const stack: *c.GtkStack = @ptrCast(app_state.content_stack orelse return);
+    app_state.active_view = .player;
+    c.gtk_stack_set_visible_child_name(stack, "player");
+
+    app_state.player.loadFile(file_path) catch |err| {
+        std.log.err("Failed to load file: {}", .{err});
+    };
+    app_state.controls.show();
+    app_state.controls.scheduleHide();
+}
+
+pub fn switchToView(view_name: [*:0]const u8) void {
+    const stack: *c.GtkStack = @ptrCast(app_state.content_stack orelse return);
+    c.gtk_stack_set_visible_child_name(stack, view_name);
 }
