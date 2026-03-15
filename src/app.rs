@@ -29,6 +29,7 @@ use crate::navigation::CurrentView;
 use crate::player::backend::{self, PlayState};
 use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
+use crate::services::mpris::{self, MprisBridge, MprisCommand};
 use crate::services::plex::api::PlexClient;
 use crate::services::plex::source::PlexSource;
 use crate::settings::Settings;
@@ -60,6 +61,8 @@ pub struct App {
     active_source: Option<Arc<PlexSource>>,
     /// Application settings.
     settings: Settings,
+    /// MPRIS D-Bus bridge channels.
+    mpris: MprisBridge,
 }
 
 #[derive(Debug)]
@@ -94,6 +97,7 @@ pub enum AppMsg {
     MarkUnwatched(MediaItem),
     OpenPreferences,
     OpenAbout,
+    MprisInput(MprisCommand),
 }
 
 #[derive(Debug)]
@@ -403,7 +407,18 @@ impl Component for App {
             pending_resume: None,
             active_source: None,
             settings: Settings::load(),
+            mpris: mpris::spawn_mpris_server(),
         };
+
+        // Relay MPRIS commands from tokio to the GTK main loop
+        let sender_mpris = sender.input_sender().clone();
+        if let Some(mut command_rx) = model.mpris.command_rx.take() {
+            glib::spawn_future_local(async move {
+                while let Some(cmd) = command_rx.recv().await {
+                    let _ = sender_mpris.send(AppMsg::MprisInput(cmd));
+                }
+            });
+        }
 
         // Handle CLI file arg or start with library
         let sender_init = sender.clone();
@@ -514,6 +529,14 @@ impl Component for App {
             AppMsg::VideoOutput(output) => match output {
                 VideoAreaOutput::FileLoaded => {
                     self.screensaver.inhibit(root);
+                    // Update MPRIS metadata
+                    if let Some(ref item) = self.now_playing {
+                        let duration =
+                            item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0);
+                        let meta =
+                            mpris::metadata_from_media_item(item, duration, None);
+                        let _ = self.mpris.metadata_tx.send(meta);
+                    }
                     // Auto-resume from saved position
                     if let Some(position) = self.pending_resume.take() {
                         let formatted = backend::format_position(position);
@@ -537,6 +560,11 @@ impl Component for App {
                 }
                 VideoAreaOutput::PositionChanged { position, duration } => {
                     self.last_position = position;
+                    // Update MPRIS position
+                    let _ = self
+                        .mpris
+                        .position_tx
+                        .send(mpris::seconds_to_micros(position));
                     // Update tracker duration from actual mpv value if we have it
                     if let Some(ref item) = self.now_playing
                         && !self.watch_tracker.is_active()
@@ -555,6 +583,8 @@ impl Component for App {
                     dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
                 }
                 VideoAreaOutput::StateChanged(state) => {
+                    // Update MPRIS playback status
+                    let _ = self.mpris.status_tx.send(state);
                     if self.current_view == CurrentView::Player {
                         root.set_title(Some(backend::window_title_for_state(state)));
                     }
@@ -582,6 +612,13 @@ impl Component for App {
                 VideoAreaOutput::EndOfFile(reason) => {
                     info!("Playback ended: {:?}", reason);
                     self.screensaver.uninhibit(root);
+                    // Update MPRIS
+                    let _ = self.mpris.status_tx.send(PlayState::Stopped);
+                    let _ = self
+                        .mpris
+                        .metadata_tx
+                        .send(mpris::MprisMetadata::default());
+                    let _ = self.mpris.position_tx.send(0);
                     // Stop watch tracking with final persist + scrobble check
                     let events = self.watch_tracker.stop(self.last_position);
                     dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
@@ -784,6 +821,38 @@ impl Component for App {
             AppMsg::OpenAbout => {
                 settings_dialog::show_about(root);
             }
+            AppMsg::MprisInput(cmd) => match cmd {
+                MprisCommand::Play | MprisCommand::PlayPause => {
+                    self.video_area.emit(VideoAreaMsg::TogglePause);
+                }
+                MprisCommand::Pause => {
+                    self.video_area.emit(VideoAreaMsg::TogglePause);
+                }
+                MprisCommand::Stop => {
+                    sender.input(AppMsg::GoBack);
+                }
+                MprisCommand::Seek(offset_us) => {
+                    let offset_secs = mpris::micros_to_seconds(offset_us);
+                    self.video_area
+                        .emit(VideoAreaMsg::SeekRelative(offset_secs));
+                }
+                MprisCommand::SetPosition(pos_us) => {
+                    let pos_secs = mpris::micros_to_seconds(pos_us);
+                    self.video_area.emit(VideoAreaMsg::SeekAbsolute(pos_secs));
+                }
+                MprisCommand::SetVolume(vol) => {
+                    self.video_area.emit(VideoAreaMsg::SetVolume(vol));
+                }
+                MprisCommand::OpenUri(uri) => {
+                    sender.input(AppMsg::OpenFile(uri));
+                }
+                MprisCommand::Raise => {
+                    root.present();
+                }
+                MprisCommand::Quit => {
+                    root.close();
+                }
+            },
         }
     }
 

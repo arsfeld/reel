@@ -4,6 +4,7 @@ pub mod artwork;
 pub mod library_filter;
 #[allow(dead_code)]
 pub mod media_source;
+pub mod mpris;
 #[allow(dead_code)]
 pub mod plex;
 pub mod screensaver;
