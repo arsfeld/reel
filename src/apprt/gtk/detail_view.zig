@@ -16,10 +16,13 @@ pub const DetailView = struct {
     type_label: *c.GtkWidget,
     play_button: *c.GtkWidget,
     download_button: *c.GtkWidget,
+    fix_match_button: *c.GtkWidget,
+    lock_icon: *c.GtkWidget,
     episodes_box: *c.GtkWidget,
     episodes_group: *c.GtkWidget,
     current_item_id: i64 = 0,
     current_source: types.MediaSource = .local,
+    current_match_locked: bool = false,
     current_file_path_buf: [1024]u8 = undefined,
     current_file_path_len: usize = 0,
 
@@ -123,6 +126,31 @@ pub const DetailView = struct {
         );
 
         c.gtk_box_append(@ptrCast(button_box), @ptrCast(download_button));
+
+        // Fix Match button
+        const fix_match_button = c.gtk_button_new_from_icon_name("edit-find-replace-symbolic");
+        c.gtk_widget_add_css_class(@ptrCast(fix_match_button), "flat");
+        c.gtk_widget_set_tooltip_text(@ptrCast(fix_match_button), "Fix Match");
+        c.gtk_widget_set_visible(@ptrCast(fix_match_button), 0); // hidden by default
+
+        _ = c.g_signal_connect_data(
+            @ptrCast(fix_match_button),
+            "clicked",
+            @ptrCast(&onFixMatchClicked),
+            null,
+            null,
+            c.G_CONNECT_DEFAULT,
+        );
+
+        c.gtk_box_append(@ptrCast(button_box), @ptrCast(fix_match_button));
+
+        // Lock icon (shown when match is locked)
+        const lock_icon = c.gtk_image_new_from_icon_name("changes-prevent-symbolic");
+        c.gtk_widget_set_tooltip_text(@ptrCast(lock_icon), "Match locked \xe2\x80\x94 rescans will not overwrite metadata");
+        c.gtk_widget_set_visible(@ptrCast(lock_icon), 0);
+        c.gtk_widget_set_valign(@ptrCast(lock_icon), c.GTK_ALIGN_CENTER);
+        c.gtk_box_append(@ptrCast(button_box), @ptrCast(lock_icon));
+
         c.gtk_box_append(@ptrCast(info), @ptrCast(button_box));
 
         // Summary
@@ -156,6 +184,8 @@ pub const DetailView = struct {
             .type_label = @ptrCast(type_label),
             .play_button = @ptrCast(play_button),
             .download_button = @ptrCast(download_button),
+            .fix_match_button = @ptrCast(fix_match_button),
+            .lock_icon = @ptrCast(lock_icon),
             .episodes_box = episodes_box_widget,
             .episodes_group = @ptrCast(episodes_group),
         };
@@ -245,6 +275,12 @@ pub const DetailView = struct {
         if (show_download) {
             self.updateDownloadButton();
         }
+
+        // Fix Match button: show for movies and shows
+        self.current_match_locked = item.match_locked;
+        const show_fix_match = item.media_type == .movie or item.media_type == .show;
+        c.gtk_widget_set_visible(@ptrCast(self.fix_match_button), if (show_fix_match) 1 else 0);
+        c.gtk_widget_set_visible(@ptrCast(self.lock_icon), if (item.match_locked) 1 else 0);
 
         // Episodes for TV shows
         if (item.media_type == .show) {
@@ -336,4 +372,22 @@ fn onDownloadClicked(_: *c.GtkButton, _: ?*anyopaque) callconv(.c) void {
 
     // Update button state immediately
     detail.updateDownloadButton();
+}
+
+fn onFixMatchClicked(_: *c.GtkButton, _: ?*anyopaque) callconv(.c) void {
+    const detail = global_detail orelse return;
+    if (detail.current_item_id == 0) return;
+
+    // If match is locked, toggle unlock
+    if (detail.current_match_locked) {
+        var lib = app.getLibrary() orelse return;
+        lib.setMatchLocked(detail.current_item_id, false) catch return;
+        detail.current_match_locked = false;
+        c.gtk_widget_set_visible(@ptrCast(detail.lock_icon), 0);
+        return;
+    }
+
+    // TODO: Open TMDB search dialog for match correction
+    // For now, log that the button was clicked
+    std.log.info("Fix Match clicked for item {d}", .{detail.current_item_id});
 }

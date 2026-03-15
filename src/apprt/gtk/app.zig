@@ -24,6 +24,7 @@ const files_view = @import("files_view.zig");
 const downloads_view = @import("downloads_view.zig");
 const settings_view = @import("settings_view.zig");
 const detail_view = @import("detail_view.zig");
+const collections_view = @import("collections_view.zig");
 
 pub const ViewId = enum(u8) {
     home = 0,
@@ -31,10 +32,11 @@ pub const ViewId = enum(u8) {
     tv_shows = 2,
     other = 3,
     favorites = 4,
-    files = 5,
-    downloads = 6,
-    settings = 7,
-    player = 8,
+    collections = 5,
+    files = 6,
+    downloads = 7,
+    settings = 8,
+    player = 9,
 };
 
 const SidebarItem = struct {
@@ -49,6 +51,7 @@ const sidebar_items = [_]SidebarItem{
     .{ .label = "TV Shows", .icon = "tv-symbolic", .view_id = .tv_shows },
     .{ .label = "Other", .icon = "folder-videos-symbolic", .view_id = .other },
     .{ .label = "Favorites", .icon = "starred-symbolic", .view_id = .favorites },
+    .{ .label = "Collections", .icon = "view-grid-symbolic", .view_id = .collections },
     .{ .label = "Files", .icon = "network-server-symbolic", .view_id = .files },
     .{ .label = "Downloads", .icon = "folder-download-symbolic", .view_id = .downloads },
     .{ .label = "Settings", .icon = "emblem-system-symbolic", .view_id = .settings },
@@ -236,8 +239,8 @@ fn buildSidebarLayout(window: *c.GtkWidget) void {
 
     // Add sidebar items
     for (sidebar_items, 0..) |item, i| {
-        // Add separator before Favorites and Downloads groups
-        if (i == 4 or i == 6) {
+        // Add separator before Favorites group and Downloads group
+        if (i == 4 or i == 7) {
             const sep = c.gtk_separator_new(c.GTK_ORIENTATION_HORIZONTAL);
             c.gtk_widget_set_margin_top(@ptrCast(sep), 6);
             c.gtk_widget_set_margin_bottom(@ptrCast(sep), 6);
@@ -292,6 +295,9 @@ fn buildSidebarLayout(window: *c.GtkWidget) void {
 
     const fav = favorites_view.FavoritesView.init();
     _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(fav.widget)), "favorites");
+
+    const cv = collections_view.CollectionsView.init();
+    _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(cv.widget)), "collections");
 
     const fv = files_view.FilesView.init();
     _ = c.gtk_stack_add_named(@ptrCast(stack), @ptrCast(@alignCast(fv.widget)), "files");
@@ -358,9 +364,8 @@ fn onSidebarRowSelected(_: *c.GtkListBox, row: ?*c.GtkListBoxRow, _: ?*anyopaque
     if (index < 0) return;
 
     // Map row index to view, accounting for separator rows.
-    // Rows: 0=Home, 1=Movies, 2=TV Shows, 3=Other, 4=sep, 5=Favorites, 6=Files, 7=sep, 8=Downloads, 9=Settings
-    // GtkListBox separator rows are not selectable, so this callback
-    // won't fire for them. But their indices still count.
+    // Rows: 0=Home, 1=Movies, 2=TV Shows, 3=Other, 4=sep,
+    //        5=Favorites, 6=Collections, 7=Files, 8=sep, 9=Downloads, 10=Settings
     const view_name: [*:0]const u8 = switch (index) {
         0 => "home",
         1 => "movies",
@@ -368,10 +373,11 @@ fn onSidebarRowSelected(_: *c.GtkListBox, row: ?*c.GtkListBoxRow, _: ?*anyopaque
         3 => "other",
         // 4 = separator
         5 => "favorites",
-        6 => "files",
-        // 7 = separator
-        8 => "downloads",
-        9 => "settings",
+        6 => "collections",
+        7 => "files",
+        // 8 = separator
+        9 => "downloads",
+        10 => "settings",
         else => return,
     };
 
