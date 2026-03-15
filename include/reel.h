@@ -2,7 +2,7 @@
  * libreel - Core library for the Reel media center
  *
  * This header defines the C ABI for libreel, consumed by
- * platform-native frontends (GTK4 on Linux, AppKit on macOS).
+ * platform-native frontends (GTK4 on Linux, SwiftUI on macOS).
  */
 
 #ifndef REEL_H
@@ -54,7 +54,12 @@ ReelError reel_player_cycle_sub(ReelPlayer* player);
 ReelError reel_player_cycle_audio(ReelPlayer* player);
 double reel_player_get_position(ReelPlayer* player);
 double reel_player_get_duration(ReelPlayer* player);
+double reel_player_get_volume(ReelPlayer* player);
 ReelState reel_player_get_state(ReelPlayer* player);
+ReelError reel_player_stop(ReelPlayer* player);
+
+/** Drain pending mpv events, updating cached position/duration/state. */
+void reel_player_poll_events(ReelPlayer* player);
 
 /* ── Media types ─────────────────────────────────────────── */
 
@@ -87,8 +92,8 @@ typedef enum {
 
 typedef struct {
     int64_t id;
-    ReelMediaType media_type;
-    ReelMediaSource source;
+    int media_type;             /* ReelMediaType */
+    int source;                 /* ReelMediaSource */
     const char* title;
     const char* sort_title;     /* nullable */
     int32_t year;               /* 0 if unknown */
@@ -111,7 +116,7 @@ void reel_db_close(ReelDatabase* db);
 ReelLibrary* reel_library_create(ReelDatabase* db);
 void reel_library_destroy(ReelLibrary* lib);
 
-/* Query items by type with sort and pagination */
+/** Query items by type with sort and pagination. Returns count written, or -1 on error. */
 int32_t reel_library_get_items(ReelLibrary* lib,
                                ReelMediaType type,
                                ReelSortField sort_by,
@@ -121,11 +126,13 @@ int32_t reel_library_get_items(ReelLibrary* lib,
                                ReelMediaItem* out_items,
                                int32_t max_items);
 
+/** Get recently added movies/shows. Returns count written, or -1 on error. */
 int32_t reel_library_get_recently_added(ReelLibrary* lib,
                                          int32_t limit,
                                          ReelMediaItem* out_items,
                                          int32_t max_items);
 
+/** Get items with in-progress watch state. Returns count written, or -1 on error. */
 int32_t reel_library_get_continue_watching(ReelLibrary* lib,
                                             int32_t limit,
                                             ReelMediaItem* out_items,
@@ -133,11 +140,22 @@ int32_t reel_library_get_continue_watching(ReelLibrary* lib,
 
 int32_t reel_library_get_item_count(ReelLibrary* lib, ReelMediaType type);
 
-/* Search */
+/** Full-text search. Returns count written, or -1 on error. */
 int32_t reel_library_search(ReelLibrary* lib,
                              const char* query,
                              ReelMediaItem* out_items,
                              int32_t max_items);
+
+/** Get a single media item by ID. Returns REEL_OK or REEL_ERR_NOT_FOUND. */
+ReelError reel_library_get_item(ReelLibrary* lib,
+                                 int64_t id,
+                                 ReelMediaItem* out_item);
+
+/** Get children of a parent item (seasons of show, episodes of season). */
+int32_t reel_library_get_items_by_parent(ReelLibrary* lib,
+                                          int64_t parent_id,
+                                          ReelMediaItem* out_items,
+                                          int32_t max_items);
 
 /* Server management */
 int32_t reel_library_server_count(ReelLibrary* lib);
@@ -149,13 +167,57 @@ int64_t reel_library_add_favorite(ReelLibrary* lib,
                                    const char* display_name);
 ReelError reel_library_remove_favorite(ReelLibrary* lib, int64_t id);
 
+typedef struct {
+    int64_t id;
+    const char* item_type;
+    const char* item_id;
+    const char* display_name;
+    int32_t sort_order;
+} ReelFavoriteC;
+
+/** List all favorites. Pass out_ptr=NULL to query just the count. */
+ReelError reel_library_list_favorites(ReelLibrary* lib,
+                                       ReelFavoriteC* out_ptr,
+                                       int32_t* out_count);
+
 /* Scan paths */
 int64_t reel_library_add_scan_path(ReelLibrary* lib, const char* path);
 ReelError reel_library_remove_scan_path(ReelLibrary* lib, int64_t id);
 
+typedef struct {
+    int64_t id;
+    const char* path;
+} ReelScanPathC;
+
+/** List all scan paths. Pass out_ptr=NULL to query just the count. */
+ReelError reel_library_list_scan_paths(ReelLibrary* lib,
+                                        ReelScanPathC* out_ptr,
+                                        int32_t* out_count);
+
 /* Settings */
 const char* reel_settings_get(ReelDatabase* db, const char* key);
 ReelError reel_settings_set(ReelDatabase* db, const char* key, const char* value);
+
+/* ── Watch Progress ─────────────────────────────────────── */
+
+typedef struct {
+    int64_t media_item_id;
+    int64_t position_ms;
+    int64_t duration_ms;    /* 0 if unknown */
+    int watched;            /* 0 or 1 */
+} ReelWatchProgressC;
+
+/** Get watch progress for a media item. Returns REEL_OK or REEL_ERR_NOT_FOUND. */
+ReelError reel_library_get_watch_progress(ReelLibrary* lib,
+                                            int64_t media_item_id,
+                                            ReelWatchProgressC* out);
+
+/** Update watch progress for a media item. */
+ReelError reel_library_update_watch_progress(ReelLibrary* lib,
+                                               int64_t media_item_id,
+                                               int64_t position_ms,
+                                               int64_t duration_ms,
+                                               int watched);
 
 /* ── Collections ────────────────────────────────────────── */
 
@@ -171,53 +233,97 @@ typedef struct {
     const char* description; /* nullable */
 } ReelCollectionC;
 
-/** Create a collection. Returns the new collection id, or -1 on error. */
 int64_t reel_collection_create(ReelLibrary* lib,
                                 const char* name,
                                 int collection_type,
                                 const char* description);
-
-/** Delete a collection by id. Returns REEL_OK or error. */
 ReelError reel_collection_delete(ReelLibrary* lib, int64_t id);
 
-/**
- * List all collections.
- * Pass out_ptr=NULL to query just the count.
- * Caller must allocate out_ptr with enough space.
- * Returns REEL_OK or error.
- */
+/** List all collections. Pass out_ptr=NULL to query just the count. */
 ReelError reel_collection_list(ReelLibrary* lib,
                                 ReelCollectionC* out_ptr,
                                 int32_t* out_count);
 
-/** Add a media item to a collection. Returns REEL_OK or error. */
 ReelError reel_collection_add_item(ReelLibrary* lib,
                                     int64_t collection_id,
                                     int64_t media_item_id);
-
-/** Remove a media item from a collection. Returns REEL_OK or error. */
 ReelError reel_collection_remove_item(ReelLibrary* lib,
                                        int64_t collection_id,
                                        int64_t media_item_id);
 
+/** Get media items in a collection. Returns count written, or -1 on error. */
+int32_t reel_collection_get_items(ReelLibrary* lib,
+                                   int64_t collection_id,
+                                   ReelMediaItem* out_items,
+                                   int32_t max_items);
+
 /* ── Genres ─────────────────────────────────────────────── */
 
-/**
- * Set genres for a media item (replaces existing).
- * genre_names is an array of null-terminated strings with `count` elements.
- * Returns REEL_OK or error.
- */
 ReelError reel_genre_set(ReelLibrary* lib,
                           int64_t media_item_id,
                           const char* const* genre_names,
                           int count);
 
+typedef struct {
+    int64_t id;
+    const char* name;
+} ReelGenreC;
+
+/** List distinct genres. Pass out_ptr=NULL to query just the count. */
+ReelError reel_library_get_genres(ReelLibrary* lib,
+                                   ReelGenreC* out_ptr,
+                                   int32_t* out_count);
+
+/** Get media items matching a genre. Returns count written, or -1 on error. */
+int32_t reel_library_get_items_by_genre(ReelLibrary* lib,
+                                         const char* genre_name,
+                                         int32_t limit,
+                                         ReelMediaItem* out_items,
+                                         int32_t max_items);
+
 /* ── Match lock ─────────────────────────────────────────── */
 
-/** Lock or unlock metadata matching for a media item. */
 ReelError reel_match_set_locked(ReelLibrary* lib,
                                  int64_t media_item_id,
                                  int locked);
+
+/* ── Plex Auth ──────────────────────────────────────────── */
+
+typedef struct ReelPlexAuth ReelPlexAuth;
+
+typedef struct {
+    const char* id;
+    const char* name;
+    const char* uri;
+    const char* access_token;
+} ReelPlexServerC;
+
+typedef struct {
+    const char* id;
+    const char* name;
+    const char* connection_uri;
+} ReelServerC;
+
+ReelPlexAuth* reel_plex_create(ReelDatabase* db);
+void reel_plex_destroy(ReelPlexAuth* plex);
+const char* reel_plex_request_pin(ReelPlexAuth* plex);
+const char* reel_plex_get_auth_url(ReelPlexAuth* plex);
+const char* reel_plex_poll_pin(ReelPlexAuth* plex);
+int32_t reel_plex_discover_servers(ReelPlexAuth* plex,
+                                    ReelPlexServerC* out_ptr,
+                                    int32_t max);
+
+ReelError reel_server_upsert(ReelLibrary* lib,
+                              const char* id,
+                              const char* name,
+                              const char* connection_uri,
+                              const char* auth_token);
+ReelError reel_server_delete(ReelLibrary* lib, const char* id);
+
+/** List stored servers. Pass out_ptr=NULL to query just the count. */
+ReelError reel_server_list(ReelLibrary* lib,
+                            ReelServerC* out_ptr,
+                            int32_t* out_count);
 
 /* ── Downloads ──────────────────────────────────────────── */
 
@@ -237,6 +343,26 @@ ReelError reel_download_pause(ReelDownloader* dl, int64_t id);
 ReelError reel_download_resume(ReelDownloader* dl, int64_t id);
 ReelError reel_download_remove(ReelDownloader* dl, int64_t id, int delete_file);
 const char* reel_download_get_local_path(ReelDownloader* dl, int64_t media_item_id);
+
+typedef struct {
+    int64_t id;
+    int64_t media_item_id;
+    const char* status;         /* "queued", "downloading", "paused", "complete", "failed" */
+    int64_t downloaded_bytes;
+    int64_t total_bytes;        /* 0 if unknown */
+    const char* local_path;     /* nullable */
+    const char* error_message;  /* nullable */
+} ReelDownloadC;
+
+/** List all downloads. Pass out_ptr=NULL to query just the count. */
+ReelError reel_download_list(ReelDownloader* dl,
+                              ReelDownloadC* out_ptr,
+                              int32_t* out_count);
+
+/* ── Memory Management ──────────────────────────────────── */
+
+/** Free a string or buffer allocated by libreel. */
+void reel_free(void* ptr);
 
 #ifdef __cplusplus
 }

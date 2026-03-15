@@ -1,10 +1,14 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.1
 import PackageDescription
+import Foundation
+
+let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
+let repoRoot = packageDir + "/.."
 
 let package = Package(
     name: "Reel",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v15)   // Will target macOS 26 once SDK is available; v15 for now
     ],
     targets: [
         .systemLibrary(
@@ -17,8 +21,25 @@ let package = Package(
             name: "Reel",
             dependencies: ["ReelCore"],
             path: "Reel/Sources",
+            exclude: [
+                "AppDelegate.swift",
+                "MainWindow.swift",
+                "SidebarViewController.swift",
+                "PlaceholderViewController.swift",
+                "PlayerControlsView.swift",
+                "SettingsViewController.swift",
+                "VideoView.swift",
+                "main.swift",
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v5),
+            ],
             linkerSettings: [
-                .unsafeFlags(["-L../../zig-out/lib"]),
+                .unsafeFlags([
+                    "-L\(repoRoot)/zig-out/lib",
+                    "-L/opt/homebrew/lib",
+                    "-L/opt/homebrew/opt/mpv/lib",
+                ]),
                 .linkedLibrary("reel"),
                 .linkedLibrary("mpv"),
                 .linkedLibrary("epoxy"),
