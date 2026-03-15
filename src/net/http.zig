@@ -53,6 +53,7 @@ pub const HttpClient = struct {
 
     /// Download a URL to a file on disk with resume support and progress reporting.
     /// The progress callback returns true to continue, false to cancel.
+    /// The cancel_flag pointer is checked atomically each chunk; set to true to abort.
     pub fn downloadToFile(
         self: *HttpClient,
         url: []const u8,
@@ -60,6 +61,7 @@ pub const HttpClient = struct {
         resume_from: u64,
         extra_headers: []const Header,
         progress_cb: ?*const fn (downloaded: u64, total: u64) bool,
+        cancel_flag: ?*bool,
     ) HttpError!void {
         const uri = std.Uri.parse(url) catch return error.InvalidUrl;
 
@@ -125,6 +127,11 @@ pub const HttpClient = struct {
         var bytes_since_callback: u64 = 0;
 
         while (true) {
+            // Check cancel flag
+            if (cancel_flag) |flag| {
+                if (@atomicLoad(bool, flag, .monotonic)) return error.Cancelled;
+            }
+
             const n = reader.read(&buf) catch return error.RequestFailed;
             if (n == 0) break;
 

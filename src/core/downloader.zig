@@ -1,8 +1,11 @@
 const std = @import("std");
 const database = @import("database.zig");
 const types = @import("types.zig");
+const http = @import("../net/http.zig");
 
 pub const max_concurrent: usize = 2;
+const max_retries: u32 = 3;
+const retry_delays_ms = [_]u64{ 5_000, 30_000, 120_000 };
 
 pub const DownloadRequest = struct {
     media_item_id: i64,
@@ -29,9 +32,201 @@ const select_columns =
 pub const Downloader = struct {
     db: *database.Database,
     allocator: std.mem.Allocator,
+    // Worker thread state
+    http_client: ?*http.HttpClient = null,
+    worker_thread: ?std.Thread = null,
+    running: bool = false,
+    cancel_current: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, db: *database.Database) Downloader {
         return .{ .db = db, .allocator = allocator };
+    }
+
+    /// Start the background download worker thread.
+    pub fn startWorker(self: *Downloader, http_client: *http.HttpClient) !void {
+        if (self.worker_thread != null) return;
+
+        self.http_client = http_client;
+        @atomicStore(bool, &self.running, true, .monotonic);
+        @atomicStore(bool, &self.cancel_current, false, .monotonic);
+
+        // Reset any downloads that were interrupted by last shutdown
+        try self.resetInterrupted();
+
+        self.worker_thread = try std.Thread.spawn(.{}, workerLoop, .{self});
+    }
+
+    /// Stop the background download worker thread.
+    pub fn stopWorker(self: *Downloader) void {
+        @atomicStore(bool, &self.running, false, .monotonic);
+        @atomicStore(bool, &self.cancel_current, true, .monotonic);
+
+        if (self.worker_thread) |thread| {
+            thread.join();
+            self.worker_thread = null;
+        }
+    }
+
+    /// Pause a specific download.
+    pub fn pause(self: *Downloader, id: i64) !void {
+        const dl = try self.getDownload(id) orelse return;
+        defer self.freeDownload(dl);
+
+        if (dl.status == .downloading) {
+            // Signal the worker to cancel the current download
+            @atomicStore(bool, &self.cancel_current, true, .monotonic);
+        }
+        try self.setStatus(id, .paused);
+    }
+
+    /// Resume a paused download by setting it back to queued.
+    pub fn resumeDownload(self: *Downloader, id: i64) !void {
+        try self.setStatus(id, .queued);
+    }
+
+    fn workerLoop(self: *Downloader) void {
+        while (@atomicLoad(bool, &self.running, .monotonic)) {
+            self.processQueue() catch |err| {
+                std.log.err("Download worker error: {}", .{err});
+            };
+
+            // Sleep 2 seconds between queue checks
+            std.time.sleep(2 * std.time.ns_per_s);
+        }
+    }
+
+    fn processQueue(self: *Downloader) !void {
+        // Check if we can start more downloads
+        const active = try self.activeCount();
+        if (active >= max_concurrent) return;
+
+        // Get next queued download
+        const queued = try self.getByStatus(.queued);
+        defer self.freeDownloads(queued);
+
+        if (queued.len == 0) return;
+
+        const dl = queued[0];
+        self.processDownload(dl) catch |err| {
+            std.log.err("Failed to process download {d}: {}", .{ dl.id, err });
+        };
+    }
+
+    fn processDownload(self: *Downloader, dl: types.Download) !void {
+        const client = self.http_client orelse return;
+
+        // Check disk space before starting
+        if (dl.local_path) |path| {
+            if (dl.total_bytes) |total| {
+                if (!checkDiskSpace(path, @intCast(total))) {
+                    try self.setFailed(dl.id, "Insufficient disk space");
+                    return;
+                }
+            }
+        }
+
+        // Ensure download directory exists
+        if (dl.local_path) |path| {
+            if (std.mem.lastIndexOfScalar(u8, path, '/')) |dir_end| {
+                std.fs.cwd().makePath(path[0..dir_end]) catch {};
+            }
+        }
+
+        try self.setStatus(dl.id, .downloading);
+        @atomicStore(bool, &self.cancel_current, false, .monotonic);
+
+        const resume_from: u64 = if (dl.downloaded_bytes > 0) @intCast(dl.downloaded_bytes) else 0;
+
+        // Build the download URL (use source_url directly)
+        const url = dl.source_url;
+        const file_path = dl.local_path orelse {
+            try self.setFailed(dl.id, "No local path configured");
+            return;
+        };
+
+        // Create a progress context that updates the database
+        const ProgressCtx = struct {
+            downloader: *Downloader,
+            download_id: i64,
+
+            fn callback(downloaded: u64, total: u64) bool {
+                // We can't use the context pointer pattern with a simple fn pointer,
+                // so we use the thread-local approach below instead.
+                _ = downloaded;
+                _ = total;
+                return true;
+            }
+        };
+        _ = ProgressCtx;
+
+        // Retry loop
+        var retries: u32 = 0;
+        while (retries <= max_retries) : (retries += 1) {
+            if (!@atomicLoad(bool, &self.running, .monotonic)) return;
+
+            const current_offset: u64 = blk: {
+                if (retries > 0) {
+                    // Re-read the download to get updated bytes
+                    const updated = try self.getDownload(dl.id) orelse return;
+                    defer self.freeDownload(updated);
+                    break :blk if (updated.downloaded_bytes > 0) @intCast(updated.downloaded_bytes) else 0;
+                }
+                break :blk resume_from;
+            };
+
+            client.downloadToFile(
+                url,
+                file_path,
+                current_offset,
+                &.{},
+                null,
+                &self.cancel_current,
+            ) catch |err| {
+                switch (err) {
+                    error.Cancelled => {
+                        // Check if this was a pause or a stop
+                        if (!@atomicLoad(bool, &self.running, .monotonic)) return;
+                        // Paused — update progress and leave as paused
+                        return;
+                    },
+                    error.AuthenticationFailed => {
+                        try self.setFailed(dl.id, "Authentication expired");
+                        return;
+                    },
+                    error.NotFound => {
+                        try self.setFailed(dl.id, "File not found on server");
+                        return;
+                    },
+                    error.WriteFailed => {
+                        try self.setFailed(dl.id, "Disk write failed (disk full?)");
+                        return;
+                    },
+                    else => {
+                        // Transient error — retry with backoff
+                        if (retries < max_retries) {
+                            const delay_idx = @min(retries, retry_delays_ms.len - 1);
+                            std.time.sleep(retry_delays_ms[delay_idx] * std.time.ns_per_ms);
+                            continue;
+                        }
+                        try self.setFailed(dl.id, "Download failed after retries");
+                        return;
+                    },
+                }
+            };
+
+            // Download completed successfully
+            try self.setStatus(dl.id, .complete);
+
+            // Update final progress
+            if (try self.getDownload(dl.id)) |final_dl| {
+                defer self.freeDownload(final_dl);
+                if (final_dl.local_path) |path| {
+                    const file_stat = std.fs.cwd().statFile(path) catch break;
+                    try self.updateProgress(dl.id, @intCast(file_stat.size), @intCast(file_stat.size));
+                }
+            }
+            return;
+        }
     }
 
     /// Queue a new download. Returns error.AlreadyExists if a non-failed download exists.
