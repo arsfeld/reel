@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const is_linux = target.result.os.tag == .linux;
 
     // Core library module
     const core_mod = b.addModule("reel", .{
@@ -14,6 +15,8 @@ pub fn build(b: *std.Build) void {
     core_mod.linkSystemLibrary("mpv", .{});
     core_mod.linkSystemLibrary("epoxy", .{});
     core_mod.linkSystemLibrary("sqlite3", .{});
+    core_mod.addIncludePath(b.path("include"));
+    core_mod.addCSourceFile(.{ .file = b.path("src/sqlite_helpers.c") });
 
     // Static library for macOS Swift frontend consumption
     const lib = b.addLibrary(.{
@@ -29,37 +32,41 @@ pub fn build(b: *std.Build) void {
     lib.root_module.linkSystemLibrary("mpv", .{});
     lib.root_module.linkSystemLibrary("epoxy", .{});
     lib.root_module.linkSystemLibrary("sqlite3", .{});
+    lib.root_module.addIncludePath(b.path("include"));
+    lib.root_module.addCSourceFile(.{ .file = b.path("src/sqlite_helpers.c") });
     b.installArtifact(lib);
 
     // Main executable (GTK frontend — Linux only)
-    const exe = b.addExecutable(.{
-        .name = "reel",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .imports = &.{
-                .{ .name = "reel", .module = core_mod },
-            },
-        }),
-    });
-    exe.root_module.linkSystemLibrary("gtk4", .{});
-    exe.root_module.linkSystemLibrary("libadwaita-1", .{});
-    exe.root_module.linkSystemLibrary("mpv", .{});
-    exe.root_module.linkSystemLibrary("epoxy", .{});
-    exe.root_module.linkSystemLibrary("egl", .{});
-    exe.root_module.linkSystemLibrary("sqlite3", .{});
+    if (is_linux) {
+        const exe = b.addExecutable(.{
+            .name = "reel",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .imports = &.{
+                    .{ .name = "reel", .module = core_mod },
+                },
+            }),
+        });
+        exe.root_module.linkSystemLibrary("gtk4", .{});
+        exe.root_module.linkSystemLibrary("libadwaita-1", .{});
+        exe.root_module.linkSystemLibrary("mpv", .{});
+        exe.root_module.linkSystemLibrary("epoxy", .{});
+        exe.root_module.linkSystemLibrary("egl", .{});
+        exe.root_module.linkSystemLibrary("sqlite3", .{});
 
-    b.installArtifact(exe);
+        b.installArtifact(exe);
 
-    // Run step
-    const run_step = b.step("run", "Run Reel");
-    const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
+        // Run step
+        const run_step = b.step("run", "Run Reel");
+        const run_cmd = b.addRunArtifact(exe);
+        run_step.dependOn(&run_cmd.step);
+        run_cmd.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
     }
 
     // Tests

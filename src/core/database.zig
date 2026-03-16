@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @cImport({
     @cInclude("sqlite3.h");
+    @cInclude("sqlite_helpers.h");
 });
 
 pub const Database = struct {
@@ -9,7 +10,14 @@ pub const Database = struct {
 
     pub fn open(path: [*:0]const u8) !Database {
         var db: ?*c.sqlite3 = null;
-        const rc = c.sqlite3_open(path, &db);
+        // Open in serialized mode (FULLMUTEX) so the same connection is safe
+        // to use from multiple threads concurrently.
+        const rc = c.sqlite3_open_v2(
+            path,
+            &db,
+            c.SQLITE_OPEN_READWRITE | c.SQLITE_OPEN_CREATE | c.SQLITE_OPEN_FULLMUTEX,
+            null,
+        );
         if (rc != c.SQLITE_OK) {
             if (db) |d| _ = c.sqlite3_close(d);
             return error.DatabaseOpenFailed;
@@ -253,6 +261,23 @@ pub const Database = struct {
 
             try self.setSchemaVersion(4);
         }
+
+        if (version < 5) {
+            try self.exec(
+                \\CREATE TABLE IF NOT EXISTS server_connections (
+                \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                \\    server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                \\    uri TEXT NOT NULL,
+                \\    is_local INTEGER NOT NULL DEFAULT 0,
+                \\    is_relay INTEGER NOT NULL DEFAULT 0,
+                \\    protocol TEXT NOT NULL DEFAULT 'https',
+                \\    latency_ms INTEGER,
+                \\    UNIQUE(server_id, uri)
+                \\);
+            );
+            try self.exec("CREATE INDEX IF NOT EXISTS idx_server_connections_server ON server_connections(server_id)");
+            try self.setSchemaVersion(5);
+        }
     }
 };
 
@@ -298,7 +323,7 @@ pub const Statement = struct {
     }
 
     pub fn bindText(self: *Statement, col: c_int, val: []const u8) void {
-        _ = c.sqlite3_bind_text(self.stmt, col, @ptrCast(val.ptr), @intCast(val.len), c.SQLITE_TRANSIENT);
+        _ = c.sqlite3_bind_text_transient(self.stmt, col, @ptrCast(val.ptr), @intCast(val.len));
     }
 
     pub fn bindNull(self: *Statement, col: c_int) void {
@@ -383,7 +408,7 @@ test "database open and migrate" {
     defer db.close();
 
     const version = try db.getSchemaVersion();
-    try std.testing.expectEqual(@as(i32, 4), version);
+    try std.testing.expectEqual(@as(i32, 5), version);
 }
 
 test "database insert and query" {

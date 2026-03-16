@@ -82,14 +82,18 @@ class SidebarViewController: NSViewController, NSOutlineViewDataSource, NSOutlin
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Expand all sections
-        for section in sidebarSections {
-            outlineView.expandItem(section.title.isEmpty ? nil : section.title)
-        }
-        // Select Home by default
-        let homeRow = outlineView.row(forItem: SidebarItem.home)
-        if homeRow >= 0 {
-            outlineView.selectRowIndexes(IndexSet(integer: homeRow), byExtendingSelection: false)
+        // Defer expansion to avoid deadlock during contentViewController assignment
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            // Expand all sections
+            for section in sidebarSections {
+                self.outlineView.expandItem(section.title)
+            }
+            // Select Home by default
+            let homeRow = self.outlineView.row(forItem: SidebarItem.home)
+            if homeRow >= 0 {
+                self.outlineView.selectRowIndexes(IndexSet(integer: homeRow), byExtendingSelection: false)
+            }
         }
     }
 

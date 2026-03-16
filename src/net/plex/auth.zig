@@ -59,7 +59,10 @@ pub const PlexAuth = struct {
         );
         defer response.deinit();
 
-        if (response.status != .ok) return error.PinRequestFailed;
+        if (response.status != .ok and response.status != .created) {
+            std.log.err("PIN request HTTP status: {d} body: {s}", .{ @intFromEnum(response.status), response.body[0..@min(response.body.len, 500)] });
+            return error.PinRequestFailed;
+        }
 
         // Parse XML response for id and code
         var parser = xml.XmlParser.init(response.body);

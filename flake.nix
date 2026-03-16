@@ -22,11 +22,12 @@
 
           buildInputs = with pkgs; [
             mpv-unwrapped
-            gtk4
-            libadwaita
             sqlite
             libepoxy
             glib
+          ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            gtk4
+            libadwaita
             gobject-introspection
           ];
 

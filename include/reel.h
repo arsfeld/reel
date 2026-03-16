@@ -313,6 +313,27 @@ int32_t reel_plex_discover_servers(ReelPlexAuth* plex,
                                     ReelPlexServerC* out_ptr,
                                     int32_t max);
 
+/** Discover servers and store all connection URIs in the database. */
+int32_t reel_plex_discover_servers_with_lib(ReelPlexAuth* plex,
+                                             ReelPlexServerC* out_ptr,
+                                             int32_t max,
+                                             ReelLibrary* lib);
+
+/**
+ * Resolve the best connection URI for a server by testing reachability.
+ * Connections must already be stored (via discover_servers_with_lib or refresh_connections).
+ * Updates servers.connection_uri with the winner.
+ * Returns the best URI (caller frees with reel_free), or NULL if none reachable.
+ */
+const char* reel_server_resolve_connection(ReelLibrary* lib, const char* server_id);
+
+/**
+ * Re-discover connections for all stored servers from Plex API and store them.
+ * Loads auth tokens from the servers table automatically.
+ * Returns number of servers refreshed, or -1 on error.
+ */
+int32_t reel_server_refresh_connections(ReelLibrary* lib);
+
 /**
  * Sync a Plex server's libraries into the local media_items table.
  * Fetches all library sections, items, and children (seasons/episodes).

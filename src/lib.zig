@@ -19,6 +19,7 @@ pub const plex_auth = @import("net/plex/auth.zig");
 pub const plex_client = @import("net/plex/client.zig");
 pub const tmdb_types = @import("net/tmdb/types.zig");
 pub const tmdb_client = @import("net/tmdb/client.zig");
+pub const connection_selector = @import("net/connection_selector.zig");
 
 // ── C ABI Exports ──────────────────────────────────────────
 
@@ -556,6 +557,15 @@ export fn reel_plex_discover_servers(
     out_ptr: ?[*]ReelPlexServerC,
     max: c_int,
 ) c_int {
+    return reel_plex_discover_servers_with_lib(pw, out_ptr, max, null);
+}
+
+export fn reel_plex_discover_servers_with_lib(
+    pw: ?*PlexAuthWrapper,
+    out_ptr: ?[*]ReelPlexServerC,
+    max: c_int,
+    lib: ?*library.Library,
+) c_int {
     const p = pw orelse return -1;
     const out = out_ptr orelse return -1;
     if (max <= 0) return -1;
@@ -570,7 +580,10 @@ export fn reel_plex_discover_servers(
             allocator.free(srv.name);
             allocator.free(srv.machine_identifier);
             if (srv.access_token) |t| allocator.free(t);
-            for (srv.connections) |conn| allocator.free(conn.uri);
+            for (srv.connections) |conn| {
+                allocator.free(conn.uri);
+                allocator.free(conn.protocol);
+            }
             allocator.free(srv.connections);
         }
         allocator.free(servers);
@@ -578,14 +591,40 @@ export fn reel_plex_discover_servers(
 
     const count: usize = @min(servers.len, @as(usize, @intCast(max)));
     for (servers[0..count], 0..) |srv, i| {
-        // Pick best URI: prefer first non-local HTTPS connection, fall back to first connection
+        // Store all connections in the DB if library is available
+        if (lib) |l| {
+            var sc_buf: [32]types.ServerConnection = undefined;
+            const sc_count = @min(srv.connections.len, sc_buf.len);
+            for (srv.connections[0..sc_count], 0..) |conn, j| {
+                sc_buf[j] = .{
+                    .server_id = srv.machine_identifier,
+                    .uri = conn.uri,
+                    .is_local = conn.local,
+                    .is_relay = conn.relay,
+                    .protocol = conn.protocol,
+                };
+            }
+            l.upsertServerConnections(srv.machine_identifier, sc_buf[0..sc_count]) catch |err| {
+                std.log.err("plex_discover: failed to store connections for '{s}': {}", .{ srv.name, err });
+            };
+            std.log.info("plex_discover: stored {d} connections for server '{s}'", .{ sc_count, srv.name });
+        }
+
+        // Pick best URI: prefer local connections first, then remote
         const uri = blk: {
+            // 1. Try local connections first (fastest, most reliable)
+            for (srv.connections) |conn| {
+                if (conn.local) break :blk conn.uri;
+            }
+            // 2. Fall back to remote/relay connections
             for (srv.connections) |conn| {
                 if (!conn.local) break :blk conn.uri;
             }
             if (srv.connections.len > 0) break :blk srv.connections[0].uri;
             break :blk "";
         };
+
+        std.log.info("plex_discover: server '{s}' selected uri='{s}' (from {d} connections)", .{ srv.name, uri, srv.connections.len });
 
         out[i] = .{
             .id = @ptrCast(allocator.dupeZ(u8, srv.machine_identifier) catch return -1),
@@ -615,11 +654,23 @@ export fn reel_plex_sync(
     const uri = std.mem.span(server_uri);
     const token = std.mem.span(auth_token);
 
+    std.log.info("plex_sync: starting sync for server_id='{s}' uri='{s}' token_len={d}", .{ sid, uri, token.len });
+
+    if (uri.len == 0) {
+        std.log.err("plex_sync: empty server URI, skipping", .{});
+        return -1;
+    }
+    if (token.len == 0) {
+        std.log.err("plex_sync: empty auth token for server '{s}', skipping", .{sid});
+        return -1;
+    }
+
     // Read the client_identifier from settings (needed for Plex headers)
     const client_id = blk: {
         var s = settings.Settings.init(allocator, l.db);
         break :blk (s.getString(settings.keys.client_identifier) catch null) orelse "reel-default";
     };
+    std.log.info("plex_sync: using client_identifier='{s}'", .{client_id});
 
     var hc = http.HttpClient.init(allocator);
     defer hc.deinit();
@@ -629,7 +680,7 @@ export fn reel_plex_sync(
 
     // Get library sections
     const libs = client.getLibraries() catch |err| {
-        std.log.err("plex_sync: getLibraries failed: {}", .{err});
+        std.log.err("plex_sync: getLibraries failed for '{s}': {}", .{ uri, err });
         return -1;
     };
     defer {
@@ -778,16 +829,39 @@ fn syncChildren(
 /// Returns total items synced across all servers, or -1 on error.
 export fn reel_plex_sync_all(lib: ?*library.Library) i32 {
     const l = lib orelse return -1;
-    const servers = l.listServers() catch return -1;
+    const servers = l.listServers() catch |err| {
+        std.log.err("plex_sync_all: listServers failed: {}", .{err});
+        return -1;
+    };
     defer l.freeServers(servers);
+
+    std.log.info("plex_sync_all: found {d} stored servers", .{servers.len});
 
     var total: i32 = 0;
     for (servers) |srv| {
-        const uri = srv.connection_uri orelse continue;
-        const token = srv.auth_token orelse continue;
-        const result = reel_plex_sync(lib, @ptrCast(allocator.dupeZ(u8, srv.id) catch continue), @ptrCast(allocator.dupeZ(u8, uri) catch continue), @ptrCast(allocator.dupeZ(u8, token) catch continue));
-        if (result > 0) total += result;
+        const uri = srv.connection_uri orelse {
+            std.log.warn("plex_sync_all: server '{s}' has no connection_uri, skipping", .{srv.id});
+            continue;
+        };
+        const token = srv.auth_token orelse {
+            std.log.warn("plex_sync_all: server '{s}' has no auth_token, skipping", .{srv.id});
+            continue;
+        };
+
+        std.log.info("plex_sync_all: syncing server '{s}' name='{s}' uri='{s}'", .{ srv.id, srv.name, uri });
+
+        const sid_z = allocator.dupeZ(u8, srv.id) catch continue;
+        const uri_z = allocator.dupeZ(u8, uri) catch continue;
+        const token_z = allocator.dupeZ(u8, token) catch continue;
+        const result = reel_plex_sync(lib, @ptrCast(sid_z), @ptrCast(uri_z), @ptrCast(token_z));
+        if (result >= 0) {
+            total += result;
+        } else {
+            std.log.err("plex_sync_all: sync failed for server '{s}'", .{srv.id});
+        }
     }
+
+    std.log.info("plex_sync_all: total synced={d}", .{total});
     return total;
 }
 
@@ -868,6 +942,145 @@ export fn reel_server_list(
     count_ptr.* = @intCast(servers.len);
     l.freeServers(servers);
     return 0;
+}
+
+// ── Connection Resolution ──────────────────────────────────
+
+/// Resolve the best connection URI for a server by testing all stored connections.
+/// Connections must already be stored via reel_plex_discover_servers_with_lib or reel_server_refresh_connections.
+/// Updates servers.connection_uri with the winner. Returns the best URI (caller frees with reel_free).
+export fn reel_server_resolve_connection(
+    lib: ?*library.Library,
+    server_id: [*:0]const u8,
+) ?[*:0]const u8 {
+    const l = lib orelse return null;
+    const sid = std.mem.span(server_id);
+
+    const connections = l.getServerConnections(sid) catch |err| {
+        std.log.err("resolve_connection: failed to load connections for '{s}': {}", .{ sid, err });
+        return null;
+    };
+    defer l.freeServerConnections(connections);
+
+    if (connections.len == 0) {
+        std.log.info("resolve_connection: no stored connections for server '{s}', call reel_server_refresh_connections first", .{sid});
+        return null;
+    }
+
+    std.log.info("resolve_connection: testing {d} connections for server '{s}'", .{ connections.len, sid });
+
+    // Get auth token for Plex headers
+    const server = l.getServer(sid) catch null;
+    defer if (server) |s| l.freeServer(s);
+
+    const token = if (server) |s| s.auth_token else null;
+
+    // Read client_identifier
+    const client_id = blk: {
+        var s = settings.Settings.init(allocator, l.db);
+        break :blk (s.getString(settings.keys.client_identifier) catch null) orelse "reel-default";
+    };
+
+    var hc = http.HttpClient.init(allocator);
+    defer hc.deinit();
+
+    // Build Plex headers
+    var plex_hdrs = plex_types.PlexHeaders{
+        .client_identifier = client_id,
+        .auth_token = token,
+    };
+    var header_buf: [8]plex_types.Header = undefined;
+    const headers = plex_hdrs.toHeaders(&header_buf);
+
+    var selector = connection_selector.ConnectionSelector.init(allocator, &hc, headers);
+    const best = selector.selectBest(connections) orelse {
+        std.log.warn("resolve_connection: no reachable connection for server '{s}'", .{sid});
+        return null;
+    };
+
+    std.log.info("resolve_connection: selected uri='{s}' score={d} latency={d}ms for server '{s}'", .{ best.uri, best.score, best.latency_ms, sid });
+
+    // Update the cached best URI
+    l.updateServerBestUri(sid, best.uri) catch |err| {
+        std.log.err("resolve_connection: failed to update best URI: {}", .{err});
+    };
+
+    return allocator.dupeZ(u8, best.uri) catch null;
+}
+
+/// Re-discover connections for all stored servers from Plex API and store them.
+/// Loads auth tokens from the servers table — no PlexAuthWrapper needed.
+/// Returns the number of servers whose connections were refreshed, or -1 on error.
+export fn reel_server_refresh_connections(
+    lib: ?*library.Library,
+) c_int {
+    const l = lib orelse return -1;
+
+    // Load stored servers to get auth tokens
+    const stored_servers = l.listServers() catch |err| {
+        std.log.err("refresh_connections: listServers failed: {}", .{err});
+        return -1;
+    };
+    defer l.freeServers(stored_servers);
+
+    if (stored_servers.len == 0) return 0;
+
+    // Use the first server's auth token to call the Plex API
+    const token = stored_servers[0].auth_token orelse {
+        std.log.warn("refresh_connections: no auth token on server '{s}'", .{stored_servers[0].id});
+        return -1;
+    };
+
+    const client_id = blk: {
+        var s = settings.Settings.init(allocator, l.db);
+        break :blk (s.getString(settings.keys.client_identifier) catch null) orelse "reel-default";
+    };
+
+    var hc = http.HttpClient.init(allocator);
+    defer hc.deinit();
+
+    var client = plex_client.PlexClient.init(allocator, &hc, client_id, token);
+
+    const discovered = client.discoverServers() catch |err| {
+        std.log.err("refresh_connections: discoverServers failed: {}", .{err});
+        return -1;
+    };
+    defer {
+        for (discovered) |srv| {
+            allocator.free(srv.name);
+            allocator.free(srv.machine_identifier);
+            if (srv.access_token) |t| allocator.free(t);
+            for (srv.connections) |conn| {
+                allocator.free(conn.uri);
+                allocator.free(conn.protocol);
+            }
+            allocator.free(srv.connections);
+        }
+        allocator.free(discovered);
+    }
+
+    var refreshed: c_int = 0;
+    for (discovered) |srv| {
+        var sc_buf: [32]types.ServerConnection = undefined;
+        const sc_count = @min(srv.connections.len, sc_buf.len);
+        for (srv.connections[0..sc_count], 0..) |conn, j| {
+            sc_buf[j] = .{
+                .server_id = srv.machine_identifier,
+                .uri = conn.uri,
+                .is_local = conn.local,
+                .is_relay = conn.relay,
+                .protocol = conn.protocol,
+            };
+        }
+        l.upsertServerConnections(srv.machine_identifier, sc_buf[0..sc_count]) catch |err| {
+            std.log.err("refresh_connections: failed to store connections for '{s}': {}", .{ srv.name, err });
+            continue;
+        };
+        std.log.info("refresh_connections: stored {d} connections for server '{s}'", .{ sc_count, srv.name });
+        refreshed += 1;
+    }
+
+    return refreshed;
 }
 
 // ── Library Queries ──────────────────────────────────────────

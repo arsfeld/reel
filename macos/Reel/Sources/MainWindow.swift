@@ -7,7 +7,7 @@ class MainWindow: NSWindowController, SidebarDelegate {
     private var hideControlsTimer: Timer?
     private var splitViewController: NSSplitViewController!
     private var sidebarViewController: SidebarViewController!
-    private var contentViewController: NSViewController!
+    private var activeContentVC: NSViewController!
     private var isDirectPlay = false
     private var viewControllers: [SidebarItem: NSViewController] = [:]
 
@@ -53,13 +53,13 @@ class MainWindow: NSWindowController, SidebarDelegate {
         splitViewController.addSplitViewItem(sidebarItem)
 
         // Content
-        contentViewController = PlaceholderViewController.home()
-        let contentItem = NSSplitViewItem(viewController: contentViewController)
+        activeContentVC = PlaceholderViewController.home()
+        let contentItem = NSSplitViewItem(viewController: activeContentVC)
         contentItem.minimumThickness = 400
         splitViewController.addSplitViewItem(contentItem)
 
         // Store initial view controllers
-        viewControllers[.home] = contentViewController
+        viewControllers[.home] = activeContentVC
 
         window?.contentViewController = splitViewController
     }
@@ -116,7 +116,7 @@ class MainWindow: NSWindowController, SidebarDelegate {
         contentItem.minimumThickness = 400
         splitViewController.addSplitViewItem(contentItem)
 
-        contentViewController = vc
+        activeContentVC = vc
     }
 
     private func viewControllerForItem(_ item: SidebarItem) -> NSViewController {
@@ -133,7 +133,7 @@ class MainWindow: NSWindowController, SidebarDelegate {
         case .favorites: vc = PlaceholderViewController.favorites()
         case .files: vc = PlaceholderViewController.files()
         case .downloads: vc = PlaceholderViewController.downloads()
-        case .settings: vc = PlaceholderViewController.settings()
+        case .settings: vc = SettingsViewController()
         }
 
         viewControllers[item] = vc

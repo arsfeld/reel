@@ -45,22 +45,66 @@ pub const PlexClient = struct {
         );
         defer response.deinit();
 
-        if (response.status != .ok) return error.RequestFailed;
+        if (response.status != .ok) {
+            std.log.err("discoverServers HTTP status: {d}", .{@intFromEnum(response.status)});
+            return error.RequestFailed;
+        }
+
+        std.log.info("discoverServers response ({d} bytes): {s}", .{ response.body.len, response.body[0..@min(response.body.len, 500)] });
 
         var servers: std.ArrayList(plex_types.PlexServer) = .{};
 
         var parser = xml.XmlParser.init(response.body);
-        while (parser.next()) |elem| {
-            if (std.mem.eql(u8, elem.tag, "Device")) {
-                const provides = elem.attr("provides") orelse continue;
-                if (std.mem.indexOf(u8, provides, "server") == null) continue;
+        var in_server_device = false;
+        var current_connections: std.ArrayList(plex_types.PlexServer.Connection) = .{};
+        var current_server: ?plex_types.PlexServer = null;
 
-                try servers.append(self.allocator, .{
+        while (parser.next()) |elem| {
+            if (std.mem.eql(u8, elem.tag, "Device") or std.mem.eql(u8, elem.tag, "resource")) {
+                // Flush previous server if any
+                if (current_server) |*srv| {
+                    srv.connections = current_connections.toOwnedSlice(self.allocator) catch &.{};
+                    try servers.append(self.allocator, srv.*);
+                    current_connections = .{};
+                }
+
+                const provides = elem.attr("provides") orelse {
+                    in_server_device = false;
+                    current_server = null;
+                    continue;
+                };
+                if (std.mem.indexOf(u8, provides, "server") == null) {
+                    in_server_device = false;
+                    current_server = null;
+                    continue;
+                }
+
+                in_server_device = true;
+                current_server = .{
                     .name = try self.allocator.dupe(u8, elem.attr("name") orelse continue),
                     .machine_identifier = try self.allocator.dupe(u8, elem.attr("clientIdentifier") orelse continue),
                     .access_token = if (elem.attr("accessToken")) |t| try self.allocator.dupe(u8, t) else null,
+                };
+            } else if (in_server_device and (std.mem.eql(u8, elem.tag, "Connection") or std.mem.eql(u8, elem.tag, "connection"))) {
+                const uri = elem.attr("uri") orelse continue;
+                const local_str = elem.attr("local") orelse "0";
+                const is_local = std.mem.eql(u8, local_str, "1");
+                const relay_str = elem.attr("relay") orelse "0";
+                const is_relay = std.mem.eql(u8, relay_str, "1");
+                const protocol = elem.attr("protocol") orelse "https";
+                try current_connections.append(self.allocator, .{
+                    .uri = try self.allocator.dupe(u8, uri),
+                    .local = is_local,
+                    .relay = is_relay,
+                    .protocol = try self.allocator.dupe(u8, protocol),
                 });
             }
+        }
+
+        // Flush last server
+        if (current_server) |*srv| {
+            srv.connections = current_connections.toOwnedSlice(self.allocator) catch &.{};
+            try servers.append(self.allocator, srv.*);
         }
 
         return servers.toOwnedSlice(self.allocator);
@@ -68,17 +112,29 @@ pub const PlexClient = struct {
 
     /// Get library sections from the connected server.
     pub fn getLibraries(self: *PlexClient) ![]plex_types.PlexLibrary {
-        const base = self.server_uri orelse return error.InvalidUrl;
+        const base = self.server_uri orelse {
+            std.log.err("PlexClient.getLibraries: no server_uri set", .{});
+            return error.InvalidUrl;
+        };
         const url = try std.fmt.allocPrint(self.allocator, "{s}/library/sections", .{base});
         defer self.allocator.free(url);
+
+        std.log.info("PlexClient.getLibraries: GET {s}", .{url});
 
         var header_buf: [8]plex_types.Header = undefined;
         const headers = self.headers.toHeaders(&header_buf);
 
-        var response = try self.http_client.get(url, headers);
+        var response = self.http_client.get(url, headers) catch |err| {
+            std.log.err("PlexClient.getLibraries: HTTP request failed: {}", .{err});
+            return err;
+        };
         defer response.deinit();
 
-        if (response.status != .ok) return error.RequestFailed;
+        std.log.info("PlexClient.getLibraries: HTTP {d}, body_len={d}", .{ @intFromEnum(response.status), response.body.len });
+        if (response.status != .ok) {
+            std.log.err("PlexClient.getLibraries: non-200 response: {d}, body: {s}", .{ @intFromEnum(response.status), response.body[0..@min(response.body.len, 500)] });
+            return error.RequestFailed;
+        }
 
         var libraries: std.ArrayList(plex_types.PlexLibrary) = .{};
 
@@ -190,10 +246,19 @@ pub const PlexClient = struct {
         var header_buf: [8]plex_types.Header = undefined;
         const headers = self.headers.toHeaders(&header_buf);
 
-        var response = try self.http_client.get(url, headers);
+        std.log.info("PlexClient.fetchMediaItems: GET {s}", .{url});
+
+        var response = self.http_client.get(url, headers) catch |err| {
+            std.log.err("PlexClient.fetchMediaItems: HTTP request failed for {s}: {}", .{ url, err });
+            return err;
+        };
         defer response.deinit();
 
-        if (response.status != .ok) return error.RequestFailed;
+        if (response.status != .ok) {
+            std.log.err("PlexClient.fetchMediaItems: HTTP {d} for {s}", .{ @intFromEnum(response.status), url });
+            return error.RequestFailed;
+        }
+        std.log.info("PlexClient.fetchMediaItems: HTTP 200, body_len={d}", .{response.body.len});
 
         var items: std.ArrayList(plex_types.PlexMediaItem) = .{};
 

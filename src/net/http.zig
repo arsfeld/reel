@@ -179,10 +179,13 @@ pub const HttpClient = struct {
         const result = self.client.fetch(.{
             .location = .{ .url = url },
             .method = method,
-            .payload = body,
+            .payload = body orelse if (method.requestHasBody()) "" else null,
             .extra_headers = extra.items,
             .response_writer = &alloc_writer.writer,
-        }) catch return error.RequestFailed;
+        }) catch |err| {
+            std.log.err("HttpClient.doRequest: fetch failed for {s}: {}", .{ url, err });
+            return error.RequestFailed;
+        };
 
         const response_body = alloc_writer.toOwnedSlice() catch return error.OutOfMemory;
 

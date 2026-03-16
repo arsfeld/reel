@@ -205,6 +205,16 @@ pub const CollectionRule = struct {
     value: []const u8,
 };
 
+pub const ServerConnection = struct {
+    id: i64 = 0,
+    server_id: []const u8,
+    uri: []const u8,
+    is_local: bool = false,
+    is_relay: bool = false,
+    protocol: []const u8 = "https",
+    latency_ms: ?i32 = null,
+};
+
 pub const Genre = struct {
     id: i64 = 0,
     name: []const u8,

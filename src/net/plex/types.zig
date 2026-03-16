@@ -52,6 +52,8 @@ pub const PlexServer = struct {
     pub const Connection = struct {
         uri: []const u8,
         local: bool = false,
+        relay: bool = false,
+        protocol: []const u8 = "https",
     };
 };
 

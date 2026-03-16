@@ -131,7 +131,7 @@ struct SettingsView: View {
                     _ = String(cString: tokenPtr)
                     // Discover and save servers
                     var serverBuf = [ReelPlexServerC](repeating: ReelPlexServerC(), count: 10)
-                    let count = reel_plex_discover_servers(plex, &serverBuf, 10)
+                    let count = reel_plex_discover_servers_with_lib(plex, &serverBuf, 10, appState.library)
                     if count > 0, let lib = appState.library {
                         for i in 0..<Int(count) {
                             reel_server_upsert(

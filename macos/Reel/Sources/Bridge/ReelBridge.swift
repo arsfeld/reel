@@ -159,6 +159,32 @@ enum ReelBridge {
         }
     }
 
+    // MARK: - Connection Resolution
+
+    /// Resolve the best connection URI for a server by testing all stored connections.
+    /// Returns nil if no reachable connection found.
+    static func resolveConnection(library lib: OpaquePointer, serverId: String) -> String? {
+        guard let ptr = reel_server_resolve_connection(lib, serverId) else { return nil }
+        let uri = String(cString: ptr)
+        reel_free(UnsafeMutableRawPointer(mutating: ptr))
+        return uri
+    }
+
+    /// Discover servers and store all connection URIs in the database.
+    static func discoverServersWithLib(
+        plex: OpaquePointer,
+        library lib: OpaquePointer,
+        buffer: inout [ReelPlexServerC],
+        max: Int32
+    ) -> Int32 {
+        reel_plex_discover_servers_with_lib(plex, &buffer, max, lib)
+    }
+
+    /// Re-discover connections for all servers from Plex and store them in the DB.
+    static func refreshConnections(library lib: OpaquePointer) -> Int32 {
+        reel_server_refresh_connections(lib)
+    }
+
     // MARK: - Watch Progress
 
     struct WatchProgress {

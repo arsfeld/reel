@@ -916,12 +916,94 @@ pub const Library = struct {
         return null;
     }
 
+    pub fn deleteServer(self: *Library, id: []const u8) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare("DELETE FROM servers WHERE id = ?");
+        defer stmt.finalize();
+        stmt.bindText(1, id);
+        try stmt.exec();
+    }
+
     pub fn freeServer(self: *Library, server: types.Server) void {
         self.allocator.free(server.id);
         self.allocator.free(server.name);
         self.allocator.free(server.client_identifier);
         if (server.auth_token) |t| self.allocator.free(t);
         if (server.connection_uri) |u| self.allocator.free(u);
+    }
+
+    // ── Server Connections ──────────────────────────────────
+
+    pub fn upsertServerConnections(self: *Library, server_id: []const u8, connections: []const types.ServerConnection) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        // Delete existing connections for this server
+        var del_stmt = try self.db.prepare("DELETE FROM server_connections WHERE server_id = ?");
+        defer del_stmt.finalize();
+        del_stmt.bindText(1, server_id);
+        try del_stmt.exec();
+
+        // Insert all new connections
+        for (connections) |conn| {
+            var ins_stmt = try self.db.prepare(
+                \\INSERT INTO server_connections (server_id, uri, is_local, is_relay, protocol)
+                \\VALUES (?, ?, ?, ?, ?)
+            );
+            defer ins_stmt.finalize();
+            ins_stmt.bindText(1, server_id);
+            ins_stmt.bindText(2, conn.uri);
+            ins_stmt.bindInt(3, if (conn.is_local) 1 else 0);
+            ins_stmt.bindInt(4, if (conn.is_relay) 1 else 0);
+            ins_stmt.bindText(5, conn.protocol);
+            try ins_stmt.exec();
+        }
+    }
+
+    pub fn getServerConnections(self: *Library, server_id: []const u8) ![]types.ServerConnection {
+        var stmt = try self.db.prepare(
+            \\SELECT id, server_id, uri, is_local, is_relay, protocol, latency_ms
+            \\FROM server_connections WHERE server_id = ?
+            \\ORDER BY is_local DESC, is_relay ASC
+        );
+        defer stmt.finalize();
+        stmt.bindText(1, server_id);
+
+        var results: std.ArrayList(types.ServerConnection) = .{};
+        while (stmt.step()) {
+            try results.append(self.allocator, types.ServerConnection{
+                .id = stmt.columnInt64(0),
+                .server_id = try dupeText(self.allocator, stmt.columnText(1) orelse continue),
+                .uri = try dupeText(self.allocator, stmt.columnText(2) orelse continue),
+                .is_local = stmt.columnBool(3),
+                .is_relay = stmt.columnBool(4),
+                .protocol = try dupeText(self.allocator, stmt.columnText(5) orelse "https"),
+                .latency_ms = stmt.columnOptionalInt(6),
+            });
+        }
+        return results.toOwnedSlice(self.allocator);
+    }
+
+    pub fn updateServerBestUri(self: *Library, server_id: []const u8, uri: []const u8) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare("UPDATE servers SET connection_uri = ? WHERE id = ?");
+        defer stmt.finalize();
+        stmt.bindText(1, uri);
+        stmt.bindText(2, server_id);
+        try stmt.exec();
+    }
+
+    pub fn freeServerConnections(self: *Library, conns: []types.ServerConnection) void {
+        for (conns) |conn| {
+            self.allocator.free(conn.server_id);
+            self.allocator.free(conn.uri);
+            self.allocator.free(conn.protocol);
+        }
+        self.allocator.free(conns);
     }
 
     pub fn freeMediaItem(self: *Library, item: types.MediaItem) void {
