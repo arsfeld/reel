@@ -31,8 +31,8 @@ struct PosterCard: View {
 
     @ViewBuilder
     private var posterImage: some View {
-        if let path = item.posterPath, !path.isEmpty {
-            AsyncImage(url: URL(fileURLWithPath: path)) { phase in
+        if let url = item.posterURL {
+            AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let image):
                     image.resizable().aspectRatio(contentMode: .fill)

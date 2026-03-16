@@ -87,4 +87,28 @@ struct MediaItem: Identifiable, Hashable {
     var yearString: String {
         year > 0 ? String(year) : ""
     }
+
+    // MARK: - Image URLs
+
+    private static let tmdbImageBase = "https://image.tmdb.org/t/p/"
+
+    var posterURL: URL? {
+        guard let path = posterPath, !path.isEmpty else { return nil }
+        if path.hasPrefix("http://") || path.hasPrefix("https://") {
+            return URL(string: path)
+        } else if path.hasPrefix("/") {
+            return URL(string: "\(Self.tmdbImageBase)w342\(path)")
+        }
+        return URL(fileURLWithPath: path)
+    }
+
+    var backdropURL: URL? {
+        guard let path = backdropPath, !path.isEmpty else { return nil }
+        if path.hasPrefix("http://") || path.hasPrefix("https://") {
+            return URL(string: path)
+        } else if path.hasPrefix("/") {
+            return URL(string: "\(Self.tmdbImageBase)w1280\(path)")
+        }
+        return URL(fileURLWithPath: path)
+    }
 }

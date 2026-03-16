@@ -90,8 +90,8 @@ struct DetailView: View {
     @ViewBuilder
     private var backdrop: some View {
         ZStack(alignment: .bottom) {
-            if let path = item.backdropPath, !path.isEmpty {
-                AsyncImage(url: URL(fileURLWithPath: path)) { phase in
+            if let url = item.backdropURL {
+                AsyncImage(url: url) { phase in
                     if case .success(let image) = phase {
                         image.resizable()
                             .aspectRatio(contentMode: .fill)

@@ -72,13 +72,15 @@ struct HomeView: View {
     private func heroBanner(_ item: MediaItem) -> some View {
         ZStack(alignment: .bottomLeading) {
             // Backdrop
-            if let path = item.backdropPath, !path.isEmpty {
-                AsyncImage(url: URL(fileURLWithPath: path)) { phase in
+            if let url = item.backdropURL {
+                AsyncImage(url: url) { phase in
                     if case .success(let image) = phase {
                         image.resizable()
                             .aspectRatio(contentMode: .fill)
                             .frame(height: 400)
                             .clipped()
+                    } else {
+                        Color.black.opacity(0.3).frame(height: 400)
                     }
                 }
             }
