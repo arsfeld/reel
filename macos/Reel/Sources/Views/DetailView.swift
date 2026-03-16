@@ -47,7 +47,7 @@ struct DetailView: View {
                     HStack(spacing: 12) {
                         if let filePath = item.filePath {
                             Button {
-                                playerModel.play(filePath: filePath)
+                                playerModel.play(filePath: filePath, mediaItemId: item.id)
                             } label: {
                                 Label("Play", systemImage: "play.fill")
                             }
@@ -165,7 +165,7 @@ struct DetailView: View {
 
                         if let filePath = episode.filePath {
                             Button {
-                                playerModel.play(filePath: filePath)
+                                playerModel.play(filePath: filePath, mediaItemId: episode.id)
                             } label: {
                                 Image(systemName: "play.circle.fill")
                                     .font(.title2)

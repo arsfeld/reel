@@ -3,17 +3,48 @@ import SwiftUI
 struct PosterCard: View {
     let item: MediaItem
     let width: CGFloat
+    let showPlayButton: Bool
 
-    init(_ item: MediaItem, width: CGFloat = 150) {
+    @Environment(PlayerModel.self) private var playerModel
+    @State private var isHovered = false
+
+    init(_ item: MediaItem, width: CGFloat = 150, showPlayButton: Bool = true) {
         self.item = item
         self.width = width
+        self.showPlayButton = showPlayButton
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            posterImage
-                .frame(width: width, height: width * 1.5)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            ZStack {
+                posterImage
+                    .frame(width: width, height: width * 1.5)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                // Play button overlay on hover for playable items
+                if showPlayButton && item.filePath != nil && isHovered {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.black.opacity(0.4))
+                        .frame(width: width, height: width * 1.5)
+
+                    Button {
+                        if let path = item.filePath {
+                            playerModel.play(filePath: path, mediaItemId: item.id)
+                        }
+                    } label: {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.white)
+                            .shadow(radius: 4)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isHovered = hovering
+                }
+            }
 
             Text(item.title)
                 .font(.caption)

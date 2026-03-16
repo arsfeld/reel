@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(AppState.self) private var appState
+    @Environment(PlayerModel.self) private var playerModel
     @State private var libraryModel = LibraryModel()
     @State private var heroItem: MediaItem?
 
@@ -108,6 +109,27 @@ struct HomeView: View {
                         .lineLimit(2)
                         .foregroundStyle(.secondary)
                 }
+
+                HStack(spacing: 12) {
+                    if let filePath = item.filePath {
+                        Button {
+                            playerModel.play(filePath: filePath, mediaItemId: item.id)
+                        } label: {
+                            Label("Play", systemImage: "play.fill")
+                                .font(.headline)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                    }
+
+                    NavigationLink(value: item) {
+                        Label("More Info", systemImage: "info.circle")
+                            .font(.headline)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                }
+                .padding(.top, 4)
             }
             .padding(24)
         }
