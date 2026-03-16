@@ -26,8 +26,17 @@ struct ContentView: View {
             }
         }
         .environment(playerModel)
+        .onAppear {
+            playerModel.appState = appState
+        }
         .onKeyPress(.escape) {
             if playerModel.isActive {
+                // If in fullscreen, exit fullscreen first (match Infuse behavior)
+                if let window = NSApp.keyWindow, window.styleMask.contains(.fullScreen) {
+                    window.toggleFullScreen(nil)
+                    return .handled
+                }
+                // Otherwise, stop the player
                 playerModel.stop()
                 columnVisibility = .all
                 return .handled

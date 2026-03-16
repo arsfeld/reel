@@ -11,9 +11,17 @@ final class PlayerModel {
 
     var isActive = false
     var currentFilePath: String?
+    var currentMediaItemId: Int64 = 0
+    var hasError = false
+    var errorMessage: String?
 
-    private var player: OpaquePointer?
+    private(set) var player: OpaquePointer?
     private var pollTimer: Timer?
+    private var lastSaveTime: Date = .distantPast
+    private var renderContextReady = false
+
+    // Weak reference to library for watch progress
+    weak var appState: AppState?
 
     var formattedPosition: String { formatTime(position) }
     var formattedDuration: String { formatTime(duration) }
@@ -26,6 +34,7 @@ final class PlayerModel {
     func createPlayer() {
         guard player == nil else { return }
         player = reel_player_create()
+        renderContextReady = false
     }
 
     func destroyPlayer() {
@@ -34,24 +43,64 @@ final class PlayerModel {
             reel_player_destroy(p)
             player = nil
         }
+        renderContextReady = false
         isActive = false
         currentFilePath = nil
+        currentMediaItemId = 0
+        hasError = false
+        errorMessage = nil
     }
 
-    func play(filePath: String) {
+    /// Start playback. Creates the player and sets isActive to trigger
+    /// the SwiftUI view. File loading is deferred until onRenderContextReady().
+    func play(filePath: String, mediaItemId: Int64 = 0) {
+        // If already playing something, stop it first
+        if isActive {
+            stop()
+        }
+
+        hasError = false
+        errorMessage = nil
         createPlayer()
-        guard let p = player else { return }
-        let err = reel_player_load_file(p, filePath)
-        guard err.rawValue == 0 else { return }
         currentFilePath = filePath
+        currentMediaItemId = mediaItemId
+        isActive = true  // Triggers PlayerScreen to appear with VideoPlayerView
+
+        // File loading happens in onRenderContextReady() after the OpenGL view
+        // calls prepareOpenGL and initializes the mpv render context.
+    }
+
+    /// Called by PlayerOpenGLView after mpv render context is successfully initialized.
+    func onRenderContextReady() {
+        renderContextReady = true
+        guard let p = player, let path = currentFilePath else { return }
+
+        let err = reel_player_load_file(p, path)
+        guard err == REEL_OK else {
+            hasError = true
+            errorMessage = "Failed to load: \(path)"
+            return
+        }
+
         isPlaying = true
-        isActive = true
         startPolling()
+
+        // Resume from saved watch progress if available
+        resumeFromSavedPosition()
     }
 
     func togglePause() {
         guard let p = player else { return }
         reel_player_toggle_pause(p)
+        // Save progress on pause
+        if isPlaying {
+            saveProgress()
+        }
+    }
+
+    func toggleMute() {
+        guard let p = player else { return }
+        reel_player_toggle_mute(p)
     }
 
     func seek(to seconds: Double) {
@@ -72,10 +121,12 @@ final class PlayerModel {
 
     func stop() {
         guard let p = player else { return }
+        saveProgress()
         reel_player_stop(p)
         isPlaying = false
         isActive = false
         stopPolling()
+        NSCursor.unhide()
     }
 
     func cycleSub() {
@@ -86,6 +137,33 @@ final class PlayerModel {
     func cycleAudio() {
         guard let p = player else { return }
         reel_player_cycle_audio(p)
+    }
+
+    // MARK: - Watch Progress
+
+    private func resumeFromSavedPosition() {
+        guard let lib = appState?.library, currentMediaItemId > 0 else { return }
+        var progress = ReelWatchProgressC()
+        let err = reel_library_get_watch_progress(lib, currentMediaItemId, &progress)
+        if err == REEL_OK && progress.watched == 0 && progress.position_ms > 0 {
+            let resumeSeconds = Double(progress.position_ms) / 1000.0
+            seek(to: resumeSeconds)
+        }
+    }
+
+    private func saveProgress() {
+        guard let lib = appState?.library, currentMediaItemId > 0 else { return }
+        guard duration > 0 else { return }
+        let posMs = Int64(position * 1000)
+        let durMs = Int64(duration * 1000)
+        let watched: Int32 = (position / duration > 0.9) ? 1 : 0
+        reel_library_update_watch_progress(lib, currentMediaItemId, posMs, durMs, watched)
+        lastSaveTime = Date()
+    }
+
+    private func maybeSaveProgress() {
+        guard isPlaying, Date().timeIntervalSince(lastSaveTime) >= 10 else { return }
+        saveProgress()
     }
 
     // MARK: - Polling
@@ -111,9 +189,14 @@ final class PlayerModel {
         state = Int32(reel_player_get_state(p).rawValue)
         isPlaying = state == Int32(REEL_STATE_PLAYING.rawValue)
 
-        if state == Int32(REEL_STATE_STOPPED.rawValue) && isActive {
-            // Playback ended
+        // Periodically save watch progress
+        maybeSaveProgress()
+
+        // Handle end-of-file: playback ended naturally
+        if state == Int32(REEL_STATE_STOPPED.rawValue) && isActive && !hasError {
+            saveProgress()
             isActive = false
+            NSCursor.unhide()
         }
     }
 

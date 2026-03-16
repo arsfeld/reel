@@ -191,6 +191,38 @@ export fn reel_player_get_state(pw: ?*PlayerWrapper) c_int {
     return @intFromEnum(p.state);
 }
 
+// Player Rendering
+
+export fn reel_player_init_render(
+    pw: ?*PlayerWrapper,
+    get_proc_address: *const fn (?*anyopaque, [*c]const u8) callconv(.c) ?*anyopaque,
+) c_int {
+    const p = pw orelse return -1;
+    p.p.initRender(get_proc_address) catch return -4; // REEL_ERR_RENDER
+    return 0;
+}
+
+export fn reel_player_set_render_update_callback(
+    pw: ?*PlayerWrapper,
+    callback: ?*const fn (?*anyopaque) callconv(.c) void,
+    ctx: ?*anyopaque,
+) void {
+    const p = pw orelse return;
+    if (callback) |cb| {
+        p.p.setRenderUpdateCallback(cb, ctx);
+    }
+}
+
+export fn reel_player_render(
+    pw: ?*PlayerWrapper,
+    fbo: c_int,
+    width: c_int,
+    height: c_int,
+) void {
+    const p = pw orelse return;
+    p.p.render(fbo, width, height);
+}
+
 // Database
 
 export fn reel_db_open(path: [*:0]const u8) ?*database.Database {

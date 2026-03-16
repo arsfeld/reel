@@ -61,6 +61,24 @@ ReelError reel_player_stop(ReelPlayer* player);
 /** Drain pending mpv events, updating cached position/duration/state. */
 void reel_player_poll_events(ReelPlayer* player);
 
+/* ── Player Rendering ───────────────────────────────────── */
+
+typedef void* (*ReelGetProcAddressFn)(void* ctx, const char* name);
+typedef void (*ReelRenderUpdateFn)(void* ctx);
+
+/** Initialize OpenGL render context. Call after GL context is current. */
+ReelError reel_player_init_render(ReelPlayer* player,
+                                   ReelGetProcAddressFn get_proc_address);
+
+/** Set callback invoked when mpv has a new frame. Fires on mpv's thread. */
+void reel_player_set_render_update_callback(ReelPlayer* player,
+                                             ReelRenderUpdateFn callback,
+                                             void* ctx);
+
+/** Render current frame into the given OpenGL FBO. */
+void reel_player_render(ReelPlayer* player,
+                         int fbo, int width, int height);
+
 /* ── Media types ─────────────────────────────────────────── */
 
 typedef enum {
