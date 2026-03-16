@@ -35,6 +35,11 @@
             echo "Reel dev environment ready"
             echo "  Zig: $(zig version)"
             echo "  mpv: ${pkgs.mpv-unwrapped.version}"
+          '' + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+            export REEL_MPV_LIBDIR="${pkgs.mpv-unwrapped}/lib"
+            export REEL_EPOXY_LIBDIR="${pkgs.libepoxy}/lib"
+            export REEL_SQLITE_LIBDIR="${pkgs.sqlite.out}/lib"
+          '' + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
             echo "  GTK4: ${pkgs.gtk4.version}"
             echo "  libadwaita: ${pkgs.libadwaita.version}"
           '';

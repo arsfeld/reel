@@ -73,6 +73,7 @@ struct MediaGridView: View {
             }
         }
         .onAppear { reload() }
+        .onChange(of: appState.lastSyncTime) { reload() }
     }
 
     private func reload() {

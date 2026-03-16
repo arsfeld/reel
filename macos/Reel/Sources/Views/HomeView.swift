@@ -30,11 +30,26 @@ struct HomeView: View {
             .padding(.vertical)
         }
         .navigationTitle("Home")
+        .toolbar {
+            if appState.isSyncing {
+                ToolbarItem(placement: .automatic) {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(appState.syncStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
         .navigationDestination(for: MediaItem.self) { item in
             DetailView(item: item)
         }
         .overlay {
-            if libraryModel.recentlyAdded.isEmpty && libraryModel.continueWatching.isEmpty {
+            if appState.isSyncing {
+                syncingOverlay
+            } else if libraryModel.recentlyAdded.isEmpty && libraryModel.continueWatching.isEmpty {
                 emptyState
             }
         }
@@ -47,6 +62,9 @@ struct HomeView: View {
             if heroItem == nil {
                 heroItem = libraryModel.recentlyAdded.first
             }
+        }
+        .onChange(of: appState.lastSyncTime) {
+            libraryModel.loadHomeData()
         }
     }
 
@@ -94,6 +112,16 @@ struct HomeView: View {
         .frame(height: 400)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal)
+    }
+
+    private var syncingOverlay: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.large)
+            Text(appState.syncStatus)
+                .font(.headline)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var emptyState: some View {

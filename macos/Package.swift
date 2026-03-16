@@ -5,6 +5,12 @@ import Foundation
 let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
 let repoRoot = packageDir + "/.."
 
+let env = ProcessInfo.processInfo.environment
+var libPaths: [String] = ["-L\(repoRoot)/zig-out/lib"]
+if let dir = env["REEL_MPV_LIBDIR"] { libPaths.append("-L\(dir)") }
+if let dir = env["REEL_EPOXY_LIBDIR"] { libPaths.append("-L\(dir)") }
+if let dir = env["REEL_SQLITE_LIBDIR"] { libPaths.append("-L\(dir)") }
+
 let package = Package(
     name: "Reel",
     platforms: [
@@ -35,11 +41,7 @@ let package = Package(
                 .swiftLanguageMode(.v5),
             ],
             linkerSettings: [
-                .unsafeFlags([
-                    "-L\(repoRoot)/zig-out/lib",
-                    "-L/opt/homebrew/lib",
-                    "-L/opt/homebrew/opt/mpv/lib",
-                ]),
+                .unsafeFlags(libPaths),
                 .linkedLibrary("reel"),
                 .linkedLibrary("mpv"),
                 .linkedLibrary("epoxy"),

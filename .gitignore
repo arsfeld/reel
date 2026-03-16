@@ -8,3 +8,13 @@ result-*
 *.a
 *.so
 *.dylib
+
+# macOS
+.DS_Store
+macos/.build/
+
+# Build artifacts
+target/
+
+# Screenshots
+screenshots/

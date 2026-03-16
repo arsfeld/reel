@@ -1,9 +1,15 @@
 import SwiftUI
+import AppKit
 import ReelCore
 
 @main
 struct ReelApp: App {
     @State private var appState = AppState()
+
+    init() {
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.activate()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -25,6 +31,9 @@ final class AppState {
     var library: OpaquePointer?
     var downloader: OpaquePointer?
     var isInitialized = false
+    var isSyncing = false
+    var syncStatus: String = ""
+    var lastSyncTime: Date?
     private var connectionTimer: Timer?
 
     func initialize() {
@@ -51,28 +60,45 @@ final class AppState {
         downloader = reel_download_create(db)
         isInitialized = true
 
-        // Background: refresh connections from Plex, resolve best, then sync
+        // Background: sync immediately with stored URI, resolve best connection in parallel
         if let lib = library {
             let libPtr = lib
-            Task.detached {
-                // Refresh connections from Plex API (uses stored auth tokens)
-                let refreshed = reel_server_refresh_connections(libPtr)
-                print("Refreshed connections for \(refreshed) servers")
 
-                // Resolve best connection for each server
-                let servers = ReelBridge.listServers(library: libPtr)
-                for server in servers {
-                    if let uri = ReelBridge.resolveConnection(library: libPtr, serverId: server.id) {
-                        print("Resolved connection for '\(server.name)': \(uri)")
-                    }
-                }
+            // Use a proper thread with large stack for Zig C calls (Swift Task has limited stack)
+            isSyncing = true
+            syncStatus = "Syncing library..."
 
-                // Sync libraries
+            // 1. Refresh connection list from Plex API, then sync immediately
+            let syncThread = Thread { [weak self] in
+                // Quick API call to get latest connection URIs
+                reel_server_refresh_connections(libPtr)
+
+                // Sync now using whatever connection_uri is already stored
                 let count = reel_plex_sync_all(libPtr)
                 if count > 0 {
                     print("Synced \(count) items from Plex servers")
                 }
+                DispatchQueue.main.async {
+                    self?.isSyncing = false
+                    self?.syncStatus = ""
+                    self?.lastSyncTime = Date()
+                }
             }
+            syncThread.stackSize = 8 * 1024 * 1024  // 8MB stack
+            syncThread.start()
+
+            // 2. Resolve best connection in parallel (slow — tests each URI for latency)
+            //    Updates stored connection_uri for future syncs
+            let resolveThread = Thread {
+                let servers = ReelBridge.listServers(library: libPtr)
+                for server in servers {
+                    if let uri = ReelBridge.resolveConnection(library: libPtr, serverId: server.id) {
+                        print("Resolved best connection for '\(server.name)': \(uri)")
+                    }
+                }
+            }
+            resolveThread.stackSize = 8 * 1024 * 1024
+            resolveThread.start()
         }
 
         // Periodic re-resolution every 60s

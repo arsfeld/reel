@@ -164,6 +164,8 @@ pub const HttpClient = struct {
         extra_headers: []const Header,
         body: ?[]const u8,
     ) !Response {
+        const uri = std.Uri.parse(url) catch return error.InvalidUrl;
+
         // Build extra headers
         var extra: std.ArrayList(std.http.Header) = .{};
         defer extra.deinit(self.allocator);
@@ -172,25 +174,50 @@ pub const HttpClient = struct {
             try extra.append(self.allocator, .{ .name = h.name, .value = h.value });
         }
 
-        // Use the fetch API for simple request/response
-        var alloc_writer = std.Io.Writer.Allocating.init(self.allocator);
-        defer alloc_writer.deinit();
+        // Fresh client per request to avoid any shared TLS/connection state
+        var client: std.http.Client = .{ .allocator = self.allocator };
+        defer client.deinit();
 
-        const result = self.client.fetch(.{
-            .location = .{ .url = url },
-            .method = method,
-            .payload = body orelse if (method.requestHasBody()) "" else null,
+        var req = client.request(method, uri, .{
             .extra_headers = extra.items,
-            .response_writer = &alloc_writer.writer,
-        }) catch |err| {
-            std.log.err("HttpClient.doRequest: fetch failed for {s}: {}", .{ url, err });
-            return error.RequestFailed;
-        };
+        }) catch return error.ConnectionFailed;
+        defer req.deinit();
 
-        const response_body = alloc_writer.toOwnedSlice() catch return error.OutOfMemory;
+        if (body) |payload| {
+            req.transfer_encoding = .{ .content_length = payload.len };
+            var req_body = req.sendBodyUnflushed(&.{}) catch return error.RequestFailed;
+            req_body.writer.writeAll(payload) catch return error.RequestFailed;
+            req_body.end() catch return error.RequestFailed;
+            if (req.connection) |conn| conn.flush() catch return error.RequestFailed;
+        } else {
+            req.sendBodiless() catch return error.RequestFailed;
+        }
+
+        // Heap-allocate buffers to reduce stack pressure (called from Swift Task with limited stack)
+        const redirect_buf = self.allocator.alloc(u8, 8 * 1024) catch return error.OutOfMemory;
+        defer self.allocator.free(redirect_buf);
+        var response = req.receiveHead(redirect_buf) catch return error.RequestFailed;
+
+        // Read body into allocated buffer
+        var result = std.ArrayListUnmanaged(u8){};
+        const transfer_buf = self.allocator.alloc(u8, 8192) catch return error.OutOfMemory;
+        defer self.allocator.free(transfer_buf);
+        const reader = response.reader(transfer_buf);
+
+        const read_buf = self.allocator.alloc(u8, 8192) catch return error.OutOfMemory;
+        defer self.allocator.free(read_buf);
+
+        while (true) {
+            var bufs = [_][]u8{read_buf};
+            const n = reader.readVec(&bufs) catch return error.RequestFailed;
+            if (n == 0) break;
+            result.appendSlice(self.allocator, read_buf[0..n]) catch return error.OutOfMemory;
+        }
+
+        const response_body = result.toOwnedSlice(self.allocator) catch return error.OutOfMemory;
 
         return Response{
-            .status = result.status,
+            .status = response.head.status,
             .body = response_body,
             .allocator = self.allocator,
         };
