@@ -24,7 +24,7 @@ pub const PlexHeaders = struct {
         i += 1;
         buf[i] = .{ .name = "X-Plex-Client-Identifier", .value = self.client_identifier };
         i += 1;
-        buf[i] = .{ .name = "Accept", .value = "application/xml" };
+        buf[i] = .{ .name = "Accept", .value = "application/json" };
         i += 1;
         if (self.auth_token) |token| {
             buf[i] = .{ .name = "X-Plex-Token", .value = token };

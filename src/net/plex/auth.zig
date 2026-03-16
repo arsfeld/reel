@@ -1,7 +1,6 @@
 const std = @import("std");
 const http = @import("../http.zig");
 const plex_types = @import("types.zig");
-const xml = @import("xml.zig");
 
 pub const AuthError = error{
     PinRequestFailed,
@@ -64,23 +63,31 @@ pub const PlexAuth = struct {
             return error.PinRequestFailed;
         }
 
-        // Parse XML response for id and code
-        var parser = xml.XmlParser.init(response.body);
-        while (parser.next()) |elem| {
-            if (std.mem.eql(u8, elem.tag, "pin")) {
-                const id = elem.attrInt64("id") orelse continue;
-                const code = elem.attr("code") orelse continue;
+        // Parse JSON response for id and code
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response.body, .{}) catch
+            return error.InvalidResponse;
+        defer parsed.deinit();
 
-                self.pin_id = id;
-                if (self.pin_code) |old| self.allocator.free(old);
-                self.pin_code = try self.allocator.dupe(u8, code);
-                self.state = .awaiting_pin;
+        const root = switch (parsed.value) {
+            .object => |o| o,
+            else => return error.InvalidResponse,
+        };
 
-                return self.pin_code.?;
-            }
-        }
+        const id = switch (root.get("id") orelse return error.InvalidResponse) {
+            .integer => |i| i,
+            else => return error.InvalidResponse,
+        };
+        const code = switch (root.get("code") orelse return error.InvalidResponse) {
+            .string => |s| s,
+            else => return error.InvalidResponse,
+        };
 
-        return error.InvalidResponse;
+        self.pin_id = id;
+        if (self.pin_code) |old| self.allocator.free(old);
+        self.pin_code = try self.allocator.dupe(u8, code);
+        self.state = .awaiting_pin;
+
+        return self.pin_code.?;
     }
 
     /// Open the user's browser to plex.tv/link.
@@ -113,23 +120,30 @@ pub const PlexAuth = struct {
         if (response.status != .ok) return error.PinPollFailed;
 
         // Check if authToken is populated
-        var parser = xml.XmlParser.init(response.body);
-        while (parser.next()) |elem| {
-            if (std.mem.eql(u8, elem.tag, "pin")) {
-                if (elem.attr("authToken")) |token| {
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response.body, .{}) catch
+            return error.InvalidResponse;
+        defer parsed.deinit();
+
+        const root = switch (parsed.value) {
+            .object => |o| o,
+            else => return error.InvalidResponse,
+        };
+
+        if (root.get("authToken")) |token_val| {
+            switch (token_val) {
+                .string => |token| {
                     if (token.len > 0) {
                         if (self.auth_token) |old| self.allocator.free(old);
                         self.auth_token = try self.allocator.dupe(u8, token);
                         self.state = .authenticated;
                         return self.auth_token.?;
                     }
-                }
-                // Not yet authenticated
-                return null;
+                },
+                else => {},
             }
         }
-
-        return error.InvalidResponse;
+        // Not yet authenticated
+        return null;
     }
 
     /// Generate a UUID v4 for use as X-Plex-Client-Identifier.

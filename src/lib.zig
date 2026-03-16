@@ -14,7 +14,6 @@ pub const image_cache = @import("core/image_cache.zig");
 pub const http = @import("net/http.zig");
 pub const media_server = @import("net/media_server.zig");
 pub const plex_types = @import("net/plex/types.zig");
-pub const plex_xml = @import("net/plex/xml.zig");
 pub const plex_auth = @import("net/plex/auth.zig");
 pub const plex_client = @import("net/plex/client.zig");
 pub const tmdb_types = @import("net/tmdb/types.zig");

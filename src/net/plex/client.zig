@@ -1,7 +1,6 @@
 const std = @import("std");
 const http = @import("../http.zig");
 const plex_types = @import("types.zig");
-const xml = @import("xml.zig");
 const auth_mod = @import("auth.zig");
 
 pub const PlexClient = struct {
@@ -54,57 +53,71 @@ pub const PlexClient = struct {
 
         var servers: std.ArrayList(plex_types.PlexServer) = .{};
 
-        var parser = xml.XmlParser.init(response.body);
-        var in_server_device = false;
-        var current_connections: std.ArrayList(plex_types.PlexServer.Connection) = .{};
-        var current_server: ?plex_types.PlexServer = null;
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response.body, .{}) catch
+            return error.RequestFailed;
+        defer parsed.deinit();
 
-        while (parser.next()) |elem| {
-            if (std.mem.eql(u8, elem.tag, "Device") or std.mem.eql(u8, elem.tag, "resource")) {
-                // Flush previous server if any
-                if (current_server) |*srv| {
-                    srv.connections = current_connections.toOwnedSlice(self.allocator) catch &.{};
-                    try servers.append(self.allocator, srv.*);
-                    current_connections = .{};
+        const devices = switch (parsed.value) {
+            .array => |a| a,
+            else => return error.RequestFailed,
+        };
+
+        for (devices.items) |device| {
+            const obj = switch (device) {
+                .object => |o| o,
+                else => continue,
+            };
+
+            const provides = switch (obj.get("provides") orelse continue) {
+                .string => |s| s,
+                else => continue,
+            };
+            if (std.mem.indexOf(u8, provides, "server") == null) continue;
+
+            const name = switch (obj.get("name") orelse continue) {
+                .string => |s| s,
+                else => continue,
+            };
+            const client_id = switch (obj.get("clientIdentifier") orelse continue) {
+                .string => |s| s,
+                else => continue,
+            };
+
+            // Parse nested connections array
+            var conns: std.ArrayList(plex_types.PlexServer.Connection) = .{};
+            if (obj.get("connections")) |conns_val| {
+                if (conns_val == .array) {
+                    for (conns_val.array.items) |conn| {
+                        const c = switch (conn) {
+                            .object => |o| o,
+                            else => continue,
+                        };
+                        const uri = switch (c.get("uri") orelse continue) {
+                            .string => |s| s,
+                            else => continue,
+                        };
+                        try conns.append(self.allocator, .{
+                            .uri = try self.allocator.dupe(u8, uri),
+                            .local = jsonBool(c.get("local")),
+                            .relay = jsonBool(c.get("relay")),
+                            .protocol = try self.allocator.dupe(u8, if (c.get("protocol")) |v| switch (v) {
+                                .string => |s| s,
+                                else => "https",
+                            } else "https"),
+                        });
+                    }
                 }
-
-                const provides = elem.attr("provides") orelse {
-                    in_server_device = false;
-                    current_server = null;
-                    continue;
-                };
-                if (std.mem.indexOf(u8, provides, "server") == null) {
-                    in_server_device = false;
-                    current_server = null;
-                    continue;
-                }
-
-                in_server_device = true;
-                current_server = .{
-                    .name = try self.allocator.dupe(u8, elem.attr("name") orelse continue),
-                    .machine_identifier = try self.allocator.dupe(u8, elem.attr("clientIdentifier") orelse continue),
-                    .access_token = if (elem.attr("accessToken")) |t| try self.allocator.dupe(u8, t) else null,
-                };
-            } else if (in_server_device and (std.mem.eql(u8, elem.tag, "Connection") or std.mem.eql(u8, elem.tag, "connection"))) {
-                const uri = elem.attr("uri") orelse continue;
-                const local_str = elem.attr("local") orelse "0";
-                const is_local = std.mem.eql(u8, local_str, "1");
-                const relay_str = elem.attr("relay") orelse "0";
-                const is_relay = std.mem.eql(u8, relay_str, "1");
-                const protocol = elem.attr("protocol") orelse "https";
-                try current_connections.append(self.allocator, .{
-                    .uri = try self.allocator.dupe(u8, uri),
-                    .local = is_local,
-                    .relay = is_relay,
-                    .protocol = try self.allocator.dupe(u8, protocol),
-                });
             }
-        }
 
-        // Flush last server
-        if (current_server) |*srv| {
-            srv.connections = current_connections.toOwnedSlice(self.allocator) catch &.{};
-            try servers.append(self.allocator, srv.*);
+            try servers.append(self.allocator, .{
+                .name = try self.allocator.dupe(u8, name),
+                .machine_identifier = try self.allocator.dupe(u8, client_id),
+                .access_token = if (obj.get("accessToken")) |v| switch (v) {
+                    .string => |s| try self.allocator.dupe(u8, s),
+                    else => null,
+                } else null,
+                .connections = conns.toOwnedSlice(self.allocator) catch &.{},
+            });
         }
 
         return servers.toOwnedSlice(self.allocator);
@@ -138,15 +151,26 @@ pub const PlexClient = struct {
 
         var libraries: std.ArrayList(plex_types.PlexLibrary) = .{};
 
-        var parser = xml.XmlParser.init(response.body);
-        while (parser.next()) |elem| {
-            if (std.mem.eql(u8, elem.tag, "Directory")) {
-                try libraries.append(self.allocator, .{
-                    .key = try self.allocator.dupe(u8, elem.attr("key") orelse continue),
-                    .title = try self.allocator.dupe(u8, elem.attr("title") orelse continue),
-                    .library_type = try self.allocator.dupe(u8, elem.attr("type") orelse continue),
-                });
-            }
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response.body, .{}) catch
+            return error.RequestFailed;
+        defer parsed.deinit();
+
+        const mc = getMediaContainer(parsed.value) orelse return libraries.toOwnedSlice(self.allocator);
+        const dirs = switch (mc.get("Directory") orelse return libraries.toOwnedSlice(self.allocator)) {
+            .array => |a| a,
+            else => return libraries.toOwnedSlice(self.allocator),
+        };
+
+        for (dirs.items) |item| {
+            const obj = switch (item) {
+                .object => |o| o,
+                else => continue,
+            };
+            try libraries.append(self.allocator, .{
+                .key = try self.allocator.dupe(u8, jsonString(obj.get("key")) orelse continue),
+                .title = try self.allocator.dupe(u8, jsonString(obj.get("title")) orelse continue),
+                .library_type = try self.allocator.dupe(u8, jsonString(obj.get("type")) orelse continue),
+            });
         }
 
         return libraries.toOwnedSlice(self.allocator);
@@ -262,30 +286,39 @@ pub const PlexClient = struct {
 
         var items: std.ArrayList(plex_types.PlexMediaItem) = .{};
 
-        var parser = xml.XmlParser.init(response.body);
-        while (parser.next()) |elem| {
-            if (std.mem.eql(u8, elem.tag, "Video") or
-                std.mem.eql(u8, elem.tag, "Directory"))
-            {
-                try items.append(self.allocator, .{
-                    .rating_key = try self.allocator.dupe(u8, elem.attr("ratingKey") orelse continue),
-                    .title = try self.allocator.dupe(u8, elem.attr("title") orelse continue),
-                    .media_type = try self.allocator.dupe(u8, elem.attr("type") orelse "unknown"),
-                    .summary = if (elem.attr("summary")) |s| try self.allocator.dupe(u8, s) else null,
-                    .year = elem.attrInt("year"),
-                    .rating = elem.attrFloat("rating"),
-                    .duration_ms = elem.attrInt64("duration"),
-                    .thumb = if (elem.attr("thumb")) |s| try self.allocator.dupe(u8, s) else null,
-                    .art = if (elem.attr("art")) |s| try self.allocator.dupe(u8, s) else null,
-                    .parent_rating_key = if (elem.attr("parentRatingKey")) |s| try self.allocator.dupe(u8, s) else null,
-                    .grandparent_rating_key = if (elem.attr("grandparentRatingKey")) |s| try self.allocator.dupe(u8, s) else null,
-                    .grandparent_title = if (elem.attr("grandparentTitle")) |s| try self.allocator.dupe(u8, s) else null,
-                    .parent_index = elem.attrInt("parentIndex"),
-                    .index = elem.attrInt("index"),
-                    .view_offset = elem.attrInt64("viewOffset"),
-                    .part_key = if (elem.attr("key")) |s| try self.allocator.dupe(u8, s) else null,
-                });
-            }
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response.body, .{}) catch
+            return error.RequestFailed;
+        defer parsed.deinit();
+
+        const mc = getMediaContainer(parsed.value) orelse return items.toOwnedSlice(self.allocator);
+        const metadata = switch (mc.get("Metadata") orelse return items.toOwnedSlice(self.allocator)) {
+            .array => |a| a,
+            else => return items.toOwnedSlice(self.allocator),
+        };
+
+        for (metadata.items) |entry| {
+            const obj = switch (entry) {
+                .object => |o| o,
+                else => continue,
+            };
+            try items.append(self.allocator, .{
+                .rating_key = try self.allocator.dupe(u8, jsonString(obj.get("ratingKey")) orelse continue),
+                .title = try self.allocator.dupe(u8, jsonString(obj.get("title")) orelse continue),
+                .media_type = try self.allocator.dupe(u8, jsonString(obj.get("type")) orelse "unknown"),
+                .summary = try dupeOptionalJsonString(self.allocator, obj.get("summary")),
+                .year = jsonInt(i32, obj.get("year")),
+                .rating = jsonFloat(obj.get("rating")),
+                .duration_ms = jsonInt(i64, obj.get("duration")),
+                .thumb = try dupeOptionalJsonString(self.allocator, obj.get("thumb")),
+                .art = try dupeOptionalJsonString(self.allocator, obj.get("art")),
+                .parent_rating_key = try dupeOptionalJsonString(self.allocator, obj.get("parentRatingKey")),
+                .grandparent_rating_key = try dupeOptionalJsonString(self.allocator, obj.get("grandparentRatingKey")),
+                .grandparent_title = try dupeOptionalJsonString(self.allocator, obj.get("grandparentTitle")),
+                .parent_index = jsonInt(i32, obj.get("parentIndex")),
+                .index = jsonInt(i32, obj.get("index")),
+                .view_offset = jsonInt(i64, obj.get("viewOffset")),
+                .part_key = try dupeOptionalJsonString(self.allocator, obj.get("key")),
+            });
         }
 
         return items.toOwnedSlice(self.allocator);
@@ -308,6 +341,76 @@ pub const PlexClient = struct {
     }
 };
 
+/// Extract the MediaContainer object from a parsed JSON value.
+fn getMediaContainer(value: std.json.Value) ?std.json.ObjectMap {
+    const root = switch (value) {
+        .object => |o| o,
+        else => return null,
+    };
+    return switch (root.get("MediaContainer") orelse return null) {
+        .object => |o| o,
+        else => null,
+    };
+}
+
+/// Extract a boolean from a JSON value, defaulting to false.
+/// Handles both proper booleans and integer 0/1 values.
+fn jsonBool(val: ?std.json.Value) bool {
+    if (val) |v| {
+        return switch (v) {
+            .bool => |b| b,
+            .integer => |i| i != 0,
+            else => false,
+        };
+    }
+    return false;
+}
+
+/// Extract a string from a JSON value, returning null if not a string.
+fn jsonString(val: ?std.json.Value) ?[]const u8 {
+    if (val) |v| {
+        return switch (v) {
+            .string => |s| s,
+            else => null,
+        };
+    }
+    return null;
+}
+
+/// Extract an integer from a JSON value, returning null if not an integer.
+fn jsonInt(comptime T: type, val: ?std.json.Value) ?T {
+    if (val) |v| {
+        return switch (v) {
+            .integer => |i| @intCast(i),
+            else => null,
+        };
+    }
+    return null;
+}
+
+/// Extract a float from a JSON value, handling both float and integer types.
+fn jsonFloat(val: ?std.json.Value) ?f64 {
+    if (val) |v| {
+        return switch (v) {
+            .float => |f| f,
+            .integer => |i| @floatFromInt(i),
+            else => null,
+        };
+    }
+    return null;
+}
+
+/// Dupe an optional JSON string value using the allocator.
+fn dupeOptionalJsonString(allocator: std.mem.Allocator, val: ?std.json.Value) !?[]const u8 {
+    if (val) |v| {
+        switch (v) {
+            .string => |s| return try allocator.dupe(u8, s),
+            else => return null,
+        }
+    }
+    return null;
+}
+
 test "PlexClient init" {
     var hc = http.HttpClient.init(std.testing.allocator);
     defer hc.deinit();
@@ -317,4 +420,146 @@ test "PlexClient init" {
     client.setServerUri("http://localhost:32400");
 
     try std.testing.expectEqualStrings("http://localhost:32400", client.server_uri.?);
+}
+
+test "getMediaContainer extracts nested object" {
+    const json =
+        \\{"MediaContainer":{"size":2,"Metadata":[{"ratingKey":"123","title":"Test"}]}}
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const mc = getMediaContainer(parsed.value).?;
+    const metadata = mc.get("Metadata").?.array;
+    try std.testing.expectEqual(@as(usize, 1), metadata.items.len);
+}
+
+test "getMediaContainer returns null for empty response" {
+    const json =
+        \\{"MediaContainer":{"size":0}}
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const mc = getMediaContainer(parsed.value).?;
+    try std.testing.expectEqual(@as(?std.json.Value, null), mc.get("Metadata"));
+}
+
+test "jsonString extracts string values" {
+    const json =
+        \\{"name":"test","count":42}
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+
+    try std.testing.expectEqualStrings("test", jsonString(obj.get("name")).?);
+    try std.testing.expectEqual(@as(?[]const u8, null), jsonString(obj.get("count")));
+    try std.testing.expectEqual(@as(?[]const u8, null), jsonString(obj.get("missing")));
+}
+
+test "jsonInt extracts integer values" {
+    const json =
+        \\{"year":2024,"name":"test"}
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+
+    try std.testing.expectEqual(@as(?i32, 2024), jsonInt(i32, obj.get("year")));
+    try std.testing.expectEqual(@as(?i32, null), jsonInt(i32, obj.get("name")));
+    try std.testing.expectEqual(@as(?i32, null), jsonInt(i32, obj.get("missing")));
+}
+
+test "jsonFloat handles float and integer" {
+    const json =
+        \\{"rating":7.5,"count":10}
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+
+    try std.testing.expectEqual(@as(?f64, 7.5), jsonFloat(obj.get("rating")));
+    try std.testing.expectEqual(@as(?f64, 10.0), jsonFloat(obj.get("count")));
+    try std.testing.expectEqual(@as(?f64, null), jsonFloat(obj.get("missing")));
+}
+
+test "jsonBool handles booleans and integers" {
+    const json =
+        \\{"local":true,"relay":false,"flag":1,"off":0}
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+
+    try std.testing.expect(jsonBool(obj.get("local")));
+    try std.testing.expect(!jsonBool(obj.get("relay")));
+    try std.testing.expect(jsonBool(obj.get("flag")));
+    try std.testing.expect(!jsonBool(obj.get("off")));
+    try std.testing.expect(!jsonBool(obj.get("missing")));
+}
+
+test "parse Plex metadata JSON" {
+    const json =
+        \\{"MediaContainer":{"size":1,"Metadata":[{"ratingKey":"123","title":"Test Movie","type":"movie","year":2024,"rating":7.5,"duration":7200000,"summary":"A test film","thumb":"/thumb/123","art":"/art/123","key":"/library/metadata/123","parentRatingKey":"100","grandparentRatingKey":"50","grandparentTitle":"Show","parentIndex":1,"index":5,"viewOffset":3600000}]}}
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const mc = getMediaContainer(parsed.value).?;
+    const metadata = mc.get("Metadata").?.array;
+    try std.testing.expectEqual(@as(usize, 1), metadata.items.len);
+
+    const obj = metadata.items[0].object;
+    try std.testing.expectEqualStrings("123", jsonString(obj.get("ratingKey")).?);
+    try std.testing.expectEqualStrings("Test Movie", jsonString(obj.get("title")).?);
+    try std.testing.expectEqualStrings("movie", jsonString(obj.get("type")).?);
+    try std.testing.expectEqual(@as(?i32, 2024), jsonInt(i32, obj.get("year")));
+    try std.testing.expectEqual(@as(?f64, 7.5), jsonFloat(obj.get("rating")));
+    try std.testing.expectEqual(@as(?i64, 7200000), jsonInt(i64, obj.get("duration")));
+    try std.testing.expectEqualStrings("A test film", jsonString(obj.get("summary")).?);
+    try std.testing.expectEqual(@as(?i32, 1), jsonInt(i32, obj.get("parentIndex")));
+    try std.testing.expectEqual(@as(?i32, 5), jsonInt(i32, obj.get("index")));
+    try std.testing.expectEqual(@as(?i64, 3600000), jsonInt(i64, obj.get("viewOffset")));
+}
+
+test "parse Plex resources JSON (bare array)" {
+    const json =
+        \\[{"name":"My Server","clientIdentifier":"abc123","provides":"server","accessToken":"tok","connections":[{"uri":"https://192.168.1.1:32400","local":true,"relay":false,"protocol":"https"}]},{"name":"Player","clientIdentifier":"def456","provides":"player"}]
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const devices = parsed.value.array;
+    try std.testing.expectEqual(@as(usize, 2), devices.items.len);
+
+    // First device is a server
+    const server = devices.items[0].object;
+    try std.testing.expectEqualStrings("My Server", jsonString(server.get("name")).?);
+    try std.testing.expectEqualStrings("server", jsonString(server.get("provides")).?);
+
+    // It has connections
+    const conns = server.get("connections").?.array;
+    try std.testing.expectEqual(@as(usize, 1), conns.items.len);
+    const conn = conns.items[0].object;
+    try std.testing.expectEqualStrings("https://192.168.1.1:32400", jsonString(conn.get("uri")).?);
+    try std.testing.expect(jsonBool(conn.get("local")));
+    try std.testing.expect(!jsonBool(conn.get("relay")));
+}
+
+test "parse Plex library sections JSON" {
+    const json =
+        \\{"MediaContainer":{"size":2,"Directory":[{"key":"1","type":"movie","title":"Movies"},{"key":"2","type":"show","title":"TV Shows"}]}}
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const mc = getMediaContainer(parsed.value).?;
+    const dirs = mc.get("Directory").?.array;
+    try std.testing.expectEqual(@as(usize, 2), dirs.items.len);
+
+    const movie_lib = dirs.items[0].object;
+    try std.testing.expectEqualStrings("1", jsonString(movie_lib.get("key")).?);
+    try std.testing.expectEqualStrings("movie", jsonString(movie_lib.get("type")).?);
+    try std.testing.expectEqualStrings("Movies", jsonString(movie_lib.get("title")).?);
 }
