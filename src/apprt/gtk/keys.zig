@@ -39,15 +39,15 @@ fn onKeyPressed(
     }
 
     switch (keyval) {
-        // Sidebar navigation: 1-8
-        c.GDK_KEY_1 => { app.switchToView("home"); return 1; },
-        c.GDK_KEY_2 => { app.switchToView("movies"); return 1; },
-        c.GDK_KEY_3 => { app.switchToView("tv_shows"); return 1; },
-        c.GDK_KEY_4 => { app.switchToView("other"); return 1; },
-        c.GDK_KEY_5 => { app.switchToView("favorites"); return 1; },
-        c.GDK_KEY_6 => { app.switchToView("files"); return 1; },
-        c.GDK_KEY_7 => { app.switchToView("downloads"); return 1; },
-        c.GDK_KEY_8 => { app.switchToView("settings"); return 1; },
+        // Sidebar navigation: 1-8 (disabled during playback)
+        c.GDK_KEY_1 => { if (!app.isPlayerVisible()) { app.switchToView("home"); return 1; } return 0; },
+        c.GDK_KEY_2 => { if (!app.isPlayerVisible()) { app.switchToView("movies"); return 1; } return 0; },
+        c.GDK_KEY_3 => { if (!app.isPlayerVisible()) { app.switchToView("tv_shows"); return 1; } return 0; },
+        c.GDK_KEY_4 => { if (!app.isPlayerVisible()) { app.switchToView("other"); return 1; } return 0; },
+        c.GDK_KEY_5 => { if (!app.isPlayerVisible()) { app.switchToView("favorites"); return 1; } return 0; },
+        c.GDK_KEY_6 => { if (!app.isPlayerVisible()) { app.switchToView("files"); return 1; } return 0; },
+        c.GDK_KEY_7 => { if (!app.isPlayerVisible()) { app.switchToView("downloads"); return 1; } return 0; },
+        c.GDK_KEY_8 => { if (!app.isPlayerVisible()) { app.switchToView("settings"); return 1; } return 0; },
 
         // Playback controls
         c.GDK_KEY_space => {
@@ -78,8 +78,8 @@ fn onKeyPressed(
             if (app.isFullscreen()) {
                 app.toggleFullscreen();
             } else {
-                // Go back from detail/player to previous view
-                app.switchToView("home");
+                // Pop the navigation stack (no-op if at root)
+                app.popNavigation();
             }
             return 1;
         },

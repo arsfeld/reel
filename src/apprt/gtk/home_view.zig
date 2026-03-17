@@ -117,17 +117,17 @@ pub const HomeView = struct {
             defer lib.freeFavorites(favs);
             if (favs.len > 0) {
                 // Resolve favorites to media items
-                var fav_items = std.ArrayList(types.MediaItem).init(app.getAllocator());
+                var fav_items: std.ArrayList(types.MediaItem) = .{};
                 defer {
                     for (fav_items.items) |item| lib.freeMediaItem(item);
-                    fav_items.deinit();
+                    fav_items.deinit(app.getAllocator());
                 }
 
                 for (favs) |fav| {
                     if (fav.item_type != .media_item) continue;
                     const fav_id = std.fmt.parseInt(i64, fav.item_id, 10) catch continue;
                     if (lib.getMediaItem(fav_id) catch null) |item| {
-                        fav_items.append(item) catch continue;
+                        fav_items.append(app.getAllocator(), item) catch continue;
                     }
                 }
 
@@ -189,7 +189,7 @@ pub const HomeView = struct {
     }
 
     fn setBackdrop(self: *HomeView, backdrop_path: ?[]const u8) void {
-        _ = image_loader.loadTmdbImage(self.backdrop_picture, backdrop_path, .w1280, -1, -1);
+        _ = image_loader.loadTmdbImage(@ptrCast(self.backdrop_picture), backdrop_path, .w780, -1, -1);
     }
 };
 
@@ -238,12 +238,17 @@ fn createSmallPosterCard(item: types.MediaItem) *c.GtkWidget {
         else => "folder-videos-symbolic",
     };
     const poster_widget = image_loader.createPosterPicture(item.poster_path, 130, 195, icon_name);
-    c.gtk_box_append(@ptrCast(card), poster_widget);
+    c.gtk_box_append(@ptrCast(card), @ptrCast(poster_widget));
 
     // Title — need to copy since item may be freed before GTK renders
-    const title_z = allocator.dupeZ(u8, item.title) catch item.title.ptr;
+    const title_z = allocator.dupeZ(u8, item.title) catch {
+        const title_label = c.gtk_label_new("Unknown");
+        c.gtk_box_append(@ptrCast(card), @ptrCast(title_label));
+        c.gtk_button_set_child(@ptrCast(button), @ptrCast(card));
+        return @ptrCast(button);
+    };
+    defer allocator.free(title_z);
     const title_label = c.gtk_label_new(title_z.ptr);
-    if (title_z.ptr != item.title.ptr) allocator.free(title_z);
     c.gtk_label_set_ellipsize(@ptrCast(title_label), c.PANGO_ELLIPSIZE_END);
     c.gtk_label_set_max_width_chars(@ptrCast(title_label), 18);
     c.gtk_widget_set_halign(@ptrCast(title_label), c.GTK_ALIGN_START);

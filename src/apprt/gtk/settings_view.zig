@@ -5,6 +5,7 @@ const c = @cImport({
 });
 const app = @import("app.zig");
 const types = @import("../../core/types.zig");
+const plex_setup = @import("plex_setup.zig");
 
 pub const SettingsView = struct {
     widget: *c.GtkWidget,
@@ -31,6 +32,15 @@ pub const SettingsView = struct {
         );
         c.adw_action_row_add_suffix(@ptrCast(add_server_row),
             c.gtk_image_new_from_icon_name("go-next-symbolic"),
+        );
+        c.gtk_list_box_row_set_activatable(@ptrCast(add_server_row), 1);
+        _ = c.g_signal_connect_data(
+            @ptrCast(add_server_row),
+            "activated",
+            @ptrCast(&onAddServerClicked),
+            null,
+            null,
+            c.G_CONNECT_DEFAULT,
         );
         c.adw_preferences_group_add(@ptrCast(plex_group), @ptrCast(add_server_row));
 
@@ -142,3 +152,7 @@ pub const SettingsView = struct {
         return .{ .widget = @ptrCast(scrolled) };
     }
 };
+
+fn onAddServerClicked(_: *c.GtkWidget, _: ?*anyopaque) callconv(.c) void {
+    plex_setup.showSetupDialog();
+}

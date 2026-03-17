@@ -57,7 +57,7 @@ pub const Controls = struct {
 
         c.gtk_box_append(@ptrCast(controls_box), bottom_row);
 
-        var self = Controls{
+        const self = Controls{
             .widget = controls_box,
             .player = player,
             .play_button = play_button,
@@ -106,12 +106,14 @@ pub const Controls = struct {
             c.G_CONNECT_DEFAULT,
         );
 
-        // Poll mpv state to update UI
-        self.poll_source = c.g_timeout_add(250, &pollPlayerState, @ptrCast(&self));
-        // Store in global for access from poll callback
-        global_controls = &self;
-
         return self;
+    }
+
+    /// Start polling mpv state. Must be called after the Controls value
+    /// has been stored at its final (stable) address.
+    pub fn startPolling(self: *Controls) void {
+        global_controls = self;
+        self.poll_source = c.g_timeout_add(250, &pollPlayerState, null);
     }
 
     pub fn show(self: *Controls) void {

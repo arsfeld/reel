@@ -80,7 +80,7 @@ pub const MoviesView = struct {
             return;
         };
 
-        const items = lib.getItemsByType(.movie, .title, .asc, 200, 0) catch {
+        const items = lib.getItemsByType(.movie, .title, .asc, 60, 0) catch {
             c.gtk_stack_set_visible_child_name(@ptrCast(self.grid_container), "empty");
             return;
         };
