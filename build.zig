@@ -56,6 +56,7 @@ pub fn build(b: *std.Build) void {
         exe.root_module.linkSystemLibrary("epoxy", .{});
         exe.root_module.linkSystemLibrary("egl", .{});
         exe.root_module.linkSystemLibrary("sqlite3", .{});
+        exe.root_module.addIncludePath(b.path("include"));
 
         b.installArtifact(exe);
 

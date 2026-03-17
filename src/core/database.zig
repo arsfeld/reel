@@ -9,6 +9,21 @@ pub const Database = struct {
     mutex: std.Thread.Mutex = .{},
 
     pub fn open(path: [*:0]const u8) !Database {
+        var self = try openRaw(path);
+
+        // Detect incompatible pre-rewrite schema (had a 'sources' table).
+        // Rename the old DB and start fresh.
+        if (self.hasTable("sources")) {
+            self.close();
+            renameOldDb(path);
+            self = try openRaw(path);
+        }
+
+        try self.migrate();
+        return self;
+    }
+
+    fn openRaw(path: [*:0]const u8) !Database {
         var db: ?*c.sqlite3 = null;
         // Open in serialized mode (FULLMUTEX) so the same connection is safe
         // to use from multiple threads concurrently.
@@ -30,8 +45,32 @@ pub const Database = struct {
         // Enable foreign keys
         try self.exec("PRAGMA foreign_keys=ON");
 
-        try self.migrate();
         return self;
+    }
+
+    fn hasTable(self: *Database, name: []const u8) bool {
+        var stmt = self.prepareSilent("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?") catch return false;
+        defer stmt.finalize();
+        stmt.bindText(1, name);
+        return stmt.step();
+    }
+
+    fn renameOldDb(path: [*:0]const u8) void {
+        const span = std.mem.span(path);
+        var buf: [512]u8 = undefined;
+        const backup = std.fmt.bufPrintZ(&buf, "{s}.old", .{span}) catch return;
+        std.fs.cwd().rename(span, backup) catch {};
+        // Also clean up WAL/SHM files
+        var wal_buf: [512]u8 = undefined;
+        var shm_buf: [512]u8 = undefined;
+        const wal = std.fmt.bufPrintZ(&wal_buf, "{s}-wal", .{span}) catch return;
+        const shm = std.fmt.bufPrintZ(&shm_buf, "{s}-shm", .{span}) catch return;
+        var wal_old: [512]u8 = undefined;
+        var shm_old: [512]u8 = undefined;
+        const wal_bak = std.fmt.bufPrintZ(&wal_old, "{s}-wal", .{backup}) catch return;
+        const shm_bak = std.fmt.bufPrintZ(&shm_old, "{s}-shm", .{backup}) catch return;
+        std.fs.cwd().rename(wal, wal_bak) catch {};
+        std.fs.cwd().rename(shm, shm_bak) catch {};
     }
 
     pub fn close(self: *Database) void {
@@ -94,114 +133,107 @@ pub const Database = struct {
     fn migrate(self: *Database) !void {
         const version = self.getSchemaVersion() catch 0;
 
-        if (version < 1) {
-            try self.exec(
-                \\CREATE TABLE IF NOT EXISTS schema_version (
-                \\    version INTEGER PRIMARY KEY
-                \\);
-                \\
-                \\CREATE TABLE IF NOT EXISTS servers (
-                \\    id TEXT PRIMARY KEY,
-                \\    name TEXT NOT NULL,
-                \\    client_identifier TEXT NOT NULL,
-                \\    auth_token TEXT,
-                \\    connection_uri TEXT,
-                \\    last_connected_at INTEGER
-                \\);
-                \\
-                \\CREATE TABLE IF NOT EXISTS media_items (
-                \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                \\    source TEXT NOT NULL,
-                \\    source_id TEXT,
-                \\    server_id TEXT REFERENCES servers(id),
-                \\    media_type TEXT NOT NULL,
-                \\    title TEXT NOT NULL,
-                \\    sort_title TEXT,
-                \\    year INTEGER,
-                \\    summary TEXT,
-                \\    rating REAL,
-                \\    duration_ms INTEGER,
-                \\    poster_path TEXT,
-                \\    backdrop_path TEXT,
-                \\    tmdb_id INTEGER,
-                \\    parent_id INTEGER REFERENCES media_items(id),
-                \\    season_number INTEGER,
-                \\    episode_number INTEGER,
-                \\    file_path TEXT,
-                \\    added_at INTEGER,
-                \\    updated_at INTEGER
-                \\);
-                \\
-                \\CREATE TABLE IF NOT EXISTS watch_progress (
-                \\    media_item_id INTEGER PRIMARY KEY REFERENCES media_items(id),
-                \\    position_ms INTEGER NOT NULL DEFAULT 0,
-                \\    duration_ms INTEGER,
-                \\    watched INTEGER NOT NULL DEFAULT 0,
-                \\    last_watched_at INTEGER
-                \\);
-                \\
-                \\CREATE TABLE IF NOT EXISTS downloads (
-                \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                \\    media_item_id INTEGER REFERENCES media_items(id),
-                \\    server_id TEXT REFERENCES servers(id),
-                \\    source_url TEXT NOT NULL,
-                \\    local_path TEXT,
-                \\    total_bytes INTEGER,
-                \\    downloaded_bytes INTEGER DEFAULT 0,
-                \\    status TEXT NOT NULL DEFAULT 'queued',
-                \\    created_at INTEGER,
-                \\    completed_at INTEGER
-                \\);
-                \\
-                \\CREATE TABLE IF NOT EXISTS scan_paths (
-                \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                \\    path TEXT NOT NULL UNIQUE,
-                \\    last_scanned_at INTEGER
-                \\);
-                \\
-                \\CREATE TABLE IF NOT EXISTS image_cache (
-                \\    url TEXT PRIMARY KEY,
-                \\    local_path TEXT NOT NULL,
-                \\    size_bytes INTEGER,
-                \\    cached_at INTEGER
-                \\);
-                \\
-                \\CREATE TABLE IF NOT EXISTS settings (
-                \\    key TEXT PRIMARY KEY,
-                \\    value TEXT
-                \\);
-                \\
-                \\CREATE INDEX IF NOT EXISTS idx_media_items_source ON media_items(source, source_id);
-                \\CREATE INDEX IF NOT EXISTS idx_media_items_type ON media_items(media_type);
-                \\CREATE INDEX IF NOT EXISTS idx_media_items_parent ON media_items(parent_id);
-                \\CREATE INDEX IF NOT EXISTS idx_media_items_tmdb ON media_items(tmdb_id);
-            );
-            try self.setSchemaVersion(1);
-        }
-
-        if (version < 2) {
-            try self.exec(
-                \\CREATE TABLE IF NOT EXISTS favorites (
-                \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                \\    item_type TEXT NOT NULL,
-                \\    item_id TEXT NOT NULL,
-                \\    display_name TEXT NOT NULL,
-                \\    sort_order INTEGER NOT NULL DEFAULT 0,
-                \\    created_at INTEGER
-                \\);
-                \\
-                \\CREATE INDEX IF NOT EXISTS idx_media_items_added ON media_items(added_at);
-                \\CREATE INDEX IF NOT EXISTS idx_media_items_title ON media_items(sort_title, title);
-            );
-            try self.setSchemaVersion(2);
-        }
+        // Ensure all base tables exist (idempotent). This handles both fresh
+        // databases and databases from a pre-rewrite schema.
+        try self.exec(
+            \\CREATE TABLE IF NOT EXISTS schema_version (
+            \\    version INTEGER PRIMARY KEY
+            \\);
+            \\
+            \\CREATE TABLE IF NOT EXISTS servers (
+            \\    id TEXT PRIMARY KEY,
+            \\    name TEXT NOT NULL,
+            \\    client_identifier TEXT NOT NULL,
+            \\    auth_token TEXT,
+            \\    connection_uri TEXT,
+            \\    last_connected_at INTEGER
+            \\);
+            \\
+            \\CREATE TABLE IF NOT EXISTS media_items (
+            \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\    source TEXT NOT NULL,
+            \\    source_id TEXT,
+            \\    server_id TEXT REFERENCES servers(id),
+            \\    media_type TEXT NOT NULL,
+            \\    title TEXT NOT NULL,
+            \\    sort_title TEXT,
+            \\    year INTEGER,
+            \\    summary TEXT,
+            \\    rating REAL,
+            \\    duration_ms INTEGER,
+            \\    poster_path TEXT,
+            \\    backdrop_path TEXT,
+            \\    tmdb_id INTEGER,
+            \\    parent_id INTEGER REFERENCES media_items(id),
+            \\    season_number INTEGER,
+            \\    episode_number INTEGER,
+            \\    file_path TEXT,
+            \\    added_at INTEGER,
+            \\    updated_at INTEGER
+            \\);
+            \\
+            \\CREATE TABLE IF NOT EXISTS watch_progress (
+            \\    media_item_id INTEGER PRIMARY KEY REFERENCES media_items(id),
+            \\    position_ms INTEGER NOT NULL DEFAULT 0,
+            \\    duration_ms INTEGER,
+            \\    watched INTEGER NOT NULL DEFAULT 0,
+            \\    last_watched_at INTEGER
+            \\);
+            \\
+            \\CREATE TABLE IF NOT EXISTS downloads (
+            \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\    media_item_id INTEGER REFERENCES media_items(id),
+            \\    server_id TEXT REFERENCES servers(id),
+            \\    source_url TEXT NOT NULL,
+            \\    local_path TEXT,
+            \\    total_bytes INTEGER,
+            \\    downloaded_bytes INTEGER DEFAULT 0,
+            \\    status TEXT NOT NULL DEFAULT 'queued',
+            \\    created_at INTEGER,
+            \\    completed_at INTEGER
+            \\);
+            \\
+            \\CREATE TABLE IF NOT EXISTS scan_paths (
+            \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\    path TEXT NOT NULL UNIQUE,
+            \\    last_scanned_at INTEGER
+            \\);
+            \\
+            \\CREATE TABLE IF NOT EXISTS image_cache (
+            \\    url TEXT PRIMARY KEY,
+            \\    local_path TEXT NOT NULL,
+            \\    size_bytes INTEGER,
+            \\    cached_at INTEGER
+            \\);
+            \\
+            \\CREATE TABLE IF NOT EXISTS settings (
+            \\    key TEXT PRIMARY KEY,
+            \\    value TEXT
+            \\);
+            \\
+            \\CREATE TABLE IF NOT EXISTS favorites (
+            \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\    item_type TEXT NOT NULL,
+            \\    item_id TEXT NOT NULL,
+            \\    display_name TEXT NOT NULL,
+            \\    sort_order INTEGER NOT NULL DEFAULT 0,
+            \\    created_at INTEGER
+            \\);
+            \\
+            \\CREATE INDEX IF NOT EXISTS idx_media_items_source ON media_items(source, source_id);
+            \\CREATE INDEX IF NOT EXISTS idx_media_items_type ON media_items(media_type);
+            \\CREATE INDEX IF NOT EXISTS idx_media_items_parent ON media_items(parent_id);
+            \\CREATE INDEX IF NOT EXISTS idx_media_items_tmdb ON media_items(tmdb_id);
+            \\CREATE INDEX IF NOT EXISTS idx_media_items_added ON media_items(added_at);
+            \\CREATE INDEX IF NOT EXISTS idx_media_items_title ON media_items(sort_title, title);
+        );
 
         if (version < 3) {
-            try self.exec("ALTER TABLE downloads ADD COLUMN error_message TEXT");
-            try self.exec("ALTER TABLE downloads ADD COLUMN part_key TEXT");
-            try self.exec("CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)");
-            try self.exec("CREATE INDEX IF NOT EXISTS idx_downloads_media_item_id ON downloads(media_item_id)");
-            try self.exec("ALTER TABLE image_cache ADD COLUMN pinned INTEGER DEFAULT 0");
+            self.exec("ALTER TABLE downloads ADD COLUMN error_message TEXT") catch {};
+            self.exec("ALTER TABLE downloads ADD COLUMN part_key TEXT") catch {};
+            self.exec("CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)") catch {};
+            self.exec("CREATE INDEX IF NOT EXISTS idx_downloads_media_item_id ON downloads(media_item_id)") catch {};
+            self.exec("ALTER TABLE image_cache ADD COLUMN pinned INTEGER DEFAULT 0") catch {};
             try self.setSchemaVersion(3);
         }
 
@@ -223,7 +255,7 @@ pub const Database = struct {
             try self.exec("CREATE INDEX IF NOT EXISTS idx_media_item_genres_genre ON media_item_genres(genre_id)");
 
             // Match lock
-            try self.exec("ALTER TABLE media_items ADD COLUMN match_locked INTEGER NOT NULL DEFAULT 0");
+            self.exec("ALTER TABLE media_items ADD COLUMN match_locked INTEGER NOT NULL DEFAULT 0") catch {};
 
             // Collections
             try self.exec(

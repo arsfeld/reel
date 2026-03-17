@@ -127,6 +127,12 @@ pub const Player = struct {
         if (err < 0) return error.CommandFailed;
     }
 
+    pub fn stop(self: *Player) !void {
+        const cmd = [_:null]?[*:0]const u8{ "stop", null };
+        const err = c.mpv_command(self.handle, @constCast(@ptrCast(&cmd)));
+        if (err < 0) return error.CommandFailed;
+    }
+
     pub fn togglePause(self: *Player) !void {
         const cmd = [_:null]?[*:0]const u8{ "cycle", "pause", null };
         const err = c.mpv_command(self.handle, @constCast(@ptrCast(&cmd)));

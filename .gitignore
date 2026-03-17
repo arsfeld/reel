@@ -1,20 +1,60 @@
+# Zig
 zig-out/
 zig-cache/
 .zig-cache/
+
+# Nix
+.direnv/
 result
 result-*
-.direnv/
+
+# Build artifacts
 *.o
 *.a
 *.so
 *.dylib
+*.gresource
+build/
+build-dir/
+
+# Rust (legacy)
+/target/
+
+# Flatpak
+.flatpak-builder/
+cargo-sources.json
+gst-plugin-gtk4-sources.json
+flatpak-cargo-generator.py
+*.flatpak
+repo/
+
+# AppImage
+AppDir/
+*.AppImage
+squashfs-root/
 
 # macOS
 .DS_Store
 macos/.build/
+Generated/
 
-# Build artifacts
-target/
+# IDE
+.vscode/
+.code/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+
+# App data
+data/cache/
+data/config/
 
 # Screenshots
 screenshots/
+
+# Other
+.gst-plugins-rs/
+backlog/

@@ -1048,20 +1048,28 @@ export fn reel_server_resolve_connection(
     var header_buf: [8]plex_types.Header = undefined;
     const headers = plex_hdrs.toHeaders(&header_buf);
 
-    var selector = connection_selector.ConnectionSelector.init(allocator, &hc, headers);
-    const best = selector.selectBest(connections) orelse {
-        std.log.warn("resolve_connection: no reachable connection for server '{s}'", .{sid});
+    // Relay-first: use relay/remote immediately, test locals in background
+    const immediate_uri = connection_selector.ConnectionSelector.selectImmediate(connections) orelse {
+        std.log.warn("resolve_connection: no connection available for server '{s}'", .{sid});
         return null;
     };
 
-    std.log.info("resolve_connection: selected uri='{s}' score={d} latency={d}ms for server '{s}'", .{ best.uri, best.score, best.latency_ms, sid });
+    std.log.info("resolve_connection: using uri='{s}' for server '{s}' (relay-first)", .{ immediate_uri, sid });
 
-    // Update the cached best URI
-    l.updateServerBestUri(sid, best.uri) catch |err| {
-        std.log.err("resolve_connection: failed to update best URI: {}", .{err});
+    // Update the cached URI
+    l.updateServerBestUri(sid, immediate_uri) catch |err| {
+        std.log.err("resolve_connection: failed to update URI: {}", .{err});
     };
 
-    return allocator.dupeZ(u8, best.uri) catch null;
+    // Test local connections in background and upgrade if available
+    var selector = connection_selector.ConnectionSelector.init(allocator, &hc, headers);
+    if (selector.findWorkingLocal(connections)) |local| {
+        std.log.info("resolve_connection: local connection available: {s} (latency={d}ms), upgrading", .{ local.uri, local.latency_ms });
+        l.updateServerBestUri(sid, local.uri) catch {};
+        return allocator.dupeZ(u8, local.uri) catch null;
+    }
+
+    return allocator.dupeZ(u8, immediate_uri) catch null;
 }
 
 /// Re-discover connections for all stored servers from Plex API and store them.
