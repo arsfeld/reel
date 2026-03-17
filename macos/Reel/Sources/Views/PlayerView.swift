@@ -81,8 +81,10 @@ class PlayerOpenGLView: NSOpenGLView {
         guard let player = player else { return }
         let result = reel_player_init_render(player) { _, name -> UnsafeMutableRawPointer? in
             guard let name = name else { return nil }
-            // Use dlsym to resolve GL proc addresses on macOS
-            return dlsym(nil, name) // nil handle = RTLD_DEFAULT
+            // Load GL functions from the OpenGL framework (dlsym(nil) doesn't find them on macOS)
+            let handle = dlopen("/System/Library/Frameworks/OpenGL.framework/OpenGL", RTLD_LAZY)
+            if let handle, let sym = dlsym(handle, name) { return sym }
+            return dlsym(nil, name)
         }
         renderReady = (result == REEL_OK)
         if !renderReady {
@@ -239,14 +241,13 @@ struct PlayerScreen: View {
                 }
             }
 
-            // Controls overlay
+            // Infuse desktop-style OSD
             if showControls {
                 VStack {
                     Spacer()
-                    controlsBar
-                        .padding()
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-                        .padding()
+                    controlsPanel
+                        .frame(maxWidth: 700)
+                        .padding(.bottom, 36)
                 }
                 .transition(.opacity)
             }
@@ -259,12 +260,22 @@ struct PlayerScreen: View {
         .onDisappear {
             columnVisibility = .all
             hideTimer?.invalidate()
+            // Clear aspect ratio lock so the window is freely resizable again
+            if let window = NSApp.keyWindow {
+                window.resizeIncrements = NSSize(width: 1, height: 1)
+            }
         }
-        .onHover { hovering in
-            if hovering {
+        .onChange(of: playerModel.videoWidth) {
+            resizeWindowForVideo()
+        }
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
                 withAnimation { showControls = true }
                 NSCursor.unhide()
                 scheduleHide()
+            case .ended:
+                break
             }
         }
         .onTapGesture {
@@ -276,53 +287,130 @@ struct PlayerScreen: View {
         }
     }
 
-    private var controlsBar: some View {
-        VStack(spacing: 8) {
-            // Seek bar
-            Slider(value: Binding(
-                get: { playerModel.progress },
-                set: { newValue in
-                    playerModel.seek(to: newValue * playerModel.duration)
-                }
-            ))
+    // MARK: - Infuse Desktop OSD Panel
 
-            HStack {
-                // Play/Pause
-                Button {
-                    playerModel.togglePause()
-                } label: {
-                    Image(systemName: playerModel.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title2)
+    private var controlsPanel: some View {
+        VStack(spacing: 0) {
+            // Top row: volume slider + transport + utility buttons
+            HStack(spacing: 0) {
+                // Volume (left)
+                HStack(spacing: 8) {
+                    Slider(value: Binding(
+                        get: { playerModel.volume / 100 },
+                        set: { playerModel.setVolume($0 * 100) }
+                    ))
+                    .tint(.white.opacity(0.6))
+                    .frame(width: 90)
                 }
-                .buttonStyle(.plain)
-
-                // Time
-                Text("\(playerModel.formattedPosition) / \(playerModel.formattedDuration)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                .frame(width: 110, alignment: .leading)
 
                 Spacer()
 
-                // Volume
-                HStack(spacing: 4) {
-                    Image(systemName: playerModel.volume > 0 ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                        .font(.caption)
-                    Slider(value: Binding(
-                        get: { playerModel.volume },
-                        set: { playerModel.setVolume($0) }
-                    ), in: 0...150)
-                    .frame(width: 80)
+                // Transport (center)
+                HStack(spacing: 24) {
+                    osdButton("backward.end.fill", size: 16) { playerModel.seekRelative(-10) }
+                    osdButton("gobackward.10", size: 20) { playerModel.seekRelative(-10) }
+
+                    Button { playerModel.togglePause() } label: {
+                        Image(systemName: playerModel.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 28, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+
+                    osdButton("goforward.30", size: 20) { playerModel.seekRelative(30) }
+                    osdButton("forward.end.fill", size: 16) { playerModel.seekRelative(30) }
                 }
 
-                // Fullscreen
-                Button {
-                    NSApp.keyWindow?.toggleFullScreen(nil)
-                } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                Spacer()
+
+                // Utility buttons (right)
+                HStack(spacing: 14) {
+                    osdButton("gearshape", size: 15) { }
+                    osdButton("captions.bubble", size: 15) { playerModel.cycleSub() }
+                    osdButton("pip", size: 15) { }
+                    osdButton("arrow.up.left.and.arrow.down.right", size: 14) {
+                        NSApp.keyWindow?.toggleFullScreen(nil)
+                    }
+                    osdButton("xmark", size: 14) { playerModel.stop() }
                 }
-                .buttonStyle(.plain)
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            // Bottom row: progress bar with timestamps
+            HStack(spacing: 8) {
+                Text(playerModel.formattedPosition)
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.6))
+                    .frame(width: 50, alignment: .trailing)
+
+                Slider(value: Binding(
+                    get: { playerModel.progress },
+                    set: { playerModel.seek(to: $0 * playerModel.duration) }
+                ))
+                .tint(.white.opacity(0.5))
+
+                Text("-\(playerModel.formattedRemaining)")
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.6))
+                    .frame(width: 50, alignment: .leading)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 10)
         }
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.black.opacity(0.85))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(.white.opacity(0.1), lineWidth: 0.5)
+                )
+        )
+    }
+
+    private func osdButton(_ icon: String, size: CGFloat, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var volumeIcon: String {
+        if playerModel.volume <= 0 { return "speaker.slash.fill" }
+        if playerModel.volume < 34 { return "speaker.wave.1.fill" }
+        if playerModel.volume < 67 { return "speaker.wave.2.fill" }
+        return "speaker.wave.3.fill"
+    }
+
+    private func resizeWindowForVideo() {
+        guard let window = NSApp.keyWindow,
+              !window.styleMask.contains(.fullScreen),
+              playerModel.videoWidth > 0, playerModel.videoHeight > 0 else { return }
+
+        let aspect = CGFloat(playerModel.videoWidth) / CGFloat(playerModel.videoHeight)
+        guard let screen = window.screen else { return }
+
+        let maxSize = screen.visibleFrame.size
+        var newWidth = min(CGFloat(playerModel.videoWidth), maxSize.width * 0.85)
+        var newHeight = newWidth / aspect
+        if newHeight > maxSize.height * 0.85 {
+            newHeight = maxSize.height * 0.85
+            newWidth = newHeight * aspect
+        }
+
+        let frame = window.frame
+        let centerX = frame.midX - newWidth / 2
+        let centerY = frame.midY - newHeight / 2
+        let newFrame = NSRect(x: centerX, y: centerY, width: newWidth, height: newHeight)
+        window.setFrame(newFrame, display: true, animate: true)
+        window.aspectRatio = NSSize(width: CGFloat(playerModel.videoWidth), height: CGFloat(playerModel.videoHeight))
     }
 
     private func scheduleHide() {

@@ -10,6 +10,8 @@ final class PlayerModel {
     var state: Int32 = 0 // REEL_STATE_*
 
     var isActive = false
+    var videoWidth: Int64 = 0
+    var videoHeight: Int64 = 0
     var currentFilePath: String?
     var currentMediaItemId: Int64 = 0
     var hasError = false
@@ -25,6 +27,7 @@ final class PlayerModel {
 
     var formattedPosition: String { formatTime(position) }
     var formattedDuration: String { formatTime(duration) }
+    var formattedRemaining: String { formatTime(max(0, duration - position)) }
 
     var progress: Double {
         guard duration > 0 else { return 0 }
@@ -120,12 +123,10 @@ final class PlayerModel {
     }
 
     func stop() {
-        guard let p = player else { return }
+        guard player != nil else { return }
         saveProgress()
-        reel_player_stop(p)
         isPlaying = false
-        isActive = false
-        stopPolling()
+        destroyPlayer()
         NSCursor.unhide()
     }
 
@@ -188,6 +189,14 @@ final class PlayerModel {
         volume = reel_player_get_volume(p)
         state = Int32(reel_player_get_state(p).rawValue)
         isPlaying = state == Int32(REEL_STATE_PLAYING.rawValue)
+
+        // Update video dimensions (available after file loads)
+        let w = reel_player_get_video_width(p)
+        let h = reel_player_get_video_height(p)
+        if w > 0 && h > 0 {
+            videoWidth = w
+            videoHeight = h
+        }
 
         // Periodically save watch progress
         maybeSaveProgress()

@@ -180,7 +180,10 @@ pub const HttpClient = struct {
 
         var req = client.request(method, uri, .{
             .extra_headers = extra.items,
-        }) catch return error.ConnectionFailed;
+        }) catch |err| {
+            std.log.err("http: {s} {s} connection failed: {}", .{ @tagName(method), url, err });
+            return error.ConnectionFailed;
+        };
         defer req.deinit();
 
         if (body) |payload| {
@@ -189,32 +192,35 @@ pub const HttpClient = struct {
             req_body.writer.writeAll(payload) catch return error.RequestFailed;
             req_body.end() catch return error.RequestFailed;
             if (req.connection) |conn| conn.flush() catch return error.RequestFailed;
+        } else if (method.requestHasBody()) {
+            // POST/PUT/PATCH with no body: send empty body (content-length: 0)
+            req.transfer_encoding = .{ .content_length = 0 };
+            var req_body = req.sendBodyUnflushed(&.{}) catch return error.RequestFailed;
+            req_body.end() catch return error.RequestFailed;
+            if (req.connection) |conn| conn.flush() catch return error.RequestFailed;
         } else {
             req.sendBodiless() catch return error.RequestFailed;
         }
 
-        // Heap-allocate buffers to reduce stack pressure (called from Swift Task with limited stack)
+        // Heap-allocate redirect buffer to reduce stack pressure (called from Swift Task with limited stack)
         const redirect_buf = self.allocator.alloc(u8, 8 * 1024) catch return error.OutOfMemory;
         defer self.allocator.free(redirect_buf);
         var response = req.receiveHead(redirect_buf) catch return error.RequestFailed;
 
-        // Read body into allocated buffer
-        var result = std.ArrayListUnmanaged(u8){};
-        const transfer_buf = self.allocator.alloc(u8, 8192) catch return error.OutOfMemory;
-        defer self.allocator.free(transfer_buf);
-        const reader = response.reader(transfer_buf);
+        // Read and decompress body (handles gzip/deflate/zstd automatically)
+        const decompress_buf = switch (response.head.content_encoding) {
+            .identity => @as([]u8, &.{}),
+            .deflate, .gzip => self.allocator.alloc(u8, std.compress.flate.max_window_len) catch return error.OutOfMemory,
+            .zstd => self.allocator.alloc(u8, std.compress.zstd.default_window_len) catch return error.OutOfMemory,
+            else => return error.RequestFailed,
+        };
+        defer if (response.head.content_encoding != .identity) self.allocator.free(decompress_buf);
 
-        const read_buf = self.allocator.alloc(u8, 8192) catch return error.OutOfMemory;
-        defer self.allocator.free(read_buf);
+        var transfer_buf: [64]u8 = undefined;
+        var decompress: std.http.Decompress = undefined;
+        const reader = response.readerDecompressing(&transfer_buf, &decompress, decompress_buf);
 
-        while (true) {
-            var bufs = [_][]u8{read_buf};
-            const n = reader.readVec(&bufs) catch return error.RequestFailed;
-            if (n == 0) break;
-            result.appendSlice(self.allocator, read_buf[0..n]) catch return error.OutOfMemory;
-        }
-
-        const response_body = result.toOwnedSlice(self.allocator) catch return error.OutOfMemory;
+        const response_body = reader.allocRemaining(self.allocator, .unlimited) catch return error.RequestFailed;
 
         return Response{
             .status = response.head.status,

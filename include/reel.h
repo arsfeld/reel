@@ -56,6 +56,8 @@ double reel_player_get_position(ReelPlayer* player);
 double reel_player_get_duration(ReelPlayer* player);
 double reel_player_get_volume(ReelPlayer* player);
 ReelState reel_player_get_state(ReelPlayer* player);
+int64_t reel_player_get_video_width(ReelPlayer* player);
+int64_t reel_player_get_video_height(ReelPlayer* player);
 ReelError reel_player_stop(ReelPlayer* player);
 
 /** Drain pending mpv events, updating cached position/duration/state. */

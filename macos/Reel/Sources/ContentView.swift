@@ -25,6 +25,7 @@ struct ContentView: View {
                 .transition(.opacity)
             }
         }
+        .toolbar(playerModel.isActive ? .hidden : .automatic, for: .windowToolbar)
         .environment(playerModel)
         .onAppear {
             playerModel.appState = appState

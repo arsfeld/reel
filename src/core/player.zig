@@ -244,6 +244,14 @@ pub const Player = struct {
         return false;
     }
 
+    pub fn getVideoSize(self: *Player) struct { width: i64, height: i64 } {
+        var w: i64 = 0;
+        var h: i64 = 0;
+        _ = c.mpv_get_property(self.handle, "dwidth", c.MPV_FORMAT_INT64, @ptrCast(&w));
+        _ = c.mpv_get_property(self.handle, "dheight", c.MPV_FORMAT_INT64, @ptrCast(&h));
+        return .{ .width = w, .height = h };
+    }
+
     fn observeProperty(self: *Player, name: [*:0]const u8, format: c_int) !void {
         const err = c.mpv_observe_property(self.handle, 0, name, @intCast(format));
         if (err < 0) return error.ObservePropertyFailed;

@@ -138,7 +138,7 @@ pub const PlexClient = struct {
         const headers = self.headers.toHeaders(&header_buf);
 
         var response = self.http_client.get(url, headers) catch |err| {
-            std.log.err("PlexClient.getLibraries: HTTP request failed: {}", .{err});
+            std.log.err("PlexClient.getLibraries: FAILED at HTTP level err={}", .{err});
             return err;
         };
         defer response.deinit();
@@ -317,7 +317,7 @@ pub const PlexClient = struct {
                 .parent_index = jsonInt(i32, obj.get("parentIndex")),
                 .index = jsonInt(i32, obj.get("index")),
                 .view_offset = jsonInt(i64, obj.get("viewOffset")),
-                .part_key = try dupeOptionalJsonString(self.allocator, obj.get("key")),
+                .part_key = try dupeOptionalJsonString(self.allocator, extractPartKey(obj)),
             });
         }
 
@@ -340,6 +340,29 @@ pub const PlexClient = struct {
         self.allocator.free(items);
     }
 };
+
+/// Extract the stream part key from Media[0].Part[0].key in a Plex metadata object.
+fn extractPartKey(obj: std.json.ObjectMap) ?std.json.Value {
+    const media_arr = switch (obj.get("Media") orelse return null) {
+        .array => |a| a,
+        else => return null,
+    };
+    if (media_arr.items.len == 0) return null;
+    const media_obj = switch (media_arr.items[0]) {
+        .object => |o| o,
+        else => return null,
+    };
+    const part_arr = switch (media_obj.get("Part") orelse return null) {
+        .array => |a| a,
+        else => return null,
+    };
+    if (part_arr.items.len == 0) return null;
+    const part_obj = switch (part_arr.items[0]) {
+        .object => |o| o,
+        else => return null,
+    };
+    return part_obj.get("key");
+}
 
 /// Extract the MediaContainer object from a parsed JSON value.
 fn getMediaContainer(value: std.json.Value) ?std.json.ObjectMap {

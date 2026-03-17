@@ -190,6 +190,16 @@ export fn reel_player_get_state(pw: ?*PlayerWrapper) c_int {
     return @intFromEnum(p.state);
 }
 
+export fn reel_player_get_video_width(pw: ?*PlayerWrapper) i64 {
+    const p = pw orelse return 0;
+    return p.p.getVideoSize().width;
+}
+
+export fn reel_player_get_video_height(pw: ?*PlayerWrapper) i64 {
+    const p = pw orelse return 0;
+    return p.p.getVideoSize().height;
+}
+
 // Player Rendering
 
 export fn reel_player_init_render(
@@ -766,6 +776,13 @@ export fn reel_plex_sync(
                 break :blk null;
             } else null;
 
+            // Build stream URL from part key for playable items
+            const stream_url = if (plex_item.part_key) |pk|
+                client.getStreamUrl(pk) catch null
+            else
+                null;
+            defer if (stream_url) |s| allocator.free(s);
+
             const item_id = l.insertMediaItem(.{
                 .source = .plex,
                 .source_id = plex_item.rating_key,
@@ -781,6 +798,7 @@ export fn reel_plex_sync(
                 .parent_id = parent_id,
                 .season_number = plex_item.parent_index,
                 .episode_number = plex_item.index,
+                .file_path = stream_url,
                 .added_at = now,
                 .updated_at = now,
             }) catch |err| {
@@ -831,6 +849,12 @@ fn syncChildren(
             null;
         defer if (poster_url) |p| allocator.free(p);
 
+        const stream_url = if (child.part_key) |pk|
+            client.getStreamUrl(pk) catch null
+        else
+            null;
+        defer if (stream_url) |s| allocator.free(s);
+
         const child_id = l.insertMediaItem(.{
             .source = .plex,
             .source_id = child.rating_key,
@@ -845,6 +869,7 @@ fn syncChildren(
             .parent_id = parent_db_id,
             .season_number = child.parent_index orelse child.index,
             .episode_number = child.index,
+            .file_path = stream_url,
             .added_at = now,
             .updated_at = now,
         }) catch continue;
