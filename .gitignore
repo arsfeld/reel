@@ -58,3 +58,4 @@ screenshots/
 # Other
 .gst-plugins-rs/
 backlog/
+zig-pkg/

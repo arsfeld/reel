@@ -100,6 +100,7 @@ pub const MediaItem = struct {
     season_number: ?i32 = null,
     episode_number: ?i32 = null,
     file_path: ?[]const u8 = null,
+    library_section: ?[]const u8 = null,
     added_at: ?i64 = null,
     updated_at: ?i64 = null,
     match_locked: bool = false,

@@ -5,6 +5,27 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const is_linux = target.result.os.tag == .linux;
 
+    // Vendored zig-sqlite module
+    const sqlite_mod = b.addModule("sqlite", .{
+        .root_source_file = b.path("vendor/zig-sqlite/sqlite.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sqlite_mod.addIncludePath(b.path("vendor/zig-sqlite/c"));
+    sqlite_mod.addIncludePath(b.path("vendor/zig-sqlite/sqlite-amalgamation"));
+    sqlite_mod.addCSourceFile(.{
+        .file = b.path("vendor/zig-sqlite/sqlite-amalgamation/sqlite3.c"),
+        .flags = &.{
+            "-std=c99",
+            "-DSQLITE_THREADSAFE=1",
+            "-DSQLITE_DQS=0",
+            "-DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1",
+            "-DSQLITE_USE_ALLOCA",
+            "-DSQLITE_OMIT_DECLTYPE",
+        },
+    });
+
     // Core library module
     const core_mod = b.addModule("reel", .{
         .root_source_file = b.path("src/lib.zig"),
@@ -14,9 +35,8 @@ pub fn build(b: *std.Build) void {
     });
     core_mod.linkSystemLibrary("mpv", .{});
     core_mod.linkSystemLibrary("epoxy", .{});
-    core_mod.linkSystemLibrary("sqlite3", .{});
+    core_mod.addImport("sqlite", sqlite_mod);
     core_mod.addIncludePath(b.path("include"));
-    core_mod.addCSourceFile(.{ .file = b.path("src/sqlite_helpers.c") });
 
     // Static library for macOS Swift frontend consumption
     const lib = b.addLibrary(.{
@@ -31,9 +51,8 @@ pub fn build(b: *std.Build) void {
     });
     lib.root_module.linkSystemLibrary("mpv", .{});
     lib.root_module.linkSystemLibrary("epoxy", .{});
-    lib.root_module.linkSystemLibrary("sqlite3", .{});
+    lib.root_module.addImport("sqlite", sqlite_mod);
     lib.root_module.addIncludePath(b.path("include"));
-    lib.root_module.addCSourceFile(.{ .file = b.path("src/sqlite_helpers.c") });
     b.installArtifact(lib);
 
     // Main executable (GTK frontend — Linux only)
@@ -55,7 +74,7 @@ pub fn build(b: *std.Build) void {
         exe.root_module.linkSystemLibrary("mpv", .{});
         exe.root_module.linkSystemLibrary("epoxy", .{});
         exe.root_module.linkSystemLibrary("egl", .{});
-        exe.root_module.linkSystemLibrary("sqlite3", .{});
+        exe.root_module.addImport("sqlite", sqlite_mod);
         exe.root_module.addIncludePath(b.path("include"));
 
         b.installArtifact(exe);

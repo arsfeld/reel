@@ -8,5 +8,6 @@
         "build.zig.zon",
         "src",
         "include",
+        "vendor",
     },
 }
