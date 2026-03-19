@@ -6,6 +6,35 @@ pub const Library = struct {
     db: *database.Database,
     allocator: std.mem.Allocator,
 
+    // ── Column field tuples ──────────────────────────────────
+    // These define the canonical column order for SELECT and INSERT queries.
+    // readRow/bindStruct use these to eliminate hardcoded numeric indices.
+
+    const media_item_fields = .{
+        .id,            .source,        .source_id,      .server_id,
+        .media_type,    .title,         .sort_title,      .year,
+        .summary,       .rating,        .duration_ms,     .poster_path,
+        .backdrop_path, .tmdb_id,       .parent_id,       .season_number,
+        .episode_number,.file_path,     .library_section, .added_at,
+        .updated_at,    .match_locked,
+    };
+
+    const media_item_insert_fields = .{
+        .source,        .source_id,     .server_id,       .media_type,
+        .title,         .sort_title,    .year,            .summary,
+        .rating,        .duration_ms,   .poster_path,     .backdrop_path,
+        .tmdb_id,       .parent_id,     .season_number,   .episode_number,
+        .file_path,     .library_section,.added_at,       .updated_at,
+    };
+
+    const media_item_select = "SELECT " ++ database.columnList(media_item_fields, null) ++ " FROM media_items";
+    const media_item_select_m = "SELECT " ++ database.columnList(media_item_fields, "m") ++ " FROM media_items m";
+
+    const collection_fields = .{
+        .id, .name, .collection_type, .description, .poster_path,
+        .show_on_home, .sort_order, .created_at, .updated_at,
+    };
+
     pub fn init(allocator: std.mem.Allocator, db: *database.Database) Library {
         return .{ .db = db, .allocator = allocator };
     }
@@ -15,34 +44,12 @@ pub const Library = struct {
         defer self.db.mutex.unlock();
 
         var stmt = try self.db.prepare(
-            \\INSERT INTO media_items
-            \\  (source, source_id, server_id, media_type, title, sort_title,
-            \\   year, summary, rating, duration_ms, poster_path, backdrop_path,
-            \\   tmdb_id, parent_id, season_number, episode_number, file_path,
-            \\   added_at, updated_at)
-            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO media_items (" ++ database.columnList(media_item_insert_fields, null) ++
+                ") VALUES (" ++ database.placeholders(media_item_insert_fields.len) ++ ")",
         );
         defer stmt.finalize();
 
-        stmt.bindText(1, item.source.toString());
-        stmt.bindOptionalText(2, item.source_id);
-        stmt.bindOptionalText(3, item.server_id);
-        stmt.bindText(4, item.media_type.toString());
-        stmt.bindText(5, item.title);
-        stmt.bindOptionalText(6, item.sort_title);
-        stmt.bindOptionalInt(7, item.year);
-        stmt.bindOptionalText(8, item.summary);
-        stmt.bindOptionalDouble(9, item.rating);
-        stmt.bindOptionalInt64(10, item.duration_ms);
-        stmt.bindOptionalText(11, item.poster_path);
-        stmt.bindOptionalText(12, item.backdrop_path);
-        stmt.bindOptionalInt(13, item.tmdb_id);
-        stmt.bindOptionalInt64(14, item.parent_id);
-        stmt.bindOptionalInt(15, item.season_number);
-        stmt.bindOptionalInt(16, item.episode_number);
-        stmt.bindOptionalText(17, item.file_path);
-        stmt.bindOptionalInt64(18, item.added_at);
-        stmt.bindOptionalInt64(19, item.updated_at);
+        _ = stmt.bindStruct(types.MediaItem, media_item_insert_fields, item, 1);
 
         try stmt.exec();
         return stmt.lastInsertRowId();
@@ -53,7 +60,7 @@ pub const Library = struct {
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
+            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
             \\FROM media_items WHERE id = ?
         );
         defer stmt.finalize();
@@ -70,7 +77,7 @@ pub const Library = struct {
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
+            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
             \\FROM media_items WHERE source = ? AND source_id = ?
         );
         defer stmt.finalize();
@@ -121,6 +128,39 @@ pub const Library = struct {
             };
         }
         return null;
+    }
+
+    pub fn setLibrarySection(self: *Library, item_id: i64, section: []const u8) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        var stmt = try self.db.prepare("UPDATE media_items SET library_section = ? WHERE id = ?");
+        defer stmt.finalize();
+        stmt.bindText(1, section);
+        stmt.bindInt64(2, item_id);
+        try stmt.exec();
+    }
+
+    pub fn deleteByLibrarySection(self: *Library, server_id: []const u8, section: []const u8) !void {
+        self.db.mutex.lock();
+        defer self.db.mutex.unlock();
+
+        // Delete watch progress for affected items
+        var wp_stmt = try self.db.prepare(
+            \\DELETE FROM watch_progress WHERE media_item_id IN
+            \\  (SELECT id FROM media_items WHERE server_id = ? AND library_section = ?)
+        );
+        defer wp_stmt.finalize();
+        wp_stmt.bindText(1, server_id);
+        wp_stmt.bindText(2, section);
+        try wp_stmt.exec();
+
+        // Delete the items themselves
+        var stmt = try self.db.prepare("DELETE FROM media_items WHERE server_id = ? AND library_section = ?");
+        defer stmt.finalize();
+        stmt.bindText(1, server_id);
+        stmt.bindText(2, section);
+        try stmt.exec();
     }
 
     pub fn deleteMediaItem(self: *Library, id: i64) !void {
@@ -178,7 +218,7 @@ pub const Library = struct {
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
+            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
             \\FROM media_items WHERE media_type = ?
             \\ORDER BY {s} {s} LIMIT ? OFFSET ?
         , .{ order_clause, direction }) catch return error.SqlFormatFailed;
@@ -197,7 +237,7 @@ pub const Library = struct {
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
+            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
             \\FROM media_items
             \\WHERE media_type IN ('movie', 'show')
             \\ORDER BY added_at DESC LIMIT ?
@@ -231,7 +271,7 @@ pub const Library = struct {
                 \\SELECT id, source, source_id, server_id, media_type, title,
                 \\       sort_title, year, summary, rating, duration_ms,
                 \\       poster_path, backdrop_path, tmdb_id, parent_id,
-                \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
+                \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
                 \\FROM media_items WHERE title LIKE ? AND media_type = ?
                 \\ORDER BY title LIMIT 50
             );
@@ -247,7 +287,7 @@ pub const Library = struct {
                 \\SELECT id, source, source_id, server_id, media_type, title,
                 \\       sort_title, year, summary, rating, duration_ms,
                 \\       poster_path, backdrop_path, tmdb_id, parent_id,
-                \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
+                \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
                 \\FROM media_items WHERE title LIKE ?
                 \\ORDER BY title LIMIT 50
             );
@@ -265,7 +305,7 @@ pub const Library = struct {
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, added_at, updated_at, match_locked
+            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
             \\FROM media_items WHERE parent_id = ?
             \\ORDER BY season_number, episode_number, title
         );
@@ -273,6 +313,109 @@ pub const Library = struct {
         stmt.bindInt64(1, parent_id);
 
         return self.collectMediaItems(&stmt);
+    }
+
+    /// Get a single media item by ID.
+    pub fn getItemById(self: *Library, id: i64) !?types.MediaItem {
+        var stmt = try self.db.prepare(
+            \\SELECT id, source, source_id, server_id, media_type, title,
+            \\       sort_title, year, summary, rating, duration_ms,
+            \\       poster_path, backdrop_path, tmdb_id, parent_id,
+            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
+            \\FROM media_items WHERE id = ?
+        );
+        defer stmt.finalize();
+        stmt.bindInt64(1, id);
+
+        if (stmt.step()) {
+            return try readMediaItem(self.allocator, &stmt);
+        }
+        return null;
+    }
+
+    /// Find the next episode after the given media item.
+    /// Looks for the next episode in the same season, then the first episode of the next season.
+    /// Returns null if the item is not an episode or no next episode exists.
+    pub fn getNextEpisode(self: *Library, current_item_id: i64) !?types.MediaItem {
+        // First, get the current item to find its parent (season), episode number, etc.
+        var item_stmt = try self.db.prepare(
+            \\SELECT parent_id, season_number, episode_number, media_type
+            \\FROM media_items WHERE id = ?
+        );
+        defer item_stmt.finalize();
+        item_stmt.bindInt64(1, current_item_id);
+
+        if (!item_stmt.step()) return null;
+
+        const media_type_str = item_stmt.columnText(3) orelse return null;
+        if (!std.mem.eql(u8, media_type_str, "episode")) return null;
+
+        const season_id = item_stmt.columnOptionalInt64(0) orelse return null;
+        const current_episode = item_stmt.columnOptionalInt(2) orelse return null;
+        const current_season = item_stmt.columnOptionalInt(1);
+
+        // Try next episode in the same season
+        {
+            var stmt = try self.db.prepare(
+                \\SELECT id, source, source_id, server_id, media_type, title,
+                \\       sort_title, year, summary, rating, duration_ms,
+                \\       poster_path, backdrop_path, tmdb_id, parent_id,
+                \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
+                \\FROM media_items
+                \\WHERE parent_id = ? AND episode_number > ?
+                \\ORDER BY episode_number ASC LIMIT 1
+            );
+            defer stmt.finalize();
+            stmt.bindInt64(1, season_id);
+            stmt.bindInt(2, current_episode);
+
+            if (stmt.step()) {
+                return try readMediaItem(self.allocator, &stmt);
+            }
+        }
+
+        // No more episodes in this season — try the next season
+        if (current_season) |cs| {
+            // Get the show ID (parent of the season)
+            var show_stmt = try self.db.prepare(
+                "SELECT parent_id FROM media_items WHERE id = ?"
+            );
+            defer show_stmt.finalize();
+            show_stmt.bindInt64(1, season_id);
+
+            if (!show_stmt.step()) return null;
+            const show_id = show_stmt.columnOptionalInt64(0) orelse return null;
+
+            // Find the next season
+            var next_season_stmt = try self.db.prepare(
+                "SELECT id FROM media_items WHERE parent_id = ? AND season_number > ? ORDER BY season_number ASC LIMIT 1"
+            );
+            defer next_season_stmt.finalize();
+            next_season_stmt.bindInt64(1, show_id);
+            next_season_stmt.bindInt(2, cs);
+
+            if (!next_season_stmt.step()) return null;
+            const next_season_id = next_season_stmt.columnInt64(0);
+
+            // Get first episode of that season
+            var ep_stmt = try self.db.prepare(
+                \\SELECT id, source, source_id, server_id, media_type, title,
+                \\       sort_title, year, summary, rating, duration_ms,
+                \\       poster_path, backdrop_path, tmdb_id, parent_id,
+                \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
+                \\FROM media_items
+                \\WHERE parent_id = ? AND media_type = 'episode'
+                \\ORDER BY episode_number ASC LIMIT 1
+            );
+            defer ep_stmt.finalize();
+            ep_stmt.bindInt64(1, next_season_id);
+
+            if (ep_stmt.step()) {
+                return try readMediaItem(self.allocator, &ep_stmt);
+            }
+        }
+
+        return null;
     }
 
     pub fn getItemCount(self: *Library, media_type: types.MediaType) !u32 {
@@ -1015,6 +1158,7 @@ pub const Library = struct {
         if (item.poster_path) |s| self.allocator.free(s);
         if (item.backdrop_path) |s| self.allocator.free(s);
         if (item.file_path) |s| self.allocator.free(s);
+        if (item.library_section) |s| self.allocator.free(s);
     }
 
     fn readMediaItem(allocator: std.mem.Allocator, stmt: *database.Statement) !types.MediaItem {
@@ -1037,9 +1181,10 @@ pub const Library = struct {
             .season_number = stmt.columnOptionalInt(15),
             .episode_number = stmt.columnOptionalInt(16),
             .file_path = try dupeOptionalText(allocator, stmt.columnText(17)),
-            .added_at = stmt.columnOptionalInt64(18),
-            .updated_at = stmt.columnOptionalInt64(19),
-            .match_locked = stmt.columnBool(20),
+            .library_section = try dupeOptionalText(allocator, stmt.columnText(18)),
+            .added_at = stmt.columnOptionalInt64(19),
+            .updated_at = stmt.columnOptionalInt64(20),
+            .match_locked = stmt.columnBool(21),
         };
     }
 };

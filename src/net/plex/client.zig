@@ -257,6 +257,71 @@ pub const PlexClient = struct {
         // Timeline reporting failures are non-fatal
     }
 
+    /// Fetch markers (credits, intro) for a media item.
+    pub fn getMarkers(self: *PlexClient, rating_key: []const u8) ![]plex_types.PlexMarker {
+        const base = self.server_uri orelse return error.InvalidUrl;
+        const url = try std.fmt.allocPrint(self.allocator, "{s}/library/metadata/{s}?includeMarkers=1", .{ base, rating_key });
+        defer self.allocator.free(url);
+
+        var header_buf: [8]plex_types.Header = undefined;
+        const headers = self.headers.toHeaders(&header_buf);
+
+        var response = self.http_client.get(url, headers) catch |err| {
+            std.log.err("PlexClient.getMarkers: HTTP request failed: {}", .{err});
+            return err;
+        };
+        defer response.deinit();
+
+        if (response.status != .ok) return error.RequestFailed;
+
+        var markers: std.ArrayList(plex_types.PlexMarker) = .{};
+
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response.body, .{}) catch
+            return error.RequestFailed;
+        defer parsed.deinit();
+
+        const mc = getMediaContainer(parsed.value) orelse return markers.toOwnedSlice(self.allocator);
+        const metadata = switch (mc.get("Metadata") orelse return markers.toOwnedSlice(self.allocator)) {
+            .array => |a| a,
+            else => return markers.toOwnedSlice(self.allocator),
+        };
+
+        for (metadata.items) |entry| {
+            const obj = switch (entry) {
+                .object => |o| o,
+                else => continue,
+            };
+            // Parse Marker array
+            const marker_arr = switch (obj.get("Marker") orelse continue) {
+                .array => |a| a,
+                else => continue,
+            };
+            for (marker_arr.items) |marker_val| {
+                const m = switch (marker_val) {
+                    .object => |o| o,
+                    else => continue,
+                };
+                const mtype = jsonString(m.get("type")) orelse continue;
+                const start = jsonInt(i64, m.get("startTimeOffset")) orelse continue;
+                const end = jsonInt(i64, m.get("endTimeOffset")) orelse continue;
+                try markers.append(self.allocator, .{
+                    .marker_type = try self.allocator.dupe(u8, mtype),
+                    .start_time_ms = start,
+                    .end_time_ms = end,
+                });
+            }
+        }
+
+        return markers.toOwnedSlice(self.allocator);
+    }
+
+    pub fn freeMarkers(self: *PlexClient, markers: []plex_types.PlexMarker) void {
+        for (markers) |m| {
+            self.allocator.free(m.marker_type);
+        }
+        self.allocator.free(markers);
+    }
+
     /// Search the Plex library.
     pub fn search(self: *PlexClient, query: []const u8) ![]plex_types.PlexMediaItem {
         const base = self.server_uri orelse return error.InvalidUrl;

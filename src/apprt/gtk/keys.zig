@@ -95,6 +95,15 @@ fn onKeyPressed(
             player.cycleAudio() catch {};
             return 1;
         },
+        // Chapter navigation
+        c.GDK_KEY_comma => {
+            player.prevChapter() catch {};
+            return 1;
+        },
+        c.GDK_KEY_period => {
+            player.nextChapter() catch {};
+            return 1;
+        },
         else => return 0,
     }
 }

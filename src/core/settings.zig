@@ -71,6 +71,15 @@ pub const keys = struct {
     pub const preferred_subtitle_lang = "preferred_subtitle_lang";
     pub const preferred_audio_lang = "preferred_audio_lang";
     pub const image_cache_max_mb = "image_cache_max_mb";
+
+    // Subtitle appearance
+    pub const sub_font = "sub_font";
+    pub const sub_font_size = "sub_font_size";
+    pub const sub_color = "sub_color"; // stored as #AARRGGBB
+    pub const sub_border_color = "sub_border_color";
+    pub const sub_border_size = "sub_border_size";
+    pub const sub_back_color = "sub_back_color";
+    pub const sub_pos = "sub_pos"; // 0-100, 100=bottom
 };
 
 test "settings round-trip" {

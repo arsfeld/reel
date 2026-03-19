@@ -81,6 +81,49 @@ void reel_player_set_render_update_callback(ReelPlayer* player,
 void reel_player_render(ReelPlayer* player,
                          int fbo, int width, int height);
 
+/* ── Chapter Navigation ──────────────────────────────────── */
+
+/** Get number of chapters in the current file. Returns 0 if none. */
+int32_t reel_player_get_chapter_count(ReelPlayer* player);
+
+/** Jump to next chapter. */
+ReelError reel_player_next_chapter(ReelPlayer* player);
+
+/** Jump to previous chapter. */
+ReelError reel_player_prev_chapter(ReelPlayer* player);
+
+/* ── Playback Speed ──────────────────────────────────────── */
+
+/** Set playback speed (1.0 = normal). */
+ReelError reel_player_set_speed(ReelPlayer* player, double speed);
+
+/** Get current playback speed. Returns 1.0 if not playing. */
+double reel_player_get_speed(ReelPlayer* player);
+
+/* ── Subtitle Loading ────────────────────────────────────── */
+
+/** Load an external subtitle file. */
+ReelError reel_player_load_subtitle_file(ReelPlayer* player, const char* path);
+
+/** Get number of subtitle tracks (embedded + external). */
+int32_t reel_player_get_subtitle_track_count(ReelPlayer* player);
+
+/** Set active subtitle track by mpv track ID. */
+ReelError reel_player_set_subtitle_track(ReelPlayer* player, int64_t track_id);
+
+/** Disable subtitles. */
+ReelError reel_player_disable_subtitles(ReelPlayer* player);
+
+/* ── Subtitle Appearance ─────────────────────────────────── */
+
+void reel_player_set_sub_font(ReelPlayer* player, const char* font);
+void reel_player_set_sub_font_size(ReelPlayer* player, int64_t size);
+void reel_player_set_sub_color(ReelPlayer* player, const char* color);
+void reel_player_set_sub_border_color(ReelPlayer* player, const char* color);
+void reel_player_set_sub_border_size(ReelPlayer* player, double size);
+void reel_player_set_sub_back_color(ReelPlayer* player, const char* color);
+void reel_player_set_sub_pos(ReelPlayer* player, int64_t pos);
+
 /* ── Media types ─────────────────────────────────────────── */
 
 typedef enum {
@@ -378,6 +421,25 @@ ReelError reel_server_delete(ReelLibrary* lib, const char* id);
 ReelError reel_server_list(ReelLibrary* lib,
                             ReelServerC* out_ptr,
                             int32_t* out_count);
+
+/* ── Plex Library Sections ──────────────────────────────── */
+
+typedef struct {
+    const char* key;
+    const char* title;
+    const char* library_type;
+} ReelPlexLibraryC;
+
+/** Get Plex libraries for a server. Returns count, or negative on error. */
+int32_t reel_plex_get_libraries(ReelLibrary* lib,
+                                 const char* server_id,
+                                 ReelPlexLibraryC* out_ptr,
+                                 int32_t max_count);
+
+/** Delete all media items belonging to a library section for a server. */
+ReelError reel_library_delete_by_section(ReelLibrary* lib,
+                                          const char* server_id,
+                                          const char* section_key);
 
 /* ── Downloads ──────────────────────────────────────────── */
 

@@ -181,6 +181,7 @@ export fn reel_player_poll_events(pw: ?*PlayerWrapper) void {
             .idle, .shutdown => break,
             .unknown => break,
             .file_loaded => {},
+            .log_message => {},
         }
     }
 }
@@ -230,6 +231,100 @@ export fn reel_player_render(
 ) void {
     const p = pw orelse return;
     p.p.render(fbo, width, height);
+}
+
+// ── Chapter Navigation ──────────────────────────────────
+
+export fn reel_player_get_chapter_count(pw: ?*PlayerWrapper) i32 {
+    const p = pw orelse return 0;
+    return p.p.getChapterCount();
+}
+
+export fn reel_player_next_chapter(pw: ?*PlayerWrapper) c_int {
+    const p = pw orelse return -1;
+    p.p.nextChapter() catch return -3;
+    return 0;
+}
+
+export fn reel_player_prev_chapter(pw: ?*PlayerWrapper) c_int {
+    const p = pw orelse return -1;
+    p.p.prevChapter() catch return -3;
+    return 0;
+}
+
+// ── Playback Speed ──────────────────────────────────────
+
+export fn reel_player_set_speed(pw: ?*PlayerWrapper, speed: f64) c_int {
+    const p = pw orelse return -1;
+    p.p.setSpeed(speed) catch return -3;
+    return 0;
+}
+
+export fn reel_player_get_speed(pw: ?*PlayerWrapper) f64 {
+    const p = pw orelse return 1.0;
+    return p.p.getSpeed();
+}
+
+// ── Subtitle Loading ────────────────────────────────────
+
+export fn reel_player_load_subtitle_file(pw: ?*PlayerWrapper, path: [*:0]const u8) c_int {
+    const p = pw orelse return -1;
+    p.p.loadSubtitleFile(std.mem.span(path)) catch return -3;
+    return 0;
+}
+
+export fn reel_player_get_subtitle_track_count(pw: ?*PlayerWrapper) i32 {
+    const p = pw orelse return 0;
+    return p.p.getSubtitleTrackCount();
+}
+
+export fn reel_player_set_subtitle_track(pw: ?*PlayerWrapper, track_id: i64) c_int {
+    const p = pw orelse return -1;
+    p.p.setSubtitleTrack(track_id) catch return -3;
+    return 0;
+}
+
+export fn reel_player_disable_subtitles(pw: ?*PlayerWrapper) c_int {
+    const p = pw orelse return -1;
+    p.p.disableSubtitles() catch return -3;
+    return 0;
+}
+
+// ── Subtitle Appearance ─────────────────────────────────
+
+export fn reel_player_set_sub_font(pw: ?*PlayerWrapper, font: [*:0]const u8) void {
+    const p = pw orelse return;
+    p.p.setSubFont(font);
+}
+
+export fn reel_player_set_sub_font_size(pw: ?*PlayerWrapper, size: i64) void {
+    const p = pw orelse return;
+    p.p.setSubFontSize(size);
+}
+
+export fn reel_player_set_sub_color(pw: ?*PlayerWrapper, color: [*:0]const u8) void {
+    const p = pw orelse return;
+    p.p.setSubColor(color);
+}
+
+export fn reel_player_set_sub_border_color(pw: ?*PlayerWrapper, color: [*:0]const u8) void {
+    const p = pw orelse return;
+    p.p.setSubBorderColor(color);
+}
+
+export fn reel_player_set_sub_border_size(pw: ?*PlayerWrapper, size: f64) void {
+    const p = pw orelse return;
+    p.p.setSubBorderSize(size);
+}
+
+export fn reel_player_set_sub_back_color(pw: ?*PlayerWrapper, color: [*:0]const u8) void {
+    const p = pw orelse return;
+    p.p.setSubBackColor(color);
+}
+
+export fn reel_player_set_sub_pos(pw: ?*PlayerWrapper, pos: i64) void {
+    const p = pw orelse return;
+    p.p.setSubPos(pos);
 }
 
 // Database
@@ -997,6 +1092,85 @@ export fn reel_server_list(
     }
     count_ptr.* = @intCast(servers.len);
     l.freeServers(servers);
+    return 0;
+}
+
+// ── Plex Library Sections ──────────────────────────────────
+
+const ReelPlexLibraryC = extern struct {
+    key: [*:0]const u8,
+    title: [*:0]const u8,
+    library_type: [*:0]const u8,
+};
+
+/// Get Plex libraries for a server. Caller must free each string with reel_free.
+export fn reel_plex_get_libraries(
+    lib: ?*library.Library,
+    server_id: [*:0]const u8,
+    out_ptr: [*]ReelPlexLibraryC,
+    max_count: i32,
+) i32 {
+    const l = lib orelse return -1;
+    const sid = std.mem.span(server_id);
+
+    const servers_list = l.listServers() catch return -1;
+    defer l.freeServers(servers_list);
+
+    // Find the matching server
+    var uri: ?[]const u8 = null;
+    var token: ?[]const u8 = null;
+    for (servers_list) |srv| {
+        if (std.mem.eql(u8, srv.id, sid)) {
+            uri = srv.connection_uri;
+            token = srv.auth_token;
+            break;
+        }
+    }
+
+    const srv_uri = uri orelse return -1;
+    const srv_token = token orelse return -1;
+
+    // Get client identifier
+    const db = l.db;
+    var s = settings.Settings.init(allocator, db);
+    const client_id = (s.getString("client_identifier") catch return -1) orelse return -1;
+    defer allocator.free(client_id);
+
+    var http_client = http.HttpClient.init(allocator);
+    defer http_client.deinit();
+
+    var pc = plex_client.PlexClient.init(allocator, &http_client, client_id, srv_token);
+    pc.setServerUri(srv_uri);
+
+    const libraries = pc.getLibraries() catch return -1;
+    defer {
+        for (libraries) |lib_item| {
+            allocator.free(lib_item.title);
+            allocator.free(lib_item.key);
+            allocator.free(lib_item.library_type);
+        }
+        allocator.free(libraries);
+    }
+
+    const count: usize = @min(libraries.len, @as(usize, @intCast(max_count)));
+    for (0..count) |i| {
+        out_ptr[i] = .{
+            .key = @ptrCast(allocator.dupeZ(u8, libraries[i].key) catch return -1),
+            .title = @ptrCast(allocator.dupeZ(u8, libraries[i].title) catch return -1),
+            .library_type = @ptrCast(allocator.dupeZ(u8, libraries[i].library_type) catch return -1),
+        };
+    }
+    return @intCast(count);
+}
+
+/// Delete all media items belonging to a library section for a server.
+export fn reel_library_delete_by_section(
+    lib: ?*library.Library,
+    server_id: [*:0]const u8,
+    section_key: [*:0]const u8,
+) c_int {
+    const l = lib orelse return -1;
+    l.deleteByLibrarySection(std.mem.span(server_id), std.mem.span(section_key)) catch return -1;
     return 0;
 }
 

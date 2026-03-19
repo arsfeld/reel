@@ -4,6 +4,7 @@ const c = @cImport({
     @cInclude("gtk/gtk.h");
 });
 const app = @import("app.zig");
+const http_mod = @import("../../net/http.zig");
 const plex_client_mod = @import("../../net/plex/client.zig");
 const plex_types = @import("../../net/plex/types.zig");
 const connection_selector = @import("../../net/connection_selector.zig");
@@ -302,8 +303,8 @@ fn onDiscoverServers(_: ?*anyopaque) callconv(.c) c.gboolean {
 
         std.log.info("Saved server: {s} at {s} (relay-first)", .{ server.name, connection_uri });
 
-        // Spawn background thread to test local connections and upgrade if found
-        const thread_ctx = allocator.create(LocalTestCtx) catch continue;
+        // Spawn background thread to test all non-relay connections in parallel
+        const thread_ctx = allocator.create(ConnTestCtx) catch continue;
         thread_ctx.* = .{
             .server_id = allocator.dupe(u8, server.machine_identifier) catch {
                 allocator.destroy(thread_ctx);
@@ -321,22 +322,23 @@ fn onDiscoverServers(_: ?*anyopaque) callconv(.c) c.gboolean {
                 continue;
             },
         };
-        // Copy local connection URIs
-        var local_count: usize = 0;
+        // Copy all non-relay connection URIs
+        var conn_count: usize = 0;
         for (server.connections) |conn| {
-            if (conn.local and local_count < LocalTestCtx.max_locals) {
-                thread_ctx.local_uris[local_count] = allocator.dupe(u8, conn.uri) catch continue;
-                local_count += 1;
+            if (!conn.relay and conn_count < ConnTestCtx.max_conns) {
+                thread_ctx.uris[conn_count] = allocator.dupe(u8, conn.uri) catch continue;
+                thread_ctx.is_local[conn_count] = conn.local;
+                conn_count += 1;
             }
         }
-        thread_ctx.local_count = local_count;
+        thread_ctx.count = conn_count;
 
-        if (local_count > 0) {
-            _ = std.Thread.spawn(.{}, testLocalConnections, .{thread_ctx}) catch {
-                freeLocalTestCtx(thread_ctx);
+        if (conn_count > 0) {
+            _ = std.Thread.spawn(.{}, testAllConnections, .{thread_ctx}) catch {
+                freeConnTestCtx(thread_ctx);
             };
         } else {
-            freeLocalTestCtx(thread_ctx);
+            freeConnTestCtx(thread_ctx);
         }
     }
 
@@ -347,32 +349,69 @@ fn onDiscoverServers(_: ?*anyopaque) callconv(.c) c.gboolean {
     return 0;
 }
 
-const LocalTestCtx = struct {
+const ConnTestCtx = struct {
     server_id: []const u8,
     client_id: []const u8,
     server_token: []const u8,
-    local_uris: [max_locals][]const u8 = undefined,
-    local_count: usize = 0,
-    const max_locals = 8;
+    uris: [max_conns][]const u8 = undefined,
+    is_local: [max_conns]bool = undefined,
+    count: usize = 0,
+    const max_conns = 16;
 };
 
-fn freeLocalTestCtx(ctx: *LocalTestCtx) void {
+fn freeConnTestCtx(ctx: *ConnTestCtx) void {
     const allocator = app.getAllocator();
-    for (ctx.local_uris[0..ctx.local_count]) |uri| allocator.free(uri);
+    for (ctx.uris[0..ctx.count]) |uri| allocator.free(uri);
     allocator.free(ctx.server_id);
     allocator.free(ctx.client_id);
     allocator.free(ctx.server_token);
     allocator.destroy(ctx);
 }
 
-/// Background thread: test local connections, upgrade server URI if one works.
-fn testLocalConnections(ctx: *LocalTestCtx) void {
-    const allocator = app.getAllocator();
-    const http_client = app.getHttpClient() orelse {
-        freeLocalTestCtx(ctx);
+/// Shared state for parallel connection testing. Each thread that succeeds
+/// immediately upgrades the server URI if it's better than what's been found so far.
+const ConnBest = struct {
+    mutex: std.Thread.Mutex = .{},
+    best_latency: i32 = std.math.maxInt(i32),
+    best_is_local: bool = false,
+    found: bool = false,
+};
+
+/// Background thread: test all non-relay connections in parallel.
+/// Each successful test immediately upgrades the server URI (no waiting for all to finish).
+fn testAllConnections(ctx: *ConnTestCtx) void {
+    defer freeConnTestCtx(ctx);
+    std.log.info("testAllConnections: testing {d} non-relay connections", .{ctx.count});
+    if (ctx.count == 0) {
+        std.log.info("testAllConnections: no connections to test, staying on relay", .{});
+        pending_conn_status = .relay;
+        _ = c.g_idle_add(&updateConnectionStatusUI, null);
         return;
-    };
-    defer freeLocalTestCtx(ctx);
+    }
+
+    var best = ConnBest{};
+    var threads: [ConnTestCtx.max_conns]?std.Thread = .{null} ** ConnTestCtx.max_conns;
+
+    for (0..ctx.count) |i| {
+        threads[i] = std.Thread.spawn(.{}, testSingleConnection, .{
+            ctx, i, &best,
+        }) catch null;
+    }
+
+    for (0..ctx.count) |i| {
+        if (threads[i]) |t| t.join();
+    }
+
+    if (!best.found) {
+        std.log.info("No direct connections reachable for {s}, staying on relay", .{ctx.server_id});
+        pending_conn_status = .relay;
+        _ = c.g_idle_add(&updateConnectionStatusUI, null);
+    }
+}
+
+fn testSingleConnection(ctx: *ConnTestCtx, idx: usize, best: *ConnBest) void {
+    const allocator = app.getAllocator();
+    const http_client = app.getHttpClient() orelse return;
 
     var header_buf: [8]plex_types.Header = undefined;
     const plex_headers = plex_types.PlexHeaders{
@@ -381,27 +420,51 @@ fn testLocalConnections(ctx: *LocalTestCtx) void {
     };
     const h = plex_headers.toHeaders(&header_buf);
 
-    // Test each local connection
-    for (ctx.local_uris[0..ctx.local_count]) |uri| {
-        var selector = connection_selector.ConnectionSelector.init(allocator, http_client, h);
-        if (selector.testConnection(uri, true, false)) |result| {
-            std.log.info("Local connection available: {s} (latency={d}ms)", .{ uri, result.latency_ms });
+    var selector = connection_selector.ConnectionSelector.init(allocator, http_client, h);
+    if (selector.testConnection(ctx.uris[idx], ctx.is_local[idx], false)) |result| {
+        std.log.info("Connection reachable: {s} (latency={d}ms)", .{ ctx.uris[idx], result.latency_ms });
 
-            // Upgrade the server's connection_uri to the local one
+        best.mutex.lock();
+        defer best.mutex.unlock();
+
+        const is_local = ctx.is_local[idx];
+        // Upgrade if: first result, or local beats non-local, or lower latency in same category
+        if (!best.found or
+            (is_local and !best.best_is_local) or
+            (is_local == best.best_is_local and result.latency_ms < best.best_latency))
+        {
+            best.best_latency = result.latency_ms;
+            best.best_is_local = is_local;
+            best.found = true;
+
+            std.log.info("Upgrading server connection to: {s}", .{ctx.uris[idx]});
             const lib = app.getLibrary() orelse return;
             lib.upsertServer(.{
                 .id = ctx.server_id,
-                .name = ctx.server_id, // name doesn't change but we need something
+                .name = ctx.server_id,
                 .client_identifier = ctx.server_id,
                 .auth_token = ctx.server_token,
-                .connection_uri = uri,
+                .connection_uri = ctx.uris[idx],
             }) catch |err| {
-                std.log.err("Failed to upgrade to local connection: {}", .{err});
+                std.log.err("Failed to upgrade connection: {}", .{err});
+                return;
             };
-            return; // First working local wins
+
+            // Update UI on the main thread
+            pending_conn_status = .direct;
+            _ = c.g_idle_add(&updateConnectionStatusUI, null);
         }
+    } else {
+        std.log.info("Connection unreachable: {s}", .{ctx.uris[idx]});
     }
-    std.log.info("No local connections available for {s}, staying on relay", .{ctx.server_id});
+}
+
+var pending_conn_status: app.ConnectionStatus = .connecting;
+
+fn updateConnectionStatusUI(_: ?*anyopaque) callconv(.c) c.gboolean {
+    std.log.info("updateConnectionStatusUI: setting status to {s}", .{@tagName(pending_conn_status)});
+    app.setConnectionStatus(pending_conn_status);
+    return 0; // G_SOURCE_REMOVE
 }
 
 var sync_result_items: i32 = 0;
@@ -453,7 +516,31 @@ fn doSyncLibrary() i32 {
             allocator.free(libraries);
         }
 
+        // Get disabled libraries setting
+        const disabled_str = blk: {
+            if (app.getSettings()) |s| {
+                if (s.getString("plex_disabled_libraries") catch null) |ds| break :blk ds;
+            }
+            break :blk @as(?[]const u8, null);
+        };
+        defer if (disabled_str) |ds| allocator.free(ds);
+
         for (libraries) |section| {
+            // Skip disabled libraries
+            if (disabled_str) |ds| {
+                var iter = std.mem.splitScalar(u8, ds, ',');
+                var skip = false;
+                while (iter.next()) |entry| {
+                    if (std.mem.eql(u8, entry, section.key)) {
+                        skip = true;
+                        break;
+                    }
+                }
+                if (skip) {
+                    std.log.info("Skipping disabled library: {s} (key={s})", .{ section.title, section.key });
+                    continue;
+                }
+            }
             std.log.info("Syncing library: {s} (key={s})", .{ section.title, section.key });
             const items = plex.getItems(section.key) catch |err| {
                 std.log.err("Failed to get items for {s}: {}", .{ section.title, err });
@@ -463,12 +550,13 @@ fn doSyncLibrary() i32 {
 
             for (items) |item| {
                 if (lib.getBySourceId(.plex, item.rating_key) catch null) |existing| {
+                    // Backfill library_section if missing
+                    if (existing.library_section == null) {
+                        lib.setLibrarySection(existing.id, section.key) catch {};
+                    }
                     lib.freeMediaItem(existing);
                     continue;
                 }
-
-                const stream_url = if (item.part_key) |pk| (plex.getStreamUrl(pk) catch null) else null;
-                defer if (stream_url) |u| allocator.free(u);
 
                 const poster_url = if (item.thumb) |thumb|
                     (std.fmt.allocPrint(allocator, "{s}{s}?X-Plex-Token={s}", .{ uri, thumb, token }) catch null)
@@ -490,10 +578,11 @@ fn doSyncLibrary() i32 {
                     .title = item.title,
                     .year = item.year,
                     .summary = item.summary,
-                    .file_path = stream_url,
+                    .file_path = item.part_key,
                     .poster_path = poster_url,
                     .backdrop_path = backdrop_url,
                     .duration_ms = item.duration_ms,
+                    .library_section = section.key,
                 }) catch |err| {
                     std.log.err("Failed to insert item {s}: {}", .{ item.title, err });
                     continue;
@@ -531,92 +620,168 @@ fn onDialogClosed(_: *c.GtkWidget, _: ?*anyopaque) callconv(.c) void {
 
 /// Sync all saved servers in a background thread. Called at app startup.
 pub fn syncAllInBackground() void {
+    app.setSyncing(true);
     _ = std.Thread.spawn(.{}, syncAllWorker, .{}) catch |err| {
         std.log.err("Failed to start background sync: {}", .{err});
+        app.setSyncing(false);
     };
 }
 
 fn syncAllWorker() void {
     const count = doSyncLibrary();
     std.log.info("Background sync complete: {d} items synced", .{count});
+    _ = c.g_idle_add(&onSyncDone, null);
 }
 
-/// Called at app startup: for each saved server, ensure the connection URI uses
-/// relay-first strategy, then test locals in background and upgrade if available.
+fn onSyncDone(_: ?*anyopaque) callconv(.c) c.gboolean {
+    app.setSyncing(false);
+    return 0;
+}
+
+/// Called at app startup: discover servers from Plex API, save connections,
+/// then test all non-relay connections in parallel to find the best one.
 pub fn refreshServerConnections() void {
+    _ = std.Thread.spawn(.{}, refreshServerConnectionsWorker, .{}) catch |err| {
+        std.log.err("Failed to start connection refresh: {}", .{err});
+    };
+}
+
+fn refreshServerConnectionsWorker() void {
     const allocator = app.getAllocator();
     const lib = app.getLibrary() orelse return;
     const http_client = app.getHttpClient() orelse return;
 
+    const client_id = getOrCreateClientId(allocator) orelse return;
+    defer allocator.free(client_id);
+
+    // Get auth token from first stored server
     const servers = lib.listServers() catch return;
     defer lib.freeServers(servers);
 
-    for (servers) |server| {
-        const token = server.auth_token orelse continue;
+    if (servers.len == 0) return;
+    const auth_token = servers[0].auth_token orelse return;
 
-        // Load stored connections
-        const connections = lib.getServerConnections(server.id) catch continue;
-        defer {
-            for (connections) |conn| allocator.free(conn.uri);
-            allocator.free(connections);
+    // Discover servers from Plex API (always fresh)
+    var plex = plex_client_mod.PlexClient.init(allocator, http_client, client_id, auth_token);
+    const discovered = plex.discoverServers() catch |err| {
+        std.log.err("refreshServerConnections: discovery failed: {}", .{err});
+        // Fall back to stored servers
+        setStatusFromStoredServers(lib);
+        return;
+    };
+    defer {
+        for (discovered) |server| {
+            allocator.free(server.name);
+            allocator.free(server.machine_identifier);
+            if (server.access_token) |t| allocator.free(t);
+            for (server.connections) |conn| allocator.free(conn.uri);
+            allocator.free(server.connections);
+        }
+        allocator.free(discovered);
+    }
+
+    std.log.info("refreshServerConnections: discovered {d} servers", .{discovered.len});
+
+    for (discovered) |server| {
+        const server_token = server.access_token orelse auth_token;
+
+        // Build connection list for DB
+        var db_connections = allocator.alloc(types.ServerConnection, server.connections.len) catch continue;
+        defer allocator.free(db_connections);
+        for (server.connections, 0..) |conn, i| {
+            db_connections[i] = .{
+                .server_id = server.machine_identifier,
+                .uri = conn.uri,
+                .is_local = conn.local,
+                .is_relay = conn.relay,
+                .protocol = if (std.mem.startsWith(u8, conn.uri, "https://")) "https" else "http",
+            };
         }
 
-        if (connections.len == 0) continue;
+        // Use relay immediately so the app is functional right away
+        const immediate_uri = connection_selector.ConnectionSelector.selectImmediate(db_connections) orelse continue;
 
-        // Use relay/remote immediately
-        const immediate_uri = connection_selector.ConnectionSelector.selectImmediate(connections) orelse continue;
+        // Save server (keep existing URI if it was already upgraded to direct)
+        const existing_uri = blk: {
+            const existing = lib.getServer(server.machine_identifier) catch break :blk null;
+            if (existing) |s| {
+                defer lib.freeServer(s);
+                if (s.connection_uri) |u| break :blk allocator.dupe(u8, u) catch null;
+            }
+            break :blk null;
+        };
+        defer if (existing_uri) |u| allocator.free(u);
 
-        // Update server URI if it differs from what's stored
-        if (server.connection_uri == null or !std.mem.eql(u8, server.connection_uri.?, immediate_uri)) {
-            lib.upsertServer(.{
-                .id = server.id,
-                .name = server.name,
-                .client_identifier = server.client_identifier,
-                .auth_token = token,
-                .connection_uri = immediate_uri,
-            }) catch {};
-        }
+        lib.upsertServer(.{
+            .id = server.machine_identifier,
+            .name = server.name,
+            .client_identifier = server.machine_identifier,
+            .auth_token = server_token,
+            .connection_uri = existing_uri orelse immediate_uri,
+        }) catch |err| {
+            std.log.err("Failed to save server: {}", .{err});
+            continue;
+        };
 
-        // Spawn background thread to test local connections
-        const client_id = getOrCreateClientId(allocator) orelse continue;
-        const thread_ctx = allocator.create(LocalTestCtx) catch {
-            allocator.free(client_id);
+        // Save all connections
+        lib.upsertServerConnections(server.machine_identifier, db_connections) catch {};
+
+        std.log.info("Saved server: {s} with {d} connections", .{ server.name, server.connections.len });
+
+        // Spawn connection testing threads
+        const test_client_id = allocator.dupe(u8, client_id) catch continue;
+        const thread_ctx = allocator.create(ConnTestCtx) catch {
+            allocator.free(test_client_id);
             continue;
         };
         thread_ctx.* = .{
-            .server_id = allocator.dupe(u8, server.id) catch {
-                allocator.free(client_id);
+            .server_id = allocator.dupe(u8, server.machine_identifier) catch {
+                allocator.free(test_client_id);
                 allocator.destroy(thread_ctx);
                 continue;
             },
-            .client_id = client_id,
-            .server_token = allocator.dupe(u8, token) catch {
+            .client_id = test_client_id,
+            .server_token = allocator.dupe(u8, server_token) catch {
                 allocator.free(thread_ctx.server_id);
-                allocator.free(client_id);
+                allocator.free(test_client_id);
                 allocator.destroy(thread_ctx);
                 continue;
             },
         };
 
-        var local_count: usize = 0;
-        for (connections) |conn| {
-            if (conn.is_local and local_count < LocalTestCtx.max_locals) {
-                thread_ctx.local_uris[local_count] = allocator.dupe(u8, conn.uri) catch continue;
-                local_count += 1;
+        var conn_count: usize = 0;
+        for (server.connections) |conn| {
+            if (!conn.relay and conn_count < ConnTestCtx.max_conns) {
+                thread_ctx.uris[conn_count] = allocator.dupe(u8, conn.uri) catch continue;
+                thread_ctx.is_local[conn_count] = conn.local;
+                conn_count += 1;
             }
         }
-        thread_ctx.local_count = local_count;
+        thread_ctx.count = conn_count;
 
-        if (local_count > 0) {
-            _ = std.Thread.spawn(.{}, testLocalConnections, .{thread_ctx}) catch {
-                freeLocalTestCtx(thread_ctx);
-            };
+        if (conn_count > 0) {
+            testAllConnections(thread_ctx);
         } else {
-            freeLocalTestCtx(thread_ctx);
+            // Only relay available
+            pending_conn_status = .relay;
+            _ = c.g_idle_add(&updateConnectionStatusUI, null);
+            freeConnTestCtx(thread_ctx);
         }
     }
+}
 
-    _ = http_client; // used by background threads via app.getHttpClient()
+/// Set connection status from stored server data (when discovery fails).
+const library_mod = @import("../../core/library.zig");
+
+fn setStatusFromStoredServers(lib: *library_mod.Library) void {
+    const servers = lib.listServers() catch return;
+    defer lib.freeServers(servers);
+    if (servers.len > 0 and servers[0].connection_uri != null) {
+        pending_conn_status = .direct;
+    } else {
+        pending_conn_status = .offline;
+    }
+    _ = c.g_idle_add(&updateConnectionStatusUI, null);
 }
 
 fn getOrCreateClientId(allocator: std.mem.Allocator) ?[]const u8 {

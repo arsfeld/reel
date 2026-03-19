@@ -82,6 +82,12 @@ pub const PlexMediaItem = struct {
     part_key: ?[]const u8 = null,
 };
 
+pub const PlexMarker = struct {
+    marker_type: []const u8, // "credits", "intro", etc.
+    start_time_ms: i64,
+    end_time_ms: i64,
+};
+
 pub const TimelineState = enum {
     playing,
     paused,

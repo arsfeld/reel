@@ -10,9 +10,16 @@ pub const Event = union(enum) {
     file_loaded,
     end_file: EndFileReason,
     property_change: PropertyChange,
+    log_message: LogMessage,
     idle,
     shutdown,
     unknown,
+};
+
+pub const LogMessage = struct {
+    prefix: []const u8,
+    text: []const u8,
+    level: []const u8,
 };
 
 pub const EndFileReason = enum {
@@ -54,6 +61,9 @@ pub const Player = struct {
             c.mpv_destroy(handle);
             return error.MpvInitFailed;
         }
+
+        // Enable mpv log messages at "error" level for diagnostics
+        _ = c.mpv_request_log_messages(handle, "warn");
 
         var self = Player{ .handle = handle };
 
@@ -179,6 +189,168 @@ pub const Player = struct {
         if (err < 0) return error.CommandFailed;
     }
 
+    // ── Chapter Navigation ──────────────────────────────────
+
+    pub fn getChapterCount(self: *Player) i32 {
+        var count: i64 = 0;
+        _ = c.mpv_get_property(self.handle, "chapter-list/count", c.MPV_FORMAT_INT64, @ptrCast(&count));
+        return @intCast(count);
+    }
+
+    pub fn nextChapter(self: *Player) !void {
+        const cmd = [_:null]?[*:0]const u8{ "add", "chapter", "1", null };
+        const err = c.mpv_command(self.handle, @constCast(@ptrCast(&cmd)));
+        if (err < 0) return error.CommandFailed;
+    }
+
+    pub fn prevChapter(self: *Player) !void {
+        const cmd = [_:null]?[*:0]const u8{ "add", "chapter", "-1", null };
+        const err = c.mpv_command(self.handle, @constCast(@ptrCast(&cmd)));
+        if (err < 0) return error.CommandFailed;
+    }
+
+    // ── Playback Speed ──────────────────────────────────────
+
+    pub fn setSpeed(self: *Player, speed: f64) !void {
+        var s = speed;
+        const err = c.mpv_set_property(self.handle, "speed", c.MPV_FORMAT_DOUBLE, @ptrCast(&s));
+        if (err < 0) return error.SetPropertyFailed;
+    }
+
+    pub fn getSpeed(self: *Player) f64 {
+        var speed: f64 = 1.0;
+        _ = c.mpv_get_property(self.handle, "speed", c.MPV_FORMAT_DOUBLE, @ptrCast(&speed));
+        return speed;
+    }
+
+    // ── Subtitle Loading ────────────────────────────────────
+
+    pub fn loadSubtitleFile(self: *Player, path: []const u8) !void {
+        const path_z = try std.heap.c_allocator.dupeZ(u8, path);
+        defer std.heap.c_allocator.free(path_z);
+        const cmd = [_:null]?[*:0]const u8{ "sub-add", path_z, null };
+        const err = c.mpv_command(self.handle, @constCast(@ptrCast(&cmd)));
+        if (err < 0) return error.CommandFailed;
+    }
+
+    pub fn getSubtitleTrackCount(self: *Player) i32 {
+        var count: i64 = 0;
+        _ = c.mpv_get_property(self.handle, "track-list/count", c.MPV_FORMAT_INT64, @ptrCast(&count));
+        // Count only subtitle tracks
+        var sub_count: i32 = 0;
+        var i: i64 = 0;
+        while (i < count) : (i += 1) {
+            var key_buf: [64]u8 = undefined;
+            const key = std.fmt.bufPrintZ(&key_buf, "track-list/{d}/type", .{i}) catch continue;
+            var type_val: [*c]const u8 = null;
+            _ = c.mpv_get_property(self.handle, key.ptr, c.MPV_FORMAT_STRING, @ptrCast(&type_val));
+            if (type_val) |tv| {
+                if (std.mem.eql(u8, std.mem.span(tv), "sub")) {
+                    sub_count += 1;
+                }
+                c.mpv_free(@constCast(tv));
+            }
+        }
+        return sub_count;
+    }
+
+    pub fn setSubtitleTrack(self: *Player, track_id: i64) !void {
+        var id = track_id;
+        const err = c.mpv_set_property(self.handle, "sid", c.MPV_FORMAT_INT64, @ptrCast(&id));
+        if (err < 0) return error.SetPropertyFailed;
+    }
+
+    pub fn disableSubtitles(self: *Player) !void {
+        const err = c.mpv_set_property_string(self.handle, "sid", "no");
+        if (err < 0) return error.SetPropertyFailed;
+    }
+
+    /// Scan for external subtitle files in the same directory as the video.
+    /// Only works for local file paths (not HTTP URLs).
+    pub fn scanAndLoadExternalSubs(self: *Player, video_path: []const u8) void {
+        // Skip HTTP streams
+        if (std.mem.startsWith(u8, video_path, "http://") or
+            std.mem.startsWith(u8, video_path, "https://"))
+            return;
+
+        // Extract directory and filename stem
+        const dir_end = std.mem.lastIndexOfScalar(u8, video_path, '/') orelse return;
+        const dir_path = video_path[0 .. dir_end + 1];
+        const filename = video_path[dir_end + 1 ..];
+        const dot_idx = std.mem.lastIndexOfScalar(u8, filename, '.') orelse return;
+        const stem = filename[0..dot_idx];
+
+        const sub_exts = [_][]const u8{ ".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt" };
+
+        // Open directory and scan
+        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
+        defer dir.close();
+
+        var iter = dir.iterate();
+        while (iter.next() catch null) |entry| {
+            if (entry.kind != .file) continue;
+            const name = entry.name;
+
+            // Check if extension matches a subtitle format
+            var is_sub = false;
+            for (sub_exts) |ext| {
+                if (name.len > ext.len and
+                    std.ascii.eqlIgnoreCase(name[name.len - ext.len ..], ext))
+                {
+                    is_sub = true;
+                    break;
+                }
+            }
+            if (!is_sub) continue;
+
+            // Check if filename starts with the video stem (case-insensitive)
+            if (name.len < stem.len) continue;
+            if (!std.ascii.eqlIgnoreCase(name[0..stem.len], stem)) continue;
+
+            // The character after the stem must be '.' (e.g., movie.en.srt, movie.srt)
+            // or the stem IS the full name before extension
+            if (name.len > stem.len and name[stem.len] != '.') continue;
+
+            // Build full path and load
+            var path_buf: [1024]u8 = undefined;
+            const full_path = std.fmt.bufPrint(&path_buf, "{s}{s}", .{ dir_path, name }) catch continue;
+            self.loadSubtitleFile(full_path) catch {};
+        }
+    }
+
+    // ── Subtitle Appearance ─────────────────────────────────
+
+    pub fn setSubFont(self: *Player, font: [*:0]const u8) void {
+        _ = c.mpv_set_property_string(self.handle, "sub-font", font);
+    }
+
+    pub fn setSubFontSize(self: *Player, size: i64) void {
+        var s = size;
+        _ = c.mpv_set_property(self.handle, "sub-font-size", c.MPV_FORMAT_INT64, @ptrCast(&s));
+    }
+
+    pub fn setSubColor(self: *Player, color: [*:0]const u8) void {
+        _ = c.mpv_set_property_string(self.handle, "sub-color", color);
+    }
+
+    pub fn setSubBorderColor(self: *Player, color: [*:0]const u8) void {
+        _ = c.mpv_set_property_string(self.handle, "sub-border-color", color);
+    }
+
+    pub fn setSubBorderSize(self: *Player, size: f64) void {
+        var s = size;
+        _ = c.mpv_set_property(self.handle, "sub-border-size", c.MPV_FORMAT_DOUBLE, @ptrCast(&s));
+    }
+
+    pub fn setSubBackColor(self: *Player, color: [*:0]const u8) void {
+        _ = c.mpv_set_property_string(self.handle, "sub-back-color", color);
+    }
+
+    pub fn setSubPos(self: *Player, pos: i64) void {
+        var p = pos;
+        _ = c.mpv_set_property(self.handle, "sub-pos", c.MPV_FORMAT_INT64, @ptrCast(&p));
+    }
+
     pub fn waitEvent(self: *Player, timeout: f64) Event {
         const ev = c.mpv_wait_event(self.handle, timeout);
         return switch (ev.*.event_id) {
@@ -202,6 +374,17 @@ pub const Player = struct {
                     const prop: *c.mpv_event_property = @ptrCast(@alignCast(data));
                     const name = std.mem.span(prop.name);
                     break :blk .{ .property_change = parsePropertyChange(name, prop) };
+                }
+                break :blk .unknown;
+            },
+            c.MPV_EVENT_LOG_MESSAGE => blk: {
+                if (ev.*.data) |data| {
+                    const msg: *c.mpv_event_log_message = @ptrCast(@alignCast(data));
+                    break :blk .{ .log_message = .{
+                        .prefix = if (msg.prefix) |p| std.mem.span(p) else "",
+                        .text = if (msg.text) |t| std.mem.span(t) else "",
+                        .level = if (msg.level) |l| std.mem.span(l) else "",
+                    } };
                 }
                 break :blk .unknown;
             },

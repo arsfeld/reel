@@ -5,9 +5,19 @@ struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @State private var servers: [ReelBridge.Server] = []
     @State private var scanPaths: [ReelBridge.ScanPath] = []
+    @State private var plexLibraries: [PlexLibraryItem] = []
+    @State private var disabledLibraries: Set<String> = []
     @State private var plexState: PlexAuthState = .disconnected
     @State private var plexPin: String = ""
     @State private var authTask: Task<Void, Never>?
+
+    struct PlexLibraryItem: Identifiable {
+        var id: String { key }
+        let key: String
+        let title: String
+        let libraryType: String
+        let serverId: String
+    }
 
     enum PlexAuthState {
         case disconnected
@@ -64,6 +74,27 @@ struct SettingsView: View {
                 }
             }
 
+            // Plex Libraries section
+            if !plexLibraries.isEmpty {
+                Section("Plex Libraries") {
+                    ForEach(plexLibraries) { lib in
+                        Toggle(isOn: Binding(
+                            get: { !disabledLibraries.contains(lib.key) },
+                            set: { enabled in
+                                toggleLibrary(key: lib.key, serverId: lib.serverId, enabled: enabled)
+                            }
+                        )) {
+                            VStack(alignment: .leading) {
+                                Text(lib.title)
+                                Text(lib.libraryType)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+
             // Library section
             Section("Library") {
                 ForEach(scanPaths) { path in
@@ -98,6 +129,32 @@ struct SettingsView: View {
         servers = ReelBridge.listServers(library: lib)
         scanPaths = ReelBridge.listScanPaths(library: lib)
         plexState = servers.isEmpty ? .disconnected : .connected
+
+        // Load disabled libraries setting
+        if let db = appState.db,
+           let val = reel_settings_get(db, "plex_disabled_libraries") {
+            disabledLibraries = Set(String(cString: val).split(separator: ",").map(String.init))
+        } else {
+            disabledLibraries = []
+        }
+
+        // Load Plex libraries from each server
+        var libs: [PlexLibraryItem] = []
+        for server in servers {
+            var buf = [ReelPlexLibraryC](repeating: ReelPlexLibraryC(), count: 32)
+            let count = reel_plex_get_libraries(lib, server.id, &buf, 32)
+            if count > 0 {
+                for i in 0..<Int(count) {
+                    libs.append(PlexLibraryItem(
+                        key: String(cString: buf[i].key),
+                        title: String(cString: buf[i].title),
+                        libraryType: String(cString: buf[i].library_type),
+                        serverId: String(cString: server.id)
+                    ))
+                }
+            }
+        }
+        plexLibraries = libs
     }
 
     private func startPlexAuth() {
@@ -182,10 +239,40 @@ struct SettingsView: View {
         }
     }
 
+    private func toggleLibrary(key: String, serverId: String, enabled: Bool) {
+        guard let db = appState.db, let lib = appState.library else { return }
+
+        if enabled {
+            disabledLibraries.remove(key)
+        } else {
+            disabledLibraries.insert(key)
+            // Remove already-synced items from this section
+            serverId.withCString { sidPtr in
+                key.withCString { keyPtr in
+                    reel_library_delete_by_section(lib, sidPtr, keyPtr)
+                }
+            }
+        }
+
+        // Save the updated disabled list
+        let value = disabledLibraries.joined(separator: ",")
+        reel_settings_set(db, "plex_disabled_libraries", value)
+    }
+
     private func removeScanPath(id: Int64) {
         guard let lib = appState.library else { return }
         reel_library_remove_scan_path(lib, id)
         reload()
+    }
+}
+
+extension ReelPlexLibraryC {
+    init() {
+        self.init(
+            key: UnsafePointer(bitPattern: 1)!,
+            title: UnsafePointer(bitPattern: 1)!,
+            library_type: UnsafePointer(bitPattern: 1)!
+        )
     }
 }
 

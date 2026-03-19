@@ -81,6 +81,12 @@ const AppState = struct {
     // Per-view navigation pages (singletons for replace())
     nav_pages: [sidebar_items.len + 2]?*c.GtkWidget = .{null} ** (sidebar_items.len + 2), // +2 for detail, player
     direct_play: bool = false,
+    current_media_item_id: ?i64 = null,
+    player_overlay: ?*c.GtkWidget = null,
+    connection_status: ?*c.GtkWidget = null, // sidebar connection indicator
+    connection_icon: ?*c.GtkWidget = null,
+    connection_label: ?*c.GtkWidget = null,
+    sync_spinner: ?*c.GtkWidget = null,
     // View instances (singletons, created once)
     home: ?home_view.HomeView = null,
     movies: ?movies_view.MoviesView = null,
@@ -345,6 +351,39 @@ fn buildSidebarLayout(window: *c.GtkWidget) void {
     c.gtk_scrolled_window_set_child(@ptrCast(scrolled), @ptrCast(list_box));
     c.adw_toolbar_view_set_content(@ptrCast(sidebar_toolbar), scrolled);
 
+    // --- Connection status indicator at bottom of sidebar ---
+    const conn_box = c.gtk_box_new(c.GTK_ORIENTATION_HORIZONTAL, 6);
+    c.gtk_widget_set_margin_start(conn_box, 12);
+    c.gtk_widget_set_margin_end(conn_box, 12);
+    c.gtk_widget_set_margin_top(conn_box, 8);
+    c.gtk_widget_set_margin_bottom(conn_box, 8);
+
+    const conn_icon = c.gtk_image_new_from_icon_name("network-offline-symbolic");
+    c.gtk_image_set_pixel_size(@ptrCast(conn_icon), 16);
+    c.gtk_widget_add_css_class(conn_icon, "dim-label");
+    c.gtk_box_append(@ptrCast(conn_box), conn_icon);
+
+    const conn_label = c.gtk_label_new("Connecting...");
+    c.gtk_widget_add_css_class(conn_label, "dim-label");
+    c.gtk_widget_add_css_class(conn_label, "caption");
+    c.gtk_label_set_ellipsize(@ptrCast(conn_label), 3); // PANGO_ELLIPSIZE_END
+    c.gtk_box_append(@ptrCast(conn_box), conn_label);
+
+    // Sync spinner (pushed to the right)
+    const spacer = c.gtk_box_new(c.GTK_ORIENTATION_HORIZONTAL, 0);
+    c.gtk_widget_set_hexpand(spacer, 1);
+    c.gtk_box_append(@ptrCast(conn_box), spacer);
+
+    const sync_spinner = c.gtk_spinner_new();
+    c.gtk_widget_set_visible(sync_spinner, 0);
+    c.gtk_box_append(@ptrCast(conn_box), sync_spinner);
+
+    c.adw_toolbar_view_add_bottom_bar(@ptrCast(sidebar_toolbar), conn_box);
+    app_state.connection_status = conn_box;
+    app_state.connection_icon = conn_icon;
+    app_state.connection_label = conn_label;
+    app_state.sync_spinner = sync_spinner;
+
     // --- Content area: AdwNavigationView ---
     const nav_view = c.adw_navigation_view_new();
     c.gtk_widget_set_vexpand(@ptrCast(nav_view), 1);
@@ -373,6 +412,7 @@ fn buildSidebarLayout(window: *c.GtkWidget) void {
 
     // Player overlay
     const player_overlay = c.gtk_overlay_new();
+    app_state.player_overlay = player_overlay;
     app_state.video = video_area.VideoArea.init(&app_state.player);
     c.gtk_overlay_set_child(@ptrCast(player_overlay), @ptrCast(app_state.video.widget));
     app_state.controls = player_controls.Controls.init(&app_state.player);
@@ -551,6 +591,38 @@ pub fn toggleFullscreen() void {
     }
 }
 
+pub const ConnectionStatus = enum { connecting, direct, relay, offline };
+
+pub fn setConnectionStatus(status: ConnectionStatus) void {
+    const icon = app_state.connection_icon orelse return;
+    const label = app_state.connection_label orelse return;
+
+    switch (status) {
+        .connecting => {
+            c.gtk_image_set_from_icon_name(@ptrCast(icon), "network-offline-symbolic");
+            c.gtk_label_set_text(@ptrCast(label), "Connecting...");
+        },
+        .direct => {
+            c.gtk_image_set_from_icon_name(@ptrCast(icon), "network-wired-symbolic");
+            c.gtk_label_set_text(@ptrCast(label), "Direct");
+        },
+        .relay => {
+            c.gtk_image_set_from_icon_name(@ptrCast(icon), "network-cellular-symbolic");
+            c.gtk_label_set_text(@ptrCast(label), "Relay");
+        },
+        .offline => {
+            c.gtk_image_set_from_icon_name(@ptrCast(icon), "network-offline-symbolic");
+            c.gtk_label_set_text(@ptrCast(label), "Offline");
+        },
+    }
+}
+
+pub fn setSyncing(syncing: bool) void {
+    const spinner = app_state.sync_spinner orelse return;
+    c.gtk_spinner_set_spinning(@ptrCast(spinner), if (syncing) 1 else 0);
+    c.gtk_widget_set_visible(spinner, if (syncing) 1 else 0);
+}
+
 pub fn isFullscreen() bool {
     return app_state.fullscreen;
 }
@@ -564,6 +636,128 @@ pub fn getLibrary() ?*library_mod.Library {
 
 pub fn getAllocator() std.mem.Allocator {
     return app_state.allocator;
+}
+
+pub fn getCurrentMediaItemId() ?i64 {
+    return app_state.current_media_item_id;
+}
+
+pub fn isDirectPlay() bool {
+    return app_state.direct_play;
+}
+
+pub fn getPlayerOverlay() ?*c.GtkWidget {
+    return app_state.player_overlay;
+}
+
+/// Apply subtitle appearance settings from the database to the player.
+/// Only sets properties that the user has explicitly configured.
+fn applySubtitleSettings() void {
+    const s = getSettings() orelse return;
+    const alloc = app_state.allocator;
+
+    if (s.getString("sub_font") catch null) |font| {
+        defer alloc.free(font);
+        const font_z = alloc.dupeZ(u8, font) catch return;
+        defer alloc.free(font_z);
+        app_state.player.setSubFont(font_z.ptr);
+    }
+    if (s.getInt("sub_font_size") catch null) |size| {
+        app_state.player.setSubFontSize(size);
+    }
+    if (s.getString("sub_color") catch null) |color| {
+        defer alloc.free(color);
+        const color_z = alloc.dupeZ(u8, color) catch return;
+        defer alloc.free(color_z);
+        app_state.player.setSubColor(color_z.ptr);
+    }
+    if (s.getString("sub_border_color") catch null) |color| {
+        defer alloc.free(color);
+        const color_z = alloc.dupeZ(u8, color) catch return;
+        defer alloc.free(color_z);
+        app_state.player.setSubBorderColor(color_z.ptr);
+    }
+    if (s.getString("sub_border_size") catch null) |size_str| {
+        defer alloc.free(size_str);
+        const size = std.fmt.parseFloat(f64, size_str) catch return;
+        app_state.player.setSubBorderSize(size);
+    }
+    if (s.getString("sub_back_color") catch null) |color| {
+        defer alloc.free(color);
+        const color_z = alloc.dupeZ(u8, color) catch return;
+        defer alloc.free(color_z);
+        app_state.player.setSubBackColor(color_z.ptr);
+    }
+    if (s.getInt("sub_pos") catch null) |pos| {
+        app_state.player.setSubPos(pos);
+    }
+}
+
+/// Fetch the credits marker start time (in seconds) for the current media item from Plex.
+/// Returns null if the item is not from Plex, has no markers, or on error.
+pub fn getCreditsStartSeconds(item_id: i64) ?f64 {
+    const lib = getLibrary() orelse return null;
+    const maybe_item = lib.getItemById(item_id) catch return null;
+    const item = maybe_item orelse return null;
+    defer lib.freeMediaItem(item);
+
+    if (item.source != .plex) return null;
+    const rating_key = item.source_id orelse return null;
+    const server_id = item.server_id orelse return null;
+
+    // Get server auth token and URI
+    const maybe_server = lib.getServer(server_id) catch return null;
+    const server = maybe_server orelse return null;
+    defer lib.freeServer(server);
+
+    const auth_token = server.auth_token orelse return null;
+    const server_uri = server.connection_uri orelse return null;
+
+    const http_client = getHttpClient() orelse return null;
+    const client_id = blk: {
+        if (getSettings()) |s| {
+            if (s.getString("client_identifier") catch null) |cid| {
+                break :blk cid;
+            }
+        }
+        break :blk @as(?[]const u8, null);
+    };
+    if (client_id == null) return null;
+    defer app_state.allocator.free(client_id.?);
+
+    const plex_client_mod = @import("../../net/plex/client.zig");
+    var plex = plex_client_mod.PlexClient.init(app_state.allocator, http_client, client_id.?, auth_token);
+    plex.setServerUri(server_uri);
+
+    const markers = plex.getMarkers(rating_key) catch return null;
+    defer plex.freeMarkers(markers);
+
+    // Find the "credits" marker
+    for (markers) |m| {
+        if (std.mem.eql(u8, m.marker_type, "credits")) {
+            return @as(f64, @floatFromInt(m.start_time_ms)) / 1000.0;
+        }
+    }
+    return null;
+}
+
+/// Play the next episode (called by auto-play). Preserves playback speed.
+pub fn playNextEpisode(next_item_id: i64, file_path: []const u8) void {
+    app_state.current_media_item_id = next_item_id;
+
+    const url = resolveStreamUrl(next_item_id, file_path) orelse {
+        std.log.err("Failed to resolve stream URL for next episode {d}", .{next_item_id});
+        return;
+    };
+    defer app_state.allocator.free(url);
+
+    app_state.player.loadFile(url) catch |err| {
+        std.log.err("Failed to load next episode: {}", .{err});
+    };
+    // Scan for external subtitle files
+    app_state.player.scanAndLoadExternalSubs(url);
+    // Apply subtitle appearance settings
+    applySubtitleSettings();
 }
 
 pub fn getSettings() ?*settings_mod.Settings {
@@ -690,18 +884,105 @@ pub fn switchToPlayer(file_path: []const u8) void {
     const nav: *c.GtkWidget = app_state.nav_view orelse return;
     app_state.active_view = .player;
 
+    // Reset speed to 1x on manual new playback
+    app_state.player.setSpeed(1.0) catch {};
+    app_state.controls.updateSpeedLabel();
+
     // Push player page onto navigation stack (by tag — page is static)
     c.adw_navigation_view_push_by_tag(@ptrCast(nav), "player");
 
+    std.log.info("Loading file: {s}", .{file_path});
     app_state.player.loadFile(file_path) catch |err| {
         std.log.err("Failed to load file: {}", .{err});
     };
+    // Scan for external subtitle files alongside local videos
+    app_state.player.scanAndLoadExternalSubs(file_path);
+    // Apply subtitle appearance settings
+    applySubtitleSettings();
     app_state.controls.show();
     app_state.controls.scheduleHide();
 }
 
+/// Resolve a Plex part_key to a full stream URL.
+/// Uses the server's current connection_uri (which is upgraded at startup by background
+/// connection testing in plex_setup.refreshServerConnections).
+/// If the connection is a relay, uses the transcoding endpoint to proxy the stream.
+/// For non-Plex items (local files, full URLs), returns the path as-is.
+fn resolveStreamUrl(item_id: i64, path: []const u8) ?[]const u8 {
+    // If it's already a full URL, use it directly (legacy DB entries)
+    if (std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://")) {
+        return app_state.allocator.dupe(u8, path) catch null;
+    }
+
+    // It's a Plex part_key — resolve via server connection
+    const lib = getLibrary() orelse return null;
+    const maybe_item = lib.getItemById(item_id) catch return null;
+    const item = maybe_item orelse return null;
+    defer lib.freeMediaItem(item);
+
+    if (item.source != .plex) {
+        return app_state.allocator.dupe(u8, path) catch null;
+    }
+
+    const server_id = item.server_id orelse return null;
+    const rating_key = item.source_id orelse return null;
+    const maybe_server = lib.getServer(server_id) catch return null;
+    const server = maybe_server orelse return null;
+    defer lib.freeServer(server);
+
+    const token = server.auth_token orelse return null;
+    const uri = server.connection_uri orelse return null;
+
+    // Check if current connection is a relay
+    var is_relay = false;
+    const connections = lib.getServerConnections(server_id) catch {
+        // Can't check — assume direct
+        std.log.info("Streaming via {s}", .{uri});
+        return std.fmt.allocPrint(app_state.allocator, "{s}{s}?X-Plex-Token={s}", .{ uri, path, token }) catch null;
+    };
+    defer lib.freeServerConnections(connections);
+
+    for (connections) |conn| {
+        if (std.mem.eql(u8, conn.uri, uri)) {
+            is_relay = conn.is_relay;
+            break;
+        }
+    }
+
+    if (!is_relay) {
+        // Direct connection — use the part_key directly
+        std.log.info("Streaming via direct connection: {s}", .{uri});
+        return std.fmt.allocPrint(app_state.allocator, "{s}{s}?X-Plex-Token={s}", .{ uri, path, token }) catch null;
+    }
+
+    // Relay — use transcoding endpoint to proxy the stream
+    const client_id = blk: {
+        if (getSettings()) |s| {
+            if (s.getString("client_identifier") catch null) |cid| {
+                break :blk cid;
+            }
+        }
+        break :blk @as(?[]const u8, null);
+    };
+    defer if (client_id) |cid| app_state.allocator.free(cid);
+
+    if (client_id) |cid| {
+        std.log.info("Streaming via relay (indirect): {s}", .{uri});
+        return std.fmt.allocPrint(
+            app_state.allocator,
+            "{s}/video/:/transcode/universal/start.mkv?path=%2Flibrary%2Fmetadata%2F{s}&mediaIndex=0&partIndex=0&protocol=http&directPlay=0&directStream=1&location=wan&X-Plex-Token={s}&X-Plex-Client-Identifier={s}&X-Plex-Product=Reel&X-Plex-Platform=Linux",
+            .{ uri, rating_key, token, cid },
+        ) catch null;
+    }
+
+    // No client ID — try direct path on relay (will likely 500)
+    std.log.warn("No client ID for relay streaming, trying direct path: {s}", .{uri});
+    return std.fmt.allocPrint(app_state.allocator, "{s}{s}?X-Plex-Token={s}", .{ uri, path, token }) catch null;
+}
+
 /// Play a media item, preferring a completed local download over streaming.
 pub fn playMediaItem(item_id: i64, streaming_path: []const u8) void {
+    app_state.current_media_item_id = item_id;
     // Check for completed local download first
     if (getDownloader()) |dl| {
         if (dl.getCompletedLocalPath(item_id) catch null) |local_path| {
@@ -714,14 +995,22 @@ pub fn playMediaItem(item_id: i64, streaming_path: []const u8) void {
                     dl.setFailed(download.id, "File not found") catch {};
                 }
                 // Fall through to streaming
-                switchToPlayer(streaming_path);
+                if (resolveStreamUrl(item_id, streaming_path)) |url| {
+                    defer app_state.allocator.free(url);
+                    switchToPlayer(url);
+                }
                 return;
             };
             switchToPlayer(local_path);
             return;
         }
     }
-    switchToPlayer(streaming_path);
+    if (resolveStreamUrl(item_id, streaming_path)) |url| {
+        defer app_state.allocator.free(url);
+        switchToPlayer(url);
+    } else {
+        std.log.err("Failed to resolve stream URL for item {d}", .{item_id});
+    }
 }
 
 pub fn switchToView(view_name: [*:0]const u8) void {
