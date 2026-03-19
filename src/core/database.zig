@@ -49,7 +49,9 @@ pub const Database = struct {
         const span = std.mem.span(path);
         var buf: [512]u8 = undefined;
         const backup = std.fmt.bufPrintZ(&buf, "{s}.old", .{span}) catch return;
-        std.fs.cwd().rename(span, backup) catch {};
+        const cwd = std.Io.Dir.cwd();
+        const sio = std.Io.Threaded.global_single_threaded.io();
+        cwd.rename(span, cwd, backup, sio) catch {};
         // Also clean up WAL/SHM files
         var wal_buf: [512]u8 = undefined;
         var shm_buf: [512]u8 = undefined;
@@ -59,8 +61,8 @@ pub const Database = struct {
         var shm_old: [512]u8 = undefined;
         const wal_bak = std.fmt.bufPrintZ(&wal_old, "{s}-wal", .{backup}) catch return;
         const shm_bak = std.fmt.bufPrintZ(&shm_old, "{s}-shm", .{backup}) catch return;
-        std.fs.cwd().rename(wal, wal_bak) catch {};
-        std.fs.cwd().rename(shm, shm_bak) catch {};
+        cwd.rename(wal, cwd, wal_bak, sio) catch {};
+        cwd.rename(shm, cwd, shm_bak, sio) catch {};
     }
 
     pub fn close(self: *Database) void {
@@ -297,13 +299,15 @@ test "database insert and query" {
     ) catch return error.SqlExecFailed;
 
     // Query it back
-    const result = db.db.one(
+    const result = db.db.oneAlloc(
         struct { value: []const u8 },
+        std.testing.allocator,
         "SELECT value FROM settings WHERE key = ?{[]const u8}",
         .{},
         .{"test_key"},
     ) catch return error.SqlExecFailed;
 
     try std.testing.expect(result != null);
+    defer std.testing.allocator.free(result.?.value);
     try std.testing.expectEqualStrings("test_value", result.?.value);
 }

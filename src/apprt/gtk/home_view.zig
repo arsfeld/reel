@@ -117,7 +117,7 @@ pub const HomeView = struct {
             defer lib.freeFavorites(favs);
             if (favs.len > 0) {
                 // Resolve favorites to media items
-                var fav_items: std.ArrayList(types.MediaItem) = .{};
+                var fav_items: std.ArrayList(types.MediaItem) = .empty;
                 defer {
                     for (fav_items.items) |item| lib.freeMediaItem(item);
                     fav_items.deinit(app.getAllocator());

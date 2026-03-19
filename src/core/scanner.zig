@@ -130,7 +130,7 @@ fn stripExtension(name: []const u8) []const u8 {
 /// Scan a directory recursively for video files.
 /// Returns a list of absolute paths to video files.
 pub fn scanDirectory(allocator: std.mem.Allocator, dir_path: []const u8) ![][]const u8 {
-    var results: std.ArrayList([]const u8) = .{};
+    var results: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (results.items) |item| allocator.free(item);
         results.deinit(allocator);
@@ -141,11 +141,12 @@ pub fn scanDirectory(allocator: std.mem.Allocator, dir_path: []const u8) ![][]co
 }
 
 fn scanDirRecursive(allocator: std.mem.Allocator, dir_path: []const u8, results: *std.ArrayList([]const u8)) !void {
-    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
-    defer dir.close();
+    const sio = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(sio, dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(sio);
 
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(sio)) |entry| {
         const full_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
 
         switch (entry.kind) {

@@ -11,23 +11,23 @@ pub const Settings = struct {
 
     /// Returns an allocated string that the caller must free.
     pub fn getString(self: *Settings, key: []const u8) !?[]const u8 {
-        var stmt = self.db.prepare("SELECT value FROM settings WHERE key = ?") catch return null;
-        defer stmt.finalize();
-        stmt.bindText(1, key);
-        if (stmt.step()) {
-            if (stmt.columnText(0)) |text| {
-                return try self.allocator.dupe(u8, text);
-            }
-        }
+        const row = self.db.db.oneAlloc(
+            struct { value: []const u8 },
+            self.allocator,
+            "SELECT value FROM settings WHERE key = ?{[]const u8}",
+            .{},
+            .{key},
+        ) catch return null;
+        if (row) |r| return r.value;
         return null;
     }
 
     pub fn setString(self: *Settings, key: []const u8, value: []const u8) !void {
-        var stmt = try self.db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
-        defer stmt.finalize();
-        stmt.bindText(1, key);
-        stmt.bindText(2, value);
-        try stmt.exec();
+        self.db.db.exec(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?{[]const u8}, ?{[]const u8})",
+            .{},
+            .{ key, value },
+        ) catch return error.SqlExecFailed;
     }
 
     pub fn getInt(self: *Settings, key: []const u8) !?i64 {
@@ -55,10 +55,11 @@ pub const Settings = struct {
     }
 
     pub fn delete(self: *Settings, key: []const u8) !void {
-        var stmt = try self.db.prepare("DELETE FROM settings WHERE key = ?");
-        defer stmt.finalize();
-        stmt.bindText(1, key);
-        try stmt.exec();
+        self.db.db.exec(
+            "DELETE FROM settings WHERE key = ?{[]const u8}",
+            .{},
+            .{key},
+        ) catch return error.SqlExecFailed;
     }
 };
 

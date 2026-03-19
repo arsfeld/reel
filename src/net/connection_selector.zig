@@ -2,6 +2,12 @@ const std = @import("std");
 const http = @import("http.zig");
 const types = @import("../core/types.zig");
 
+fn milliTimestamp() i64 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
+}
+
 pub const TestResult = struct {
     uri: []const u8,
     score: i32,
@@ -32,7 +38,7 @@ pub const ConnectionSelector = struct {
         const url = std.fmt.allocPrint(self.allocator, "{s}/identity", .{uri}) catch return null;
         defer self.allocator.free(url);
 
-        const start = std.time.milliTimestamp();
+        const start = milliTimestamp();
 
         var response = self.http_client.get(url, self.plex_headers) catch {
             return null;
@@ -41,7 +47,7 @@ pub const ConnectionSelector = struct {
 
         if (response.status != .ok) return null;
 
-        const latency: i32 = @intCast(@min(std.time.milliTimestamp() - start, std.math.maxInt(i32)));
+        const latency: i32 = @intCast(@min(milliTimestamp() - start, std.math.maxInt(i32)));
 
         return TestResult{
             .uri = uri,

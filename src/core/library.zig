@@ -1,181 +1,115 @@
 const std = @import("std");
 const database = @import("database.zig");
 const types = @import("types.zig");
+const sqlite = database.sqlite;
 
 pub const Library = struct {
     db: *database.Database,
     allocator: std.mem.Allocator,
-
-    // ── Column field tuples ──────────────────────────────────
-    // These define the canonical column order for SELECT and INSERT queries.
-    // readRow/bindStruct use these to eliminate hardcoded numeric indices.
-
-    const media_item_fields = .{
-        .id,            .source,        .source_id,      .server_id,
-        .media_type,    .title,         .sort_title,      .year,
-        .summary,       .rating,        .duration_ms,     .poster_path,
-        .backdrop_path, .tmdb_id,       .parent_id,       .season_number,
-        .episode_number,.file_path,     .library_section, .added_at,
-        .updated_at,    .match_locked,
-    };
-
-    const media_item_insert_fields = .{
-        .source,        .source_id,     .server_id,       .media_type,
-        .title,         .sort_title,    .year,            .summary,
-        .rating,        .duration_ms,   .poster_path,     .backdrop_path,
-        .tmdb_id,       .parent_id,     .season_number,   .episode_number,
-        .file_path,     .library_section,.added_at,       .updated_at,
-    };
-
-    const media_item_select = "SELECT " ++ database.columnList(media_item_fields, null) ++ " FROM media_items";
-    const media_item_select_m = "SELECT " ++ database.columnList(media_item_fields, "m") ++ " FROM media_items m";
-
-    const collection_fields = .{
-        .id, .name, .collection_type, .description, .poster_path,
-        .show_on_home, .sort_order, .created_at, .updated_at,
-    };
 
     pub fn init(allocator: std.mem.Allocator, db: *database.Database) Library {
         return .{ .db = db, .allocator = allocator };
     }
 
     pub fn insertMediaItem(self: *Library, item: types.MediaItem) !i64 {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare(
-            "INSERT INTO media_items (" ++ database.columnList(media_item_insert_fields, null) ++
-                ") VALUES (" ++ database.placeholders(media_item_insert_fields.len) ++ ")",
-        );
-        defer stmt.finalize();
-
-        _ = stmt.bindStruct(types.MediaItem, media_item_insert_fields, item, 1);
-
-        try stmt.exec();
-        return stmt.lastInsertRowId();
+        try self.db.db.exec(
+            \\INSERT INTO media_items (source, source_id, server_id, media_type,
+            \\  title, sort_title, year, summary, rating, duration_ms,
+            \\  poster_path, backdrop_path, tmdb_id, parent_id,
+            \\  season_number, episode_number, file_path, library_section,
+            \\  added_at, updated_at)
+            \\VALUES (?{[]const u8}, ?{?[]const u8}, ?{?[]const u8}, ?{[]const u8},
+            \\  ?{[]const u8}, ?{?[]const u8}, ?{?i32}, ?{?[]const u8}, ?{?f64}, ?{?i64},
+            \\  ?{?[]const u8}, ?{?[]const u8}, ?{?i32}, ?{?i64},
+            \\  ?{?i32}, ?{?i32}, ?{?[]const u8}, ?{?[]const u8},
+            \\  ?{?i64}, ?{?i64})
+        , .{}, .{
+            item.source,       item.source_id,      item.server_id,      item.media_type,
+            item.title,        item.sort_title,      item.year,           item.summary,
+            item.rating,       item.duration_ms,     item.poster_path,    item.backdrop_path,
+            item.tmdb_id,      item.parent_id,       item.season_number,  item.episode_number,
+            item.file_path,    item.library_section, item.added_at,       item.updated_at,
+        });
+        return self.db.db.getLastInsertRowID();
     }
 
     pub fn getMediaItem(self: *Library, id: i64) !?types.MediaItem {
-        var stmt = try self.db.prepare(
+        return try self.db.db.oneAlloc(types.MediaItem, self.allocator,
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
-            \\FROM media_items WHERE id = ?
-        );
-        defer stmt.finalize();
-        stmt.bindInt64(1, id);
-
-        if (stmt.step()) {
-            return try readMediaItem(self.allocator, &stmt);
-        }
-        return null;
+            \\       season_number, episode_number, file_path, library_section,
+            \\       added_at, updated_at, match_locked
+            \\FROM media_items WHERE id = ?{i64}
+        , .{}, .{id});
     }
 
     pub fn getBySourceId(self: *Library, source: types.MediaSource, source_id: []const u8) !?types.MediaItem {
-        var stmt = try self.db.prepare(
+        return try self.db.db.oneAlloc(types.MediaItem, self.allocator,
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
-            \\FROM media_items WHERE source = ? AND source_id = ?
-        );
-        defer stmt.finalize();
-        stmt.bindText(1, source.toString());
-        stmt.bindText(2, source_id);
-
-        if (stmt.step()) {
-            return try readMediaItem(self.allocator, &stmt);
-        }
-        return null;
+            \\       season_number, episode_number, file_path, library_section,
+            \\       added_at, updated_at, match_locked
+            \\FROM media_items WHERE source = ?{[]const u8} AND source_id = ?{[]const u8}
+        , .{}, .{ source, source_id });
     }
 
     pub fn updateWatchProgress(self: *Library, progress: types.WatchProgress) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare(
+        try self.db.db.exec(
             \\INSERT OR REPLACE INTO watch_progress
             \\  (media_item_id, position_ms, duration_ms, watched, last_watched_at)
-            \\VALUES (?, ?, ?, ?, ?)
-        );
-        defer stmt.finalize();
-
-        stmt.bindInt64(1, progress.media_item_id);
-        stmt.bindInt64(2, progress.position_ms);
-        stmt.bindOptionalInt64(3, progress.duration_ms);
-        stmt.bindInt(4, if (progress.watched) 1 else 0);
-        stmt.bindOptionalInt64(5, progress.last_watched_at);
-
-        try stmt.exec();
+            \\VALUES (?{i64}, ?{i64}, ?{?i64}, ?{bool}, ?{?i64})
+        , .{}, .{
+            progress.media_item_id,
+            progress.position_ms,
+            progress.duration_ms,
+            progress.watched,
+            progress.last_watched_at,
+        });
     }
 
     pub fn getWatchProgress(self: *Library, media_item_id: i64) !?types.WatchProgress {
-        var stmt = try self.db.prepare(
+        return try self.db.db.one(types.WatchProgress,
             \\SELECT media_item_id, position_ms, duration_ms, watched, last_watched_at
-            \\FROM watch_progress WHERE media_item_id = ?
-        );
-        defer stmt.finalize();
-        stmt.bindInt64(1, media_item_id);
-
-        if (stmt.step()) {
-            return types.WatchProgress{
-                .media_item_id = stmt.columnInt64(0),
-                .position_ms = stmt.columnInt64(1),
-                .duration_ms = stmt.columnOptionalInt64(2),
-                .watched = stmt.columnBool(3),
-                .last_watched_at = stmt.columnOptionalInt64(4),
-            };
-        }
-        return null;
+            \\FROM watch_progress WHERE media_item_id = ?{i64}
+        , .{}, .{media_item_id});
     }
 
     pub fn setLibrarySection(self: *Library, item_id: i64, section: []const u8) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("UPDATE media_items SET library_section = ? WHERE id = ?");
-        defer stmt.finalize();
-        stmt.bindText(1, section);
-        stmt.bindInt64(2, item_id);
-        try stmt.exec();
+        try self.db.db.exec(
+            "UPDATE media_items SET library_section = ?{[]const u8} WHERE id = ?{i64}",
+            .{},
+            .{ section, item_id },
+        );
     }
 
     pub fn deleteByLibrarySection(self: *Library, server_id: []const u8, section: []const u8) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
         // Delete watch progress for affected items
-        var wp_stmt = try self.db.prepare(
+        try self.db.db.exec(
             \\DELETE FROM watch_progress WHERE media_item_id IN
-            \\  (SELECT id FROM media_items WHERE server_id = ? AND library_section = ?)
-        );
-        defer wp_stmt.finalize();
-        wp_stmt.bindText(1, server_id);
-        wp_stmt.bindText(2, section);
-        try wp_stmt.exec();
+            \\  (SELECT id FROM media_items WHERE server_id = ?{[]const u8} AND library_section = ?{[]const u8})
+        , .{}, .{ server_id, section });
 
         // Delete the items themselves
-        var stmt = try self.db.prepare("DELETE FROM media_items WHERE server_id = ? AND library_section = ?");
-        defer stmt.finalize();
-        stmt.bindText(1, server_id);
-        stmt.bindText(2, section);
-        try stmt.exec();
+        try self.db.db.exec(
+            "DELETE FROM media_items WHERE server_id = ?{[]const u8} AND library_section = ?{[]const u8}",
+            .{},
+            .{ server_id, section },
+        );
     }
 
     pub fn deleteMediaItem(self: *Library, id: i64) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var wp_stmt = try self.db.prepare("DELETE FROM watch_progress WHERE media_item_id = ?");
-        defer wp_stmt.finalize();
-        wp_stmt.bindInt64(1, id);
-        try wp_stmt.exec();
-
-        var stmt = try self.db.prepare("DELETE FROM media_items WHERE id = ?");
-        defer stmt.finalize();
-        stmt.bindInt64(1, id);
-        try stmt.exec();
+        try self.db.db.exec(
+            "DELETE FROM watch_progress WHERE media_item_id = ?{i64}",
+            .{},
+            .{id},
+        );
+        try self.db.db.exec(
+            "DELETE FROM media_items WHERE id = ?{i64}",
+            .{},
+            .{id},
+        );
     }
 
     // Query operations
@@ -200,8 +134,6 @@ pub const Library = struct {
         limit: u32,
         offset: u32,
     ) ![]types.MediaItem {
-        // Build SQL with sort clause. We use comptime-known sort strings
-        // but must pick at runtime, so use a buffer approach.
         const order_clause = switch (sort_by) {
             .title => "COALESCE(sort_title, title)",
             .year => "year",
@@ -213,124 +145,112 @@ pub const Library = struct {
             .desc => "DESC",
         };
 
-        var sql_buf: [512]u8 = undefined;
-        const sql = std.fmt.bufPrintZ(&sql_buf,
+        var sql_buf: [1024]u8 = undefined;
+        const sql = std.fmt.bufPrint(&sql_buf,
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
+            \\       season_number, episode_number, file_path, library_section,
+            \\       added_at, updated_at, match_locked
             \\FROM media_items WHERE media_type = ?
             \\ORDER BY {s} {s} LIMIT ? OFFSET ?
         , .{ order_clause, direction }) catch return error.SqlFormatFailed;
 
-        var stmt = try self.db.prepare(sql);
-        defer stmt.finalize();
-        stmt.bindText(1, media_type.toString());
-        stmt.bindInt(2, @intCast(limit));
-        stmt.bindInt(3, @intCast(offset));
-
-        return self.collectMediaItems(&stmt);
+        var stmt = try self.db.db.prepareDynamic(sql);
+        defer stmt.deinit();
+        return try stmt.all(types.MediaItem, self.allocator, .{}, .{
+            media_type.toString(),
+            @as(i64, @intCast(limit)),
+            @as(i64, @intCast(offset)),
+        });
     }
 
     pub fn getRecentlyAdded(self: *Library, limit: u32) ![]types.MediaItem {
-        var stmt = try self.db.prepare(
+        var stmt = try self.db.db.prepare(
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
+            \\       season_number, episode_number, file_path, library_section,
+            \\       added_at, updated_at, match_locked
             \\FROM media_items
             \\WHERE media_type IN ('movie', 'show')
-            \\ORDER BY added_at DESC LIMIT ?
+            \\ORDER BY added_at DESC LIMIT ?{i32}
         );
-        defer stmt.finalize();
-        stmt.bindInt(1, @intCast(limit));
-
-        return self.collectMediaItems(&stmt);
+        defer stmt.deinit();
+        return try stmt.all(types.MediaItem, self.allocator, .{}, .{@as(i32, @intCast(limit))});
     }
 
     pub fn getContinueWatching(self: *Library, limit: u32) ![]types.MediaItem {
-        var stmt = try self.db.prepare(
+        var stmt = try self.db.db.prepare(
             \\SELECT m.id, m.source, m.source_id, m.server_id, m.media_type, m.title,
             \\       m.sort_title, m.year, m.summary, m.rating, m.duration_ms,
             \\       m.poster_path, m.backdrop_path, m.tmdb_id, m.parent_id,
-            \\       m.season_number, m.episode_number, m.file_path, m.added_at, m.updated_at, m.match_locked
+            \\       m.season_number, m.episode_number, m.file_path, m.library_section,
+            \\       m.added_at, m.updated_at, m.match_locked
             \\FROM media_items m
             \\JOIN watch_progress wp ON m.id = wp.media_item_id
             \\WHERE wp.watched = 0 AND wp.position_ms > 0
-            \\ORDER BY wp.last_watched_at DESC LIMIT ?
+            \\ORDER BY wp.last_watched_at DESC LIMIT ?{i32}
         );
-        defer stmt.finalize();
-        stmt.bindInt(1, @intCast(limit));
-
-        return self.collectMediaItems(&stmt);
+        defer stmt.deinit();
+        return try stmt.all(types.MediaItem, self.allocator, .{}, .{@as(i32, @intCast(limit))});
     }
 
     pub fn searchItems(self: *Library, query: []const u8, media_type_filter: ?types.MediaType) ![]types.MediaItem {
+        var pattern_buf: [256]u8 = undefined;
+        const pattern = std.fmt.bufPrint(&pattern_buf, "%{s}%", .{query}) catch return error.SqlFormatFailed;
+
         if (media_type_filter) |mt| {
-            var stmt = try self.db.prepare(
+            var stmt = try self.db.db.prepare(
                 \\SELECT id, source, source_id, server_id, media_type, title,
                 \\       sort_title, year, summary, rating, duration_ms,
                 \\       poster_path, backdrop_path, tmdb_id, parent_id,
-                \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
-                \\FROM media_items WHERE title LIKE ? AND media_type = ?
+                \\       season_number, episode_number, file_path, library_section,
+                \\       added_at, updated_at, match_locked
+                \\FROM media_items WHERE title LIKE ?{[]const u8} AND media_type = ?{[]const u8}
                 \\ORDER BY title LIMIT 50
             );
-            defer stmt.finalize();
-
-            var pattern_buf: [256]u8 = undefined;
-            const pattern = std.fmt.bufPrint(&pattern_buf, "%{s}%", .{query}) catch return error.SqlFormatFailed;
-            stmt.bindText(1, pattern);
-            stmt.bindText(2, mt.toString());
-            return self.collectMediaItems(&stmt);
+            defer stmt.deinit();
+            return try stmt.all(types.MediaItem, self.allocator, .{}, .{ pattern, mt });
         } else {
-            var stmt = try self.db.prepare(
+            var stmt = try self.db.db.prepare(
                 \\SELECT id, source, source_id, server_id, media_type, title,
                 \\       sort_title, year, summary, rating, duration_ms,
                 \\       poster_path, backdrop_path, tmdb_id, parent_id,
-                \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
-                \\FROM media_items WHERE title LIKE ?
+                \\       season_number, episode_number, file_path, library_section,
+                \\       added_at, updated_at, match_locked
+                \\FROM media_items WHERE title LIKE ?{[]const u8}
                 \\ORDER BY title LIMIT 50
             );
-            defer stmt.finalize();
-
-            var pattern_buf: [256]u8 = undefined;
-            const pattern = std.fmt.bufPrint(&pattern_buf, "%{s}%", .{query}) catch return error.SqlFormatFailed;
-            stmt.bindText(1, pattern);
-            return self.collectMediaItems(&stmt);
+            defer stmt.deinit();
+            return try stmt.all(types.MediaItem, self.allocator, .{}, .{pattern});
         }
     }
 
     pub fn getItemsByParent(self: *Library, parent_id: i64) ![]types.MediaItem {
-        var stmt = try self.db.prepare(
+        var stmt = try self.db.db.prepare(
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
-            \\FROM media_items WHERE parent_id = ?
+            \\       season_number, episode_number, file_path, library_section,
+            \\       added_at, updated_at, match_locked
+            \\FROM media_items WHERE parent_id = ?{i64}
             \\ORDER BY season_number, episode_number, title
         );
-        defer stmt.finalize();
-        stmt.bindInt64(1, parent_id);
-
-        return self.collectMediaItems(&stmt);
+        defer stmt.deinit();
+        return try stmt.all(types.MediaItem, self.allocator, .{}, .{parent_id});
     }
 
     /// Get a single media item by ID.
     pub fn getItemById(self: *Library, id: i64) !?types.MediaItem {
-        var stmt = try self.db.prepare(
+        return try self.db.db.oneAlloc(types.MediaItem, self.allocator,
             \\SELECT id, source, source_id, server_id, media_type, title,
             \\       sort_title, year, summary, rating, duration_ms,
             \\       poster_path, backdrop_path, tmdb_id, parent_id,
-            \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
-            \\FROM media_items WHERE id = ?
-        );
-        defer stmt.finalize();
-        stmt.bindInt64(1, id);
-
-        if (stmt.step()) {
-            return try readMediaItem(self.allocator, &stmt);
-        }
-        return null;
+            \\       season_number, episode_number, file_path, library_section,
+            \\       added_at, updated_at, match_locked
+            \\FROM media_items WHERE id = ?{i64}
+        , .{}, .{id});
     }
 
     /// Find the next episode after the given media item.
@@ -338,118 +258,86 @@ pub const Library = struct {
     /// Returns null if the item is not an episode or no next episode exists.
     pub fn getNextEpisode(self: *Library, current_item_id: i64) !?types.MediaItem {
         // First, get the current item to find its parent (season), episode number, etc.
-        var item_stmt = try self.db.prepare(
+        const CurrentInfo = struct {
+            parent_id: ?i64,
+            season_number: ?i32,
+            episode_number: ?i32,
+            media_type: types.MediaType,
+        };
+        const info = try self.db.db.oneAlloc(CurrentInfo, self.allocator,
             \\SELECT parent_id, season_number, episode_number, media_type
-            \\FROM media_items WHERE id = ?
-        );
-        defer item_stmt.finalize();
-        item_stmt.bindInt64(1, current_item_id);
+            \\FROM media_items WHERE id = ?{i64}
+        , .{}, .{current_item_id}) orelse return null;
 
-        if (!item_stmt.step()) return null;
-
-        const media_type_str = item_stmt.columnText(3) orelse return null;
-        if (!std.mem.eql(u8, media_type_str, "episode")) return null;
-
-        const season_id = item_stmt.columnOptionalInt64(0) orelse return null;
-        const current_episode = item_stmt.columnOptionalInt(2) orelse return null;
-        const current_season = item_stmt.columnOptionalInt(1);
+        if (info.media_type != .episode) return null;
+        const season_id = info.parent_id orelse return null;
+        const current_episode = info.episode_number orelse return null;
 
         // Try next episode in the same season
-        {
-            var stmt = try self.db.prepare(
-                \\SELECT id, source, source_id, server_id, media_type, title,
-                \\       sort_title, year, summary, rating, duration_ms,
-                \\       poster_path, backdrop_path, tmdb_id, parent_id,
-                \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
-                \\FROM media_items
-                \\WHERE parent_id = ? AND episode_number > ?
-                \\ORDER BY episode_number ASC LIMIT 1
-            );
-            defer stmt.finalize();
-            stmt.bindInt64(1, season_id);
-            stmt.bindInt(2, current_episode);
+        const next_in_season = try self.db.db.oneAlloc(types.MediaItem, self.allocator,
+            \\SELECT id, source, source_id, server_id, media_type, title,
+            \\       sort_title, year, summary, rating, duration_ms,
+            \\       poster_path, backdrop_path, tmdb_id, parent_id,
+            \\       season_number, episode_number, file_path, library_section,
+            \\       added_at, updated_at, match_locked
+            \\FROM media_items
+            \\WHERE parent_id = ?{i64} AND episode_number > ?{i32}
+            \\ORDER BY episode_number ASC LIMIT 1
+        , .{}, .{ season_id, current_episode });
 
-            if (stmt.step()) {
-                return try readMediaItem(self.allocator, &stmt);
-            }
-        }
+        if (next_in_season) |item| return item;
 
-        // No more episodes in this season — try the next season
-        if (current_season) |cs| {
-            // Get the show ID (parent of the season)
-            var show_stmt = try self.db.prepare(
-                "SELECT parent_id FROM media_items WHERE id = ?"
-            );
-            defer show_stmt.finalize();
-            show_stmt.bindInt64(1, season_id);
+        // No more episodes in this season -- try the next season
+        const current_season = info.season_number orelse return null;
 
-            if (!show_stmt.step()) return null;
-            const show_id = show_stmt.columnOptionalInt64(0) orelse return null;
+        // Get the show ID (parent of the season)
+        const ShowId = struct { parent_id: ?i64 };
+        const show_row = try self.db.db.one(ShowId,
+            "SELECT parent_id FROM media_items WHERE id = ?{i64}",
+            .{},
+            .{season_id},
+        ) orelse return null;
+        const show_id = show_row.parent_id orelse return null;
 
-            // Find the next season
-            var next_season_stmt = try self.db.prepare(
-                "SELECT id FROM media_items WHERE parent_id = ? AND season_number > ? ORDER BY season_number ASC LIMIT 1"
-            );
-            defer next_season_stmt.finalize();
-            next_season_stmt.bindInt64(1, show_id);
-            next_season_stmt.bindInt(2, cs);
+        // Find the next season
+        const NextSeason = struct { id: i64 };
+        const next_season = try self.db.db.one(NextSeason,
+            "SELECT id FROM media_items WHERE parent_id = ?{i64} AND season_number > ?{i32} ORDER BY season_number ASC LIMIT 1",
+            .{},
+            .{ show_id, current_season },
+        ) orelse return null;
 
-            if (!next_season_stmt.step()) return null;
-            const next_season_id = next_season_stmt.columnInt64(0);
-
-            // Get first episode of that season
-            var ep_stmt = try self.db.prepare(
-                \\SELECT id, source, source_id, server_id, media_type, title,
-                \\       sort_title, year, summary, rating, duration_ms,
-                \\       poster_path, backdrop_path, tmdb_id, parent_id,
-                \\       season_number, episode_number, file_path, library_section, added_at, updated_at, match_locked
-                \\FROM media_items
-                \\WHERE parent_id = ? AND media_type = 'episode'
-                \\ORDER BY episode_number ASC LIMIT 1
-            );
-            defer ep_stmt.finalize();
-            ep_stmt.bindInt64(1, next_season_id);
-
-            if (ep_stmt.step()) {
-                return try readMediaItem(self.allocator, &ep_stmt);
-            }
-        }
-
-        return null;
+        // Get first episode of that season
+        return try self.db.db.oneAlloc(types.MediaItem, self.allocator,
+            \\SELECT id, source, source_id, server_id, media_type, title,
+            \\       sort_title, year, summary, rating, duration_ms,
+            \\       poster_path, backdrop_path, tmdb_id, parent_id,
+            \\       season_number, episode_number, file_path, library_section,
+            \\       added_at, updated_at, match_locked
+            \\FROM media_items
+            \\WHERE parent_id = ?{i64} AND media_type = 'episode'
+            \\ORDER BY episode_number ASC LIMIT 1
+        , .{}, .{next_season.id});
     }
 
     pub fn getItemCount(self: *Library, media_type: types.MediaType) !u32 {
-        var stmt = try self.db.prepare(
-            "SELECT COUNT(*) FROM media_items WHERE media_type = ?"
+        const CountResult = struct { count: i64 };
+        const result = try self.db.db.one(CountResult,
+            "SELECT COUNT(*) FROM media_items WHERE media_type = ?{[]const u8}",
+            .{},
+            .{media_type},
         );
-        defer stmt.finalize();
-        stmt.bindText(1, media_type.toString());
-
-        if (stmt.step()) {
-            return @intCast(stmt.columnInt(0));
-        }
+        if (result) |r| return @intCast(r.count);
         return 0;
     }
 
     pub fn listServers(self: *Library) ![]types.Server {
-        var stmt = try self.db.prepare(
+        var stmt = try self.db.db.prepare(
             \\SELECT id, name, client_identifier, auth_token, connection_uri, last_connected_at
             \\FROM servers ORDER BY name
         );
-        defer stmt.finalize();
-
-        var results: std.ArrayList(types.Server) = .{};
-        while (stmt.step()) {
-            try results.append(self.allocator, types.Server{
-                .id = try dupeText(self.allocator, stmt.columnText(0) orelse continue),
-                .name = try dupeText(self.allocator, stmt.columnText(1) orelse ""),
-                .client_identifier = try dupeText(self.allocator, stmt.columnText(2) orelse ""),
-                .auth_token = try dupeOptionalText(self.allocator, stmt.columnText(3)),
-                .connection_uri = try dupeOptionalText(self.allocator, stmt.columnText(4)),
-                .last_connected_at = stmt.columnOptionalInt64(5),
-            });
-        }
-        return results.toOwnedSlice(self.allocator);
+        defer stmt.deinit();
+        return try stmt.all(types.Server, self.allocator, .{}, .{});
     }
 
     pub fn freeServers(self: *Library, servers: []types.Server) void {
@@ -458,20 +346,11 @@ pub const Library = struct {
     }
 
     pub fn listScanPaths(self: *Library) ![]types.ScanPath {
-        var stmt = try self.db.prepare(
-            "SELECT id, path, last_scanned_at FROM scan_paths ORDER BY path"
+        var stmt = try self.db.db.prepare(
+            "SELECT id, path, last_scanned_at FROM scan_paths ORDER BY path",
         );
-        defer stmt.finalize();
-
-        var results: std.ArrayList(types.ScanPath) = .{};
-        while (stmt.step()) {
-            try results.append(self.allocator, types.ScanPath{
-                .id = stmt.columnInt64(0),
-                .path = try dupeText(self.allocator, stmt.columnText(1) orelse continue),
-                .last_scanned_at = stmt.columnOptionalInt64(2),
-            });
-        }
-        return results.toOwnedSlice(self.allocator);
+        defer stmt.deinit();
+        return try stmt.all(types.ScanPath, self.allocator, .{}, .{});
     }
 
     pub fn freeScanPaths(self: *Library, paths: []types.ScanPath) void {
@@ -480,86 +359,62 @@ pub const Library = struct {
     }
 
     pub fn insertScanPath(self: *Library, path: []const u8) !i64 {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare(
-            "INSERT OR IGNORE INTO scan_paths (path) VALUES (?)"
+        try self.db.db.exec(
+            "INSERT OR IGNORE INTO scan_paths (path) VALUES (?{[]const u8})",
+            .{},
+            .{path},
         );
-        defer stmt.finalize();
-        stmt.bindText(1, path);
-        try stmt.exec();
-        return stmt.lastInsertRowId();
+        return self.db.db.getLastInsertRowID();
     }
 
     pub fn deleteScanPath(self: *Library, id: i64) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("DELETE FROM scan_paths WHERE id = ?");
-        defer stmt.finalize();
-        stmt.bindInt64(1, id);
-        try stmt.exec();
+        try self.db.db.exec(
+            "DELETE FROM scan_paths WHERE id = ?{i64}",
+            .{},
+            .{id},
+        );
     }
 
     // Favorites operations
 
     pub fn addFavorite(self: *Library, fav: types.Favorite) !i64 {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
         // Get max sort_order
-        var max_stmt = try self.db.prepare("SELECT COALESCE(MAX(sort_order), -1) FROM favorites");
-        defer max_stmt.finalize();
-        var next_order: i32 = 0;
-        if (max_stmt.step()) {
-            next_order = max_stmt.columnInt(0) + 1;
-        }
-
-        var stmt = try self.db.prepare(
-            \\INSERT INTO favorites (item_type, item_id, display_name, sort_order, created_at)
-            \\VALUES (?, ?, ?, ?, ?)
+        const MaxResult = struct { max_order: i32 };
+        const max_row = try self.db.db.one(MaxResult,
+            "SELECT COALESCE(MAX(sort_order), -1) FROM favorites",
+            .{},
+            .{},
         );
-        defer stmt.finalize();
-        stmt.bindText(1, fav.item_type.toString());
-        stmt.bindText(2, fav.item_id);
-        stmt.bindText(3, fav.display_name);
-        stmt.bindInt(4, if (fav.sort_order != 0) fav.sort_order else next_order);
-        stmt.bindInt64(5, std.time.timestamp());
+        const next_order: i32 = if (max_row) |r| r.max_order + 1 else 0;
 
-        try stmt.exec();
-        return stmt.lastInsertRowId();
+        try self.db.db.exec(
+            \\INSERT INTO favorites (item_type, item_id, display_name, sort_order, created_at)
+            \\VALUES (?{[]const u8}, ?{[]const u8}, ?{[]const u8}, ?{i32}, ?{i64})
+        , .{}, .{
+            fav.item_type,
+            fav.item_id,
+            fav.display_name,
+            if (fav.sort_order != 0) fav.sort_order else next_order,
+            unixTimestamp(),
+        });
+        return self.db.db.getLastInsertRowID();
     }
 
     pub fn removeFavorite(self: *Library, id: i64) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("DELETE FROM favorites WHERE id = ?");
-        defer stmt.finalize();
-        stmt.bindInt64(1, id);
-        try stmt.exec();
+        try self.db.db.exec(
+            "DELETE FROM favorites WHERE id = ?{i64}",
+            .{},
+            .{id},
+        );
     }
 
     pub fn listFavorites(self: *Library) ![]types.Favorite {
-        var stmt = try self.db.prepare(
+        var stmt = try self.db.db.prepare(
             \\SELECT id, item_type, item_id, display_name, sort_order, created_at
             \\FROM favorites ORDER BY sort_order ASC
         );
-        defer stmt.finalize();
-
-        var results: std.ArrayList(types.Favorite) = .{};
-        while (stmt.step()) {
-            try results.append(self.allocator, types.Favorite{
-                .id = stmt.columnInt64(0),
-                .item_type = types.FavoriteType.fromString(stmt.columnText(1) orelse "media_item") orelse .media_item,
-                .item_id = try dupeText(self.allocator, stmt.columnText(2) orelse ""),
-                .display_name = try dupeText(self.allocator, stmt.columnText(3) orelse ""),
-                .sort_order = stmt.columnInt(4),
-                .created_at = stmt.columnOptionalInt64(5),
-            });
-        }
-        return results.toOwnedSlice(self.allocator);
+        defer stmt.deinit();
+        return try stmt.all(types.Favorite, self.allocator, .{}, .{});
     }
 
     pub fn freeFavorites(self: *Library, favs: []types.Favorite) void {
@@ -573,69 +428,55 @@ pub const Library = struct {
     // Genre operations
 
     pub fn insertGenre(self: *Library, name: []const u8) !i64 {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-        return self.insertGenreLocked(name);
+        return self.insertGenreInner(name);
     }
 
-    /// Insert a genre without locking (caller must hold mutex).
-    fn insertGenreLocked(self: *Library, name: []const u8) !i64 {
-        var stmt = try self.db.prepare("INSERT OR IGNORE INTO genres (name) VALUES (?)");
-        defer stmt.finalize();
-        stmt.bindText(1, name);
-        try stmt.exec();
+    /// Insert a genre (or find existing).
+    fn insertGenreInner(self: *Library, name: []const u8) !i64 {
+        try self.db.db.exec(
+            "INSERT OR IGNORE INTO genres (name) VALUES (?{[]const u8})",
+            .{},
+            .{name},
+        );
 
-        // Always look up the id — lastInsertRowId is unreliable with INSERT OR IGNORE
-        var lookup = try self.db.prepare("SELECT id FROM genres WHERE name = ?");
-        defer lookup.finalize();
-        lookup.bindText(1, name);
-        if (lookup.step()) {
-            return lookup.columnInt64(0);
-        }
-        return error.SqlExecFailed;
+        // Always look up the id -- lastInsertRowId is unreliable with INSERT OR IGNORE
+        const IdResult = struct { id: i64 };
+        const row = try self.db.db.one(IdResult,
+            "SELECT id FROM genres WHERE name = ?{[]const u8}",
+            .{},
+            .{name},
+        ) orelse return error.SqlExecFailed;
+        return row.id;
     }
 
     pub fn setMediaItemGenres(self: *Library, media_item_id: i64, genre_names: []const []const u8) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
         // Delete existing associations
-        var del = try self.db.prepare("DELETE FROM media_item_genres WHERE media_item_id = ?");
-        defer del.finalize();
-        del.bindInt64(1, media_item_id);
-        try del.exec();
+        try self.db.db.exec(
+            "DELETE FROM media_item_genres WHERE media_item_id = ?{i64}",
+            .{},
+            .{media_item_id},
+        );
 
         // Insert new associations
         for (genre_names) |name| {
-            const genre_id = try self.insertGenreLocked(name);
-
-            var ins = try self.db.prepare(
-                "INSERT OR IGNORE INTO media_item_genres (media_item_id, genre_id) VALUES (?, ?)",
+            const genre_id = try self.insertGenreInner(name);
+            try self.db.db.exec(
+                "INSERT OR IGNORE INTO media_item_genres (media_item_id, genre_id) VALUES (?{i64}, ?{i64})",
+                .{},
+                .{ media_item_id, genre_id },
             );
-            defer ins.finalize();
-            ins.bindInt64(1, media_item_id);
-            ins.bindInt64(2, genre_id);
-            try ins.exec();
         }
     }
 
     pub fn getDistinctGenres(self: *Library) ![]types.Genre {
-        var stmt = try self.db.prepare(
+        var stmt = try self.db.db.prepare(
             \\SELECT g.id, g.name FROM genres g
             \\INNER JOIN media_item_genres mig ON g.id = mig.genre_id
             \\GROUP BY g.id, g.name
             \\ORDER BY COUNT(mig.media_item_id) DESC
         );
-        defer stmt.finalize();
-
-        var results: std.ArrayList(types.Genre) = .{};
-        while (stmt.step()) {
-            try results.append(self.allocator, types.Genre{
-                .id = stmt.columnInt64(0),
-                .name = try dupeText(self.allocator, stmt.columnText(1) orelse continue),
-            });
-        }
-        return results.toOwnedSlice(self.allocator);
+        defer stmt.deinit();
+        return try stmt.all(types.Genre, self.allocator, .{}, .{});
     }
 
     pub fn freeGenres(self: *Library, genres: []types.Genre) void {
@@ -644,135 +485,95 @@ pub const Library = struct {
     }
 
     pub fn getItemsByGenre(self: *Library, genre_name: []const u8, limit: u32) ![]types.MediaItem {
-        var stmt = try self.db.prepare(
+        var stmt = try self.db.db.prepare(
             \\SELECT m.id, m.source, m.source_id, m.server_id, m.media_type, m.title,
             \\       m.sort_title, m.year, m.summary, m.rating, m.duration_ms,
             \\       m.poster_path, m.backdrop_path, m.tmdb_id, m.parent_id,
-            \\       m.season_number, m.episode_number, m.file_path, m.added_at, m.updated_at, m.match_locked
+            \\       m.season_number, m.episode_number, m.file_path, m.library_section,
+            \\       m.added_at, m.updated_at, m.match_locked
             \\FROM media_items m
             \\INNER JOIN media_item_genres mig ON m.id = mig.media_item_id
             \\INNER JOIN genres g ON mig.genre_id = g.id
-            \\WHERE g.name = ? AND m.media_type IN ('movie', 'show')
-            \\ORDER BY m.added_at DESC LIMIT ?
+            \\WHERE g.name = ?{[]const u8} AND m.media_type IN ('movie', 'show')
+            \\ORDER BY m.added_at DESC LIMIT ?{i32}
         );
-        defer stmt.finalize();
-        stmt.bindText(1, genre_name);
-        stmt.bindInt(2, @intCast(limit));
-
-        return self.collectMediaItems(&stmt);
+        defer stmt.deinit();
+        return try stmt.all(types.MediaItem, self.allocator, .{}, .{ genre_name, @as(i32, @intCast(limit)) });
     }
 
     // Match lock operations
 
     pub fn setMatchLocked(self: *Library, media_item_id: i64, locked: bool) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("UPDATE media_items SET match_locked = ? WHERE id = ?");
-        defer stmt.finalize();
-        stmt.bindInt(1, if (locked) 1 else 0);
-        stmt.bindInt64(2, media_item_id);
-        try stmt.exec();
+        try self.db.db.exec(
+            "UPDATE media_items SET match_locked = ?{bool} WHERE id = ?{i64}",
+            .{},
+            .{ locked, media_item_id },
+        );
     }
 
     pub fn updateMediaItemMetadata(self: *Library, id: i64, item: types.MediaItem) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare(
+        try self.db.db.exec(
             \\UPDATE media_items SET
-            \\  title = ?, sort_title = ?, year = ?, summary = ?, rating = ?,
-            \\  duration_ms = ?, poster_path = ?, backdrop_path = ?, tmdb_id = ?,
-            \\  match_locked = ?, updated_at = ?
-            \\WHERE id = ?
-        );
-        defer stmt.finalize();
-
-        stmt.bindText(1, item.title);
-        stmt.bindOptionalText(2, item.sort_title);
-        stmt.bindOptionalInt(3, item.year);
-        stmt.bindOptionalText(4, item.summary);
-        stmt.bindOptionalDouble(5, item.rating);
-        stmt.bindOptionalInt64(6, item.duration_ms);
-        stmt.bindOptionalText(7, item.poster_path);
-        stmt.bindOptionalText(8, item.backdrop_path);
-        stmt.bindOptionalInt(9, item.tmdb_id);
-        stmt.bindInt(10, if (item.match_locked) 1 else 0);
-        stmt.bindInt64(11, std.time.timestamp());
-        stmt.bindInt64(12, id);
-
-        try stmt.exec();
+            \\  title = ?{[]const u8}, sort_title = ?{?[]const u8}, year = ?{?i32},
+            \\  summary = ?{?[]const u8}, rating = ?{?f64},
+            \\  duration_ms = ?{?i64}, poster_path = ?{?[]const u8},
+            \\  backdrop_path = ?{?[]const u8}, tmdb_id = ?{?i32},
+            \\  match_locked = ?{bool}, updated_at = ?{i64}
+            \\WHERE id = ?{i64}
+        , .{}, .{
+            item.title,       item.sort_title,   item.year,
+            item.summary,     item.rating,
+            item.duration_ms, item.poster_path,
+            item.backdrop_path, item.tmdb_id,
+            item.match_locked, unixTimestamp(),
+            id,
+        });
     }
 
     // Collection operations
 
     pub fn createCollection(self: *Library, name: []const u8, collection_type: types.CollectionType, description: ?[]const u8) !i64 {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
         // Get max sort_order
-        var max_stmt = try self.db.prepare("SELECT COALESCE(MAX(sort_order), -1) FROM collections");
-        defer max_stmt.finalize();
-        var next_order: i32 = 0;
-        if (max_stmt.step()) {
-            next_order = max_stmt.columnInt(0) + 1;
-        }
-
-        var stmt = try self.db.prepare(
-            \\INSERT INTO collections (name, collection_type, description, sort_order, created_at, updated_at)
-            \\VALUES (?, ?, ?, ?, ?, ?)
+        const MaxResult = struct { max_order: i32 };
+        const max_row = try self.db.db.one(MaxResult,
+            "SELECT COALESCE(MAX(sort_order), -1) FROM collections",
+            .{},
+            .{},
         );
-        defer stmt.finalize();
-        stmt.bindText(1, name);
-        stmt.bindText(2, collection_type.toString());
-        stmt.bindOptionalText(3, description);
-        stmt.bindInt(4, next_order);
-        const now = std.time.timestamp();
-        stmt.bindInt64(5, now);
-        stmt.bindInt64(6, now);
+        const next_order: i32 = if (max_row) |r| r.max_order + 1 else 0;
 
-        try stmt.exec();
-        return stmt.lastInsertRowId();
+        const now = unixTimestamp();
+        try self.db.db.exec(
+            \\INSERT INTO collections (name, collection_type, description, sort_order, created_at, updated_at)
+            \\VALUES (?{[]const u8}, ?{[]const u8}, ?{?[]const u8}, ?{i32}, ?{i64}, ?{i64})
+        , .{}, .{ name, collection_type, description, next_order, now, now });
+        return self.db.db.getLastInsertRowID();
     }
 
     pub fn getCollection(self: *Library, id: i64) !?types.Collection {
-        var stmt = try self.db.prepare(
+        return try self.db.db.oneAlloc(types.Collection, self.allocator,
             \\SELECT id, name, collection_type, description, poster_path,
             \\       show_on_home, sort_order, created_at, updated_at
-            \\FROM collections WHERE id = ?
-        );
-        defer stmt.finalize();
-        stmt.bindInt64(1, id);
-
-        if (stmt.step()) {
-            return try readCollection(self.allocator, &stmt);
-        }
-        return null;
+            \\FROM collections WHERE id = ?{i64}
+        , .{}, .{id});
     }
 
     pub fn listCollections(self: *Library) ![]types.Collection {
-        var stmt = try self.db.prepare(
+        var stmt = try self.db.db.prepare(
             \\SELECT id, name, collection_type, description, poster_path,
             \\       show_on_home, sort_order, created_at, updated_at
             \\FROM collections ORDER BY sort_order ASC, name ASC
         );
-        defer stmt.finalize();
-
-        var results: std.ArrayList(types.Collection) = .{};
-        while (stmt.step()) {
-            try results.append(self.allocator, try readCollection(self.allocator, &stmt));
-        }
-        return results.toOwnedSlice(self.allocator);
+        defer stmt.deinit();
+        return try stmt.all(types.Collection, self.allocator, .{}, .{});
     }
 
     pub fn deleteCollection(self: *Library, id: i64) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("DELETE FROM collections WHERE id = ?");
-        defer stmt.finalize();
-        stmt.bindInt64(1, id);
-        try stmt.exec();
+        try self.db.db.exec(
+            "DELETE FROM collections WHERE id = ?{i64}",
+            .{},
+            .{id},
+        );
     }
 
     pub fn freeCollection(self: *Library, col: types.Collection) void {
@@ -789,98 +590,61 @@ pub const Library = struct {
     // Collection items
 
     pub fn addToCollection(self: *Library, collection_id: i64, media_item_id: i64) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare(
+        try self.db.db.exec(
             \\INSERT OR IGNORE INTO collection_items (collection_id, media_item_id, added_at)
-            \\VALUES (?, ?, ?)
-        );
-        defer stmt.finalize();
-        stmt.bindInt64(1, collection_id);
-        stmt.bindInt64(2, media_item_id);
-        stmt.bindInt64(3, std.time.timestamp());
-        try stmt.exec();
+            \\VALUES (?{i64}, ?{i64}, ?{i64})
+        , .{}, .{ collection_id, media_item_id, unixTimestamp() });
     }
 
     pub fn removeFromCollection(self: *Library, collection_id: i64, media_item_id: i64) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare(
-            "DELETE FROM collection_items WHERE collection_id = ? AND media_item_id = ?",
+        try self.db.db.exec(
+            "DELETE FROM collection_items WHERE collection_id = ?{i64} AND media_item_id = ?{i64}",
+            .{},
+            .{ collection_id, media_item_id },
         );
-        defer stmt.finalize();
-        stmt.bindInt64(1, collection_id);
-        stmt.bindInt64(2, media_item_id);
-        try stmt.exec();
     }
 
     pub fn getCollectionItems(self: *Library, collection_id: i64) ![]types.MediaItem {
-        var stmt = try self.db.prepare(
+        var stmt = try self.db.db.prepare(
             \\SELECT m.id, m.source, m.source_id, m.server_id, m.media_type, m.title,
             \\       m.sort_title, m.year, m.summary, m.rating, m.duration_ms,
             \\       m.poster_path, m.backdrop_path, m.tmdb_id, m.parent_id,
-            \\       m.season_number, m.episode_number, m.file_path, m.added_at, m.updated_at, m.match_locked
+            \\       m.season_number, m.episode_number, m.file_path, m.library_section,
+            \\       m.added_at, m.updated_at, m.match_locked
             \\FROM media_items m
             \\INNER JOIN collection_items ci ON m.id = ci.media_item_id
-            \\WHERE ci.collection_id = ?
+            \\WHERE ci.collection_id = ?{i64}
             \\ORDER BY ci.sort_order ASC, ci.added_at DESC
         );
-        defer stmt.finalize();
-        stmt.bindInt64(1, collection_id);
-
-        return self.collectMediaItems(&stmt);
+        defer stmt.deinit();
+        return try stmt.all(types.MediaItem, self.allocator, .{}, .{collection_id});
     }
 
     // Collection rules
 
     pub fn addCollectionRule(self: *Library, collection_id: i64, field: []const u8, operator: []const u8, value: []const u8) !i64 {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare(
+        try self.db.db.exec(
             \\INSERT INTO collection_rules (collection_id, field, operator, value)
-            \\VALUES (?, ?, ?, ?)
-        );
-        defer stmt.finalize();
-        stmt.bindInt64(1, collection_id);
-        stmt.bindText(2, field);
-        stmt.bindText(3, operator);
-        stmt.bindText(4, value);
-        try stmt.exec();
-        return stmt.lastInsertRowId();
+            \\VALUES (?{i64}, ?{[]const u8}, ?{[]const u8}, ?{[]const u8})
+        , .{}, .{ collection_id, field, operator, value });
+        return self.db.db.getLastInsertRowID();
     }
 
     pub fn getCollectionRules(self: *Library, collection_id: i64) ![]types.CollectionRule {
-        var stmt = try self.db.prepare(
+        var stmt = try self.db.db.prepare(
             \\SELECT id, collection_id, field, operator, value
-            \\FROM collection_rules WHERE collection_id = ?
+            \\FROM collection_rules WHERE collection_id = ?{i64}
         );
-        defer stmt.finalize();
-        stmt.bindInt64(1, collection_id);
-
-        var results: std.ArrayList(types.CollectionRule) = .{};
-        while (stmt.step()) {
-            try results.append(self.allocator, types.CollectionRule{
-                .id = stmt.columnInt64(0),
-                .collection_id = stmt.columnInt64(1),
-                .field = try dupeText(self.allocator, stmt.columnText(2) orelse continue),
-                .operator = try dupeText(self.allocator, stmt.columnText(3) orelse continue),
-                .value = try dupeText(self.allocator, stmt.columnText(4) orelse continue),
-            });
-        }
-        return results.toOwnedSlice(self.allocator);
+        defer stmt.deinit();
+        return try stmt.all(types.CollectionRule, self.allocator, .{}, .{collection_id});
     }
 
     pub fn removeCollectionRule(self: *Library, rule_id: i64) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("DELETE FROM collection_rules WHERE id = ?");
-        defer stmt.finalize();
-        stmt.bindInt64(1, rule_id);
-        try stmt.exec();
+        try self.db.db.exec(
+            "DELETE FROM collection_rules WHERE id = ?{i64}",
+            .{},
+            .{rule_id},
+        );
     }
 
     pub fn freeCollectionRules(self: *Library, rules: []types.CollectionRule) void {
@@ -904,7 +668,7 @@ pub const Library = struct {
         var fba = std.heap.FixedBufferAllocator.init(&sql_buf);
         const fba_alloc = fba.allocator();
 
-        var where_parts: std.ArrayList([]const u8) = .{};
+        var where_parts: std.ArrayList([]const u8) = .empty;
         var needs_genre_join = false;
         var needs_watch_join = false;
 
@@ -929,12 +693,13 @@ pub const Library = struct {
         if (where_parts.items.len == 0) return self.allocator.alloc(types.MediaItem, 0);
 
         // Build full SQL
-        var full_sql: std.ArrayList(u8) = .{};
+        var full_sql: std.ArrayList(u8) = .empty;
         try full_sql.appendSlice(self.allocator,
             \\SELECT m.id, m.source, m.source_id, m.server_id, m.media_type, m.title,
             \\       m.sort_title, m.year, m.summary, m.rating, m.duration_ms,
             \\       m.poster_path, m.backdrop_path, m.tmdb_id, m.parent_id,
-            \\       m.season_number, m.episode_number, m.file_path, m.added_at, m.updated_at, m.match_locked
+            \\       m.season_number, m.episode_number, m.file_path, m.library_section,
+            \\       m.added_at, m.updated_at, m.match_locked
             \\FROM media_items m
         );
 
@@ -958,55 +723,46 @@ pub const Library = struct {
         }
 
         try full_sql.appendSlice(self.allocator, " ORDER BY m.added_at DESC LIMIT 100");
-        try full_sql.append(self.allocator, 0); // null terminator
-
-        const sql_z: [*:0]const u8 = @ptrCast(full_sql.items.ptr);
         defer full_sql.deinit(self.allocator);
 
-        var stmt = try self.db.prepare(sql_z);
-        defer stmt.finalize();
+        var stmt = try self.db.db.prepareDynamic(full_sql.items);
+        defer stmt.deinit();
 
-        // Bind rule values
+        // Bind rule values positionally using raw sqlite3 API
         var bind_idx: c_int = 1;
         for (rules) |rule| {
             if (std.mem.eql(u8, rule.field, "genre") or
                 std.mem.eql(u8, rule.field, "media_type") or
                 std.mem.eql(u8, rule.field, "source"))
             {
-                stmt.bindText(bind_idx, rule.value);
+                const rc = sqlite.c.sqlite3_bind_text(
+                    stmt.stmt,
+                    bind_idx,
+                    rule.value.ptr,
+                    @intCast(rule.value.len),
+                    sqlite.c.SQLITE_STATIC,
+                );
+                if (rc != sqlite.c.SQLITE_OK) return error.SqlExecFailed;
                 bind_idx += 1;
             } else if (std.mem.eql(u8, rule.field, "year") or
                 std.mem.eql(u8, rule.field, "watched"))
             {
-                const int_val = std.fmt.parseInt(i32, rule.value, 10) catch 0;
-                stmt.bindInt(bind_idx, int_val);
+                const int_val = std.fmt.parseInt(i64, rule.value, 10) catch 0;
+                const rc = sqlite.c.sqlite3_bind_int64(
+                    stmt.stmt,
+                    bind_idx,
+                    @intCast(int_val),
+                );
+                if (rc != sqlite.c.SQLITE_OK) return error.SqlExecFailed;
                 bind_idx += 1;
             }
         }
 
-        return self.collectMediaItems(&stmt);
-    }
-
-    fn readCollection(allocator: std.mem.Allocator, stmt: *database.Statement) !types.Collection {
-        return types.Collection{
-            .id = stmt.columnInt64(0),
-            .name = try dupeText(allocator, stmt.columnText(1) orelse ""),
-            .collection_type = types.CollectionType.fromString(stmt.columnText(2) orelse "manual") orelse .manual,
-            .description = try dupeOptionalText(allocator, stmt.columnText(3)),
-            .poster_path = try dupeOptionalText(allocator, stmt.columnText(4)),
-            .show_on_home = stmt.columnBool(5),
-            .sort_order = stmt.columnInt(6),
-            .created_at = stmt.columnOptionalInt64(7),
-            .updated_at = stmt.columnOptionalInt64(8),
-        };
-    }
-
-    // Helpers
-
-    fn collectMediaItems(self: *Library, stmt: *database.Statement) ![]types.MediaItem {
-        var results: std.ArrayList(types.MediaItem) = .{};
-        while (stmt.step()) {
-            try results.append(self.allocator, try readMediaItem(self.allocator, stmt));
+        // Read results using the iterator
+        var iter = try stmt.iteratorAlloc(types.MediaItem, self.allocator, .{});
+        var results: std.ArrayList(types.MediaItem) = .empty;
+        while (try iter.nextAlloc(self.allocator, .{})) |row| {
+            try results.append(self.allocator, row);
         }
         return results.toOwnedSlice(self.allocator);
     }
@@ -1018,55 +774,33 @@ pub const Library = struct {
 
     // Server operations
     pub fn upsertServer(self: *Library, server: types.Server) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare(
+        try self.db.db.exec(
             \\INSERT OR REPLACE INTO servers
             \\  (id, name, client_identifier, auth_token, connection_uri, last_connected_at)
-            \\VALUES (?, ?, ?, ?, ?, ?)
-        );
-        defer stmt.finalize();
-
-        stmt.bindText(1, server.id);
-        stmt.bindText(2, server.name);
-        stmt.bindText(3, server.client_identifier);
-        stmt.bindOptionalText(4, server.auth_token);
-        stmt.bindOptionalText(5, server.connection_uri);
-        stmt.bindOptionalInt64(6, server.last_connected_at);
-
-        try stmt.exec();
+            \\VALUES (?{[]const u8}, ?{[]const u8}, ?{[]const u8}, ?{?[]const u8}, ?{?[]const u8}, ?{?i64})
+        , .{}, .{
+            server.id,
+            server.name,
+            server.client_identifier,
+            server.auth_token,
+            server.connection_uri,
+            server.last_connected_at,
+        });
     }
 
     pub fn getServer(self: *Library, id: []const u8) !?types.Server {
-        var stmt = try self.db.prepare(
+        return try self.db.db.oneAlloc(types.Server, self.allocator,
             \\SELECT id, name, client_identifier, auth_token, connection_uri, last_connected_at
-            \\FROM servers WHERE id = ?
-        );
-        defer stmt.finalize();
-        stmt.bindText(1, id);
-
-        if (stmt.step()) {
-            return types.Server{
-                .id = try dupeText(self.allocator, stmt.columnText(0) orelse return null),
-                .name = try dupeText(self.allocator, stmt.columnText(1) orelse return null),
-                .client_identifier = try dupeText(self.allocator, stmt.columnText(2) orelse return null),
-                .auth_token = try dupeOptionalText(self.allocator, stmt.columnText(3)),
-                .connection_uri = try dupeOptionalText(self.allocator, stmt.columnText(4)),
-                .last_connected_at = stmt.columnOptionalInt64(5),
-            };
-        }
-        return null;
+            \\FROM servers WHERE id = ?{[]const u8}
+        , .{}, .{id});
     }
 
     pub fn deleteServer(self: *Library, id: []const u8) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("DELETE FROM servers WHERE id = ?");
-        defer stmt.finalize();
-        stmt.bindText(1, id);
-        try stmt.exec();
+        try self.db.db.exec(
+            "DELETE FROM servers WHERE id = ?{[]const u8}",
+            .{},
+            .{id},
+        );
     }
 
     pub fn freeServer(self: *Library, server: types.Server) void {
@@ -1077,67 +811,41 @@ pub const Library = struct {
         if (server.connection_uri) |u| self.allocator.free(u);
     }
 
-    // ── Server Connections ──────────────────────────────────
+    // -- Server Connections --
 
     pub fn upsertServerConnections(self: *Library, server_id: []const u8, connections: []const types.ServerConnection) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
         // Delete existing connections for this server
-        var del_stmt = try self.db.prepare("DELETE FROM server_connections WHERE server_id = ?");
-        defer del_stmt.finalize();
-        del_stmt.bindText(1, server_id);
-        try del_stmt.exec();
+        try self.db.db.exec(
+            "DELETE FROM server_connections WHERE server_id = ?{[]const u8}",
+            .{},
+            .{server_id},
+        );
 
         // Insert all new connections
         for (connections) |conn| {
-            var ins_stmt = try self.db.prepare(
+            try self.db.db.exec(
                 \\INSERT INTO server_connections (server_id, uri, is_local, is_relay, protocol)
-                \\VALUES (?, ?, ?, ?, ?)
-            );
-            defer ins_stmt.finalize();
-            ins_stmt.bindText(1, server_id);
-            ins_stmt.bindText(2, conn.uri);
-            ins_stmt.bindInt(3, if (conn.is_local) 1 else 0);
-            ins_stmt.bindInt(4, if (conn.is_relay) 1 else 0);
-            ins_stmt.bindText(5, conn.protocol);
-            try ins_stmt.exec();
+                \\VALUES (?{[]const u8}, ?{[]const u8}, ?{bool}, ?{bool}, ?{[]const u8})
+            , .{}, .{ server_id, conn.uri, conn.is_local, conn.is_relay, conn.protocol });
         }
     }
 
     pub fn getServerConnections(self: *Library, server_id: []const u8) ![]types.ServerConnection {
-        var stmt = try self.db.prepare(
+        var stmt = try self.db.db.prepare(
             \\SELECT id, server_id, uri, is_local, is_relay, protocol, latency_ms
-            \\FROM server_connections WHERE server_id = ?
+            \\FROM server_connections WHERE server_id = ?{[]const u8}
             \\ORDER BY is_local DESC, is_relay ASC
         );
-        defer stmt.finalize();
-        stmt.bindText(1, server_id);
-
-        var results: std.ArrayList(types.ServerConnection) = .{};
-        while (stmt.step()) {
-            try results.append(self.allocator, types.ServerConnection{
-                .id = stmt.columnInt64(0),
-                .server_id = try dupeText(self.allocator, stmt.columnText(1) orelse continue),
-                .uri = try dupeText(self.allocator, stmt.columnText(2) orelse continue),
-                .is_local = stmt.columnBool(3),
-                .is_relay = stmt.columnBool(4),
-                .protocol = try dupeText(self.allocator, stmt.columnText(5) orelse "https"),
-                .latency_ms = stmt.columnOptionalInt(6),
-            });
-        }
-        return results.toOwnedSlice(self.allocator);
+        defer stmt.deinit();
+        return try stmt.all(types.ServerConnection, self.allocator, .{}, .{server_id});
     }
 
     pub fn updateServerBestUri(self: *Library, server_id: []const u8, uri: []const u8) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("UPDATE servers SET connection_uri = ? WHERE id = ?");
-        defer stmt.finalize();
-        stmt.bindText(1, uri);
-        stmt.bindText(2, server_id);
-        try stmt.exec();
+        try self.db.db.exec(
+            "UPDATE servers SET connection_uri = ?{[]const u8} WHERE id = ?{[]const u8}",
+            .{},
+            .{ uri, server_id },
+        );
     }
 
     pub fn freeServerConnections(self: *Library, conns: []types.ServerConnection) void {
@@ -1160,34 +868,14 @@ pub const Library = struct {
         if (item.file_path) |s| self.allocator.free(s);
         if (item.library_section) |s| self.allocator.free(s);
     }
-
-    fn readMediaItem(allocator: std.mem.Allocator, stmt: *database.Statement) !types.MediaItem {
-        return types.MediaItem{
-            .id = stmt.columnInt64(0),
-            .source = types.MediaSource.fromString(stmt.columnText(1) orelse "local") orelse .local,
-            .source_id = try dupeOptionalText(allocator, stmt.columnText(2)),
-            .server_id = try dupeOptionalText(allocator, stmt.columnText(3)),
-            .media_type = types.MediaType.fromString(stmt.columnText(4) orelse "movie") orelse .movie,
-            .title = try dupeText(allocator, stmt.columnText(5) orelse ""),
-            .sort_title = try dupeOptionalText(allocator, stmt.columnText(6)),
-            .year = stmt.columnOptionalInt(7),
-            .summary = try dupeOptionalText(allocator, stmt.columnText(8)),
-            .rating = stmt.columnOptionalDouble(9),
-            .duration_ms = stmt.columnOptionalInt64(10),
-            .poster_path = try dupeOptionalText(allocator, stmt.columnText(11)),
-            .backdrop_path = try dupeOptionalText(allocator, stmt.columnText(12)),
-            .tmdb_id = stmt.columnOptionalInt(13),
-            .parent_id = stmt.columnOptionalInt64(14),
-            .season_number = stmt.columnOptionalInt(15),
-            .episode_number = stmt.columnOptionalInt(16),
-            .file_path = try dupeOptionalText(allocator, stmt.columnText(17)),
-            .library_section = try dupeOptionalText(allocator, stmt.columnText(18)),
-            .added_at = stmt.columnOptionalInt64(19),
-            .updated_at = stmt.columnOptionalInt64(20),
-            .match_locked = stmt.columnBool(21),
-        };
-    }
 };
+
+/// Get current unix timestamp in seconds.
+fn unixTimestamp() i64 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    return @intCast(ts.sec);
+}
 
 fn sqlOperator(op: []const u8) []const u8 {
     if (std.mem.eql(u8, op, "eq")) return "=";
@@ -1197,15 +885,6 @@ fn sqlOperator(op: []const u8) []const u8 {
     if (std.mem.eql(u8, op, "lt")) return "<";
     if (std.mem.eql(u8, op, "lte")) return "<=";
     return "=";
-}
-
-fn dupeText(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    return allocator.dupe(u8, text);
-}
-
-fn dupeOptionalText(allocator: std.mem.Allocator, text: ?[]const u8) !?[]const u8 {
-    if (text) |t| return try allocator.dupe(u8, t);
-    return null;
 }
 
 test "library insert and retrieve media item" {
@@ -1531,7 +1210,7 @@ test "library genre insert and query" {
     try lib.setMediaItemGenres(id1, &.{ "Science Fiction", "Action" });
     try lib.setMediaItemGenres(id2, &.{"Action"});
 
-    // Get distinct genres — Action should come first (2 items) then Sci-Fi (1 item)
+    // Get distinct genres -- Action should come first (2 items) then Sci-Fi (1 item)
     const genres = try lib.getDistinctGenres();
     defer lib.freeGenres(genres);
 

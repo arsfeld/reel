@@ -47,6 +47,7 @@ pub fn ParsedQuery(comptime tmp_query: []const u8) type {
         };
 
         fn parse() ParsedQueryResult {
+            @setEvalBranchQuota(100000);
             // This contains the final SQL query after parsing with our
             // own typed bind markers removed.
             var buf: [tmp_query.len]u8 = undefined;

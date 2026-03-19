@@ -7,6 +7,9 @@ pub const MediaType = enum {
     episode,
     other,
 
+    pub const BaseType = []const u8;
+    pub const default: MediaType = .other;
+
     pub fn toString(self: MediaType) []const u8 {
         return switch (self) {
             .movie => "movie",
@@ -31,6 +34,9 @@ pub const MediaSource = enum {
     plex,
     local,
 
+    pub const BaseType = []const u8;
+    pub const default: MediaSource = .local;
+
     pub fn toString(self: MediaSource) []const u8 {
         return switch (self) {
             .plex => "plex",
@@ -51,6 +57,9 @@ pub const DownloadStatus = enum {
     paused,
     complete,
     failed,
+
+    pub const BaseType = []const u8;
+    pub const default = .queued;
 
     pub fn toString(self: DownloadStatus) []const u8 {
         return switch (self) {
@@ -141,6 +150,9 @@ pub const FavoriteType = enum {
     scan_path,
     filter,
 
+    pub const BaseType = []const u8;
+    pub const default: FavoriteType = .media_item;
+
     pub fn toString(self: FavoriteType) []const u8 {
         return switch (self) {
             .media_item => "media_item",
@@ -171,6 +183,9 @@ pub const Favorite = struct {
 pub const CollectionType = enum {
     manual,
     smart,
+
+    pub const BaseType = []const u8;
+    pub const default: CollectionType = .manual;
 
     pub fn toString(self: CollectionType) []const u8 {
         return switch (self) {

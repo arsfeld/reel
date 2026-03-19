@@ -51,7 +51,7 @@ pub const PlexClient = struct {
 
         std.log.info("discoverServers response ({d} bytes): {s}", .{ response.body.len, response.body[0..@min(response.body.len, 500)] });
 
-        var servers: std.ArrayList(plex_types.PlexServer) = .{};
+        var servers: std.ArrayList(plex_types.PlexServer) = .empty;
 
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response.body, .{}) catch
             return error.RequestFailed;
@@ -84,7 +84,7 @@ pub const PlexClient = struct {
             };
 
             // Parse nested connections array
-            var conns: std.ArrayList(plex_types.PlexServer.Connection) = .{};
+            var conns: std.ArrayList(plex_types.PlexServer.Connection) = .empty;
             if (obj.get("connections")) |conns_val| {
                 if (conns_val == .array) {
                     for (conns_val.array.items) |conn| {
@@ -149,7 +149,7 @@ pub const PlexClient = struct {
             return error.RequestFailed;
         }
 
-        var libraries: std.ArrayList(plex_types.PlexLibrary) = .{};
+        var libraries: std.ArrayList(plex_types.PlexLibrary) = .empty;
 
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response.body, .{}) catch
             return error.RequestFailed;
@@ -274,7 +274,7 @@ pub const PlexClient = struct {
 
         if (response.status != .ok) return error.RequestFailed;
 
-        var markers: std.ArrayList(plex_types.PlexMarker) = .{};
+        var markers: std.ArrayList(plex_types.PlexMarker) = .empty;
 
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response.body, .{}) catch
             return error.RequestFailed;
@@ -349,7 +349,7 @@ pub const PlexClient = struct {
         }
         std.log.info("PlexClient.fetchMediaItems: HTTP 200, body_len={d}", .{response.body.len});
 
-        var items: std.ArrayList(plex_types.PlexMediaItem) = .{};
+        var items: std.ArrayList(plex_types.PlexMediaItem) = .empty;
 
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response.body, .{}) catch
             return error.RequestFailed;

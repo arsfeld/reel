@@ -25,6 +25,10 @@ pub fn build(b: *std.Build) void {
             "-DSQLITE_OMIT_DECLTYPE",
         },
     });
+    sqlite_mod.addCSourceFile(.{
+        .file = b.path("vendor/zig-sqlite/c/workaround.c"),
+        .flags = &.{},
+    });
 
     // Core library module
     const core_mod = b.addModule("reel", .{

@@ -1,5 +1,11 @@
 const std = @import("std");
 
+fn unixTimestamp() i64 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    return @intCast(ts.sec);
+}
+
 // Core modules
 pub const player = @import("core/player.zig");
 pub const database = @import("core/database.zig");
@@ -829,7 +835,7 @@ export fn reel_plex_sync(
     }
 
     var total_synced: i32 = 0;
-    const now = std.time.timestamp();
+    const now = unixTimestamp();
 
     for (libs) |lb| {
         // Get items in this section
@@ -1046,7 +1052,7 @@ export fn reel_server_upsert(
         .client_identifier = std.mem.span(id),
         .auth_token = if (auth_token) |t| std.mem.span(t) else null,
         .connection_uri = std.mem.span(connection_uri),
-        .last_connected_at = std.time.timestamp(),
+        .last_connected_at = unixTimestamp(),
     }) catch return -1;
     return 0;
 }
@@ -1687,7 +1693,7 @@ export fn reel_library_update_watch_progress(
         .position_ms = position_ms,
         .duration_ms = if (duration_ms > 0) duration_ms else null,
         .watched = watched != 0,
-        .last_watched_at = std.time.timestamp(),
+        .last_watched_at = unixTimestamp(),
     }) catch return -1;
     return 0;
 }

@@ -149,7 +149,7 @@ pub const PlexAuth = struct {
     /// Generate a UUID v4 for use as X-Plex-Client-Identifier.
     pub fn generateClientId(allocator: std.mem.Allocator) ![]const u8 {
         var bytes: [16]u8 = undefined;
-        std.crypto.random.bytes(&bytes);
+        std.Io.Threaded.global_single_threaded.io().random(&bytes);
 
         // Set version 4
         bytes[6] = (bytes[6] & 0x0f) | 0x40;

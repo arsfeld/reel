@@ -359,7 +359,7 @@ fn onPlexLibraryToggled(row: *c.GtkWidget, _: ?*anyopaque) callconv(.c) void {
     if (active != 0) {
         // Enabling: remove key from disabled list
         if (current) |list| {
-            var new_list: std.ArrayList(u8) = .{};
+            var new_list: std.ArrayList(u8) = .empty;
             defer new_list.deinit(allocator);
             var iter = std.mem.splitScalar(u8, list, ',');
             var first = true;

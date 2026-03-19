@@ -7,6 +7,12 @@ const player_mod = @import("../../core/player.zig");
 const library_mod = @import("../../core/library.zig");
 const types = @import("../../core/types.zig");
 
+fn unixTimestamp() i64 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    return @intCast(ts.sec);
+}
+
 pub const AutoPlayState = enum {
     idle, // No auto-play (movie, no next episode, direct play)
     monitoring, // Watching position, waiting for trigger
@@ -557,7 +563,7 @@ pub const Controls = struct {
                     .position_ms = dur_ms, // At the end
                     .duration_ms = dur_ms,
                     .watched = true,
-                    .last_watched_at = std.time.timestamp(),
+                    .last_watched_at = unixTimestamp(),
                 }) catch {};
             }
         }

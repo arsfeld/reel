@@ -426,7 +426,7 @@ fn applyMovieMatch(tmdb: *tmdb_client_mod.TmdbClient, lib: *@import("../../core/
 
     // Update genres
     const allocator = app.getAllocator();
-    var genre_names: std.ArrayList([]const u8) = .{};
+    var genre_names: std.ArrayList([]const u8) = .empty;
     defer genre_names.deinit(allocator);
 
     for (detail.genres) |genre| {
@@ -481,7 +481,7 @@ fn applyTVMatch(tmdb: *tmdb_client_mod.TmdbClient, lib: *@import("../../core/lib
 
     // Update genres
     const allocator = app.getAllocator();
-    var genre_names: std.ArrayList([]const u8) = .{};
+    var genre_names: std.ArrayList([]const u8) = .empty;
     defer genre_names.deinit(allocator);
 
     for (detail.genres) |genre| {

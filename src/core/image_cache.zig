@@ -1,6 +1,17 @@
 const std = @import("std");
 const database = @import("database.zig");
+const sqlite = database.sqlite;
 const http = @import("../net/http.zig");
+
+fn defaultIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
+fn unixTimestamp() i64 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    return @intCast(ts.sec);
+}
 
 pub const ImageCache = struct {
     db: *database.Database,
@@ -9,43 +20,37 @@ pub const ImageCache = struct {
 
     pub fn init(allocator: std.mem.Allocator, db: *database.Database, cache_dir: []const u8) ImageCache {
         // Ensure cache directory exists
-        std.fs.cwd().makePath(cache_dir) catch {};
+        std.Io.Dir.cwd().createDirPath(defaultIo(), cache_dir) catch {};
         return .{ .db = db, .allocator = allocator, .cache_dir = cache_dir };
     }
 
     /// Get the local file path for a cached image, or null if not cached.
     pub fn getLocalPath(self: *ImageCache, url: []const u8) !?[]const u8 {
-        var stmt = try self.db.prepare(
-            "SELECT local_path FROM image_cache WHERE url = ?"
-        );
-        defer stmt.finalize();
-        stmt.bindText(1, url);
-
-        if (stmt.step()) {
-            if (stmt.columnText(0)) |path| {
-                // Verify file still exists
-                std.fs.cwd().access(path, .{}) catch return null;
-                return try self.allocator.dupe(u8, path);
-            }
+        const row = self.db.db.oneAlloc(
+            struct { local_path: []const u8 },
+            self.allocator,
+            "SELECT local_path FROM image_cache WHERE url = ?{[]const u8}",
+            .{},
+            .{url},
+        ) catch return null;
+        if (row) |r| {
+            // Verify file still exists
+            std.Io.Dir.cwd().access(defaultIo(), r.local_path, .{}) catch {
+                self.allocator.free(r.local_path);
+                return null;
+            };
+            return r.local_path;
         }
         return null;
     }
 
     /// Store a cached image entry in the database.
     pub fn store(self: *ImageCache, url: []const u8, local_path: []const u8, size_bytes: i64) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare(
-            \\INSERT OR REPLACE INTO image_cache (url, local_path, size_bytes, cached_at)
-            \\VALUES (?, ?, ?, ?)
-        );
-        defer stmt.finalize();
-        stmt.bindText(1, url);
-        stmt.bindText(2, local_path);
-        stmt.bindInt64(3, size_bytes);
-        stmt.bindInt64(4, std.time.timestamp());
-        try stmt.exec();
+        self.db.db.exec(
+            "INSERT OR REPLACE INTO image_cache (url, local_path, size_bytes, cached_at) VALUES (?{[]const u8}, ?{[]const u8}, ?{i64}, ?{i64})",
+            .{},
+            .{ url, local_path, size_bytes, unixTimestamp() },
+        ) catch return error.SqlExecFailed;
     }
 
     /// Generate a deterministic local filename from a URL using a hash.
@@ -78,66 +83,58 @@ pub const ImageCache = struct {
 
     /// Get the total size of cached images in bytes.
     pub fn totalSize(self: *ImageCache) !i64 {
-        var stmt = try self.db.prepare(
-            "SELECT COALESCE(SUM(size_bytes), 0) FROM image_cache"
-        );
-        defer stmt.finalize();
-        if (stmt.step()) {
-            return stmt.columnInt64(0);
-        }
+        const row = self.db.db.one(
+            struct { total: i64 },
+            "SELECT COALESCE(SUM(size_bytes), 0) AS total FROM image_cache",
+            .{},
+            .{},
+        ) catch return 0;
+        if (row) |r| return r.total;
         return 0;
     }
 
     /// Pin an image URL so it won't be evicted by LRU (for downloaded items).
     pub fn pin(self: *ImageCache, url: []const u8) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("UPDATE image_cache SET pinned = 1 WHERE url = ?");
-        defer stmt.finalize();
-        stmt.bindText(1, url);
-        try stmt.exec();
+        self.db.db.exec(
+            "UPDATE image_cache SET pinned = 1 WHERE url = ?{[]const u8}",
+            .{},
+            .{url},
+        ) catch return error.SqlExecFailed;
     }
 
     /// Unpin an image URL so it can be evicted normally.
     pub fn unpin(self: *ImageCache, url: []const u8) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("UPDATE image_cache SET pinned = 0 WHERE url = ?");
-        defer stmt.finalize();
-        stmt.bindText(1, url);
-        try stmt.exec();
+        self.db.db.exec(
+            "UPDATE image_cache SET pinned = 0 WHERE url = ?{[]const u8}",
+            .{},
+            .{url},
+        ) catch return error.SqlExecFailed;
     }
 
     /// Evict oldest unpinned cached images until total size is under max_bytes.
     pub fn evictToSize(self: *ImageCache, max_bytes: i64) !void {
         while (try self.totalSize() > max_bytes) {
-            // Delete oldest unpinned entry
-            var stmt = try self.db.prepare(
-                "SELECT url, local_path FROM image_cache WHERE pinned = 0 ORDER BY cached_at ASC LIMIT 1"
-            );
-            defer stmt.finalize();
+            const row = self.db.db.oneAlloc(
+                struct { url: []const u8, local_path: []const u8 },
+                self.allocator,
+                "SELECT url, local_path FROM image_cache WHERE pinned = 0 ORDER BY cached_at ASC LIMIT 1",
+                .{},
+                .{},
+            ) catch break;
 
-            if (stmt.step()) {
-                const url = stmt.columnText(0) orelse break;
-                const local_path = stmt.columnText(1);
+            if (row) |r| {
+                defer self.allocator.free(r.url);
+                defer self.allocator.free(r.local_path);
 
                 // Delete the file
-                if (local_path) |path| {
-                    std.fs.cwd().deleteFile(path) catch {};
-                }
+                std.Io.Dir.cwd().deleteFile(defaultIo(),r.local_path) catch {};
 
                 // Delete from DB
-                self.db.mutex.lock();
-                defer self.db.mutex.unlock();
-
-                var del_stmt = self.db.prepare(
-                    "DELETE FROM image_cache WHERE url = ?"
-                ) catch break;
-                defer del_stmt.finalize();
-                del_stmt.bindText(1, url);
-                del_stmt.exec() catch {};
+                self.db.db.exec(
+                    "DELETE FROM image_cache WHERE url = ?{[]const u8}",
+                    .{},
+                    .{r.url},
+                ) catch {};
             } else {
                 break;
             }
@@ -147,18 +144,30 @@ pub const ImageCache = struct {
     /// Clear all cached images.
     pub fn clearAll(self: *ImageCache) !void {
         // Get all local paths and delete files
-        var stmt = try self.db.prepare("SELECT local_path FROM image_cache");
-        defer stmt.finalize();
+        var stmt = self.db.db.prepare(
+            "SELECT local_path FROM image_cache",
+        ) catch return error.SqlExecFailed;
+        defer stmt.deinit();
 
-        while (stmt.step()) {
-            if (stmt.columnText(0)) |path| {
-                std.fs.cwd().deleteFile(path) catch {};
-            }
+        var iter = stmt.iteratorAlloc(
+            struct { local_path: []const u8 },
+            self.allocator,
+            .{},
+        ) catch return error.SqlExecFailed;
+
+        while (true) {
+            const entry = iter.nextAlloc(self.allocator, .{}) catch break;
+            if (entry) |e| {
+                defer self.allocator.free(e.local_path);
+                std.Io.Dir.cwd().deleteFile(defaultIo(),e.local_path) catch {};
+            } else break;
         }
 
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-        try self.db.exec("DELETE FROM image_cache");
+        self.db.db.exec(
+            "DELETE FROM image_cache",
+            .{},
+            .{},
+        ) catch return error.SqlExecFailed;
     }
 };
 

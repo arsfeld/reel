@@ -2106,9 +2106,18 @@ pub fn Statement(comptime opts: StatementOptions, comptime query: anytype) type 
         }
 
         fn assertMarkerType(comptime Actual: type, comptime Expected: type) void {
-            if (Actual != Expected) {
-                @compileError("value type " ++ @typeName(Actual) ++ " is not the bind marker type " ++ @typeName(Expected));
+            if (Actual == Expected) return;
+            // Allow []u8 where []const u8 is expected (const coercion)
+            if (Actual == []u8 and Expected == []const u8) return;
+            // Allow *const [N:0]u8 (string literals) where []const u8 is expected
+            if (Expected == []const u8) {
+                const info = @typeInfo(Actual);
+                if (info == .pointer and info.pointer.size == .one) {
+                    const child = @typeInfo(info.pointer.child);
+                    if (child == .array and child.array.child == u8) return;
+                }
             }
+            @compileError("value type " ++ @typeName(Actual) ++ " is not the bind marker type " ++ @typeName(Expected));
         }
 
         /// execAlloc is like `exec` but can allocate memory.

@@ -3,6 +3,16 @@ const database = @import("database.zig");
 const types = @import("types.zig");
 const http = @import("../net/http.zig");
 
+fn defaultIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
+fn unixTimestamp() i64 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    return @intCast(ts.sec);
+}
+
 pub const max_concurrent: usize = 2;
 const max_retries: u32 = 3;
 const retry_delays_ms = [_]u64{ 5_000, 30_000, 120_000 };
@@ -23,11 +33,26 @@ pub const DownloadProgress = struct {
     status: types.DownloadStatus,
 };
 
-const select_columns =
-    \\SELECT id, media_item_id, server_id, source_url, local_path,
-    \\       total_bytes, downloaded_bytes, status, created_at, completed_at,
-    \\       error_message, part_key
-;
+/// Result struct for the existing-download check query.
+const ExistingDownloadRow = struct {
+    id: i64,
+    status: types.DownloadStatus,
+};
+
+/// Result struct for single-column count queries.
+const CountRow = struct {
+    count: i64,
+};
+
+/// Result struct for single-column sum queries.
+const SumRow = struct {
+    total: i64,
+};
+
+/// Result struct for single-column local_path queries.
+const LocalPathRow = struct {
+    local_path: ?[]const u8,
+};
 
 pub const Downloader = struct {
     db: *database.Database,
@@ -128,7 +153,7 @@ pub const Downloader = struct {
         // Ensure download directory exists
         if (dl.local_path) |path| {
             if (std.mem.lastIndexOfScalar(u8, path, '/')) |dir_end| {
-                std.fs.cwd().makePath(path[0..dir_end]) catch {};
+                std.Io.Dir.cwd().createDirPath(defaultIo(), path[0..dir_end]) catch {};
             }
         }
 
@@ -205,7 +230,7 @@ pub const Downloader = struct {
 
             // Download completed successfully — verify file and update final size
             if (dl.local_path) |path| {
-                const file_stat = std.fs.cwd().statFile(path) catch {
+                const file_stat = std.Io.Dir.cwd().statFile(defaultIo(), path, .{}) catch {
                     try self.setFailed(dl.id, "Downloaded file not found");
                     return;
                 };
@@ -218,191 +243,167 @@ pub const Downloader = struct {
 
     /// Queue a new download. Returns error.AlreadyExists if a non-failed download exists.
     pub fn enqueue(self: *Downloader, req: DownloadRequest) !i64 {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
         // Check for existing download of same media item
         const existing_failed_id: ?i64 = blk: {
-            var check_stmt = try self.db.prepare(
-                "SELECT id, status FROM downloads WHERE media_item_id = ? LIMIT 1",
-            );
-            defer check_stmt.finalize();
-            check_stmt.bindInt64(1, req.media_item_id);
+            const row = self.db.db.oneAlloc(
+                ExistingDownloadRow,
+                self.allocator,
+                "SELECT id, status FROM downloads WHERE media_item_id = ?{i64} LIMIT 1",
+                .{},
+                .{req.media_item_id},
+            ) catch return error.SqlExecFailed;
 
-            if (check_stmt.step()) {
-                const existing_status = types.DownloadStatus.fromString(
-                    check_stmt.columnText(1) orelse "queued",
-                ) orelse .queued;
-
-                switch (existing_status) {
+            if (row) |existing| {
+                switch (existing.status) {
                     .complete, .downloading, .queued, .paused => return error.AlreadyExists,
-                    .failed => break :blk check_stmt.columnInt64(0),
+                    .failed => break :blk existing.id,
                 }
             }
             break :blk null;
         };
 
-        // Remove failed entry outside the check statement scope
+        // Remove failed entry
         if (existing_failed_id) |failed_id| {
-            var del_stmt = try self.db.prepare("DELETE FROM downloads WHERE id = ?");
-            defer del_stmt.finalize();
-            del_stmt.bindInt64(1, failed_id);
-            try del_stmt.exec();
+            self.db.db.exec(
+                "DELETE FROM downloads WHERE id = ?{i64}",
+                .{},
+                .{failed_id},
+            ) catch return error.SqlExecFailed;
         }
 
         const local_path = try std.fs.path.join(self.allocator, &.{ req.download_dir, req.filename });
         defer self.allocator.free(local_path);
 
-        const now = std.time.timestamp();
+        const now = unixTimestamp();
 
-        var stmt = try self.db.prepare(
+        self.db.db.exec(
             \\INSERT INTO downloads
             \\  (media_item_id, server_id, source_url, local_path, status, created_at, part_key)
-            \\VALUES (?, ?, ?, ?, 'queued', ?, ?)
-        );
-        defer stmt.finalize();
+            \\VALUES (?{i64}, ?{[]const u8}, ?{[]const u8}, ?{[]const u8}, 'queued', ?{i64}, ?{?[]const u8})
+        , .{}, .{
+            req.media_item_id,
+            req.server_id,
+            req.source_url,
+            local_path,
+            now,
+            req.part_key,
+        }) catch return error.SqlExecFailed;
 
-        stmt.bindInt64(1, req.media_item_id);
-        stmt.bindText(2, req.server_id);
-        stmt.bindText(3, req.source_url);
-        stmt.bindText(4, local_path);
-        stmt.bindInt64(5, now);
-        stmt.bindOptionalText(6, req.part_key);
-
-        try stmt.exec();
-        return stmt.lastInsertRowId();
+        return self.db.db.getLastInsertRowID();
     }
 
     /// Get all downloads with given status.
     pub fn getByStatus(self: *Downloader, status: types.DownloadStatus) ![]types.Download {
-        var stmt = try self.db.prepare(select_columns ++
-            \\ FROM downloads WHERE status = ?
+        var stmt = try self.db.db.prepare(
+            \\SELECT id, media_item_id, server_id, source_url, local_path,
+            \\       total_bytes, downloaded_bytes, status, created_at, completed_at,
+            \\       error_message, part_key
+            \\ FROM downloads WHERE status = ?{[]const u8}
             \\ ORDER BY created_at ASC
         );
-        defer stmt.finalize();
-        stmt.bindText(1, status.toString());
-
-        var results: std.ArrayList(types.Download) = .{};
-        while (stmt.step()) {
-            try results.append(self.allocator, try readDownload(self.allocator, &stmt));
-        }
-        return results.toOwnedSlice(self.allocator);
+        defer stmt.deinit();
+        return stmt.all(types.Download, self.allocator, .{}, .{status.toString()});
     }
 
     /// Get all downloads (all statuses).
     pub fn getAllDownloads(self: *Downloader) ![]types.Download {
-        var stmt = try self.db.prepare(select_columns ++
+        var stmt = try self.db.db.prepare(
+            \\SELECT id, media_item_id, server_id, source_url, local_path,
+            \\       total_bytes, downloaded_bytes, status, created_at, completed_at,
+            \\       error_message, part_key
             \\ FROM downloads ORDER BY created_at ASC
         );
-        defer stmt.finalize();
-
-        var results: std.ArrayList(types.Download) = .{};
-        while (stmt.step()) {
-            try results.append(self.allocator, try readDownload(self.allocator, &stmt));
-        }
-        return results.toOwnedSlice(self.allocator);
+        defer stmt.deinit();
+        return stmt.all(types.Download, self.allocator, .{}, .{});
     }
 
     /// Get a single download by ID.
     pub fn getDownload(self: *Downloader, id: i64) !?types.Download {
-        var stmt = try self.db.prepare(select_columns ++
-            \\ FROM downloads WHERE id = ?
+        return self.db.db.oneAlloc(
+            types.Download,
+            self.allocator,
+            \\SELECT id, media_item_id, server_id, source_url, local_path,
+            \\       total_bytes, downloaded_bytes, status, created_at, completed_at,
+            \\       error_message, part_key
+            \\ FROM downloads WHERE id = ?{i64}
+        ,
+            .{},
+            .{id},
         );
-        defer stmt.finalize();
-        stmt.bindInt64(1, id);
-
-        if (stmt.step()) {
-            return try readDownload(self.allocator, &stmt);
-        }
-        return null;
     }
 
     /// Get download for a specific media item (if any).
     pub fn getByMediaItemId(self: *Downloader, media_item_id: i64) !?types.Download {
-        var stmt = try self.db.prepare(select_columns ++
-            \\ FROM downloads WHERE media_item_id = ? LIMIT 1
+        return self.db.db.oneAlloc(
+            types.Download,
+            self.allocator,
+            \\SELECT id, media_item_id, server_id, source_url, local_path,
+            \\       total_bytes, downloaded_bytes, status, created_at, completed_at,
+            \\       error_message, part_key
+            \\ FROM downloads WHERE media_item_id = ?{i64} LIMIT 1
+        ,
+            .{},
+            .{media_item_id},
         );
-        defer stmt.finalize();
-        stmt.bindInt64(1, media_item_id);
-
-        if (stmt.step()) {
-            return try readDownload(self.allocator, &stmt);
-        }
-        return null;
     }
 
     /// Get the local file path for a completed download of a media item.
     pub fn getCompletedLocalPath(self: *Downloader, media_item_id: i64) !?[]const u8 {
-        var stmt = try self.db.prepare(
-            "SELECT local_path FROM downloads WHERE media_item_id = ? AND status = 'complete' LIMIT 1",
+        const row = try self.db.db.oneAlloc(
+            LocalPathRow,
+            self.allocator,
+            "SELECT local_path FROM downloads WHERE media_item_id = ?{i64} AND status = 'complete' LIMIT 1",
+            .{},
+            .{media_item_id},
         );
-        defer stmt.finalize();
-        stmt.bindInt64(1, media_item_id);
-
-        if (stmt.step()) {
-            if (stmt.columnText(0)) |path| {
-                return try self.allocator.dupe(u8, path);
-            }
+        if (row) |r| {
+            return r.local_path;
         }
         return null;
     }
 
     /// Update download progress.
     pub fn updateProgress(self: *Downloader, id: i64, downloaded: i64, total: ?i64) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare(
-            \\UPDATE downloads SET downloaded_bytes = ?, total_bytes = ?
-            \\WHERE id = ?
-        );
-        defer stmt.finalize();
-        stmt.bindInt64(1, downloaded);
-        stmt.bindOptionalInt64(2, total);
-        stmt.bindInt64(3, id);
-        try stmt.exec();
+        self.db.db.exec(
+            "UPDATE downloads SET downloaded_bytes = ?{i64}, total_bytes = ?{?i64} WHERE id = ?{i64}",
+            .{},
+            .{ downloaded, total, id },
+        ) catch return error.SqlExecFailed;
     }
 
     /// Update download status.
     pub fn setStatus(self: *Downloader, id: i64, status: types.DownloadStatus) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("UPDATE downloads SET status = ? WHERE id = ?");
-        defer stmt.finalize();
-        stmt.bindText(1, status.toString());
-        stmt.bindInt64(2, id);
-        try stmt.exec();
+        self.db.db.exec(
+            "UPDATE downloads SET status = ?{[]const u8} WHERE id = ?{i64}",
+            .{},
+            .{ status.toString(), id },
+        ) catch return error.SqlExecFailed;
 
         if (status == .complete) {
-            var ts_stmt = try self.db.prepare("UPDATE downloads SET completed_at = ? WHERE id = ?");
-            defer ts_stmt.finalize();
-            ts_stmt.bindInt64(1, std.time.timestamp());
-            ts_stmt.bindInt64(2, id);
-            try ts_stmt.exec();
+            self.db.db.exec(
+                "UPDATE downloads SET completed_at = ?{i64} WHERE id = ?{i64}",
+                .{},
+                .{ unixTimestamp(), id },
+            ) catch return error.SqlExecFailed;
         }
     }
 
     /// Set status to failed with an error message.
     pub fn setFailed(self: *Downloader, id: i64, error_message: []const u8) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare(
-            "UPDATE downloads SET status = 'failed', error_message = ? WHERE id = ?",
-        );
-        defer stmt.finalize();
-        stmt.bindText(1, error_message);
-        stmt.bindInt64(2, id);
-        try stmt.exec();
+        self.db.db.exec(
+            "UPDATE downloads SET status = 'failed', error_message = ?{[]const u8} WHERE id = ?{i64}",
+            .{},
+            .{ error_message, id },
+        ) catch return error.SqlExecFailed;
     }
 
     /// Reset any 'downloading' entries to 'queued' (for crash recovery on restart).
     pub fn resetInterrupted(self: *Downloader) !void {
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        try self.db.exec("UPDATE downloads SET status = 'queued' WHERE status = 'downloading'");
+        self.db.db.exec(
+            "UPDATE downloads SET status = 'queued' WHERE status = 'downloading'",
+            .{},
+            .{},
+        ) catch return error.SqlExecFailed;
     }
 
     /// Remove a download (and optionally its file).
@@ -411,39 +412,39 @@ pub const Downloader = struct {
             if (try self.getDownload(id)) |dl| {
                 defer self.freeDownload(dl);
                 if (dl.local_path) |path| {
-                    std.fs.cwd().deleteFile(path) catch {};
+                    std.Io.Dir.cwd().deleteFile(defaultIo(), path) catch {};
                 }
             }
         }
 
-        self.db.mutex.lock();
-        defer self.db.mutex.unlock();
-
-        var stmt = try self.db.prepare("DELETE FROM downloads WHERE id = ?");
-        defer stmt.finalize();
-        stmt.bindInt64(1, id);
-        try stmt.exec();
+        self.db.db.exec(
+            "DELETE FROM downloads WHERE id = ?{i64}",
+            .{},
+            .{id},
+        ) catch return error.SqlExecFailed;
     }
 
     /// Count active (downloading) downloads.
     pub fn activeCount(self: *Downloader) !u32 {
-        var stmt = try self.db.prepare("SELECT COUNT(*) FROM downloads WHERE status = 'downloading'");
-        defer stmt.finalize();
-        if (stmt.step()) {
-            return @intCast(stmt.columnInt(0));
-        }
+        const row = self.db.db.one(
+            CountRow,
+            "SELECT COUNT(*) FROM downloads WHERE status = 'downloading'",
+            .{},
+            .{},
+        ) catch return error.SqlExecFailed;
+        if (row) |r| return @intCast(r.count);
         return 0;
     }
 
     /// Get total bytes of completed downloads.
     pub fn totalCompletedBytes(self: *Downloader) !i64 {
-        var stmt = try self.db.prepare(
+        const row = self.db.db.one(
+            SumRow,
             "SELECT COALESCE(SUM(total_bytes), 0) FROM downloads WHERE status = 'complete'",
-        );
-        defer stmt.finalize();
-        if (stmt.step()) {
-            return stmt.columnInt64(0);
-        }
+            .{},
+            .{},
+        ) catch return error.SqlExecFailed;
+        if (row) |r| return r.total;
         return 0;
     }
 
@@ -477,23 +478,6 @@ pub const Downloader = struct {
         for (downloads) |dl| self.freeDownload(dl);
         self.allocator.free(downloads);
     }
-
-    fn readDownload(allocator: std.mem.Allocator, stmt: *database.Statement) !types.Download {
-        return types.Download{
-            .id = stmt.columnInt64(0),
-            .media_item_id = stmt.columnInt64(1),
-            .server_id = try allocator.dupe(u8, stmt.columnText(2) orelse ""),
-            .source_url = try allocator.dupe(u8, stmt.columnText(3) orelse ""),
-            .local_path = if (stmt.columnText(4)) |t| try allocator.dupe(u8, t) else null,
-            .total_bytes = stmt.columnOptionalInt64(5),
-            .downloaded_bytes = stmt.columnInt64(6),
-            .status = types.DownloadStatus.fromString(stmt.columnText(7) orelse "queued") orelse .queued,
-            .created_at = stmt.columnOptionalInt64(8),
-            .completed_at = stmt.columnOptionalInt64(9),
-            .error_message = if (stmt.columnText(10)) |t| try allocator.dupe(u8, t) else null,
-            .part_key = if (stmt.columnText(11)) |t| try allocator.dupe(u8, t) else null,
-        };
-    }
 };
 
 // Thread-local state for progress callback (needed because fn pointers can't capture context)
@@ -516,8 +500,8 @@ test "downloader enqueue and retrieve" {
     defer db.close();
 
     // Insert prerequisite rows for foreign keys
-    try db.exec("INSERT INTO servers (id, name, client_identifier) VALUES ('server1', 'Test', 'uuid')");
-    try db.exec("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')");
+    try db.db.execMulti("INSERT INTO servers (id, name, client_identifier) VALUES ('server1', 'Test', 'uuid')", .{});
+    try db.db.execMulti("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')", .{});
 
     var dl = Downloader.init(std.testing.allocator, &db);
 
@@ -543,8 +527,8 @@ test "downloader duplicate prevention" {
     var db = try database.Database.open(":memory:");
     defer db.close();
 
-    try db.exec("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')");
-    try db.exec("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')");
+    try db.db.execMulti("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')", .{});
+    try db.db.execMulti("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')", .{});
 
     var dl = Downloader.init(std.testing.allocator, &db);
 
@@ -571,8 +555,8 @@ test "downloader re-enqueue after failure" {
     var db = try database.Database.open(":memory:");
     defer db.close();
 
-    try db.exec("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')");
-    try db.exec("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')");
+    try db.db.execMulti("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')", .{});
+    try db.db.execMulti("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')", .{});
 
     var dl = Downloader.init(std.testing.allocator, &db);
 
@@ -603,8 +587,8 @@ test "downloader status updates" {
     var db = try database.Database.open(":memory:");
     defer db.close();
 
-    try db.exec("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')");
-    try db.exec("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')");
+    try db.db.execMulti("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')", .{});
+    try db.db.execMulti("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')", .{});
 
     var dl = Downloader.init(std.testing.allocator, &db);
 
@@ -630,9 +614,9 @@ test "downloader getByMediaItemId" {
     var db = try database.Database.open(":memory:");
     defer db.close();
 
-    try db.exec("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')");
-    try db.exec("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')");
-    try db.exec("INSERT INTO media_items (id, source, media_type, title) VALUES (2, 'plex', 'movie', 'Test2')");
+    try db.db.execMulti("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')", .{});
+    try db.db.execMulti("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')", .{});
+    try db.db.execMulti("INSERT INTO media_items (id, source, media_type, title) VALUES (2, 'plex', 'movie', 'Test2')", .{});
 
     var dl = Downloader.init(std.testing.allocator, &db);
 
@@ -658,8 +642,8 @@ test "downloader resetInterrupted" {
     var db = try database.Database.open(":memory:");
     defer db.close();
 
-    try db.exec("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')");
-    try db.exec("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')");
+    try db.db.execMulti("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')", .{});
+    try db.db.execMulti("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')", .{});
 
     var dl = Downloader.init(std.testing.allocator, &db);
 
@@ -683,8 +667,8 @@ test "downloader error message" {
     var db = try database.Database.open(":memory:");
     defer db.close();
 
-    try db.exec("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')");
-    try db.exec("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')");
+    try db.db.execMulti("INSERT INTO servers (id, name, client_identifier) VALUES ('s1', 'Test', 'uuid')", .{});
+    try db.db.execMulti("INSERT INTO media_items (id, source, media_type, title) VALUES (1, 'plex', 'movie', 'Test')", .{});
 
     var dl = Downloader.init(std.testing.allocator, &db);
 

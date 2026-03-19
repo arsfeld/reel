@@ -181,7 +181,7 @@ pub const TmdbClient = struct {
             else => return &.{},
         };
 
-        var results: std.ArrayList(tmdb_types.SearchResult) = .{};
+        var results: std.ArrayList(tmdb_types.SearchResult) = .empty;
 
         for (results_arr.items) |item| {
             const obj = switch (item) {
@@ -228,7 +228,7 @@ fn parseGenres(allocator: std.mem.Allocator, val: ?std.json.Value) ![]const tmdb
         else => return &.{},
     };
 
-    var results: std.ArrayList(tmdb_types.Genre) = .{};
+    var results: std.ArrayList(tmdb_types.Genre) = .empty;
     for (genres_arr.items) |item| {
         const obj = switch (item) {
             .object => |o| o,
@@ -286,14 +286,16 @@ fn dupeOptionalJsonString(allocator: std.mem.Allocator, val: ?std.json.Value) !?
 }
 
 fn urlEncode(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
-    var result: std.ArrayList(u8) = .{};
+    var result: std.ArrayList(u8) = .empty;
     for (input) |ch| {
         if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
             try result.append(allocator, ch);
         } else if (ch == ' ') {
             try result.append(allocator, '+');
         } else {
-            try result.writer(allocator).print("%{X:0>2}", .{ch});
+            var buf: [3]u8 = undefined;
+            const encoded_ch = std.fmt.bufPrint(&buf, "%{X:0>2}", .{ch}) catch unreachable;
+            try result.appendSlice(allocator, encoded_ch);
         }
     }
     return result.toOwnedSlice(allocator);
