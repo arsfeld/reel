@@ -283,12 +283,11 @@ pub const Player = struct {
         const sub_exts = [_][]const u8{ ".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt" };
 
         // Open directory and scan
-        const sio = std.Io.Threaded.global_single_threaded.io();
-        var dir = std.Io.Dir.cwd().openDir(sio, dir_path, .{ .iterate = true }) catch return;
-        defer dir.close(sio);
+        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
+        defer dir.close();
 
         var iter = dir.iterate();
-        while (iter.next(sio) catch null) |entry| {
+        while (iter.next() catch null) |entry| {
             if (entry.kind != .file) continue;
             const name = entry.name;
 

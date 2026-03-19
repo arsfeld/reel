@@ -141,12 +141,11 @@ pub fn scanDirectory(allocator: std.mem.Allocator, dir_path: []const u8) ![][]co
 }
 
 fn scanDirRecursive(allocator: std.mem.Allocator, dir_path: []const u8, results: *std.ArrayList([]const u8)) !void {
-    const sio = std.Io.Threaded.global_single_threaded.io();
-    var dir = std.Io.Dir.cwd().openDir(sio, dir_path, .{ .iterate = true }) catch return;
-    defer dir.close(sio);
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
+    defer dir.close();
 
     var iter = dir.iterate();
-    while (try iter.next(sio)) |entry| {
+    while (iter.next() catch null) |entry| {
         const full_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
 
         switch (entry.kind) {

@@ -49,9 +49,8 @@ pub const Database = struct {
         const span = std.mem.span(path);
         var buf: [512]u8 = undefined;
         const backup = std.fmt.bufPrintZ(&buf, "{s}.old", .{span}) catch return;
-        const cwd = std.Io.Dir.cwd();
-        const sio = std.Io.Threaded.global_single_threaded.io();
-        cwd.rename(span, cwd, backup, sio) catch {};
+        const cwd = std.fs.cwd();
+        cwd.rename(span, backup) catch {};
         // Also clean up WAL/SHM files
         var wal_buf: [512]u8 = undefined;
         var shm_buf: [512]u8 = undefined;
@@ -61,8 +60,8 @@ pub const Database = struct {
         var shm_old: [512]u8 = undefined;
         const wal_bak = std.fmt.bufPrintZ(&wal_old, "{s}-wal", .{backup}) catch return;
         const shm_bak = std.fmt.bufPrintZ(&shm_old, "{s}-shm", .{backup}) catch return;
-        cwd.rename(wal, cwd, wal_bak, sio) catch {};
-        cwd.rename(shm, cwd, shm_bak, sio) catch {};
+        cwd.rename(wal, wal_bak) catch {};
+        cwd.rename(shm, shm_bak) catch {};
     }
 
     pub fn close(self: *Database) void {

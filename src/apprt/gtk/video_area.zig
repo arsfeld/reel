@@ -1,12 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("gtk/gtk.h");
-    @cInclude("epoxy/gl.h");
-    @cInclude("epoxy/egl.h");
-    @cInclude("mpv/client.h");
-    @cInclude("mpv/render.h");
-    @cInclude("mpv/render_gl.h");
-});
+const c = @import("c.zig").c;
 const player_mod = @import("../../core/player.zig");
 
 pub const VideoArea = struct {

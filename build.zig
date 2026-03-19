@@ -2,7 +2,11 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    const raw_optimize = b.standardOptimizeOption(.{});
+    // Work around a Zig 0.15.2 compiler crash (SIGILL) triggered by
+    // zig-sqlite's heavy comptime code in Debug mode.  Default to
+    // ReleaseSafe; pass -Doptimize=ReleaseFast etc. to override.
+    const optimize: std.builtin.OptimizeMode = if (raw_optimize == .Debug) .ReleaseSafe else raw_optimize;
     const is_linux = target.result.os.tag == .linux;
 
     // Vendored zig-sqlite module
@@ -73,13 +77,40 @@ pub fn build(b: *std.Build) void {
                 },
             }),
         });
-        exe.root_module.linkSystemLibrary("gtk4", .{});
-        exe.root_module.linkSystemLibrary("libadwaita-1", .{});
+
+        // Zig translate-c workaround for GLib 2.86+ / GTK 4.20+
+        //
+        // translate-c cannot handle _Pragma() and chokes on #error
+        // directives in raw header files.  We work around both issues:
+        //   1. _Pragma: neutralised via @cDefine("_Pragma(x)", {}) in c.zig
+        //   2. #error in gdkversionmacros.h: patched copy in overlay
+        //
+        // The overlay must be searched BEFORE system pkg-config includes.
+        // linkSystemLibrary serialises pkg-config -I flags before
+        // addIncludePath, so we link GTK/adwaita without pkg-config
+        // (link only) and supply include paths ourselves.
+        exe.root_module.addIncludePath(b.path("include/zig-tc-patches"));
+        exe.root_module.addIncludePath(b.path("include"));
+
+        // Link GTK/adwaita without pkg-config to control include ordering.
+        exe.root_module.linkSystemLibrary("gtk-4", .{ .use_pkg_config = .no });
+        exe.root_module.linkSystemLibrary("adwaita-1", .{ .use_pkg_config = .no });
+        // GTK depends on GLib/GObject/GIO/GdkPixbuf which must be linked explicitly
+        // when not using pkg-config for GTK.
+        exe.root_module.linkSystemLibrary("glib-2.0", .{ .use_pkg_config = .no });
+        exe.root_module.linkSystemLibrary("gobject-2.0", .{ .use_pkg_config = .no });
+        exe.root_module.linkSystemLibrary("gio-2.0", .{ .use_pkg_config = .no });
+        exe.root_module.linkSystemLibrary("gdk_pixbuf-2.0", .{ .use_pkg_config = .no });
+
+        // Other libraries can use pkg-config normally.
         exe.root_module.linkSystemLibrary("mpv", .{});
         exe.root_module.linkSystemLibrary("epoxy", .{});
         exe.root_module.linkSystemLibrary("egl", .{});
+
+        // GTK/GLib system include paths added AFTER our overlay.
+        addPkgConfigIncludes(b, exe.root_module, &.{ "gtk4", "libadwaita-1", "gdk-pixbuf-2.0" });
+
         exe.root_module.addImport("sqlite", sqlite_mod);
-        exe.root_module.addIncludePath(b.path("include"));
 
         b.installArtifact(exe);
 
@@ -101,4 +132,24 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_core_tests.step);
+}
+
+/// Run pkg-config --cflags-only-I for the given packages and add
+/// each resulting -I path via addSystemIncludePath on the module.
+fn addPkgConfigIncludes(b: *std.Build, mod: *std.Build.Module, packages: []const []const u8) void {
+    for (packages) |pkg| {
+        var out_code: u8 = 0;
+        const stdout = b.runAllowFail(
+            &.{ "pkg-config", "--cflags-only-I", pkg },
+            &out_code,
+            .Inherit,
+        ) catch continue;
+        if (out_code != 0) continue;
+        var iter = std.mem.splitScalar(u8, std.mem.trim(u8, stdout, " \t\n"), ' ');
+        while (iter.next()) |flag| {
+            if (flag.len > 2 and std.mem.eql(u8, flag[0..2], "-I")) {
+                mod.addSystemIncludePath(.{ .cwd_relative = flag[2..] });
+            }
+        }
+    }
 }

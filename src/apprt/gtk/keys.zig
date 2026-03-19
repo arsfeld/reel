@@ -1,7 +1,4 @@
-const c = @cImport({
-    @cInclude("gtk/gtk.h");
-    @cInclude("mpv/client.h");
-});
+const c = @import("c.zig").c;
 const player_mod = @import("../../core/player.zig");
 const app = @import("app.zig");
 

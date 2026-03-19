@@ -3,9 +3,6 @@ const database = @import("database.zig");
 const types = @import("types.zig");
 const http = @import("../net/http.zig");
 
-fn defaultIo() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
 
 fn unixTimestamp() i64 {
     var ts: std.c.timespec = undefined;
@@ -153,7 +150,7 @@ pub const Downloader = struct {
         // Ensure download directory exists
         if (dl.local_path) |path| {
             if (std.mem.lastIndexOfScalar(u8, path, '/')) |dir_end| {
-                std.Io.Dir.cwd().createDirPath(defaultIo(), path[0..dir_end]) catch {};
+                std.fs.cwd().makePath(path[0..dir_end]) catch {};
             }
         }
 
@@ -230,7 +227,7 @@ pub const Downloader = struct {
 
             // Download completed successfully — verify file and update final size
             if (dl.local_path) |path| {
-                const file_stat = std.Io.Dir.cwd().statFile(defaultIo(), path, .{}) catch {
+                const file_stat = std.fs.cwd().statFile(path) catch {
                     try self.setFailed(dl.id, "Downloaded file not found");
                     return;
                 };
@@ -412,7 +409,7 @@ pub const Downloader = struct {
             if (try self.getDownload(id)) |dl| {
                 defer self.freeDownload(dl);
                 if (dl.local_path) |path| {
-                    std.Io.Dir.cwd().deleteFile(defaultIo(), path) catch {};
+                    std.fs.cwd().deleteFile(path) catch {};
                 }
             }
         }

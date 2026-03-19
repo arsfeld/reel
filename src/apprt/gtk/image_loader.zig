@@ -1,16 +1,10 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("gtk/gtk.h");
-    @cInclude("gdk-pixbuf/gdk-pixbuf.h");
-});
+const c = @import("c.zig").c;
 const tmdb_types = @import("../../net/tmdb/types.zig");
 const image_cache = @import("../../core/image_cache.zig");
 const http_mod = @import("../../net/http.zig");
 const app = @import("app.zig");
 
-fn defaultIo() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
 
 // --- Download queue: fixed worker threads, bounded queue ---
 
@@ -129,7 +123,7 @@ fn processJob(hc: *http_mod.HttpClient, job: DownloadJob) void {
 
     // Ensure directory exists
     if (std.mem.lastIndexOfScalar(u8, local_path, '/')) |sep| {
-        std.Io.Dir.cwd().createDirPath(defaultIo(), local_path[0..sep]) catch {};
+        std.fs.cwd().makePath(local_path[0..sep]) catch {};
     }
 
     // Download
@@ -147,7 +141,7 @@ fn processJob(hc: *http_mod.HttpClient, job: DownloadJob) void {
     }
 
     // Write to disk
-    std.Io.Dir.cwd().writeFile(defaultIo(), .{ .sub_path = local_path, .data = response.body }) catch {
+    std.fs.cwd().writeFile(.{ .sub_path = local_path, .data = response.body }) catch {
         allocator.free(local_path);
         _ = c.g_idle_add(@ptrCast(&unrefWidget), @ptrCast(job.picture));
         return;

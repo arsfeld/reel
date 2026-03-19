@@ -1,8 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("adwaita.h");
-    @cInclude("gtk/gtk.h");
-});
+const c = @import("c.zig").c;
 const app = @import("app.zig");
 const http_mod = @import("../../net/http.zig");
 const plex_client_mod = @import("../../net/plex/client.zig");

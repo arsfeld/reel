@@ -3,9 +3,6 @@ const database = @import("database.zig");
 const sqlite = database.sqlite;
 const http = @import("../net/http.zig");
 
-fn defaultIo() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
 
 fn unixTimestamp() i64 {
     var ts: std.c.timespec = undefined;
@@ -20,7 +17,7 @@ pub const ImageCache = struct {
 
     pub fn init(allocator: std.mem.Allocator, db: *database.Database, cache_dir: []const u8) ImageCache {
         // Ensure cache directory exists
-        std.Io.Dir.cwd().createDirPath(defaultIo(), cache_dir) catch {};
+        std.fs.cwd().makePath(cache_dir) catch {};
         return .{ .db = db, .allocator = allocator, .cache_dir = cache_dir };
     }
 
@@ -35,7 +32,7 @@ pub const ImageCache = struct {
         ) catch return null;
         if (row) |r| {
             // Verify file still exists
-            std.Io.Dir.cwd().access(defaultIo(), r.local_path, .{}) catch {
+            std.fs.cwd().access(r.local_path, .{}) catch {
                 self.allocator.free(r.local_path);
                 return null;
             };
@@ -127,7 +124,7 @@ pub const ImageCache = struct {
                 defer self.allocator.free(r.local_path);
 
                 // Delete the file
-                std.Io.Dir.cwd().deleteFile(defaultIo(),r.local_path) catch {};
+                std.fs.cwd().deleteFile(r.local_path) catch {};
 
                 // Delete from DB
                 self.db.db.exec(
@@ -159,7 +156,7 @@ pub const ImageCache = struct {
             const entry = iter.nextAlloc(self.allocator, .{}) catch break;
             if (entry) |e| {
                 defer self.allocator.free(e.local_path);
-                std.Io.Dir.cwd().deleteFile(defaultIo(),e.local_path) catch {};
+                std.fs.cwd().deleteFile(e.local_path) catch {};
             } else break;
         }
 

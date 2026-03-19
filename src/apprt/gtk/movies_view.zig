@@ -1,8 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("adwaita.h");
-    @cInclude("gtk/gtk.h");
-});
+const c = @import("c.zig").c;
 const poster_grid = @import("poster_grid.zig");
 const app = @import("app.zig");
 const library_mod = @import("../../core/library.zig");

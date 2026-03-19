@@ -1,8 +1,5 @@
 const std = @import("std");
 
-fn defaultIo() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
 
 pub const HttpError = error{
     RequestFailed,
@@ -39,7 +36,7 @@ pub const HttpClient = struct {
     pub fn init(allocator: std.mem.Allocator) HttpClient {
         return .{
             .allocator = allocator,
-            .client = .{ .allocator = allocator, .io = defaultIo() },
+            .client = .{ .allocator = allocator },
         };
     }
 
@@ -70,7 +67,6 @@ pub const HttpClient = struct {
         const uri = std.Uri.parse(url) catch return error.InvalidUrl;
 
         // Build headers
-        const sio = defaultIo();
         var headers_list: std.ArrayList(std.http.Header) = .empty;
         defer headers_list.deinit(self.allocator);
 
@@ -110,13 +106,13 @@ pub const HttpClient = struct {
         }
 
         // Open file for writing
-        const cwd = std.Io.Dir.cwd();
+        const cwd = std.fs.cwd();
         const file = if (resume_from > 0)
-            cwd.openFile(sio, file_path, .{ .mode = .write_only }) catch
-                cwd.createFile(sio, file_path, .{}) catch return error.WriteFailed
+            cwd.openFile(file_path, .{ .mode = .write_only }) catch
+                cwd.createFile(file_path, .{}) catch return error.WriteFailed
         else
-            cwd.createFile(sio, file_path, .{}) catch return error.WriteFailed;
-        defer file.close(sio);
+            cwd.createFile(file_path, .{}) catch return error.WriteFailed;
+        defer file.close();
 
         // Get response body reader
         var transfer_buf: [64]u8 = undefined;
@@ -137,7 +133,7 @@ pub const HttpClient = struct {
             const n = reader.readVec(&bufs) catch return error.RequestFailed;
             if (n == 0) break;
 
-            file.writePositionalAll(sio, buf[0..n], downloaded) catch return error.WriteFailed;
+            file.pwriteAll(buf[0..n], downloaded) catch return error.WriteFailed;
             downloaded += n;
             bytes_since_callback += n;
 
@@ -176,7 +172,7 @@ pub const HttpClient = struct {
         }
 
         // Fresh client per request to avoid any shared TLS/connection state
-        var client: std.http.Client = .{ .allocator = self.allocator, .io = defaultIo() };
+        var client: std.http.Client = .{ .allocator = self.allocator };
         defer client.deinit();
 
         var req = client.request(method, uri, .{

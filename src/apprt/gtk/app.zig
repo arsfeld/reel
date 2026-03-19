@@ -1,8 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("adwaita.h");
-    @cInclude("gtk/gtk.h");
-});
+const c = @import("c.zig").c;
 const video_area = @import("video_area.zig");
 const player_controls = @import("player_controls.zig");
 const keys = @import("keys.zig");
@@ -29,9 +26,6 @@ const detail_view = @import("detail_view.zig");
 const collections_view = @import("collections_view.zig");
 const plex_setup = @import("plex_setup.zig");
 
-fn defaultIo() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
 
 pub const ViewId = enum(u8) {
     home = 0,
@@ -132,7 +126,7 @@ fn getDbPath() [*:0]const u8 {
 
     // Ensure directory exists
     const dir_end = std.mem.lastIndexOfScalar(u8, full[0..full.len], '/') orelse return full;
-    std.Io.Dir.cwd().createDirPath(defaultIo(),full[0..dir_end]) catch {};
+    std.fs.cwd().makePath(full[0..dir_end]) catch {};
 
     db_path_val = full;
     return full;
@@ -807,7 +801,7 @@ fn getImageCacheDir() []const u8 {
         image_cache_dir_val = "/tmp/reel/images";
         return "/tmp/reel/images";
     };
-    std.Io.Dir.cwd().createDirPath(defaultIo(),dir) catch {};
+    std.fs.cwd().makePath(dir) catch {};
     image_cache_dir_val = dir;
     return dir;
 }
@@ -841,7 +835,7 @@ pub fn getDownloadDir() []const u8 {
         download_dir_val = "/tmp/reel/downloads";
         return "/tmp/reel/downloads";
     };
-    std.Io.Dir.cwd().createDirPath(defaultIo(),dir) catch {};
+    std.fs.cwd().makePath(dir) catch {};
     download_dir_val = dir;
     return dir;
 }
@@ -992,7 +986,7 @@ pub fn playMediaItem(item_id: i64, streaming_path: []const u8) void {
         if (dl.getCompletedLocalPath(item_id) catch null) |local_path| {
             defer app_state.allocator.free(local_path);
             // Verify the file actually exists on disk
-            std.Io.Dir.cwd().access(defaultIo(), local_path, .{}) catch {
+            std.fs.cwd().access(local_path, .{}) catch {
                 // File deleted externally, mark as failed
                 if (dl.getByMediaItemId(item_id) catch null) |download| {
                     defer dl.freeDownload(download);

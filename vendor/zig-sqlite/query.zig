@@ -227,7 +227,7 @@ fn ParseType(comptime type_info: []const u8) type {
         const bits = std.fmt.parseInt(u16, type_info[1..type_info.len], 10) catch {
             @compileError("invalid type info " ++ type_info);
         };
-        return @Int(if (type_info[0] == 'i') .signed else .unsigned, bits);
+        return @Type(.{ .int = .{ .signedness = if (type_info[0] == 'i') .signed else .unsigned, .bits = bits } });
     }
 
     // Float

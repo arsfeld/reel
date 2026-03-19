@@ -1473,7 +1473,7 @@ pub fn Iterator(comptime Type: type) type {
                     },
                     inline .@"struct", .@"union" => |TI| {
                         if (TI.layout == .@"packed" and !@hasField(FieldType, "readField")) {
-                            const Backing = @Int(.unsigned, @bitSizeOf(FieldType));
+                            const Backing = @Type(.{ .int = .{ .signedness = .unsigned, .bits = @bitSizeOf(FieldType) } });
                             return @bitCast(self.readInt(Backing, i));
                         }
 
@@ -1704,7 +1704,7 @@ pub const DynamicStatement = struct {
                 },
                 .@"union" => |info| {
                     if (info.layout == .@"packed") {
-                        const Backing = @Int(.unsigned, @bitSizeOf(FieldType));
+                        const Backing = @Type(.{ .int = .{ .signedness = .unsigned, .bits = @bitSizeOf(FieldType) } });
                         try self.bindField(Backing, options, field_name, i, @as(Backing, @bitCast(field)));
                         return;
                     }

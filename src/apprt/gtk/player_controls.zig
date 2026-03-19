@@ -1,8 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("gtk/gtk.h");
-    @cInclude("mpv/client.h");
-});
+const c = @import("c.zig").c;
 const player_mod = @import("../../core/player.zig");
 const library_mod = @import("../../core/library.zig");
 const types = @import("../../core/types.zig");
