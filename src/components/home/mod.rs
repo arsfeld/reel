@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use adw;
 use gtk::prelude::*;
-use adw as adw;
 use relm4::prelude::*;
 
 use crate::models::media::MediaItem;
@@ -188,10 +188,7 @@ impl std::fmt::Debug for HomeViewMsg {
 #[allow(dead_code)]
 pub enum HomeViewOutput {
     ShowDetail(MediaItem),
-    PlayMedia {
-        url: String,
-        media_item: MediaItem,
-    },
+    PlayMedia { url: String, media_item: MediaItem },
     ShowConnectionDialog,
     Error(String),
 }

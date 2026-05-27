@@ -25,7 +25,7 @@
 //! emits while the flag is clear go through `UserSeek`, which seeks the
 //! underlying stream immediately.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -36,306 +36,14 @@ use relm4::gtk;
 use relm4::prelude::*;
 
 use crate::player::PlayState;
+use crate::player::SkipMarkers;
+use crate::player::gst_pipeline::PlaybackPipeline;
+use crate::player::pipeline_msgs::PipelineBusMsg;
+use crate::player::subtitles::is_subtitle_extension;
+use crate::player::tracks::{MediaTrack, TrackKind};
 
 const TICK_INTERVAL_MS: u32 = 250;
 const HIDE_DELAY_MS: u32 = 2500;
-
-/// Owned GStreamer pipeline driving a single stream.
-///
-/// Behaves like `gtk::MediaFile` did: build with a URL, set state
-/// transitions via `play`/`pause`, query timing in microseconds, etc.
-/// Bus messages drive event-flag transitions (`prepared`, `seeking`)
-/// and post a `Tick` to the relm4 sender so the widget refreshes.
-struct PlaybackPipeline {
-    pipeline: gst::Pipeline,
-    playbin: gst::Element,
-    paintable: gtk::gdk::Paintable,
-    bus_watch: Option<gst::bus::BusWatchGuard>,
-    prepared: Rc<Cell<bool>>,
-    seeking: Rc<Cell<bool>>,
-    playing: Rc<Cell<bool>>,
-    error: Rc<RefCell<Option<String>>>,
-}
-
-impl PlaybackPipeline {
-    fn new(
-        url: &str,
-        autoplay: bool,
-        sender: &ComponentSender<VideoPlayer>,
-    ) -> Option<Self> {
-        let playbin = make_element("playbin3")?;
-        let sink = make_element("gtk4paintablesink")?;
-
-        let paintable = sink.property::<gtk::gdk::Paintable>("paintable");
-        playbin.set_property("video-sink", &sink);
-        playbin.set_property("uri", url);
-
-        let pipeline = gst::Pipeline::new();
-        if let Err(e) = pipeline.add(&playbin) {
-            tracing::warn!("failed to add playbin to pipeline: {e}");
-            return None;
-        }
-
-        let prepared = Rc::new(Cell::new(false));
-        let seeking = Rc::new(Cell::new(false));
-        let playing = Rc::new(Cell::new(false));
-        let error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-
-        let bus_watch = install_bus_watch(
-            &pipeline,
-            sender.clone(),
-            BusFlags {
-                prepared: prepared.clone(),
-                seeking: seeking.clone(),
-                playing: playing.clone(),
-                error: error.clone(),
-            },
-        );
-
-        // Drive directly to the user-visible target state. Going Null →
-        // Paused → Playing as two separate set_state calls races the bus
-        // watch and leaves `self.playing` stuck at false on autoplay.
-        let target = if autoplay {
-            gst::State::Playing
-        } else {
-            gst::State::Paused
-        };
-        if let Err(e) = pipeline.set_state(target) {
-            tracing::warn!("failed to set pipeline to {target:?}: {e}");
-        }
-
-        Some(Self {
-            pipeline,
-            playbin,
-            paintable,
-            bus_watch,
-            prepared,
-            seeking,
-            playing,
-            error,
-        })
-    }
-
-    fn paintable(&self) -> &gtk::gdk::Paintable {
-        &self.paintable
-    }
-
-    fn play(&self) {
-        let _ = self.pipeline.set_state(gst::State::Playing);
-    }
-
-    fn pause(&self) {
-        let _ = self.pipeline.set_state(gst::State::Paused);
-    }
-
-    fn is_playing(&self) -> bool {
-        self.playing.get()
-    }
-
-    fn is_prepared(&self) -> bool {
-        self.prepared.get()
-    }
-
-    fn is_seeking(&self) -> bool {
-        self.seeking.get()
-    }
-
-    fn error_message(&self) -> Option<String> {
-        self.error.borrow().clone()
-    }
-
-    fn duration_us(&self) -> i64 {
-        self.pipeline
-            .query_duration::<gst::ClockTime>()
-            .map(|t| t.useconds() as i64)
-            .unwrap_or(0)
-    }
-
-    fn position_us(&self) -> i64 {
-        self.pipeline
-            .query_position::<gst::ClockTime>()
-            .map(|t| t.useconds() as i64)
-            .unwrap_or(0)
-    }
-
-    fn set_volume(&self, v: f64) {
-        self.playbin.set_property("volume", v);
-    }
-
-    fn volume(&self) -> f64 {
-        self.playbin.property::<f64>("volume")
-    }
-
-    fn set_muted(&self, m: bool) {
-        self.playbin.set_property("mute", m);
-    }
-
-    fn is_muted(&self) -> bool {
-        self.playbin.property::<bool>("mute")
-    }
-
-    fn set_speed(&self, speed: f64) {
-        self.pipeline.set_property("speed", speed);
-    }
-
-    fn speed(&self) -> f64 {
-        self.pipeline.property::<f64>("speed")
-    }
-
-    fn seek(&self, target_us: i64) {
-        if !self.prepared.get() {
-            tracing::debug!(target_us, "seek skipped: pipeline not prepared");
-            return;
-        }
-        let pos = gst::ClockTime::from_useconds(target_us.max(0) as u64);
-        let was_seeking = self.seeking.get();
-        let pre_position_us = self
-            .pipeline
-            .query_position::<gst::ClockTime>()
-            .map(|t| t.useconds() as i64)
-            .unwrap_or(-1);
-        // KEY_UNIT | SNAP_BEFORE keeps the HTTP range request cheap by
-        // landing on the keyframe at-or-before the target (one fetch,
-        // smooth playback resumption). ACCURATE then asks the decoder to
-        // chase forward from that keyframe to the exact requested frame
-        // — without it, several rapid "+5s" nudges between two sparse
-        // keyframes all land on the same earlier keyframe and the
-        // playhead visibly stalls while the slider keeps jumping.
-        let result = self.pipeline.seek_simple(
-            gst::SeekFlags::FLUSH
-                | gst::SeekFlags::KEY_UNIT
-                | gst::SeekFlags::SNAP_BEFORE
-                | gst::SeekFlags::ACCURATE,
-            pos,
-        );
-        match result {
-            Ok(()) => {
-                tracing::debug!(
-                    target_us,
-                    pre_position_us,
-                    was_seeking,
-                    "seek submitted"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(target_us, "seek failed: {e}");
-            }
-        }
-    }
-}
-
-impl Drop for PlaybackPipeline {
-    fn drop(&mut self) {
-        if let Some(watch) = self.bus_watch.take() {
-            // Dropping the guard removes the watch.
-            drop(watch);
-        }
-        let _ = self.pipeline.set_state(gst::State::Null);
-    }
-}
-
-/// Build a GStreamer element by factory name, logging on failure.
-fn make_element(name: &str) -> Option<gst::Element> {
-    match gst::ElementFactory::make(name).build() {
-        Ok(el) => Some(el),
-        Err(e) => {
-            tracing::warn!("{name} unavailable: {e}");
-            None
-        }
-    }
-}
-
-/// State flags shared between the bus watch and the owning `PlaybackPipeline`.
-struct BusFlags {
-    prepared: Rc<Cell<bool>>,
-    seeking: Rc<Cell<bool>>,
-    playing: Rc<Cell<bool>>,
-    error: Rc<RefCell<Option<String>>>,
-}
-
-/// Wire up `pipeline`'s bus watch to drive the supplied flags and post a
-/// `Tick` to the widget after every message.
-fn install_bus_watch(
-    pipeline: &gst::Pipeline,
-    sender: ComponentSender<VideoPlayer>,
-    flags: BusFlags,
-) -> Option<gst::bus::BusWatchGuard> {
-    let bus = pipeline.bus().expect("pipeline has a bus");
-    let pipeline_weak = pipeline.downgrade();
-    bus.add_watch_local(move |_, msg| {
-        handle_bus_message(msg, &flags, &pipeline_weak);
-        sender.input(VideoPlayerMsg::Tick);
-        glib::ControlFlow::Continue
-    })
-    .ok()
-}
-
-fn handle_bus_message(
-    msg: &gst::Message,
-    flags: &BusFlags,
-    pipeline_weak: &glib::WeakRef<gst::Pipeline>,
-) {
-    use gst::MessageView;
-    match msg.view() {
-        MessageView::Error(err) => {
-            let glib_err = err.error();
-            tracing::warn!(
-                "gstreamer error from {:?}: {} ({:?})",
-                err.src().map(|s| s.path_string()),
-                glib_err,
-                err.debug()
-            );
-            *flags.error.borrow_mut() = Some(glib_err.to_string());
-            // An error means we'll never finish preparing; clear the
-            // seeking flag so the loading overlay logic in the widget
-            // can switch to the error state.
-            flags.seeking.set(false);
-        }
-        MessageView::AsyncDone(_) => {
-            let landed_us = pipeline_weak
-                .upgrade()
-                .and_then(|p| p.query_position::<gst::ClockTime>())
-                .map(|t| t.useconds() as i64)
-                .unwrap_or(-1);
-            tracing::debug!(landed_us, "bus: AsyncDone — seek complete, prepared");
-            flags.prepared.set(true);
-            flags.seeking.set(false);
-        }
-        MessageView::AsyncStart(_) => {
-            tracing::debug!("bus: AsyncStart — seek/preroll begin");
-            flags.seeking.set(true);
-        }
-        MessageView::StateChanged(sc) => apply_state_change(sc, flags, pipeline_weak),
-        MessageView::DurationChanged(_) | MessageView::Eos(_) => {}
-        _ => {}
-    }
-}
-
-fn apply_state_change(
-    sc: &gst::message::StateChanged,
-    flags: &BusFlags,
-    pipeline_weak: &glib::WeakRef<gst::Pipeline>,
-) {
-    // Only the pipeline's own state changes are load-bearing; child
-    // elements emit their own.
-    let Some(pipe) = pipeline_weak.upgrade() else {
-        return;
-    };
-    if !sc
-        .src()
-        .map(|s| s == pipe.upcast_ref::<gst::Object>())
-        .unwrap_or(false)
-    {
-        return;
-    }
-    let current = sc.current();
-    flags.playing.set(current == gst::State::Playing);
-    if current == gst::State::Paused || current == gst::State::Playing {
-        flags.prepared.set(true);
-    } else if current == gst::State::Null || current == gst::State::Ready {
-        flags.prepared.set(false);
-    }
-}
 
 #[derive(Debug)]
 pub(crate) struct VideoPlayerInit {
@@ -352,6 +60,8 @@ pub(crate) struct VideoPlayerInit {
     /// Initial mute state, paired with `volume` so unmuting returns to
     /// the previously chosen level.
     pub(crate) muted: bool,
+    /// Preferred subtitle language from settings (ISO 639-1).
+    pub(crate) preferred_subtitle_lang: Option<String>,
 }
 
 impl Default for VideoPlayerInit {
@@ -362,6 +72,7 @@ impl Default for VideoPlayerInit {
             resume_secs: None,
             volume: 1.0,
             muted: false,
+            preferred_subtitle_lang: None,
         }
     }
 }
@@ -380,10 +91,14 @@ pub(crate) enum VideoPlayerOutput {
     },
     StateChanged(PlayState),
     EndOfFile,
-    VolumeChanged { volume: f64, muted: bool },
+    VolumeChanged {
+        volume: f64,
+        muted: bool,
+    },
     SpeedChanged(f64),
     ToggleFullscreen,
     LoadSubtitleFile,
+    Leave,
     Error(String),
     ControlsRevealedChanged(bool),
 }
@@ -420,8 +135,29 @@ pub(crate) enum VideoPlayerMsg {
     KeyPressed(gtk::gdk::Key, gtk::gdk::ModifierType),
     SetSpeed(f64),
     LoadSubtitleFile,
+    LoadExternalSubtitle(String),
     FullscreenChanged(bool),
     FilesDropped(String),
+    StreamCollection(gst::StreamCollection),
+    StreamsSelected {
+        collection: gst::StreamCollection,
+        streams: Vec<gst::Stream>,
+    },
+    SelectAudio(String),
+    SelectSubtitle(Option<String>),
+    SetTitle(Option<String>),
+    PopoverVisibilityChanged(bool),
+    ClosePopovers,
+    /// Set intro/credits skip markers for the current media.
+    SetSkipMarkers(SkipMarkers),
+    /// Seek past the intro (to intro_end_secs).
+    SkipIntro,
+    /// Seek past the credits (to end of media).
+    SkipCredits,
+    /// Context-aware skip: intro if in intro range, credits if in
+    /// credits range, no-op otherwise. Used by the overlay button
+    /// and the `s` keyboard shortcut.
+    SkipCurrent,
 }
 
 /// Independent playback flags grouped to keep `VideoPlayer`'s top-level
@@ -442,6 +178,8 @@ struct OsdState {
     /// against this in `update_with_view` so the parent only hears about
     /// real edge transitions, not every tick.
     controls_revealed: bool,
+    /// Track selector popover is open — keep chrome visible.
+    popover_open: bool,
 }
 
 pub(crate) struct VideoPlayer {
@@ -474,6 +212,13 @@ pub(crate) struct VideoPlayer {
     /// keyframe in between drag updates.
     last_user_seek: Rc<Cell<Option<Instant>>>,
     resume_pending: Option<f64>,
+    preferred_subtitle_lang: Option<String>,
+    tracks: Vec<MediaTrack>,
+    title: Option<String>,
+    track_ui_signature: String,
+    /// Skip intro / credits markers for the current media. `None` until
+    /// set by the parent (e.g. from Plex metadata).
+    skip_markers: Option<SkipMarkers>,
 }
 
 #[relm4::component(pub(crate))]
@@ -588,6 +333,51 @@ impl Component for VideoPlayer {
                     },
                 },
 
+                // Top chrome for fullscreen (back + title). Windowed mode
+                // uses the app-level titlebar synced to the same reveal flag.
+                add_overlay = &gtk::Box {
+                    set_valign: gtk::Align::Start,
+                    set_halign: gtk::Align::Fill,
+
+                    #[name = "top_chrome_revealer"]
+                    gtk::Revealer {
+                        set_transition_type: gtk::RevealerTransitionType::Crossfade,
+                        set_transition_duration: 180,
+                        set_reveal_child: true,
+                        set_hexpand: true,
+
+                        #[name = "top_chrome_box"]
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            add_css_class: "video-chrome",
+                            set_spacing: 8,
+                            set_margin_start: 8,
+                            set_margin_end: 8,
+                            set_margin_top: 8,
+                            set_margin_bottom: 24,
+
+                            #[name = "back_button"]
+                            gtk::Button {
+                                set_icon_name: "go-back-symbolic",
+                                add_css_class: "flat",
+                                add_css_class: "circular",
+                                set_tooltip_text: Some("Back to library (Esc)"),
+                                connect_clicked[sender] => move |_| {
+                                    let _ = sender.output(VideoPlayerOutput::Leave);
+                                },
+                            },
+
+                            #[name = "title_label"]
+                            gtk::Label {
+                                set_hexpand: true,
+                                set_xalign: 0.0,
+                                add_css_class: "video-chrome-title",
+                                set_ellipsize: gtk::pango::EllipsizeMode::End,
+                            },
+                        },
+                    },
+                },
+
                 // The OSD bar lives in a Revealer so we can fade it
                 // smoothly. `set_can_target: false` on the surrounding box
                 // would block clicks on the controls — we want them
@@ -685,6 +475,54 @@ impl Component for VideoPlayer {
 
                                 gtk::Box { set_hexpand: true },
 
+                                #[name = "audio_menu"]
+                                gtk::MenuButton {
+                                    set_icon_name: "audio-x-generic-symbolic",
+                                    add_css_class: "flat",
+                                    add_css_class: "circular",
+                                    set_tooltip_text: Some("Audio track"),
+                                    #[wrap(Some)]
+                                    set_popover = &gtk::Popover {
+                                        gtk::Box {
+                                            set_orientation: gtk::Orientation::Vertical,
+                                            set_spacing: 4,
+                                            set_margin_top: 8,
+                                            set_margin_bottom: 8,
+                                            set_margin_start: 8,
+                                            set_margin_end: 8,
+                                            #[name = "audio_tracks_box"]
+                                            gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_spacing: 4,
+                                            },
+                                        },
+                                    },
+                                },
+
+                                #[name = "subtitle_menu"]
+                                gtk::MenuButton {
+                                    set_icon_name: "media-view-subtitles-symbolic",
+                                    add_css_class: "flat",
+                                    add_css_class: "circular",
+                                    set_tooltip_text: Some("Subtitles"),
+                                    #[wrap(Some)]
+                                    set_popover = &gtk::Popover {
+                                        gtk::Box {
+                                            set_orientation: gtk::Orientation::Vertical,
+                                            set_spacing: 4,
+                                            set_margin_top: 8,
+                                            set_margin_bottom: 8,
+                                            set_margin_start: 8,
+                                            set_margin_end: 8,
+                                            #[name = "subtitle_tracks_box"]
+                                            gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_spacing: 4,
+                                            },
+                                        },
+                                    },
+                                },
+
                                 #[name = "volume_button"]
                                 gtk::Button {
                                     set_icon_name: "audio-volume-high-symbolic",
@@ -720,6 +558,28 @@ impl Component for VideoPlayer {
                         },
                     },
                 },
+
+                // Skip intro / credits button. Positioned near the
+                // bottom-end corner so it doesn't overlap transport
+                // controls. Visibility is driven by refresh_widgets
+                // based on the current position versus SkipMarkers.
+                add_overlay = &gtk::Box {
+                    set_valign: gtk::Align::End,
+                    set_halign: gtk::Align::End,
+                    set_margin_bottom: 90,
+                    set_margin_end: 16,
+
+                    #[name = "skip_button"]
+                    gtk::Button {
+                        set_label: "Skip Intro",
+                        add_css_class: "suggested-action",
+                        add_css_class: "circular",
+                        set_visible: false,
+                        connect_clicked[sender] => move |_| {
+                            sender.input(VideoPlayerMsg::SkipCurrent);
+                        },
+                    },
+                },
             },
         }
     }
@@ -751,18 +611,17 @@ impl Component for VideoPlayer {
         );
         wire_pointer_handlers(&widgets, &sender);
         wire_keyboard_handlers(&widgets, &sender);
+        wire_popover_handlers(&widgets, &sender);
 
         // Kick off the position-polling timer.
-        let tick = glib::timeout_add_local(
-            std::time::Duration::from_millis(TICK_INTERVAL_MS as u64),
-            {
+        let tick =
+            glib::timeout_add_local(std::time::Duration::from_millis(TICK_INTERVAL_MS as u64), {
                 let sender = sender.clone();
                 move || {
                     sender.input(VideoPlayerMsg::Tick);
                     glib::ControlFlow::Continue
                 }
-            },
-        );
+            });
 
         // Start the inactivity timer immediately so controls hide on a
         // still scene. They'll re-reveal on the next pointer/keypress.
@@ -790,13 +649,15 @@ impl Component for VideoPlayer {
         match msg {
             VideoPlayerMsg::LoadFile(path) => {
                 let url = format!("file://{}", path);
-                self.handle_set_url(widgets, &sender, Some(url), None);
+                self.handle_set_url(widgets, &sender, Some(url), None, Some(path));
             }
             VideoPlayerMsg::SetUrl { url, resume_secs } => {
-                self.handle_set_url(widgets, &sender, url, resume_secs);
+                self.handle_set_url(widgets, &sender, url, resume_secs, None);
             }
             VideoPlayerMsg::Clear => {
-                self.handle_set_url(widgets, &sender, None, None);
+                self.tracks.clear();
+                self.track_ui_signature.clear();
+                self.handle_set_url(widgets, &sender, None, None, None);
             }
             VideoPlayerMsg::SetAutoplay(on) => self.playback.autoplay = on,
             VideoPlayerMsg::Tick => self.handle_tick(widgets, &sender),
@@ -820,7 +681,9 @@ impl Component for VideoPlayer {
             VideoPlayerMsg::PointerActive => self.handle_pointer_active(&sender),
             VideoPlayerMsg::HideControls => {
                 self.hide_source = None;
-                self.osd.show_controls = false;
+                if !self.osd.popover_open {
+                    self.osd.show_controls = false;
+                }
             }
             VideoPlayerMsg::KeyPressed(key, mods) => {
                 if self.handle_key(&sender, key, mods) {
@@ -844,12 +707,84 @@ impl Component for VideoPlayer {
                 }
             }
             VideoPlayerMsg::FilesDropped(uri) => {
+                let path = uri.strip_prefix("file://").unwrap_or(&uri);
+                if is_subtitle_extension(std::path::Path::new(path)) {
+                    if self.media.is_some() {
+                        let sub_uri = if uri.starts_with("file://") {
+                            uri.clone()
+                        } else {
+                            format!("file://{uri}")
+                        };
+                        sender.input(VideoPlayerMsg::LoadExternalSubtitle(sub_uri));
+                    }
+                    return;
+                }
                 let url = if uri.starts_with("file://") {
-                    uri
+                    uri.clone()
                 } else {
                     format!("file://{}", uri)
                 };
-                self.handle_set_url(widgets, &sender, Some(url), None);
+                self.handle_set_url(widgets, &sender, Some(url), None, Some(path.to_string()));
+            }
+            VideoPlayerMsg::StreamCollection(collection) => {
+                if let Some(media) = self.media.as_ref() {
+                    media.handle_stream_collection(&collection);
+                    self.tracks = media.tracks();
+                }
+            }
+            VideoPlayerMsg::StreamsSelected {
+                collection,
+                streams,
+            } => {
+                if let Some(media) = self.media.as_ref() {
+                    media.handle_streams_selected(&collection, &streams);
+                    self.tracks = media.tracks();
+                }
+            }
+            VideoPlayerMsg::SelectAudio(id) => {
+                if let Some(media) = self.media.as_ref() {
+                    media.select_audio(&id);
+                }
+                sender.input(VideoPlayerMsg::PointerActive);
+            }
+            VideoPlayerMsg::SelectSubtitle(id) => {
+                if let Some(media) = self.media.as_ref() {
+                    media.select_subtitle(id.as_deref());
+                    self.tracks = media.tracks();
+                }
+                sender.input(VideoPlayerMsg::PointerActive);
+            }
+            VideoPlayerMsg::LoadExternalSubtitle(uri) => {
+                if let Some(media) = self.media.as_ref() {
+                    media.load_external_subtitle(&uri);
+                }
+                sender.input(VideoPlayerMsg::PointerActive);
+            }
+            VideoPlayerMsg::SetTitle(title) => {
+                self.title = title;
+            }
+            VideoPlayerMsg::PopoverVisibilityChanged(open) => {
+                self.osd.popover_open = open;
+                if open {
+                    sender.input(VideoPlayerMsg::PointerActive);
+                }
+            }
+            VideoPlayerMsg::ClosePopovers => {
+                widgets.audio_menu.popdown();
+                widgets.subtitle_menu.popdown();
+                self.osd.popover_open = false;
+            }
+            VideoPlayerMsg::SetSkipMarkers(markers) => {
+                self.skip_markers = Some(markers);
+            }
+            VideoPlayerMsg::SkipIntro => {
+                self.handle_skip_intro(&sender);
+            }
+            VideoPlayerMsg::SkipCredits => {
+                self.handle_skip_credits(&sender);
+            }
+            VideoPlayerMsg::SkipCurrent => {
+                self.handle_skip_current(&sender);
             }
         }
 
@@ -859,7 +794,7 @@ impl Component for VideoPlayer {
         // last value, and emitting only on changes avoids spamming the
         // parent on every tick.
         let force_visible = self.media.is_none() || self.duration_us == 0;
-        let revealed = self.osd.show_controls || force_visible;
+        let revealed = self.osd.show_controls || force_visible || self.osd.popover_open;
         if revealed != self.osd.controls_revealed {
             self.osd.controls_revealed = revealed;
             let _ = sender.output(VideoPlayerOutput::ControlsRevealedChanged(revealed));
@@ -868,6 +803,13 @@ impl Component for VideoPlayer {
         // Re-render derived widget state. We keep this manual because
         // many of these properties depend on multiple model fields and a
         // few need to skip our own value-changed handlers.
+        rebuild_track_popovers(
+            widgets,
+            &self.tracks,
+            self.media.as_ref(),
+            &sender,
+            &mut self.track_ui_signature,
+        );
         self.refresh_widgets(widgets, root);
         let _ = root;
     }
@@ -927,10 +869,7 @@ fn wire_slider_handlers(
 /// Pointer motion → wake controls. Single click anywhere on the surface
 /// toggles play/pause; double click toggles fullscreen. Both paths also
 /// keep the OSD visible (PointerActive).
-fn wire_pointer_handlers(
-    widgets: &VideoPlayerWidgets,
-    sender: &ComponentSender<VideoPlayer>,
-) {
+fn wire_pointer_handlers(widgets: &VideoPlayerWidgets, sender: &ComponentSender<VideoPlayer>) {
     let motion = gtk::EventControllerMotion::new();
     let sender_m = sender.clone();
     motion.connect_motion(move |_, _, _| {
@@ -960,10 +899,7 @@ fn wire_pointer_handlers(
 /// descendant) doesn't eat arrow keys before we see them. Return `Stop`
 /// for keys we recognise so we don't double-handle (e.g. focused seek
 /// slider + our own seek-by-5s).
-fn wire_keyboard_handlers(
-    widgets: &VideoPlayerWidgets,
-    sender: &ComponentSender<VideoPlayer>,
-) {
+fn wire_keyboard_handlers(widgets: &VideoPlayerWidgets, sender: &ComponentSender<VideoPlayer>) {
     let key = gtk::EventControllerKey::new();
     key.set_propagation_phase(gtk::PropagationPhase::Capture);
     let sender_k = sender.clone();
@@ -1006,6 +942,7 @@ impl VideoPlayer {
             osd: OsdState {
                 show_controls: true,
                 controls_revealed: true,
+                popover_open: false,
             },
             hide_source: None,
             tick_source: None,
@@ -1013,6 +950,11 @@ impl VideoPlayer {
             suppress_volume,
             last_user_seek,
             resume_pending: None,
+            preferred_subtitle_lang: init.preferred_subtitle_lang.clone(),
+            tracks: Vec::new(),
+            title: None,
+            track_ui_signature: String::new(),
+            skip_markers: None,
         }
     }
 
@@ -1030,10 +972,7 @@ impl VideoPlayer {
         // 400 ms covers the gap between consecutive value-changed events
         // during a continuous drag without leaving the thumb desynced for
         // long after the user lets go.
-        let media_seeking = self
-            .media
-            .as_ref()
-            .is_some_and(|m| m.is_seeking());
+        let media_seeking = self.media.as_ref().is_some_and(|m| m.is_seeking());
         let user_holding = self
             .last_user_seek
             .get()
@@ -1087,7 +1026,48 @@ impl VideoPlayer {
         // user has something to look at; otherwise let the inactivity timer
         // hide it whether playing or paused. `controls_revealed` was
         // computed (and emitted upward) in `update_with_view`.
-        widgets.controls_revealer.set_reveal_child(self.osd.controls_revealed);
+        widgets
+            .controls_revealer
+            .set_reveal_child(self.osd.controls_revealed);
+        widgets
+            .top_chrome_revealer
+            .set_reveal_child(self.osd.controls_revealed && self.is_fullscreen);
+
+        if let Some(title) = &self.title {
+            widgets.title_label.set_label(title);
+        }
+
+        let has_audio = self.tracks.iter().any(|t| t.kind == TrackKind::Audio);
+        let has_subs = self.tracks.iter().any(|t| t.kind == TrackKind::Subtitle);
+        widgets.audio_menu.set_sensitive(has_audio);
+        widgets
+            .subtitle_menu
+            .set_sensitive(has_audio || has_subs || self.media.is_some());
+
+        // Skip intro / credits button visibility. Only show when the OSD
+        // is revealed and the playhead is inside a marked range.
+        {
+            let pos_secs = self.position_us as f64 / 1_000_000.0;
+            let (visible, label) = self
+                .skip_markers
+                .as_ref()
+                .filter(|_| self.osd.controls_revealed)
+                .and_then(|m| {
+                    if m.credits_start_secs > 0.0 && pos_secs >= m.credits_start_secs {
+                        Some((true, "Skip Credits"))
+                    } else if m.intro_end_secs > 0.0
+                        && pos_secs >= m.intro_start_secs
+                        && pos_secs < m.intro_end_secs
+                    {
+                        Some((true, "Skip Intro"))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or((false, "Skip Intro"));
+            widgets.skip_button.set_visible(visible);
+            widgets.skip_button.set_label(label);
+        }
 
         // Cursor: hide on the player widget when controls are hidden so
         // the OSD "gets out of the way". Scoped to the widget (not the
@@ -1164,6 +1144,10 @@ impl VideoPlayer {
                 sender.input(VideoPlayerMsg::ToggleFullscreen);
                 true
             }
+            Key::s | Key::S => {
+                sender.input(VideoPlayerMsg::SkipCurrent);
+                true
+            }
             Key::bracketleft | Key::bracketright => {
                 let current = self
                     .media
@@ -1178,11 +1162,70 @@ impl VideoPlayer {
                 sender.input(VideoPlayerMsg::SetSpeed(new));
                 true
             }
-            Key::Escape if self.is_fullscreen => {
-                sender.input(VideoPlayerMsg::ExitFullscreen);
+            Key::Escape => {
+                if self.osd.popover_open {
+                    sender.input(VideoPlayerMsg::ClosePopovers);
+                } else if self.is_fullscreen {
+                    sender.input(VideoPlayerMsg::ExitFullscreen);
+                } else {
+                    let _ = sender.output(VideoPlayerOutput::Leave);
+                }
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Seek past the intro: jump to `intro_end_secs`.
+    fn handle_skip_intro(&mut self, _sender: &ComponentSender<Self>) {
+        let Some(ref markers) = self.skip_markers else {
+            return;
+        };
+        if markers.intro_end_secs <= 0.0 || self.duration_us <= 0 {
+            return;
+        }
+        let pos_secs = self.position_us as f64 / 1_000_000.0;
+        if pos_secs >= markers.intro_start_secs && pos_secs < markers.intro_end_secs {
+            let target = (markers.intro_end_secs * 1_000_000.0) as i64;
+            let target = target.clamp(0, self.duration_us);
+            if let Some(media) = self.media.as_ref() {
+                media.seek(target);
+            }
+            self.position_us = target;
+            self.last_user_seek.set(Some(Instant::now()));
+        }
+    }
+
+    /// Seek past the credits: jump to end of media.
+    fn handle_skip_credits(&mut self, sender: &ComponentSender<Self>) {
+        let Some(ref markers) = self.skip_markers else {
+            return;
+        };
+        if markers.credits_start_secs <= 0.0 || self.duration_us <= 0 {
+            return;
+        }
+        let pos_secs = self.position_us as f64 / 1_000_000.0;
+        if pos_secs >= markers.credits_start_secs {
+            sender.input(VideoPlayerMsg::SeekFraction(1.0));
+        }
+    }
+
+    /// Context-aware skip: dispatches to skip-intro or skip-credits
+    /// depending on where the playhead currently sits.
+    fn handle_skip_current(&mut self, sender: &ComponentSender<Self>) {
+        let Some(ref markers) = self.skip_markers else {
+            return;
+        };
+        let pos_secs = self.position_us as f64 / 1_000_000.0;
+        // Check credits first — if both ranges somehow overlap, prefer
+        // skipping credits since the user is closer to the end.
+        if markers.credits_start_secs > 0.0 && pos_secs >= markers.credits_start_secs {
+            self.handle_skip_credits(sender);
+        } else if markers.intro_end_secs > 0.0
+            && pos_secs >= markers.intro_start_secs
+            && pos_secs < markers.intro_end_secs
+        {
+            self.handle_skip_intro(sender);
         }
     }
 
@@ -1192,6 +1235,7 @@ impl VideoPlayer {
         sender: &ComponentSender<Self>,
         url: Option<String>,
         resume_secs: Option<f64>,
+        local_path: Option<String>,
     ) {
         self.url = url.clone();
         self.duration_us = 0;
@@ -1199,6 +1243,9 @@ impl VideoPlayer {
         self.playback.playing = false;
         self.playback.eos_reached = false;
         self.resume_pending = resume_secs.filter(|s| *s > 0.0);
+        self.tracks.clear();
+        self.track_ui_signature.clear();
+        self.skip_markers = None;
 
         self.media = None;
 
@@ -1208,7 +1255,32 @@ impl VideoPlayer {
             return;
         };
 
-        let Some(pipeline) = PlaybackPipeline::new(&url, self.playback.autoplay, sender) else {
+        let sender_bus = sender.clone();
+        let on_bus = Rc::new(move |msg: PipelineBusMsg| match msg {
+            PipelineBusMsg::StreamCollection(c) => {
+                sender_bus.input(VideoPlayerMsg::StreamCollection(c));
+            }
+            PipelineBusMsg::StreamsSelected {
+                collection,
+                streams,
+            } => {
+                sender_bus.input(VideoPlayerMsg::StreamsSelected {
+                    collection,
+                    streams,
+                });
+            }
+        });
+
+        let local_path_ref = local_path
+            .as_deref()
+            .or_else(|| url.strip_prefix("file://"));
+        let Some(pipeline) = PlaybackPipeline::new(
+            &url,
+            self.playback.autoplay,
+            self.preferred_subtitle_lang.clone(),
+            local_path_ref,
+            on_bus,
+        ) else {
             widgets.picture.set_paintable(gtk::gdk::Paintable::NONE);
             let msg = "Video playback unavailable (missing GStreamer plugins)".to_string();
             let _ = sender.output(VideoPlayerOutput::Error(msg));
@@ -1585,11 +1657,7 @@ struct TickSnapshot {
 
 /// Drive the central status plate. We only show it for initial loading
 /// and for terminal errors — seeking intentionally doesn't trigger it.
-fn update_status_plate(
-    widgets: &VideoPlayerWidgets,
-    error_msg: Option<&str>,
-    is_prepared: bool,
-) {
+fn update_status_plate(widgets: &VideoPlayerWidgets, error_msg: Option<&str>, is_prepared: bool) {
     if let Some(msg) = error_msg {
         widgets.status_spinner.set_spinning(false);
         widgets.status_spinner.set_visible(false);
@@ -1634,6 +1702,8 @@ fn is_player_shortcut(key: gtk::gdk::Key) -> bool {
             | Key::_0
             | Key::f
             | Key::F
+            | Key::s
+            | Key::S
             | Key::Escape
     )
 }
@@ -1666,6 +1736,129 @@ fn format_us(us: i64) -> String {
     } else {
         format!("{m}:{s:02}")
     }
+}
+
+fn wire_popover_handlers(widgets: &VideoPlayerWidgets, sender: &ComponentSender<VideoPlayer>) {
+    for menu in [&widgets.audio_menu, &widgets.subtitle_menu] {
+        let Some(popover) = menu.popover() else {
+            continue;
+        };
+        let sender_show = sender.clone();
+        popover.connect_show(move |_| {
+            sender_show.input(VideoPlayerMsg::PopoverVisibilityChanged(true));
+        });
+        let sender_hide = sender.clone();
+        popover.connect_closed(move |_| {
+            sender_hide.input(VideoPlayerMsg::PopoverVisibilityChanged(false));
+        });
+    }
+}
+
+fn track_ui_signature(tracks: &[MediaTrack], subtitles_enabled: bool) -> String {
+    let mut parts: Vec<String> = tracks
+        .iter()
+        .map(|t| format!("{}:{}:{}", t.stream_id, t.selected as u8, t.label.as_str()))
+        .collect();
+    parts.push(format!("subs:{subtitles_enabled}"));
+    parts.join("|")
+}
+
+fn rebuild_track_popovers(
+    widgets: &VideoPlayerWidgets,
+    tracks: &[MediaTrack],
+    media: Option<&PlaybackPipeline>,
+    sender: &ComponentSender<VideoPlayer>,
+    signature: &mut String,
+) {
+    let subtitles_enabled = media.is_some_and(PlaybackPipeline::subtitles_enabled);
+    let sig = track_ui_signature(tracks, subtitles_enabled);
+    if sig == *signature {
+        return;
+    }
+    *signature = sig;
+
+    while let Some(child) = widgets.audio_tracks_box.first_child() {
+        widgets.audio_tracks_box.remove(&child);
+    }
+    while let Some(child) = widgets.subtitle_tracks_box.first_child() {
+        widgets.subtitle_tracks_box.remove(&child);
+    }
+
+    let audio_tracks: Vec<_> = tracks
+        .iter()
+        .filter(|t| t.kind == TrackKind::Audio)
+        .collect();
+    if audio_tracks.is_empty() {
+        let label = gtk::Label::new(Some("No audio tracks"));
+        label.add_css_class("dim-label");
+        widgets.audio_tracks_box.append(&label);
+    } else {
+        let mut first_btn: Option<gtk::CheckButton> = None;
+        for track in audio_tracks {
+            let btn = gtk::CheckButton::builder()
+                .label(&track.label)
+                .active(track.selected)
+                .build();
+            if let Some(ref group) = first_btn {
+                btn.set_group(Some(group));
+            } else {
+                first_btn = Some(btn.clone());
+            }
+            let id = track.stream_id.clone();
+            let sender = sender.clone();
+            btn.connect_toggled(move |b| {
+                if b.is_active() {
+                    sender.input(VideoPlayerMsg::SelectAudio(id.clone()));
+                }
+            });
+            widgets.audio_tracks_box.append(&btn);
+        }
+    }
+
+    let off_btn = gtk::CheckButton::builder()
+        .label("Off")
+        .active(!subtitles_enabled)
+        .build();
+    let first_sub = Some(off_btn.clone());
+    let sender_off = sender.clone();
+    off_btn.connect_toggled(move |b| {
+        if b.is_active() {
+            sender_off.input(VideoPlayerMsg::SelectSubtitle(None));
+        }
+    });
+    widgets.subtitle_tracks_box.append(&off_btn);
+
+    let subtitle_tracks: Vec<_> = tracks
+        .iter()
+        .filter(|t| t.kind == TrackKind::Subtitle)
+        .collect();
+    for track in subtitle_tracks {
+        let btn = gtk::CheckButton::builder()
+            .label(&track.label)
+            .active(subtitles_enabled && track.selected)
+            .build();
+        if let Some(ref group) = first_sub {
+            btn.set_group(Some(group));
+        }
+        let id = track.stream_id.clone();
+        let sender = sender.clone();
+        btn.connect_toggled(move |b| {
+            if b.is_active() {
+                sender.input(VideoPlayerMsg::SelectSubtitle(Some(id.clone())));
+            }
+        });
+        widgets.subtitle_tracks_box.append(&btn);
+    }
+
+    let load_btn = gtk::Button::builder()
+        .label("Load subtitle file…")
+        .css_classes(["flat"])
+        .build();
+    let sender_load = sender.clone();
+    load_btn.connect_clicked(move |_| {
+        sender_load.input(VideoPlayerMsg::LoadSubtitleFile);
+    });
+    widgets.subtitle_tracks_box.append(&load_btn);
 }
 
 fn volume_icon(muted: bool, volume: f64) -> &'static str {

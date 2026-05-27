@@ -165,6 +165,18 @@ impl MediaSource for PlexSource {
     async fn unscrobble(&self, rating_key: &str) -> Result<(), SourceError> {
         Ok(self.client.unscrobble(rating_key).await?)
     }
+
+    async fn skip_markers(
+        &self,
+        rating_key: &str,
+        duration_secs: f64,
+    ) -> Result<crate::player::SkipMarkers, SourceError> {
+        let chapters = self.client.chapters(rating_key).await?;
+        super::convert::plex_chapters_to_skip_markers(&chapters, duration_secs)
+            .ok_or(SourceError::NotSupported(
+                "No intro/credits markers found".into(),
+            ))
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
+use adw;
 use adw::prelude::*;
-use gtk::prelude::*;
-use adw as adw;
 use relm4::prelude::*;
 use tracing::info;
 

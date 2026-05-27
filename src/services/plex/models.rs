@@ -140,6 +140,37 @@ pub struct PlexPart {
     pub size: Option<i64>,
 }
 
+// --- Chapter response (intro/credits skip markers) ---
+
+#[derive(Debug, Deserialize)]
+pub struct PlexChapterResponse {
+    #[serde(rename = "MediaContainer")]
+    pub media_container: PlexChapterContainer,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PlexChapterContainer {
+    pub size: Option<i32>,
+    #[serde(default, rename = "Chapter")]
+    pub chapters: Vec<PlexChapter>,
+}
+
+/// A single chapter marker from the Plex chapters API.
+/// Times are in milliseconds from the start of the media.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlexChapter {
+    pub id: Option<i64>,
+    /// Human-readable chapter title (e.g. "Chapter 1", "Intro", "Credits").
+    #[serde(default)]
+    pub tag: Option<String>,
+    /// Start time in milliseconds.
+    #[serde(rename = "startTimeOffset", default)]
+    pub start_time_offset: i64,
+    /// End time in milliseconds.
+    #[serde(rename = "endTimeOffset", default)]
+    pub end_time_offset: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

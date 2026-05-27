@@ -116,6 +116,18 @@ impl PlexClient {
         Ok(body.media_container.metadata)
     }
 
+    /// Get chapter markers for a media item.
+    pub async fn chapters(&self, rating_key: &str) -> Result<Vec<PlexChapter>, PlexError> {
+        let url = format!(
+            "{}/library/metadata/{}/chapters",
+            self.base_url, rating_key
+        );
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        let body: PlexChapterResponse = resp.json().await?;
+        Ok(body.media_container.chapters)
+    }
+
     /// Get all collections in a library section.
     pub async fn collections(&self, library_key: &str) -> Result<Vec<PlexMetadata>, PlexError> {
         let url = format!(

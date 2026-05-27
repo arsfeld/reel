@@ -2,10 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use adw;
 use adw::prelude::*;
 use gtk::glib;
-use gtk::prelude::*;
-use adw as adw;
 use relm4::prelude::*;
 use rusqlite::Connection;
 use tracing::info;
@@ -16,8 +15,9 @@ use crate::components::detail::show_detail::{ShowDetail, ShowDetailMsg, ShowDeta
 use crate::components::home::{HomeView, HomeViewMsg, HomeViewOutput};
 use crate::components::library::{LibraryView, LibraryViewMsg, LibraryViewOutput};
 
-
-use crate::components::player::video_player::{VideoPlayer, VideoPlayerInit, VideoPlayerMsg, VideoPlayerOutput};
+use crate::components::player::video_player::{
+    VideoPlayer, VideoPlayerInit, VideoPlayerMsg, VideoPlayerOutput,
+};
 use crate::components::settings_dialog;
 use crate::components::sidebar::{Sidebar, SidebarOutput};
 use crate::db;
@@ -26,8 +26,8 @@ use crate::models::library::LibraryType;
 use crate::models::media::{MediaItem, MediaType, SourceType};
 use crate::models::source::{Source, SourceConfig};
 use crate::models::watch::WatchProgress;
-use crate::player::PlayState;
 use crate::navigation::CurrentView;
+use crate::player::{PlayState, SkipMarkers};
 
 use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
@@ -69,6 +69,9 @@ pub struct App {
     settings: Settings,
     /// MPRIS D-Bus bridge channels.
     mpris: MprisBridge,
+    /// Windowed player chrome (back + title) overlaid on the video page.
+    player_chrome_revealer: gtk::Revealer,
+    player_window_title: adw::WindowTitle,
 }
 
 #[derive(Debug)]
@@ -119,6 +122,8 @@ pub enum AppCmd {
     SourceValidationFailed(String),
     /// No-op for fire-and-forget async commands (scrobble, timeline).
     Noop,
+    /// Skip markers fetched from the media source after playback starts.
+    SkipMarkersLoaded(SkipMarkers),
 }
 
 #[relm4::component(pub)]
@@ -143,8 +148,12 @@ impl Component for App {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let settings = Settings::load();
         let video_player = VideoPlayer::builder()
-            .launch(VideoPlayerInit::default())
+            .launch(VideoPlayerInit {
+                preferred_subtitle_lang: settings.subtitles.preferred_language.clone(),
+                ..VideoPlayerInit::default()
+            })
             .forward(sender.input_sender(), AppMsg::VideoOutput);
 
         let sidebar = Sidebar::builder()
@@ -314,16 +323,52 @@ impl Component for App {
             .build();
         split_view.set_content(Some(&content_nav_page));
 
+        // --- Player chrome (windowed overlay, synced to OSD) ---
+        let player_window_title = adw::WindowTitle::new("Reel", "");
+        let player_back = gtk::Button::builder()
+            .icon_name("go-back-symbolic")
+            .tooltip_text("Back to library (Esc)")
+            .css_classes(["flat"])
+            .build();
+        let sender_back = sender.input_sender().clone();
+        player_back.connect_clicked(move |_| {
+            let _ = sender_back.send(AppMsg::GoBack);
+        });
+
+        let player_header = adw::HeaderBar::builder()
+            .css_classes(["flat", "video-chrome"])
+            .build();
+        player_header.pack_start(&player_back);
+        player_header.set_title_widget(Some(&player_window_title));
+        let window_controls = gtk::WindowControls::new(gtk::PackType::End);
+        player_header.pack_end(&window_controls);
+
+        let player_chrome_revealer = gtk::Revealer::builder()
+            .child(&player_header)
+            .reveal_child(false)
+            .transition_type(gtk::RevealerTransitionType::Crossfade)
+            .transition_duration(180)
+            .valign(gtk::Align::Start)
+            .halign(gtk::Align::Fill)
+            .hexpand(true)
+            .build();
+
         // --- Responsive sidebar ---
         // AdwNavigationSplitView handles its own responsive collapse natively —
         // when collapsed, it moves sidebar + content into an internal NavigationView.
 
-        // Player page
+        // Player page: video with windowed chrome overlaid at the top.
+        // AdwApplicationWindow does not support gtk_window_set_titlebar().
+        let player_overlay = gtk::Overlay::new();
+        player_overlay.set_child(Some(video_player.widget()));
+        player_overlay.add_overlay(&player_chrome_revealer);
+        video_player.widget().set_vexpand(true);
+
         let player_page = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
-        player_page.append(video_player.widget());
-        video_player.widget().set_vexpand(true);
+        player_page.append(&player_overlay);
+        player_overlay.set_vexpand(true);
 
         stack.add_named(&split_view, Some("shell"));
         stack.add_named(&player_page, Some("player"));
@@ -450,8 +495,10 @@ impl Component for App {
             last_position: 0.0,
             pending_resume: None,
             active_source: None,
-            settings: Settings::load(),
+            settings,
             mpris: mpris::spawn_mpris_server(),
+            player_chrome_revealer,
+            player_window_title,
         };
 
         // Relay MPRIS commands from tokio to the GTK main loop
@@ -495,8 +542,7 @@ impl Component for App {
                 root.set_title(Some("Reel"));
                 // Load home data: in-progress from local DB + recently_added from source
                 let in_progress = load_in_progress(&self.db_conn);
-                self.home_view
-                    .emit(HomeViewMsg::LoadHome { in_progress });
+                self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
             }
             AppMsg::Navigate(library_type) => {
                 self.current_view = CurrentView::Library(library_type);
@@ -531,8 +577,7 @@ impl Component for App {
                         self.nav_view.push(&page);
                     }
                     MediaType::Show => {
-                        self.show_detail
-                            .emit(ShowDetailMsg::LoadShow(item.clone()));
+                        self.show_detail.emit(ShowDetailMsg::LoadShow(item.clone()));
                         let page = adw::NavigationPage::builder()
                             .title(&item.title)
                             .child(self.show_detail.widget())
@@ -567,9 +612,10 @@ impl Component for App {
                     let events = self.watch_tracker.stop(self.last_position);
                     dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
                     self.now_playing = None;
+                    self.video_player.emit(VideoPlayerMsg::Clear);
+                    leave_player_mode(root, &mut self.player_chrome_revealer);
                     self.stack.set_visible_child_name("shell");
                     root.set_fullscreened(false);
-                    root.set_title(Some("Reel"));
                 } else {
                     self.nav_view.pop();
                 }
@@ -588,15 +634,47 @@ impl Component for App {
                         self.pending_resume = Some(progress.resume_position());
                     }
                 }
-                self.now_playing = media_item;
+                self.now_playing = media_item.clone();
                 self.last_position = 0.0;
                 self.current_view = CurrentView::Player;
+                let title = player_title_for_item(media_item.as_ref(), &url);
+                enter_player_mode(
+                    root,
+                    &mut self.player_chrome_revealer,
+                    &self.player_window_title,
+                    &title,
+                );
+                self.video_player
+                    .emit(VideoPlayerMsg::SetTitle(Some(title)));
                 self.stack.set_visible_child_name("player");
                 self.video_player.emit(VideoPlayerMsg::SetAutoplay(true));
                 self.video_player.emit(VideoPlayerMsg::SetUrl {
                     url: Some(url),
                     resume_secs: self.pending_resume.take(),
                 });
+
+                // Fetch skip-intro / skip-credits markers from Plex.
+                if let Some(ref item) = media_item
+                    && item.source_type == SourceType::Plex
+                    && let Some(source) = self.active_source.clone()
+                {
+                    let rating_key = item.external_id.clone();
+                    let duration_secs = item
+                        .runtime_minutes
+                        .map(|m| m as f64 * 60.0)
+                        .unwrap_or(0.0);
+                    sender.oneshot_command(async move {
+                        match source.skip_markers(&rating_key, duration_secs).await {
+                            Ok(markers) => AppCmd::SkipMarkersLoaded(markers),
+                            Err(e) => {
+                                tracing::debug!(
+                                    "Skip markers not available for {rating_key}: {e}"
+                                );
+                                AppCmd::Noop
+                            }
+                        }
+                    });
+                }
             }
             AppMsg::PlayerAction(video_msg) => {
                 self.video_player.emit(video_msg);
@@ -604,6 +682,15 @@ impl Component for App {
             AppMsg::OpenFile(path) => {
                 info!("Opening file: {}", path);
                 self.current_view = CurrentView::Player;
+                let title = player_title_for_item(None, &path);
+                enter_player_mode(
+                    root,
+                    &mut self.player_chrome_revealer,
+                    &self.player_window_title,
+                    &title,
+                );
+                self.video_player
+                    .emit(VideoPlayerMsg::SetTitle(Some(title)));
                 self.stack.set_visible_child_name("player");
                 self.video_player.emit(VideoPlayerMsg::SetAutoplay(true));
                 self.video_player.emit(VideoPlayerMsg::LoadFile(path));
@@ -616,12 +703,25 @@ impl Component for App {
             }
             AppMsg::FilesDropped(uri) => {
                 self.current_view = CurrentView::Player;
+                if self.stack.visible_child_name().as_deref() != Some("player") {
+                    let title = player_title_for_item(self.now_playing.as_ref(), &uri);
+                    enter_player_mode(
+                        root,
+                        &mut self.player_chrome_revealer,
+                        &self.player_window_title,
+                        &title,
+                    );
+                    self.video_player
+                        .emit(VideoPlayerMsg::SetTitle(Some(title)));
+                }
                 self.stack.set_visible_child_name("player");
-                self.video_player.emit(VideoPlayerMsg::SetAutoplay(true));
-                self.video_player.emit(VideoPlayerMsg::LoadFile(uri));
+                self.video_player.emit(VideoPlayerMsg::FilesDropped(uri));
             }
             AppMsg::VideoOutput(output) => match output {
-                VideoPlayerOutput::FileLoaded { path: _, duration_secs } => {
+                VideoPlayerOutput::FileLoaded {
+                    path: _,
+                    duration_secs,
+                } => {
                     self.screensaver.inhibit(root);
                     if let Some(ref item) = self.now_playing {
                         let meta = mpris::metadata_from_media_item(item, duration_secs, None);
@@ -631,11 +731,18 @@ impl Component for App {
                         } else {
                             None
                         };
-                        self.watch_tracker
-                            .start(&item.id, rating_key, duration_secs, Instant::now());
+                        self.watch_tracker.start(
+                            &item.id,
+                            rating_key,
+                            duration_secs,
+                            Instant::now(),
+                        );
                     }
                 }
-                VideoPlayerOutput::PositionChanged { position_secs, duration_secs } => {
+                VideoPlayerOutput::PositionChanged {
+                    position_secs,
+                    duration_secs,
+                } => {
                     self.last_position = position_secs;
                     let _ = self
                         .mpris
@@ -649,8 +756,12 @@ impl Component for App {
                         } else {
                             None
                         };
-                        self.watch_tracker
-                            .start(&item.id, rating_key, duration_secs, Instant::now());
+                        self.watch_tracker.start(
+                            &item.id,
+                            rating_key,
+                            duration_secs,
+                            Instant::now(),
+                        );
                     }
                     let events = self
                         .watch_tracker
@@ -670,7 +781,12 @@ impl Component for App {
                                 self.last_position,
                                 Instant::now(),
                             );
-                            dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
+                            dispatch_watch_events(
+                                &self.db_conn,
+                                events,
+                                &self.active_source,
+                                &sender,
+                            );
                         }
                         PlayState::Paused | PlayState::Stopped => {
                             self.screensaver.uninhibit(root);
@@ -679,7 +795,12 @@ impl Component for App {
                                 self.last_position,
                                 Instant::now(),
                             );
-                            dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
+                            dispatch_watch_events(
+                                &self.db_conn,
+                                events,
+                                &self.active_source,
+                                &sender,
+                            );
                         }
                     }
                 }
@@ -695,9 +816,9 @@ impl Component for App {
                     self.library_view
                         .emit(LibraryViewMsg::SetWatchData(watch_data));
                     if self.current_view == CurrentView::Player {
+                        leave_player_mode(root, &mut self.player_chrome_revealer);
                         self.stack.set_visible_child_name("shell");
                         root.set_fullscreened(false);
-                        root.set_title(Some("Reel"));
                     }
                 }
                 VideoPlayerOutput::VolumeChanged { volume, muted: _ } => {
@@ -709,8 +830,15 @@ impl Component for App {
                 VideoPlayerOutput::Error(msg) => {
                     sender.input(AppMsg::ShowToast(msg));
                 }
-                VideoPlayerOutput::LoadSubtitleFile => {}
-                VideoPlayerOutput::ControlsRevealedChanged(_) => {}
+                VideoPlayerOutput::LoadSubtitleFile => {
+                    show_subtitle_chooser(root, sender.input_sender().clone());
+                }
+                VideoPlayerOutput::Leave => {
+                    sender.input(AppMsg::GoBack);
+                }
+                VideoPlayerOutput::ControlsRevealedChanged(revealed) => {
+                    self.player_chrome_revealer.set_reveal_child(revealed);
+                }
             },
             AppMsg::ShowConnectionDialog => {
                 let client_id =
@@ -973,8 +1101,7 @@ impl Component for App {
                 // NavigateHome fires before validation completes, so LoadHome
                 // was skipped — retry it here.
                 let in_progress = load_in_progress(&self.db_conn);
-                self.home_view
-                    .emit(HomeViewMsg::LoadHome { in_progress });
+                self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
                 self.library_view.emit(LibraryViewMsg::SetSource(
                     plex_source.clone(),
                     artwork_cache.clone(),
@@ -1006,6 +1133,10 @@ impl Component for App {
             AppCmd::SourceValidationFailed(msg) => {
                 tracing::warn!("Saved Plex source not reachable: {msg}");
                 sender.input(AppMsg::ShowToast(format!("Plex server unreachable: {msg}")));
+            }
+            AppCmd::SkipMarkersLoaded(markers) => {
+                self.video_player
+                    .emit(VideoPlayerMsg::SetSkipMarkers(markers));
             }
             AppCmd::Noop => {}
         }
@@ -1191,6 +1322,67 @@ fn init_database() -> Option<Connection> {
     }
 }
 
+fn player_title_for_item(item: Option<&MediaItem>, fallback: &str) -> String {
+    if let Some(item) = item {
+        return item.display_title();
+    }
+    let path = fallback.strip_prefix("file://").unwrap_or(fallback);
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Reel")
+        .to_string()
+}
+
+fn enter_player_mode(
+    root: &adw::ApplicationWindow,
+    chrome: &mut gtk::Revealer,
+    window_title: &adw::WindowTitle,
+    title: &str,
+) {
+    window_title.set_title(title);
+    root.set_title(Some(title));
+    chrome.set_reveal_child(true);
+}
+
+fn leave_player_mode(root: &adw::ApplicationWindow, chrome: &mut gtk::Revealer) {
+    chrome.set_reveal_child(false);
+    root.set_title(Some("Reel"));
+}
+
+fn show_subtitle_chooser(window: &adw::ApplicationWindow, sender: relm4::Sender<AppMsg>) {
+    let dialog = gtk::FileDialog::builder()
+        .title("Open Subtitle File")
+        .modal(true)
+        .build();
+
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Subtitle Files"));
+    for ext in ["srt", "ass", "ssa", "vtt", "sub"] {
+        filter.add_suffix(ext);
+    }
+
+    let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&filter);
+    dialog.set_filters(Some(&filters));
+
+    let window_clone = window.clone();
+    dialog.open(
+        Some(&window_clone),
+        gtk::gio::Cancellable::NONE,
+        move |result| {
+            if let Ok(file) = result
+                && let Some(path) = file.path()
+            {
+                let uri = format!("file://{}", path.to_string_lossy());
+                let _ = sender.send(AppMsg::PlayerAction(VideoPlayerMsg::LoadExternalSubtitle(
+                    uri,
+                )));
+            }
+        },
+    );
+}
+
 fn show_file_chooser(window: &adw::ApplicationWindow, sender: relm4::Sender<AppMsg>) {
     let dialog = gtk::FileDialog::builder()
         .title("Open Video File")
@@ -1220,9 +1412,7 @@ fn show_file_chooser(window: &adw::ApplicationWindow, sender: relm4::Sender<AppM
 }
 
 /// Query the local database for in-progress items (Continue Watching).
-fn load_in_progress(
-    db_conn: &Option<Connection>,
-) -> Vec<(MediaItem, WatchProgress)> {
+fn load_in_progress(db_conn: &Option<Connection>) -> Vec<(MediaItem, WatchProgress)> {
     let Some(conn) = db_conn else {
         return Vec::new();
     };
@@ -1334,7 +1524,9 @@ fn urlencoding_decode(s: &str) -> String {
                 out.push(char::from_u32((hi << 4) | lo).unwrap_or('\u{FFFD}'));
             } else {
                 out.push('%');
-                if let Some(c) = chars.next() { out.push(c); }
+                if let Some(c) = chars.next() {
+                    out.push(c);
+                }
             }
         } else {
             out.push(c);

@@ -409,3 +409,25 @@ gridview > child:selected .media-card-frame {
     color: alpha(#ffffff, 0.78);
     font-size: 0.9em;
 }
+
+/* Top chrome overlay (window titlebar + in-fullscreen header). */
+.video-chrome {
+    background: linear-gradient(
+        to bottom,
+        alpha(black, 0.72) 0%,
+        alpha(black, 0.35) 55%,
+        alpha(black, 0.0) 100%
+    );
+    color: #ffffff;
+}
+
+.video-chrome button,
+.video-chrome label,
+.video-chrome .title {
+    color: #ffffff;
+}
+
+.video-chrome-title {
+    color: #ffffff;
+    font-weight: 600;
+}

@@ -152,6 +152,100 @@ pub fn plex_metadata_to_media_detail(
     })
 }
 
+/// Recognised chapter tag substrings that indicate an intro sequence.
+const INTRO_TAGS: &[&str] = &["intro", "opening", "opening credits", "title sequence"];
+
+/// Recognised chapter tag substrings that indicate the credits sequence.
+const CREDITS_TAGS: &[&str] = &["credits", "end credits", "closing credits"];
+
+/// Convert Plex chapter markers to `SkipMarkers`.
+///
+/// Strategy (in priority order):
+/// 1. Look for a chapter whose `tag` matches an intro tag — use its
+///    start/end as the intro range.
+/// 2. Look for a chapter whose `tag` matches a credits tag — use its
+///    start as the credits start.
+/// 3. **Intro heuristic**: use the *second* chapter if it starts within
+///    the first 5 minutes and is ≤ 3 minutes long (common for TV intros).
+/// 4. **Credits heuristic**: use the *last* chapter's start time, but
+///    only if it begins in the final 25% of the media (avoids false
+///    positives on short films with few chapters).
+pub fn plex_chapters_to_skip_markers(
+    chapters: &[super::models::PlexChapter],
+    duration_secs: f64,
+) -> Option<crate::player::SkipMarkers> {
+    if chapters.is_empty() || duration_secs <= 0.0 {
+        return None;
+    }
+
+    let tag_matches = |tag: &Option<String>, candidates: &[&str]| -> bool {
+        tag.as_ref()
+            .is_some_and(|t| candidates.iter().any(|c| t.to_lowercase().contains(c)))
+    };
+
+    // --- Intro detection ---
+    let intro_chapter = chapters.iter().find(|ch| tag_matches(&ch.tag, INTRO_TAGS));
+    let intro_start_secs;
+    let intro_end_secs;
+
+    if let Some(ch) = intro_chapter {
+        intro_start_secs = (ch.start_time_offset as f64) / 1000.0;
+        intro_end_secs = (ch.end_time_offset as f64) / 1000.0;
+    } else if chapters.len() >= 2 {
+        // Heuristic: second chapter as intro candidate.
+        let second = &chapters[1];
+        let start_s = (second.start_time_offset as f64) / 1000.0;
+        let len_s = ((second.end_time_offset - second.start_time_offset) as f64) / 1000.0;
+        if start_s <= 300.0 && len_s > 0.0 && len_s <= 180.0 {
+            intro_start_secs = start_s;
+            intro_end_secs = start_s + len_s;
+        } else {
+            // No plausible intro found.
+            intro_start_secs = 0.0;
+            intro_end_secs = 0.0;
+        }
+    } else {
+        intro_start_secs = 0.0;
+        intro_end_secs = 0.0;
+    }
+
+    // --- Credits detection ---
+    let credits_chapter = chapters
+        .iter()
+        .rev()
+        .find(|ch| tag_matches(&ch.tag, CREDITS_TAGS));
+    let credits_start_secs;
+
+    if let Some(ch) = credits_chapter {
+        credits_start_secs = (ch.start_time_offset as f64) / 1000.0;
+    } else if let Some(last) = chapters.last() {
+        // Heuristic: last chapter, but only if it's in the final 25%.
+        let start_s = (last.start_time_offset as f64) / 1000.0;
+        if duration_secs > 0.0 && start_s / duration_secs >= 0.75 {
+            credits_start_secs = start_s;
+        } else {
+            credits_start_secs = 0.0;
+        }
+    } else {
+        credits_start_secs = 0.0;
+    }
+
+    // If neither range was detected, return None so the skip button stays
+    // hidden entirely.
+    if intro_end_secs <= 0.0 && credits_start_secs <= 0.0 {
+        return None;
+    }
+
+    // Sanity-check: clamp to duration bounds.
+    let clamp = |v: f64| v.clamp(0.0, duration_secs);
+
+    Some(crate::player::SkipMarkers {
+        intro_start_secs: clamp(intro_start_secs),
+        intro_end_secs: clamp(intro_end_secs),
+        credits_start_secs: clamp(credits_start_secs),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

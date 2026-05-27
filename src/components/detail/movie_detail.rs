@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use adw;
 use gtk::prelude::*;
-use adw as adw;
 use relm4::prelude::*;
 use tracing::info;
 

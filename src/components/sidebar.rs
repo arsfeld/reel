@@ -252,10 +252,8 @@ impl SimpleComponent for Sidebar {
                 shows,
                 collections,
             } => {
-                self.movies_count
-                    .set_label(&format!("({movies})"));
-                self.shows_count
-                    .set_label(&format!("({shows})"));
+                self.movies_count.set_label(&format!("({movies})"));
+                self.shows_count.set_label(&format!("({shows})"));
                 self.collections_count
                     .set_label(&format!("({collections})"));
             }

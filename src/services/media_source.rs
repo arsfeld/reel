@@ -5,6 +5,7 @@ use crate::models::{
     library::LibrarySection,
     media::{MediaItem, SourceType},
 };
+use crate::player::SkipMarkers;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
@@ -84,5 +85,19 @@ pub trait MediaSource: Send + Sync {
     /// Mark an item as unwatched. Default: no-op.
     async fn unscrobble(&self, _rating_key: &str) -> Result<(), SourceError> {
         Ok(())
+    }
+
+    /// Fetch skip-intro / skip-credits markers for a media item.
+    /// `duration_secs` is the total duration of the media in seconds,
+    /// used for sanity-checking marker bounds.
+    /// Default: not supported.
+    async fn skip_markers(
+        &self,
+        _rating_key: &str,
+        _duration_secs: f64,
+    ) -> Result<SkipMarkers, SourceError> {
+        Err(SourceError::NotSupported(
+            "Skip markers not supported by this source".into(),
+        ))
     }
 }
