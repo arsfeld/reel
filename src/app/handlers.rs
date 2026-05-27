@@ -22,12 +22,12 @@ use crate::services::plex::api::PlexClient;
 use crate::services::plex::source::PlexSource;
 use crate::services::watch_state::PlaybackState;
 
-use super::db_helpers::load_watch_data;
-use super::player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
-use super::watch_events::dispatch_watch_events;
 use super::App;
 use super::AppCmd;
 use super::AppMsg;
+use super::db_helpers::load_watch_data;
+use super::player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
+use super::watch_events::dispatch_watch_events;
 
 /// Handle VideoOutput messages from the video player component.
 #[allow(clippy::too_many_lines)]
@@ -175,8 +175,7 @@ pub fn handle_play_media(
         &app.player_window_title,
         &title,
     );
-    app.video_player
-        .emit(VideoPlayerMsg::SetTitle(Some(title)));
+    app.video_player.emit(VideoPlayerMsg::SetTitle(Some(title)));
     app.stack.set_visible_child_name("player");
     app.video_player.emit(VideoPlayerMsg::SetAutoplay(true));
     app.video_player.emit(VideoPlayerMsg::SetUrl {
@@ -190,10 +189,7 @@ pub fn handle_play_media(
         && let Some(source) = app.active_source.clone()
     {
         let rating_key = item.external_id.clone();
-        let duration_secs = item
-            .runtime_minutes
-            .map(|m| m as f64 * 60.0)
-            .unwrap_or(0.0);
+        let duration_secs = item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0);
         sender.oneshot_command(async move {
             match source.skip_markers(&rating_key, duration_secs).await {
                 Ok(markers) => AppCmd::SkipMarkersLoaded(markers),
@@ -252,15 +248,15 @@ pub fn handle_connection_saved(
         source.clone(),
         artwork_cache.clone(),
     ));
-    app.movie_detail.emit(crate::components::detail::movie_detail::MovieDetailMsg::SetSource(
-        source.clone(),
-        artwork_cache.clone(),
-    ));
-    app.show_detail
-        .emit(crate::components::detail::show_detail::ShowDetailMsg::SetSource(
-            source,
-            artwork_cache,
-        ));
+    app.movie_detail.emit(
+        crate::components::detail::movie_detail::MovieDetailMsg::SetSource(
+            source.clone(),
+            artwork_cache.clone(),
+        ),
+    );
+    app.show_detail.emit(
+        crate::components::detail::show_detail::ShowDetailMsg::SetSource(source, artwork_cache),
+    );
 
     // Send watch data to library view
     let watch_data = load_watch_data(&app.db_conn);
@@ -270,8 +266,9 @@ pub fn handle_connection_saved(
     if let CurrentView::Library(lt) = app.current_view {
         app.library_view.emit(LibraryViewMsg::LoadLibrary(lt));
     } else {
-        app.library_view
-            .emit(LibraryViewMsg::LoadLibrary(crate::models::library::LibraryType::Movie));
+        app.library_view.emit(LibraryViewMsg::LoadLibrary(
+            crate::models::library::LibraryType::Movie,
+        ));
     }
 
     sender.input(AppMsg::ShowToast(format!("Connected to {name}")));

@@ -6,8 +6,8 @@ use super::App;
 use super::AppMsg;
 use crate::components::home::HomeView;
 use crate::components::library::LibraryView;
-use crate::components::sidebar::Sidebar;
 use crate::components::player::video_player::VideoPlayer;
+use crate::components::sidebar::Sidebar;
 use crate::services::window_state::{self, WindowState};
 
 use super::utils::parse_uri_list;

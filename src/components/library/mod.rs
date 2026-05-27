@@ -1239,19 +1239,21 @@ impl LibraryView {
         let total_count = self.all_items.len();
         self.library_title.set_label(type_name);
         if showing_count == total_count {
-            self.library_hero_subtitle
-                .set_label(&format!("{total_count} {type_name_lower} · Browse your collection",
-                    type_name_lower = match self.library_type {
-                        LibraryType::Movie => "movies",
-                        LibraryType::Show => "shows",
-                    }));
+            self.library_hero_subtitle.set_label(&format!(
+                "{total_count} {type_name_lower} · Browse your collection",
+                type_name_lower = match self.library_type {
+                    LibraryType::Movie => "movies",
+                    LibraryType::Show => "shows",
+                }
+            ));
         } else {
-            self.library_hero_subtitle
-                .set_label(&format!("{showing_count} of {total_count} {type_name_lower} · Filtered",
-                    type_name_lower = match self.library_type {
-                        LibraryType::Movie => "movies",
-                        LibraryType::Show => "shows",
-                    }));
+            self.library_hero_subtitle.set_label(&format!(
+                "{showing_count} of {total_count} {type_name_lower} · Filtered",
+                type_name_lower = match self.library_type {
+                    LibraryType::Movie => "movies",
+                    LibraryType::Show => "shows",
+                }
+            ));
         }
 
         // Show shelves when data exists
@@ -1259,10 +1261,8 @@ impl LibraryView {
         self.rebuild_recently_added(sender);
 
         // Show alphabet bar when sorting by title (most useful for letter jumping)
-        let show_alpha = matches!(
-            self.sort_order,
-            SortOrder::TitleAsc | SortOrder::TitleDesc
-        ) && filtered_indices.len() > 20;
+        let show_alpha = matches!(self.sort_order, SortOrder::TitleAsc | SortOrder::TitleDesc)
+            && filtered_indices.len() > 20;
         self.alphabet_bar.set_visible(show_alpha);
     }
 

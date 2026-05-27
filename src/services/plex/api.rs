@@ -118,10 +118,7 @@ impl PlexClient {
 
     /// Get chapter markers for a media item.
     pub async fn chapters(&self, rating_key: &str) -> Result<Vec<PlexChapter>, PlexError> {
-        let url = format!(
-            "{}/library/metadata/{}/chapters",
-            self.base_url, rating_key
-        );
+        let url = format!("{}/library/metadata/{}/chapters", self.base_url, rating_key);
         let resp = self.http.get(&url).send().await?;
         Self::check_status(&resp)?;
         let body: PlexChapterResponse = resp.json().await?;

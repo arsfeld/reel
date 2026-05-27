@@ -43,10 +43,7 @@ pub async fn validate_or_rediscover_source(
     };
 
     // Find the server by name, or take the first one
-    let server = servers
-        .iter()
-        .find(|s| s.name == name)
-        .or(servers.first());
+    let server = servers.iter().find(|s| s.name == name).or(servers.first());
 
     let Some(server) = server else {
         return AppCmd::SourceValidationFailed("No servers found on account".to_string());

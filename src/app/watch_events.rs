@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use relm4::ComponentSender;
+use rusqlite::Connection;
 use tracing::{debug, info, warn};
 
 use crate::db::watch_progress_repo::WatchProgressRepo;
@@ -10,9 +10,9 @@ use crate::services::media_source::MediaSource;
 use crate::services::plex::source::PlexSource;
 use crate::services::watch_state::WatchStateEvent;
 
-use super::utils::iso_now;
 use super::App;
 use super::AppCmd;
+use super::utils::iso_now;
 
 pub fn dispatch_watch_events(
     db_conn: &Option<Connection>,

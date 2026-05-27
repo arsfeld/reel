@@ -4,7 +4,6 @@
 /// - `MAX_LINES` (hard cap): any file exceeding this fails the build.
 /// - Files between the soft target and the hard cap are listed as warnings
 ///   (via `println!`) but don't fail tests — they're candidates for splitting.
-
 use std::fs;
 use std::path::PathBuf;
 

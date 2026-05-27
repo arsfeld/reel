@@ -734,3 +734,23 @@ async fn record_plex_libraries() {
 | M5 (Polish) | MPRIS property derivation, error type coverage, settings validation |
 | M6 (Standalone) | Filename parser (proptest), TMDb client, filesystem watcher events |
 | M7 (Extensions) | Jellyfin/Emby clients, Trakt OAuth, OpenSubtitles hash computation |
+
+## GTK4 CSS Rules
+
+**Widget margins are non-negative**: GTK4 widget margin properties (`margin-bottom`, `margin-top`, `margin-start`, `margin-end`, `margin-left`, `margin-right`) take `gint` with minimum 0. Setting a negative value (e.g. `.margin_bottom(-30)`) causes a panic at widget build time. Use Overlay positioning instead of negative margins for overlapping layouts.
+
+**CSS subset is limited**: GTK4's CSS parser supports only a subset of web CSS. Properties that cause warnings:
+
+| Unsupported | Replacement |
+|---|---|
+| `margin-start`, `margin-end` | `margin-left`, `margin-right` |
+| `overflow: hidden` | Not available; use `border-radius` without overflow |
+| `transform`, `translateY()`, `scale()` | Not available in GTK CSS |
+| `transition` | Not available in GTK CSS |
+| `animation`, `@keyframes` | Not available in GTK CSS |
+| `cursor` | Not available in GTK CSS |
+| `pointer-events` | Not available in GTK CSS |
+| `letter-spacing` | Not available in GTK CSS |
+| `font-feature-settings` | Not available in GTK CSS |
+
+**Supported properties**: `background*`, `border*`, `box-shadow`, `color`, `font-*`, `margin*` (non-negative), `min-*`, `opacity`, `outline*`, `padding*`, `text-shadow`, `-gtk-icon-shadow`, `-gtk-icon-transform`.

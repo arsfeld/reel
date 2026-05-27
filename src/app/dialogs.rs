@@ -22,20 +22,16 @@ pub fn show_subtitle_chooser(window: &adw::ApplicationWindow, sender: Sender<App
     dialog.set_filters(Some(&filters));
 
     let window_clone = window.clone();
-    dialog.open(
-        Some(&window_clone),
-        gio::Cancellable::NONE,
-        move |result| {
-            if let Ok(file) = result
-                && let Some(path) = file.path()
-            {
-                let uri = format!("file://{}", path.to_string_lossy());
-                let _ = sender.send(AppMsg::PlayerAction(
-                    VideoPlayerMsg::LoadExternalSubtitle(uri),
-                ));
-            }
-        },
-    );
+    dialog.open(Some(&window_clone), gio::Cancellable::NONE, move |result| {
+        if let Ok(file) = result
+            && let Some(path) = file.path()
+        {
+            let uri = format!("file://{}", path.to_string_lossy());
+            let _ = sender.send(AppMsg::PlayerAction(VideoPlayerMsg::LoadExternalSubtitle(
+                uri,
+            )));
+        }
+    });
 }
 
 pub fn show_file_chooser(window: &adw::ApplicationWindow, sender: Sender<AppMsg>) {
@@ -53,16 +49,11 @@ pub fn show_file_chooser(window: &adw::ApplicationWindow, sender: Sender<AppMsg>
     dialog.set_filters(Some(&filters));
 
     let window_clone = window.clone();
-    dialog.open(
-        Some(&window_clone),
-        gio::Cancellable::NONE,
-        move |result| {
-            if let Ok(file) = result
-                && let Some(path) = file.path()
-            {
-                let _ =
-                    sender.send(AppMsg::OpenFile(path.to_string_lossy().to_string()));
-            }
-        },
-    );
+    dialog.open(Some(&window_clone), gio::Cancellable::NONE, move |result| {
+        if let Ok(file) = result
+            && let Some(path) = file.path()
+        {
+            let _ = sender.send(AppMsg::OpenFile(path.to_string_lossy().to_string()));
+        }
+    });
 }
