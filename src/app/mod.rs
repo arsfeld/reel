@@ -35,22 +35,22 @@ use crate::services::screensaver::ScreensaverInhibitor;
 use crate::services::watch_state::WatchStateTracker;
 use crate::settings::Settings;
 
-mod utils;
 mod db_helpers;
 mod dialogs;
+mod handlers;
 mod player_ui;
 mod source_validation;
+mod utils;
 mod watch_events;
-mod handlers;
 mod widget_builder;
 
 use db_helpers::{init_database, load_in_progress, load_watch_data};
 use dialogs::show_file_chooser;
+use handlers::{handle_connection_saved, handle_play_media, handle_video_output};
 use player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
 use source_validation::validate_or_rediscover_source;
 use utils::iso_now;
 use watch_events::dispatch_watch_events;
-use handlers::{handle_connection_saved, handle_play_media, handle_video_output};
 use widget_builder::build_widgets;
 
 #[allow(dead_code)]
@@ -79,6 +79,8 @@ pub struct App {
     pending_resume: Option<f64>,
     /// Active media source for scrobble/timeline reporting.
     active_source: Option<Arc<PlexSource>>,
+    /// True while async startup validation of a saved source is in flight.
+    source_connecting: bool,
     /// Application settings.
     settings: Settings,
     /// MPRIS D-Bus bridge channels.
@@ -229,7 +231,14 @@ impl Component for App {
 
         let widgets = view_output!();
 
-        let built = build_widgets(&root, &sender, &sidebar, &home_view, &library_view, &video_player);
+        let built = build_widgets(
+            &root,
+            &sender,
+            &sidebar,
+            &home_view,
+            &library_view,
+            &video_player,
+        );
         let toast_overlay = built.toast_overlay;
         let stack = built.stack;
         let nav_view = built.nav_view;
@@ -284,11 +293,18 @@ impl Component for App {
             last_position: 0.0,
             pending_resume: None,
             active_source: None,
+            source_connecting: false,
             settings,
             mpris: mpris::spawn_mpris_server(),
             player_chrome_revealer,
             player_window_title,
         };
+
+        // Show a loading page on the home view while async validation runs.
+        if has_sources {
+            model.source_connecting = true;
+            model.home_view.emit(HomeViewMsg::SetConnecting(true));
+        }
 
         // Relay MPRIS commands from tokio to the GTK main loop
         let sender_mpris = sender.input_sender().clone();
@@ -622,6 +638,8 @@ impl Component for App {
                 let source_start = Instant::now();
                 info!("Plex source validated: {} (url={})", name, url);
 
+                self.source_connecting = false;
+
                 // Update saved URL in DB (clear old entries — URL may have changed)
                 if let Some(ref conn) = self.db_conn {
                     let repo = crate::db::source_repo::SourceRepo::new(conn);
@@ -682,6 +700,9 @@ impl Component for App {
                     source_start.elapsed()
                 );
 
+                // Switch home view from connecting page to shelves.
+                self.home_view.emit(HomeViewMsg::SetConnecting(false));
+
                 if let CurrentView::Library(lt) = self.current_view {
                     self.library_view.emit(LibraryViewMsg::LoadLibrary(lt));
                 } else {
@@ -691,6 +712,8 @@ impl Component for App {
             }
             AppCmd::SourceValidationFailed(msg) => {
                 tracing::warn!("Saved Plex source not reachable: {msg}");
+                self.source_connecting = false;
+                self.home_view.emit(HomeViewMsg::SetConnecting(false));
                 sender.input(AppMsg::ShowToast(format!("Plex server unreachable: {msg}")));
             }
             AppCmd::SkipMarkersLoaded(markers) => {

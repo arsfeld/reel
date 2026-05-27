@@ -147,9 +147,11 @@ pub struct HomeView {
     ra_section: gtk::Box,
     ra_row: gtk::Box,
     ra_cards: Vec<(HomeCard, MediaItem)>,
-    /// Empty state page (shown when no data).
+    /// Empty state page (shown when no source configured).
     empty_page: adw::StatusPage,
-    /// Stack switches between shelves and empty page.
+    /// Loading page (shown while validating a saved source on startup).
+    connecting_page: adw::StatusPage,
+    /// Stack switches between shelves, connecting page, and empty page.
     stack: gtk::Stack,
     /// Prevent concurrent loads.
     loading: bool,
@@ -157,6 +159,8 @@ pub struct HomeView {
 
 pub enum HomeViewMsg {
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
+    /// Show/hide the "Connecting to Plex…" loading page.
+    SetConnecting(bool),
     /// Load home page data: watch_progress items from local DB + recently_added from source.
     LoadHome {
         in_progress: Vec<(MediaItem, WatchProgress)>,
@@ -172,6 +176,7 @@ impl std::fmt::Debug for HomeViewMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SetSource(..) => write!(f, "SetSource(..)"),
+            Self::SetConnecting(v) => write!(f, "SetConnecting({v})"),
             Self::LoadHome { in_progress } => {
                 write!(f, "LoadHome({} in progress)", in_progress.len())
             }
@@ -227,6 +232,7 @@ impl Component for HomeView {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn init(
         _init: Self::Init,
         root: Self::Root,
@@ -236,7 +242,7 @@ impl Component for HomeView {
 
         let stack = gtk::Stack::new();
 
-        // Empty state
+        // Empty state (no source configured)
         let empty_page = adw::StatusPage::builder()
             .title("Welcome to Reel")
             .description("Connect a Plex server to see your Continue Watching and Recently Added")
@@ -254,6 +260,20 @@ impl Component for HomeView {
             let _ = sender_btn.send(HomeViewOutput::ShowConnectionDialog);
         });
         empty_page.set_child(Some(&connect_btn));
+
+        // Connecting page (validating saved source on startup)
+        let connecting_spinner = gtk::Spinner::builder()
+            .spinning(true)
+            .halign(gtk::Align::Center)
+            .width_request(32)
+            .height_request(32)
+            .build();
+        let connecting_page = adw::StatusPage::builder()
+            .title("Connecting to Plex…")
+            .description("Checking your saved server connection")
+            .icon_name("network-server-symbolic")
+            .child(&connecting_spinner)
+            .build();
 
         // Shelves container
         let scroll = gtk::ScrolledWindow::builder()
@@ -332,6 +352,7 @@ impl Component for HomeView {
         scroll.set_child(Some(&shelves_box));
 
         stack.add_child(&empty_page);
+        stack.add_child(&connecting_page);
         stack.add_child(&scroll);
         stack.set_visible_child(&empty_page);
 
@@ -348,6 +369,7 @@ impl Component for HomeView {
             ra_row,
             ra_cards: Vec::new(),
             empty_page,
+            connecting_page,
             stack,
             loading: false,
         };
@@ -360,6 +382,13 @@ impl Component for HomeView {
             HomeViewMsg::SetSource(source, artwork_cache) => {
                 self.source = Some(source);
                 self.artwork_cache = Some(artwork_cache);
+            }
+            HomeViewMsg::SetConnecting(connecting) => {
+                if connecting {
+                    self.stack.set_visible_child(&self.connecting_page);
+                } else {
+                    self.update_visibility();
+                }
             }
             HomeViewMsg::LoadHome { in_progress } => {
                 if self.loading {
@@ -396,7 +425,6 @@ impl Component for HomeView {
                     });
                 } else {
                     self.loading = false;
-                    self.update_visibility();
                 }
             }
             HomeViewMsg::HomeLoaded { recently_added } => {
