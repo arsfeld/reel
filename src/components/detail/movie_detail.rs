@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use gtk4::prelude::*;
-use libadwaita as adw;
+use gtk::prelude::*;
+use adw as adw;
 use relm4::prelude::*;
 use tracing::info;
 
@@ -16,23 +16,23 @@ pub struct MovieDetail {
     source: Option<Arc<dyn MediaSource>>,
     artwork_cache: Option<Arc<ArtworkCache>>,
     // Widgets we need to update
-    title_label: gtk4::Label,
-    year_label: gtk4::Label,
-    runtime_label: gtk4::Label,
-    rating_label: gtk4::Label,
-    content_rating_label: gtk4::Label,
-    director_label: gtk4::Label,
-    writer_label: gtk4::Label,
-    genres_box: gtk4::FlowBox,
-    overview_label: gtk4::Label,
-    play_button: gtk4::Button,
-    backdrop: gtk4::Picture,
+    title_label: gtk::Label,
+    year_label: gtk::Label,
+    runtime_label: gtk::Label,
+    rating_label: gtk::Label,
+    content_rating_label: gtk::Label,
+    director_label: gtk::Label,
+    writer_label: gtk::Label,
+    genres_box: gtk::FlowBox,
+    overview_label: gtk::Label,
+    play_button: gtk::Button,
+    backdrop: gtk::Picture,
     // Enriched sections
-    cast_section: gtk4::Box,
-    cast_scroll: gtk4::ScrolledWindow,
-    cast_box: gtk4::Box,
-    tech_label: gtk4::Label,
-    collections_box: gtk4::Box,
+    cast_section: gtk::Box,
+    cast_scroll: gtk::ScrolledWindow,
+    cast_box: gtk::Box,
+    tech_label: gtk::Label,
+    collections_box: gtk::Box,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -64,9 +64,9 @@ pub enum MovieDetailOutput {
 
 #[allow(clippy::large_enum_variant)]
 pub enum MovieDetailCmd {
-    BackdropReady(gtk4::gdk::Texture),
+    BackdropReady(gtk::gdk::Texture),
     DetailLoaded(MediaDetail),
-    CastPhotoReady(usize, gtk4::gdk::Texture),
+    CastPhotoReady(usize, gtk::gdk::Texture),
     Noop,
 }
 
@@ -85,8 +85,8 @@ impl Component for MovieDetail {
 
     view! {
         #[root]
-        gtk4::Box {
-            set_orientation: gtk4::Orientation::Vertical,
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
             set_hexpand: true,
             set_vexpand: true,
         }
@@ -103,14 +103,14 @@ impl Component for MovieDetail {
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&adw::HeaderBar::new());
 
-        let scrolled = gtk4::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk4::PolicyType::Never)
+        let scrolled = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
             .build();
 
         let clamp = adw::Clamp::builder().maximum_size(900).build();
-        let content_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let content_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(16)
             .margin_start(16)
             .margin_end(16)
@@ -118,37 +118,37 @@ impl Component for MovieDetail {
             .margin_bottom(16)
             .build();
 
-        let backdrop = gtk4::Picture::builder()
-            .content_fit(gtk4::ContentFit::Cover)
+        let backdrop = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Cover)
             .height_request(360)
             .css_classes(["media-backdrop"])
             .build();
 
-        let title_label = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
+        let title_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["title-1"])
             .build();
 
-        let meta_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
+        let meta_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .spacing(12)
-            .halign(gtk4::Align::Start)
+            .halign(gtk::Align::Start)
             .build();
 
-        let year_label = gtk4::Label::builder()
+        let year_label = gtk::Label::builder()
             .css_classes(["dim-label"])
             .visible(false)
             .build();
-        let runtime_label = gtk4::Label::builder()
+        let runtime_label = gtk::Label::builder()
             .css_classes(["dim-label"])
             .visible(false)
             .build();
-        let rating_label = gtk4::Label::builder()
+        let rating_label = gtk::Label::builder()
             .css_classes(["dim-label"])
             .visible(false)
             .build();
-        let content_rating_label = gtk4::Label::builder()
+        let content_rating_label = gtk::Label::builder()
             .css_classes(["dim-label"])
             .visible(false)
             .build();
@@ -159,29 +159,29 @@ impl Component for MovieDetail {
         meta_box.append(&content_rating_label);
 
         // Credits labels (populated when MediaDetail arrives)
-        let director_label = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
+        let director_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["dim-label"])
             .visible(false)
             .build();
-        let writer_label = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
+        let writer_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["dim-label"])
             .visible(false)
             .build();
 
-        let genres_box = gtk4::FlowBox::builder()
-            .selection_mode(gtk4::SelectionMode::None)
-            .halign(gtk4::Align::Start)
+        let genres_box = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .halign(gtk::Align::Start)
             .max_children_per_line(10)
             .build();
 
-        let play_button = gtk4::Button::builder()
+        let play_button = gtk::Button::builder()
             .label("Play")
             .css_classes(["suggested-action", "pill"])
-            .halign(gtk4::Align::Start)
+            .halign(gtk::Align::Start)
             .margin_top(8)
             .build();
 
@@ -190,31 +190,31 @@ impl Component for MovieDetail {
             let _ = sender_play.send(MovieDetailMsg::Play);
         });
 
-        let overview_label = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
+        let overview_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
             .wrap(true)
             .margin_top(8)
             .visible(false)
             .build();
 
         // Cast section (populated when MediaDetail arrives)
-        let cast_section = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let cast_section = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(8)
             .visible(false)
             .build();
-        let cast_heading = gtk4::Label::builder()
+        let cast_heading = gtk::Label::builder()
             .label("Cast")
-            .halign(gtk4::Align::Start)
+            .halign(gtk::Align::Start)
             .css_classes(["title-4"])
             .build();
-        let cast_scroll = gtk4::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk4::PolicyType::Automatic)
-            .vscrollbar_policy(gtk4::PolicyType::Never)
+        let cast_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
             .height_request(130)
             .build();
-        let cast_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
+        let cast_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .spacing(12)
             .build();
         cast_scroll.set_child(Some(&cast_box));
@@ -222,18 +222,18 @@ impl Component for MovieDetail {
         cast_section.append(&cast_scroll);
 
         // Technical info label (populated when MediaDetail arrives)
-        let tech_label = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
+        let tech_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["dim-label", "caption"])
             .visible(false)
             .build();
 
         // Collections section (populated when MediaDetail arrives)
-        let collections_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
+        let collections_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .spacing(8)
-            .halign(gtk4::Align::Start)
+            .halign(gtk::Align::Start)
             .visible(false)
             .build();
 
@@ -324,7 +324,7 @@ impl Component for MovieDetail {
                     self.genres_box.remove(&child);
                 }
                 for genre in &item.genres {
-                    let label = gtk4::Label::builder()
+                    let label = gtk::Label::builder()
                         .label(genre)
                         .css_classes(["caption", "dim-label"])
                         .build();
@@ -356,7 +356,7 @@ impl Component for MovieDetail {
                     let cache = Arc::clone(cache);
                     sender.oneshot_command(async move {
                         match cache.get_or_download(&url).await {
-                            Ok(path) => match gtk4::gdk::Texture::from_filename(&path) {
+                            Ok(path) => match gtk::gdk::Texture::from_filename(&path) {
                                 Ok(tex) => MovieDetailCmd::BackdropReady(tex),
                                 Err(e) => {
                                     tracing::debug!("Failed to load backdrop: {e}");
@@ -419,9 +419,9 @@ impl Component for MovieDetail {
             MovieDetailCmd::CastPhotoReady(idx, texture) => {
                 // Find the cast card at this index and set its picture
                 if let Some(child) = self.cast_box.observe_children().item(idx as u32)
-                    && let Ok(card) = child.downcast::<gtk4::Box>()
+                    && let Ok(card) = child.downcast::<gtk::Box>()
                     && let Some(picture) = card.first_child()
-                    && let Ok(picture) = picture.downcast::<gtk4::Picture>()
+                    && let Ok(picture) = picture.downcast::<gtk::Picture>()
                 {
                     picture.set_paintable(Some(&texture));
                 }
@@ -457,23 +457,23 @@ impl MovieDetail {
             }
 
             for (idx, member) in detail.cast.iter().enumerate() {
-                let card = gtk4::Box::builder()
-                    .orientation(gtk4::Orientation::Vertical)
+                let card = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Vertical)
                     .spacing(4)
                     .width_request(80)
                     .build();
 
-                let picture = gtk4::Picture::builder()
-                    .content_fit(gtk4::ContentFit::Cover)
+                let picture = gtk::Picture::builder()
+                    .content_fit(gtk::ContentFit::Cover)
                     .width_request(80)
                     .height_request(80)
                     .css_classes(["cast-photo"])
                     .build();
 
-                let name_label = gtk4::Label::builder()
+                let name_label = gtk::Label::builder()
                     .label(&member.name)
-                    .halign(gtk4::Align::Center)
-                    .ellipsize(gtk4::pango::EllipsizeMode::End)
+                    .halign(gtk::Align::Center)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
                     .max_width_chars(12)
                     .css_classes(["caption"])
                     .build();
@@ -482,10 +482,10 @@ impl MovieDetail {
                 card.append(&name_label);
 
                 if let Some(ref character) = member.character {
-                    let char_label = gtk4::Label::builder()
+                    let char_label = gtk::Label::builder()
                         .label(character)
-                        .halign(gtk4::Align::Center)
-                        .ellipsize(gtk4::pango::EllipsizeMode::End)
+                        .halign(gtk::Align::Center)
+                        .ellipsize(gtk::pango::EllipsizeMode::End)
                         .max_width_chars(12)
                         .css_classes(["caption", "dim-label"])
                         .build();
@@ -502,7 +502,7 @@ impl MovieDetail {
                     let cache = Arc::clone(cache);
                     sender.oneshot_command(async move {
                         match cache.get_or_download(&url).await {
-                            Ok(path) => match gtk4::gdk::Texture::from_filename(&path) {
+                            Ok(path) => match gtk::gdk::Texture::from_filename(&path) {
                                 Ok(tex) => MovieDetailCmd::CastPhotoReady(idx, tex),
                                 Err(_) => MovieDetailCmd::Noop,
                             },
@@ -550,14 +550,14 @@ impl MovieDetail {
                 self.collections_box.remove(&child);
             }
 
-            let prefix = gtk4::Label::builder()
+            let prefix = gtk::Label::builder()
                 .label("Part of:")
                 .css_classes(["dim-label"])
                 .build();
             self.collections_box.append(&prefix);
 
             for col in &detail.collections {
-                let label = gtk4::Label::builder()
+                let label = gtk::Label::builder()
                     .label(&col.name)
                     .css_classes(["caption"])
                     .build();

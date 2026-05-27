@@ -23,11 +23,16 @@ fn main() {
 
     tracing::info!("Starting Reel");
 
+    if let Err(e) = gst::init() {
+        tracing::error!("Failed to initialize GStreamer: {e}");
+        std::process::exit(1);
+    }
+
     let app = relm4::RelmApp::new("dev.arsfeld.Reel");
 
     // Force dark theme
-    let style_manager = libadwaita::StyleManager::default();
-    style_manager.set_color_scheme(libadwaita::ColorScheme::ForceDark);
+    let style_manager = adw::StyleManager::default();
+    style_manager.set_color_scheme(adw::ColorScheme::ForceDark);
 
     relm4::set_global_css(include_str!("style.css"));
 

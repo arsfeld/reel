@@ -1,6 +1,6 @@
 use adw::prelude::*;
-use gtk4::prelude::*;
-use libadwaita as adw;
+use gtk::prelude::*;
+use adw as adw;
 use relm4::prelude::*;
 use tracing::info;
 
@@ -12,11 +12,11 @@ pub struct ConnectionDialog {
     auth_token: Option<String>,
     servers: Vec<auth::PlexResource>,
     // Widgets
-    status_label: gtk4::Label,
-    spinner: gtk4::Spinner,
-    sign_in_button: gtk4::Button,
-    server_dropdown: gtk4::DropDown,
-    server_box: gtk4::Box,
+    status_label: gtk::Label,
+    spinner: gtk::Spinner,
+    sign_in_button: gtk::Button,
+    server_dropdown: gtk::DropDown,
+    server_box: gtk::Box,
 }
 
 pub enum ConnectionDialogMsg {
@@ -89,7 +89,7 @@ impl Component for ConnectionDialog {
         let toolbar = adw::ToolbarView::new();
         let header = adw::HeaderBar::new();
 
-        let cancel_button = gtk4::Button::builder().label("Cancel").build();
+        let cancel_button = gtk::Button::builder().label("Cancel").build();
         let sender_cancel = sender.input_sender().clone();
         cancel_button.connect_clicked(move |_| {
             let _ = sender_cancel.send(ConnectionDialogMsg::Cancel);
@@ -97,38 +97,38 @@ impl Component for ConnectionDialog {
         header.pack_start(&cancel_button);
         toolbar.add_top_bar(&header);
 
-        let content_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let content_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(20)
             .margin_start(32)
             .margin_end(32)
             .margin_top(32)
             .margin_bottom(32)
-            .halign(gtk4::Align::Center)
-            .valign(gtk4::Align::Center)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
             .build();
 
-        let icon = gtk4::Image::builder()
+        let icon = gtk::Image::builder()
             .icon_name("network-server-symbolic")
             .pixel_size(64)
             .margin_bottom(4)
             .build();
 
-        let status_label = gtk4::Label::builder()
+        let status_label = gtk::Label::builder()
             .label("Sign in with your Plex account to access your media libraries.")
             .wrap(true)
-            .justify(gtk4::Justification::Center)
+            .justify(gtk::Justification::Center)
             .build();
 
-        let spinner = gtk4::Spinner::builder()
+        let spinner = gtk::Spinner::builder()
             .visible(false)
             .height_request(32)
             .build();
 
-        let sign_in_button = gtk4::Button::builder()
+        let sign_in_button = gtk::Button::builder()
             .label("Sign in to Plex")
             .css_classes(["suggested-action", "pill"])
-            .halign(gtk4::Align::Center)
+            .halign(gtk::Align::Center)
             .margin_top(4)
             .build();
         let sender_signin = sender.input_sender().clone();
@@ -137,24 +137,24 @@ impl Component for ConnectionDialog {
         });
 
         // Server picker (shown when multiple servers)
-        let server_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let server_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(12)
             .visible(false)
             .build();
 
-        let server_label = gtk4::Label::builder()
+        let server_label = gtk::Label::builder()
             .label("Choose a server:")
-            .halign(gtk4::Align::Start)
+            .halign(gtk::Align::Start)
             .css_classes(["heading"])
             .build();
 
-        let server_dropdown = gtk4::DropDown::builder().build();
+        let server_dropdown = gtk::DropDown::builder().build();
 
-        let confirm_button = gtk4::Button::builder()
+        let confirm_button = gtk::Button::builder()
             .label("Connect")
             .css_classes(["suggested-action", "pill"])
-            .halign(gtk4::Align::Center)
+            .halign(gtk::Align::Center)
             .build();
         let sender_confirm = sender.input_sender().clone();
         confirm_button.connect_clicked(move |_| {
@@ -265,7 +265,7 @@ impl Component for ConnectionDialog {
 
                 // Multiple servers — show picker
                 self.status_label.set_visible(false);
-                let string_list = gtk4::StringList::new(&[] as &[&str]);
+                let string_list = gtk::StringList::new(&[] as &[&str]);
                 for s in &self.servers {
                     string_list.append(&s.name);
                 }

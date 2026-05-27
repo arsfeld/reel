@@ -1,7 +1,7 @@
 use mpris_server::{LoopStatus, Metadata, PlaybackStatus, Time, TrackId};
 
 use crate::models::media::MediaItem;
-use crate::player::backend::PlayState;
+use crate::player::PlayState;
 
 // --- Pure conversion functions (fully testable, no I/O) ---
 

@@ -22,9 +22,25 @@
         inherit system overlays;
       };
 
-      rustToolchain = pkgs.rust-bin.stable."1.89.0".default.override {
+      rustToolchain = pkgs.rust-bin.stable."1.94.0".default.override {
         extensions = ["rust-src" "rust-analyzer" "rustfmt" "clippy"];
       };
+
+      gstPlugins = with pkgs.gst_all_1; [
+        gstreamer
+        gst-plugins-base
+        gst-plugins-good
+        gst-plugins-bad
+        gst-plugins-ugly
+        gst-libav
+        gst-plugins-rs
+      ];
+
+      # gstreamer splits bin/lib outputs; getLib resolves the store path that
+      # actually contains lib/gstreamer-1.0 (coreelements, typefind, etc.).
+      gstPluginPath = pkgs.lib.concatStringsSep ":" (
+        map (pkg: "${pkgs.lib.getLib pkg}/lib/gstreamer-1.0") gstPlugins
+      );
 
       buildInputs = with pkgs; [
         # GTK and UI
@@ -34,7 +50,7 @@
         hicolor-icon-theme
         libepoxy
 
-        # OpenGL / EGL (needed by GTK GLArea + mpv render context)
+        # OpenGL / EGL (may be needed by GStreamer GL sinks)
         libGL
         mesa  # provides actual GL/EGL drivers + vendor JSON for libglvnd dispatch
 
@@ -45,8 +61,14 @@
         gdk-pixbuf
         graphene
 
-        # Media playback
-        mpv
+        # Media playback (GStreamer)
+        gst_all_1.gstreamer
+        gst_all_1.gst-plugins-base
+        gst_all_1.gst-plugins-good
+        gst_all_1.gst-plugins-bad
+        gst_all_1.gst-plugins-ugly
+        gst_all_1.gst-libav
+        gst_all_1.gst-plugins-rs
       ];
 
       nativeBuildInputs = [
@@ -83,6 +105,9 @@
           # Wire Mesa EGL vendor so libglvnd can dispatch to GPU drivers
           export __EGL_VENDOR_LIBRARY_DIRS="${pkgs.mesa}/share/glvnd/egl_vendor.d"
 
+          # GStreamer plugin search path (includes gtk4paintablesink from gst-plugins-rs)
+          export GST_PLUGIN_SYSTEM_PATH_1_0="${gstPluginPath}"
+
           export RUST_BACKTRACE=1
           export PKG_CONFIG_PATH="${pkgs.lib.makeSearchPathOutput "dev" "lib/pkgconfig" buildInputs}:$PKG_CONFIG_PATH"
         '';
@@ -106,6 +131,12 @@
         inherit buildInputs;
 
         doCheck = false;
+
+        preFixup = ''
+          gappsWrapperArgs+=(
+            --set GST_PLUGIN_SYSTEM_PATH_1_0 "${gstPluginPath}"
+          )
+        '';
 
         meta = with pkgs.lib; {
           description = "A modern, native media player for the Linux desktop";

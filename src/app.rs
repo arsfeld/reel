@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adw::prelude::*;
-use gtk4::glib;
-use gtk4::prelude::*;
-use libadwaita as adw;
+use gtk::glib;
+use gtk::prelude::*;
+use adw as adw;
 use relm4::prelude::*;
 use rusqlite::Connection;
 use tracing::info;
@@ -15,9 +15,9 @@ use crate::components::detail::movie_detail::{MovieDetail, MovieDetailMsg, Movie
 use crate::components::detail::show_detail::{ShowDetail, ShowDetailMsg, ShowDetailOutput};
 use crate::components::home::{HomeView, HomeViewMsg, HomeViewOutput};
 use crate::components::library::{LibraryView, LibraryViewMsg, LibraryViewOutput};
-use crate::components::player::drop_target;
-use crate::components::player::shortcuts::{self, PlayerAction};
-use crate::components::player::video_area::{VideoArea, VideoAreaMsg, VideoAreaOutput};
+
+
+use crate::components::player::video_player::{VideoPlayer, VideoPlayerInit, VideoPlayerMsg, VideoPlayerOutput};
 use crate::components::settings_dialog;
 use crate::components::sidebar::{Sidebar, SidebarOutput};
 use crate::db;
@@ -26,8 +26,9 @@ use crate::models::library::LibraryType;
 use crate::models::media::{MediaItem, MediaType, SourceType};
 use crate::models::source::{Source, SourceConfig};
 use crate::models::watch::WatchProgress;
+use crate::player::PlayState;
 use crate::navigation::CurrentView;
-use crate::player::backend::{self, PlayState};
+
 use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
 use crate::services::mpris::{self, MprisBridge, MprisCommand};
@@ -41,7 +42,7 @@ use crate::settings::Settings;
 #[allow(dead_code)]
 pub struct App {
     home_view: Controller<HomeView>,
-    video_area: Controller<VideoArea>,
+    video_player: Controller<VideoPlayer>,
     sidebar: Controller<Sidebar>,
     library_view: Controller<LibraryView>,
     movie_detail: Controller<MovieDetail>,
@@ -49,10 +50,11 @@ pub struct App {
     connection_dialog: Option<Controller<ConnectionDialog>>,
     screensaver: ScreensaverInhibitor,
     toast_overlay: adw::ToastOverlay,
-    stack: gtk4::Stack,
+    stack: gtk::Stack,
     nav_view: adw::NavigationView,
     split_view: adw::NavigationSplitView,
-    view_switcher_bar: adw::ViewSwitcherBar,
+    /// Library header title label — updated when sidebar navigation changes.
+    library_title: gtk::Label,
     current_view: CurrentView,
     db_conn: Option<Connection>,
     now_playing: Option<MediaItem>,
@@ -67,8 +69,6 @@ pub struct App {
     settings: Settings,
     /// MPRIS D-Bus bridge channels.
     mpris: MprisBridge,
-    /// Guard: true when syncing ViewSwitcher ↔ Sidebar to avoid re-entrant loops.
-    switcher_syncing: bool,
 }
 
 #[derive(Debug)]
@@ -80,12 +80,12 @@ pub enum AppMsg {
     ShowMovieDetail(crate::models::media::MediaItem),
     ShowShowDetail(crate::models::media::MediaItem),
     GoBack,
-    VideoOutput(VideoAreaOutput),
+    VideoOutput(VideoPlayerOutput),
     PlayMedia {
         url: String,
         media_item: Option<MediaItem>,
     },
-    PlayerAction(VideoAreaMsg),
+    PlayerAction(VideoPlayerMsg),
     OpenFile(String),
     ShowFileChooser,
     ToggleFullscreen,
@@ -106,8 +106,6 @@ pub enum AppMsg {
     OpenPreferences,
     OpenAbout,
     MprisInput(MprisCommand),
-    /// User changed the ViewSwitcher tab (Movies/TV Shows).
-    ViewSwitcherChanged(LibraryType),
 }
 
 #[derive(Debug)]
@@ -145,8 +143,8 @@ impl Component for App {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let video_area = VideoArea::builder()
-            .launch(())
+        let video_player = VideoPlayer::builder()
+            .launch(VideoPlayerInit::default())
             .forward(sender.input_sender(), AppMsg::VideoOutput);
 
         let sidebar = Sidebar::builder()
@@ -211,8 +209,8 @@ impl Component for App {
         // --- Build widget hierarchy manually ---
 
         let toast_overlay = adw::ToastOverlay::new();
-        let stack = gtk4::Stack::builder()
-            .transition_type(gtk4::StackTransitionType::Crossfade)
+        let stack = gtk::Stack::builder()
+            .transition_type(gtk::StackTransitionType::Crossfade)
             .build();
 
         // Shell page: sidebar + navigation content
@@ -226,71 +224,36 @@ impl Component for App {
 
         let nav_view = adw::NavigationView::new();
 
-        // --- ViewSwitcher + ViewStack for Movies / TV Shows ---
-        // The ViewStack drives the ViewSwitcher tabs. Each page contains the
-        // LibraryView widget (re-parented when switching).
-        let view_stack = adw::ViewStack::new();
-        let _movies_page = view_stack.add_titled_with_icon(
-            library_view.widget(),
-            Some("Movies"),
-            "Movies",
-            "video-display-symbolic",
-        );
-        let _shows_page = view_stack.add_titled_with_icon(
-            &gtk4::Box::builder()
-                .orientation(gtk4::Orientation::Vertical)
-                .build(),
-            Some("TV Shows"),
-            "TV Shows",
-            "view-list-symbolic",
-        );
-
-        let view_switcher = adw::ViewSwitcher::builder()
-            .stack(&view_stack)
+        // --- Library title label (updated when sidebar nav changes) ---
+        let library_title = gtk::Label::builder()
+            .label("Movies")
+            .css_classes(["title"])
             .build();
-
-        // ViewSwitcherBar for narrow widths (revealed via breakpoint)
-        let view_switcher_bar = adw::ViewSwitcherBar::builder()
-            .stack(&view_stack)
-            .reveal(false)
-            .build();
-
-        // Wire ViewSwitcher page changes to app messages
-        let sender_switcher = sender.input_sender().clone();
-        view_stack.connect_visible_child_notify(move |stack| {
-            let page = stack.visible_child_name().unwrap_or_default();
-            let lt = if page == "TV Shows" {
-                LibraryType::Show
-            } else {
-                LibraryType::Movie
-            };
-            let _ = sender_switcher.send(AppMsg::ViewSwitcherChanged(lt));
-        });
 
         // --- Hamburger menu (shared between all views) ---
-        let menu = gtk4::gio::Menu::new();
+        let menu = gtk::gio::Menu::new();
         menu.append(Some("Preferences"), Some("app.preferences"));
         menu.append(Some("Plex Connection"), Some("app.plex-connection"));
         menu.append(Some("About Reel"), Some("app.about"));
 
         // Register menu actions once on the root window
-        let action_group = gtk4::gio::SimpleActionGroup::new();
+        let action_group = gtk::gio::SimpleActionGroup::new();
 
-        let prefs_action = gtk4::gio::SimpleAction::new("preferences", None);
+        let prefs_action = gtk::gio::SimpleAction::new("preferences", None);
         let sender_prefs = sender.input_sender().clone();
         prefs_action.connect_activate(move |_, _| {
             let _ = sender_prefs.send(AppMsg::OpenPreferences);
         });
         action_group.add_action(&prefs_action);
 
-        let conn_action = gtk4::gio::SimpleAction::new("plex-connection", None);
+        let conn_action = gtk::gio::SimpleAction::new("plex-connection", None);
         let sender_conn = sender.input_sender().clone();
         conn_action.connect_activate(move |_, _| {
             let _ = sender_conn.send(AppMsg::ShowConnectionDialog);
         });
         action_group.add_action(&conn_action);
 
-        let about_action = gtk4::gio::SimpleAction::new("about", None);
+        let about_action = gtk::gio::SimpleAction::new("about", None);
         let sender_about = sender.input_sender().clone();
         about_action.connect_activate(move |_, _| {
             let _ = sender_about.send(AppMsg::OpenAbout);
@@ -303,10 +266,9 @@ impl Component for App {
         let library_toolbar = adw::ToolbarView::new();
         let library_header = adw::HeaderBar::new();
 
-        // ViewSwitcher as title widget
-        library_header.set_title_widget(Some(&view_switcher));
+        library_header.set_title_widget(Some(&library_title));
 
-        let lib_menu_button = gtk4::MenuButton::builder()
+        let lib_menu_button = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .tooltip_text("Menu")
             .menu_model(&menu)
@@ -315,14 +277,7 @@ impl Component for App {
         library_header.pack_end(&lib_menu_button);
 
         library_toolbar.add_top_bar(&library_header);
-
-        // Content: switcher bar (narrow) + library view
-        let library_content = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
-            .build();
-        library_content.append(&view_switcher_bar);
-        library_content.append(library_view.widget());
-        library_toolbar.set_content(Some(&library_content));
+        library_toolbar.set_content(Some(library_view.widget()));
 
         let library_nav_page = adw::NavigationPage::builder()
             .title("Library")
@@ -335,7 +290,7 @@ impl Component for App {
         let home_toolbar = adw::ToolbarView::new();
         let home_header = adw::HeaderBar::new();
 
-        let home_menu_button = gtk4::MenuButton::builder()
+        let home_menu_button = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .tooltip_text("Menu")
             .menu_model(&menu)
@@ -360,21 +315,15 @@ impl Component for App {
         split_view.set_content(Some(&content_nav_page));
 
         // --- Responsive sidebar ---
-        // NavigationSplitView handles its own responsive collapse natively.
-        // The ViewSwitcherBar is revealed only when the sidebar is collapsed.
-        split_view.connect_collapsed_notify({
-            let bar = view_switcher_bar.clone();
-            move |sv| {
-                bar.set_reveal(sv.is_collapsed());
-            }
-        });
+        // AdwNavigationSplitView handles its own responsive collapse natively —
+        // when collapsed, it moves sidebar + content into an internal NavigationView.
 
         // Player page
-        let player_page = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let player_page = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .build();
-        player_page.append(video_area.widget());
-        video_area.widget().set_vexpand(true);
+        player_page.append(video_player.widget());
+        video_player.widget().set_vexpand(true);
 
         stack.add_named(&split_view, Some("shell"));
         stack.add_named(&player_page, Some("player"));
@@ -382,44 +331,27 @@ impl Component for App {
         toast_overlay.set_child(Some(&stack));
         root.set_content(Some(&toast_overlay));
 
-        // Keyboard shortcuts
-        let key_controller = gtk4::EventControllerKey::new();
+        // Keyboard shortcuts (library-level only; player handles its own)
+        let key_controller = gtk::EventControllerKey::new();
         let sender_key = sender.input_sender().clone();
-        let stack_key = stack.clone();
         let root_key = root.clone();
         key_controller.connect_key_pressed(move |_controller, key, _code, mods| {
-            let in_player = stack_key.visible_child_name().as_deref() == Some("player");
-
             // Detect if a text input widget has focus
-            let is_text_focused = gtk4::prelude::GtkWindowExt::focus(&root_key).is_some_and(|w| {
-                w.is::<gtk4::SearchEntry>()
-                    || w.is::<gtk4::Entry>()
-                    || w.is::<gtk4::Text>()
-                    || w.is::<gtk4::TextView>()
+            let is_text_focused = gtk::prelude::GtkWindowExt::focus(&root_key).is_some_and(|w| {
+                w.is::<gtk::SearchEntry>()
+                    || w.is::<gtk::Entry>()
+                    || w.is::<gtk::Text>()
+                    || w.is::<gtk::TextView>()
             });
 
-            if let Some(action) = shortcuts::map_key_to_action(key, mods, is_text_focused) {
-                if in_player {
-                    dispatch_player_action_sender(&sender_key, action);
-                    glib::Propagation::Stop
-                } else {
-                    match action {
-                        PlayerAction::ExitFullscreen => {
-                            let _ = sender_key.send(AppMsg::GoBack);
-                            glib::Propagation::Stop
-                        }
-                        _ => glib::Propagation::Proceed,
-                    }
-                }
-            } else if !in_player && !is_text_focused {
-                // Library-level shortcuts
-                let ctrl = mods.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
+            if !is_text_focused {
+                let ctrl = mods.contains(gtk::gdk::ModifierType::CONTROL_MASK);
                 match key {
-                    gtk4::gdk::Key::f if ctrl => {
+                    gtk::gdk::Key::f if ctrl => {
                         let _ = sender_key.send(AppMsg::FocusSearch);
                         glib::Propagation::Stop
                     }
-                    gtk4::gdk::Key::slash if mods.is_empty() => {
+                    gtk::gdk::Key::slash if mods.is_empty() => {
                         let _ = sender_key.send(AppMsg::FocusSearch);
                         glib::Propagation::Stop
                     }
@@ -432,14 +364,14 @@ impl Component for App {
         root.add_controller(key_controller);
 
         // Drag-and-drop
-        let drop_target = gtk4::DropTarget::builder()
-            .actions(gtk4::gdk::DragAction::COPY)
+        let drop_target = gtk::DropTarget::builder()
+            .actions(gtk::gdk::DragAction::COPY)
             .build();
-        drop_target.set_types(&[gtk4::glib::types::Type::STRING]);
+        drop_target.set_types(&[gtk::glib::types::Type::STRING]);
         let sender_drop = sender.input_sender().clone();
         drop_target.connect_drop(move |_target, value, _x, _y| {
             if let Ok(text) = value.get::<String>() {
-                for uri in drop_target::parse_uri_list(&text) {
+                for uri in parse_uri_list(&text) {
                     let _ = sender_drop.send(AppMsg::FilesDropped(uri));
                 }
                 return true;
@@ -499,7 +431,7 @@ impl Component for App {
 
         let mut model = Self {
             home_view,
-            video_area,
+            video_player,
             sidebar,
             library_view,
             movie_detail,
@@ -510,7 +442,7 @@ impl Component for App {
             stack,
             nav_view,
             split_view,
-            view_switcher_bar,
+            library_title,
             current_view: CurrentView::default(),
             db_conn,
             now_playing: None,
@@ -520,7 +452,6 @@ impl Component for App {
             active_source: None,
             settings: Settings::load(),
             mpris: mpris::spawn_mpris_server(),
-            switcher_syncing: false,
         };
 
         // Relay MPRIS commands from tokio to the GTK main loop
@@ -573,15 +504,12 @@ impl Component for App {
                 self.nav_view.replace_with_tags(&["library"]);
                 root.set_fullscreened(false);
                 root.set_title(Some("Reel"));
-                // Sync sidebar selection from ViewSwitcher / other triggers
-                if !self.switcher_syncing {
-                    self.switcher_syncing = true;
-                    self.sidebar
-                        .emit(crate::components::sidebar::SidebarMsg::SelectExternal(
-                            library_type,
-                        ));
-                    self.switcher_syncing = false;
-                }
+                // Update library header title
+                let title = match library_type {
+                    LibraryType::Movie => "Movies",
+                    LibraryType::Show => "TV Shows",
+                };
+                self.library_title.set_label(title);
                 self.library_view
                     .emit(LibraryViewMsg::LoadLibrary(library_type));
             }
@@ -664,72 +592,55 @@ impl Component for App {
                 self.last_position = 0.0;
                 self.current_view = CurrentView::Player;
                 self.stack.set_visible_child_name("player");
-                self.video_area.emit(VideoAreaMsg::LoadFile(url));
+                self.video_player.emit(VideoPlayerMsg::SetAutoplay(true));
+                self.video_player.emit(VideoPlayerMsg::SetUrl {
+                    url: Some(url),
+                    resume_secs: self.pending_resume.take(),
+                });
             }
             AppMsg::PlayerAction(video_msg) => {
-                self.video_area.emit(video_msg);
+                self.video_player.emit(video_msg);
             }
             AppMsg::OpenFile(path) => {
                 info!("Opening file: {}", path);
                 self.current_view = CurrentView::Player;
                 self.stack.set_visible_child_name("player");
-                self.video_area.emit(VideoAreaMsg::LoadFile(path));
+                self.video_player.emit(VideoPlayerMsg::SetAutoplay(true));
+                self.video_player.emit(VideoPlayerMsg::LoadFile(path));
             }
             AppMsg::ToggleFullscreen => {
-                let new_fs = !root.is_fullscreen();
-                root.set_fullscreened(new_fs);
-                self.video_area
-                    .emit(VideoAreaMsg::FullscreenChanged(new_fs));
+                self.video_player.emit(VideoPlayerMsg::ToggleFullscreen);
             }
             AppMsg::ExitFullscreen => {
-                if root.is_fullscreen() {
-                    root.set_fullscreened(false);
-                    self.video_area.emit(VideoAreaMsg::FullscreenChanged(false));
-                }
+                self.video_player.emit(VideoPlayerMsg::ExitFullscreen);
             }
             AppMsg::FilesDropped(uri) => {
                 self.current_view = CurrentView::Player;
                 self.stack.set_visible_child_name("player");
-                self.video_area.emit(VideoAreaMsg::FilesDropped(uri));
+                self.video_player.emit(VideoPlayerMsg::SetAutoplay(true));
+                self.video_player.emit(VideoPlayerMsg::LoadFile(uri));
             }
             AppMsg::VideoOutput(output) => match output {
-                VideoAreaOutput::FileLoaded => {
+                VideoPlayerOutput::FileLoaded { path: _, duration_secs } => {
                     self.screensaver.inhibit(root);
-                    // Update MPRIS metadata
                     if let Some(ref item) = self.now_playing {
-                        let duration = item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0);
-                        let meta = mpris::metadata_from_media_item(item, duration, None);
+                        let meta = mpris::metadata_from_media_item(item, duration_secs, None);
                         let _ = self.mpris.metadata_tx.send(meta);
-                    }
-                    // Auto-resume from saved position
-                    if let Some(position) = self.pending_resume.take() {
-                        let formatted = backend::format_position(position);
-                        info!("Resuming at {formatted}");
-                        self.video_area.emit(VideoAreaMsg::SeekAbsolute(position));
-                        let toast = adw::Toast::new(&format!("Resumed at {formatted}"));
-                        toast.set_timeout(3);
-                        self.toast_overlay.add_toast(toast);
-                    }
-                    // Start watch state tracking
-                    if let Some(ref item) = self.now_playing {
                         let rating_key = if item.source_type == SourceType::Plex {
                             Some(item.external_id.as_str())
                         } else {
                             None
                         };
-                        let duration = item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0);
                         self.watch_tracker
-                            .start(&item.id, rating_key, duration, Instant::now());
+                            .start(&item.id, rating_key, duration_secs, Instant::now());
                     }
                 }
-                VideoAreaOutput::PositionChanged { position, duration } => {
-                    self.last_position = position;
-                    // Update MPRIS position
+                VideoPlayerOutput::PositionChanged { position_secs, duration_secs } => {
+                    self.last_position = position_secs;
                     let _ = self
                         .mpris
                         .position_tx
-                        .send(mpris::seconds_to_micros(position));
-                    // Update tracker duration from actual mpv value if we have it
+                        .send(mpris::seconds_to_micros(position_secs));
                     if let Some(ref item) = self.now_playing
                         && !self.watch_tracker.is_active()
                     {
@@ -739,18 +650,17 @@ impl Component for App {
                             None
                         };
                         self.watch_tracker
-                            .start(&item.id, rating_key, duration, Instant::now());
+                            .start(&item.id, rating_key, duration_secs, Instant::now());
                     }
                     let events = self
                         .watch_tracker
-                        .process_position(position, Instant::now());
+                        .process_position(position_secs, Instant::now());
                     dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
                 }
-                VideoAreaOutput::StateChanged(state) => {
-                    // Update MPRIS playback status
+                VideoPlayerOutput::StateChanged(state) => {
                     let _ = self.mpris.status_tx.send(state);
                     if self.current_view == CurrentView::Player {
-                        root.set_title(Some(backend::window_title_for_state(state)));
+                        root.set_title(Some(crate::player::window_title_for_state(state)));
                     }
                     match state {
                         PlayState::Playing => {
@@ -760,12 +670,7 @@ impl Component for App {
                                 self.last_position,
                                 Instant::now(),
                             );
-                            dispatch_watch_events(
-                                &self.db_conn,
-                                events,
-                                &self.active_source,
-                                &sender,
-                            );
+                            dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
                         }
                         PlayState::Paused | PlayState::Stopped => {
                             self.screensaver.uninhibit(root);
@@ -774,27 +679,18 @@ impl Component for App {
                                 self.last_position,
                                 Instant::now(),
                             );
-                            dispatch_watch_events(
-                                &self.db_conn,
-                                events,
-                                &self.active_source,
-                                &sender,
-                            );
+                            dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
                         }
                     }
                 }
-                VideoAreaOutput::EndOfFile(reason) => {
-                    info!("Playback ended: {:?}", reason);
+                VideoPlayerOutput::EndOfFile => {
                     self.screensaver.uninhibit(root);
-                    // Update MPRIS
                     let _ = self.mpris.status_tx.send(PlayState::Stopped);
                     let _ = self.mpris.metadata_tx.send(mpris::MprisMetadata::default());
                     let _ = self.mpris.position_tx.send(0);
-                    // Stop watch tracking with final persist + scrobble check
                     let events = self.watch_tracker.stop(self.last_position);
                     dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
                     self.now_playing = None;
-                    // Refresh watch data on library cards
                     let watch_data = load_watch_data(&self.db_conn);
                     self.library_view
                         .emit(LibraryViewMsg::SetWatchData(watch_data));
@@ -804,19 +700,17 @@ impl Component for App {
                         root.set_title(Some("Reel"));
                     }
                 }
-                VideoAreaOutput::VolumeChanged { .. } | VideoAreaOutput::SpeedChanged(_) => {}
-                VideoAreaOutput::ToggleFullscreen => {
-                    let new_fs = !root.is_fullscreen();
-                    root.set_fullscreened(new_fs);
-                    self.video_area
-                        .emit(VideoAreaMsg::FullscreenChanged(new_fs));
+                VideoPlayerOutput::VolumeChanged { volume, muted: _ } => {
+                    self.settings.playback.default_volume = volume;
+                    let _ = self.settings.save();
                 }
-                VideoAreaOutput::LoadSubtitleFile => {
-                    show_subtitle_chooser(root, &self.video_area);
-                }
-                VideoAreaOutput::Error(msg) => {
+                VideoPlayerOutput::SpeedChanged(_) => {}
+                VideoPlayerOutput::ToggleFullscreen => {}
+                VideoPlayerOutput::Error(msg) => {
                     sender.input(AppMsg::ShowToast(msg));
                 }
+                VideoPlayerOutput::LoadSubtitleFile => {}
+                VideoPlayerOutput::ControlsRevealedChanged(_) => {}
             },
             AppMsg::ShowConnectionDialog => {
                 let client_id =
@@ -914,6 +808,7 @@ impl Component for App {
                 self.nav_view.replace_with_tags(&["library"]);
                 root.set_fullscreened(false);
                 root.set_title(Some("Reel"));
+                self.library_title.set_label("Collections");
                 self.library_view.emit(LibraryViewMsg::LoadCollections);
             }
             AppMsg::ShowCollectionDetail(item) => {
@@ -998,26 +893,23 @@ impl Component for App {
                 settings_dialog::show_about(root);
             }
             AppMsg::MprisInput(cmd) => match cmd {
-                MprisCommand::Play | MprisCommand::PlayPause => {
-                    self.video_area.emit(VideoAreaMsg::TogglePause);
-                }
-                MprisCommand::Pause => {
-                    self.video_area.emit(VideoAreaMsg::TogglePause);
+                MprisCommand::Play | MprisCommand::PlayPause | MprisCommand::Pause => {
+                    self.video_player.emit(VideoPlayerMsg::TogglePlay);
                 }
                 MprisCommand::Stop => {
                     sender.input(AppMsg::GoBack);
                 }
                 MprisCommand::Seek(offset_us) => {
-                    let offset_secs = mpris::micros_to_seconds(offset_us);
-                    self.video_area
-                        .emit(VideoAreaMsg::SeekRelative(offset_secs));
+                    let offset_secs = mpris::micros_to_seconds(offset_us) as i64;
+                    self.video_player
+                        .emit(VideoPlayerMsg::SeekRelative(offset_secs));
                 }
-                MprisCommand::SetPosition(pos_us) => {
-                    let pos_secs = mpris::micros_to_seconds(pos_us);
-                    self.video_area.emit(VideoAreaMsg::SeekAbsolute(pos_secs));
+                MprisCommand::SetPosition(_pos_us) => {
+                    // The VideoPlayer doesn't support absolute seek by position yet.
+                    // Skipped: would need SeekFraction with known duration.
                 }
                 MprisCommand::SetVolume(vol) => {
-                    self.video_area.emit(VideoAreaMsg::SetVolume(vol));
+                    self.video_player.emit(VideoPlayerMsg::SetVolume(vol));
                 }
                 MprisCommand::OpenUri(uri) => {
                     sender.input(AppMsg::OpenFile(uri));
@@ -1029,20 +921,6 @@ impl Component for App {
                     root.close();
                 }
             },
-            AppMsg::ViewSwitcherChanged(library_type) => {
-                if self.switcher_syncing {
-                    return;
-                }
-                self.switcher_syncing = true;
-                self.sidebar
-                    .emit(crate::components::sidebar::SidebarMsg::SelectExternal(
-                        library_type,
-                    ));
-                self.switcher_syncing = false;
-                self.current_view = CurrentView::Library(library_type);
-                self.library_view
-                    .emit(LibraryViewMsg::LoadLibrary(library_type));
-            }
         }
     }
 
@@ -1130,44 +1008,6 @@ impl Component for App {
                 sender.input(AppMsg::ShowToast(format!("Plex server unreachable: {msg}")));
             }
             AppCmd::Noop => {}
-        }
-    }
-}
-
-fn dispatch_player_action_sender(sender: &relm4::Sender<AppMsg>, action: PlayerAction) {
-    match action {
-        PlayerAction::TogglePause => {
-            let _ = sender.send(AppMsg::PlayerAction(VideoAreaMsg::TogglePause));
-        }
-        PlayerAction::SeekForward(s) => {
-            let _ = sender.send(AppMsg::PlayerAction(VideoAreaMsg::SeekRelative(s)));
-        }
-        PlayerAction::SeekBackward(s) => {
-            let _ = sender.send(AppMsg::PlayerAction(VideoAreaMsg::SeekRelative(-s)));
-        }
-        PlayerAction::VolumeUp(v) => {
-            let _ = sender.send(AppMsg::PlayerAction(VideoAreaMsg::VolumeStep(v)));
-        }
-        PlayerAction::VolumeDown(v) => {
-            let _ = sender.send(AppMsg::PlayerAction(VideoAreaMsg::VolumeStep(-v)));
-        }
-        PlayerAction::ToggleMute => {
-            let _ = sender.send(AppMsg::PlayerAction(VideoAreaMsg::ToggleMute));
-        }
-        PlayerAction::SpeedUp => {
-            let _ = sender.send(AppMsg::PlayerAction(VideoAreaMsg::SpeedUp));
-        }
-        PlayerAction::SpeedDown => {
-            let _ = sender.send(AppMsg::PlayerAction(VideoAreaMsg::SpeedDown));
-        }
-        PlayerAction::SpeedReset => {
-            let _ = sender.send(AppMsg::PlayerAction(VideoAreaMsg::SpeedReset));
-        }
-        PlayerAction::ToggleFullscreen => {
-            let _ = sender.send(AppMsg::ToggleFullscreen);
-        }
-        PlayerAction::ExitFullscreen => {
-            let _ = sender.send(AppMsg::ExitFullscreen);
         }
     }
 }
@@ -1351,57 +1191,24 @@ fn init_database() -> Option<Connection> {
     }
 }
 
-fn show_subtitle_chooser(window: &adw::ApplicationWindow, video_area: &Controller<VideoArea>) {
-    let dialog = gtk4::FileDialog::builder()
-        .title("Load Subtitle File")
-        .modal(true)
-        .build();
-
-    let filter = gtk4::FileFilter::new();
-    filter.set_name(Some("Subtitle Files"));
-    for ext in &["srt", "ass", "ssa", "vtt", "sub", "idx"] {
-        filter.add_suffix(ext);
-    }
-
-    let filters = gtk4::gio::ListStore::new::<gtk4::FileFilter>();
-    filters.append(&filter);
-    dialog.set_filters(Some(&filters));
-
-    let window_clone = window.clone();
-    let video_sender = video_area.sender().clone();
-    dialog.open(
-        Some(&window_clone),
-        gtk4::gio::Cancellable::NONE,
-        move |result| {
-            if let Ok(file) = result
-                && let Some(path) = file.path()
-            {
-                let _ = video_sender.send(VideoAreaMsg::AddSubtitleFile(
-                    path.to_string_lossy().to_string(),
-                ));
-            }
-        },
-    );
-}
-
 fn show_file_chooser(window: &adw::ApplicationWindow, sender: relm4::Sender<AppMsg>) {
-    let dialog = gtk4::FileDialog::builder()
+    let dialog = gtk::FileDialog::builder()
         .title("Open Video File")
         .modal(true)
         .build();
 
-    let filter = gtk4::FileFilter::new();
+    let filter = gtk::FileFilter::new();
     filter.set_name(Some("Video Files"));
     filter.add_mime_type("video/*");
 
-    let filters = gtk4::gio::ListStore::new::<gtk4::FileFilter>();
+    let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
     filters.append(&filter);
     dialog.set_filters(Some(&filters));
 
     let window_clone = window.clone();
     dialog.open(
         Some(&window_clone),
-        gtk4::gio::Cancellable::NONE,
+        gtk::gio::Cancellable::NONE,
         move |result| {
             if let Ok(file) = result
                 && let Some(path) = file.path()
@@ -1498,4 +1305,40 @@ async fn validate_or_rediscover_source(
             server.name
         )),
     }
+}
+
+/// Parse a text/uri-list string into individual file:// URIs (or plain paths).
+fn parse_uri_list(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            if let Some(stripped) = line.strip_prefix("file://") {
+                // URL-decode the path (basic: replace %XX)
+                urlencoding_decode(stripped)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect()
+}
+
+/// Minimal percent-decode for file:// URLs.
+fn urlencoding_decode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hi = chars.next().and_then(|c| c.to_digit(16));
+            let lo = chars.next().and_then(|c| c.to_digit(16));
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push(char::from_u32((hi << 4) | lo).unwrap_or('\u{FFFD}'));
+            } else {
+                out.push('%');
+                if let Some(c) = chars.next() { out.push(c); }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }

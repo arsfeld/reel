@@ -221,3 +221,138 @@
 .error {
     color: @error_color;
 }
+/* ── Inline video player + OSD ──────────────────────────────────────── */
+
+.video-player {
+    background-color: black;
+    min-height: 540px;
+}
+
+.video-surface {
+    background-color: black;
+}
+
+/* Bottom OSD bar — gradient fade + libadwaita "osd" feel. */
+.video-osd {
+    color: #ffffff;
+    background: linear-gradient(
+        to bottom,
+        alpha(black, 0.0) 0%,
+        alpha(black, 0.45) 35%,
+        alpha(black, 0.78) 100%
+    );
+    padding-top: 32px;
+}
+
+.video-osd button {
+    color: #ffffff;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    min-width: 36px;
+    min-height: 36px;
+}
+
+.video-osd button:hover {
+    background-color: alpha(white, 0.16);
+}
+
+.video-osd button:active {
+    background-color: alpha(white, 0.24);
+}
+
+.video-osd button.video-osd-primary {
+    background-color: alpha(white, 0.18);
+    min-width: 42px;
+    min-height: 42px;
+}
+
+.video-osd button.video-osd-primary:hover {
+    background-color: alpha(white, 0.28);
+}
+
+.video-osd-time {
+    color: #ffffff;
+    font-feature-settings: "tnum";
+    font-size: 0.92em;
+    opacity: 0.9;
+}
+
+/* Slider styling — slim track, accent-coloured fill, pill thumb. */
+.video-osd-seek trough,
+.video-osd-volume trough {
+    background-color: alpha(white, 0.22);
+    min-height: 4px;
+    border-radius: 999px;
+}
+
+.video-osd-seek highlight,
+.video-osd-volume highlight {
+    background-color: @accent_color;
+    border-radius: 999px;
+    min-height: 4px;
+}
+
+.video-osd-seek slider,
+.video-osd-volume slider {
+    background-color: #ffffff;
+    border: none;
+    box-shadow: 0 1px 4px alpha(black, 0.4);
+    min-width: 14px;
+    min-height: 14px;
+    margin: -6px;
+    border-radius: 999px;
+}
+
+.video-osd-seek:hover slider,
+.video-osd-volume:hover slider {
+    background-color: @accent_color;
+}
+
+/* Big centred play/pause flash that fires when toggling. */
+.video-center-indicator {
+    color: #ffffff;
+    background-color: alpha(black, 0.45);
+    border-radius: 999px;
+    padding: 24px;
+    -gtk-icon-shadow: 0 2px 6px alpha(black, 0.6);
+    transition: opacity 200ms ease, transform 200ms ease;
+    opacity: 0.0;
+    transform: scale(0.85);
+}
+
+.video-center-indicator-flash {
+    animation: video-center-flash 520ms cubic-bezier(0.2, 0.6, 0.2, 1.0);
+}
+
+@keyframes video-center-flash {
+    0%   { opacity: 0.0; transform: scale(0.7); }
+    20%  { opacity: 1.0; transform: scale(1.0); }
+    100% { opacity: 0.0; transform: scale(1.25); }
+}
+
+/* Centred plate that surfaces "loading…" and terminal pipeline errors. */
+.video-status-plate {
+    color: #ffffff;
+    background-color: alpha(black, 0.55);
+    border-radius: 18px;
+    padding: 24px 32px;
+    min-width: 220px;
+}
+
+.video-status-plate spinner {
+    color: #ffffff;
+    min-width: 48px;
+    min-height: 48px;
+}
+
+.video-status-title {
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 1.05em;
+}
+
+.video-status-detail {
+    color: alpha(#ffffff, 0.78);
+    font-size: 0.9em;
+}

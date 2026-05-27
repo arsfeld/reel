@@ -3,8 +3,8 @@ mod media_card;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use gtk4::prelude::*;
-use libadwaita as adw;
+use gtk::prelude::*;
+use adw as adw;
 use relm4::prelude::*;
 use relm4::typed_view::grid::TypedGridView;
 use tracing::info;
@@ -19,29 +19,29 @@ use media_card::MediaCardData;
 
 #[allow(dead_code)]
 pub struct LibraryView {
-    grid: TypedGridView<MediaCardData, gtk4::SingleSelection>,
+    grid: TypedGridView<MediaCardData, gtk::SingleSelection>,
     library_type: LibraryType,
     source: Option<Arc<dyn MediaSource>>,
     artwork_cache: Option<Arc<ArtworkCache>>,
     // UI widgets
-    stack: gtk4::Stack,
+    stack: gtk::Stack,
     loading_page: adw::StatusPage,
     empty_page: adw::StatusPage,
     error_page: adw::StatusPage,
     no_results_page: adw::StatusPage,
-    grid_page: gtk4::ScrolledWindow,
-    search_bar: gtk4::SearchBar,
-    search_entry: gtk4::SearchEntry,
+    grid_page: gtk::ScrolledWindow,
+    search_bar: gtk::SearchBar,
+    search_entry: gtk::SearchEntry,
     // Filter/sort bar widgets
-    filter_bar: gtk4::Box,
-    genre_scroll: gtk4::ScrolledWindow,
-    genre_box: gtk4::Box,
-    filter_button: gtk4::MenuButton,
-    filter_dot: gtk4::Image,
-    library_title: gtk4::Label,
-    decade_dropdown: gtk4::DropDown,
-    sort_dropdown: gtk4::DropDown,
-    clear_filters_btn: gtk4::Button,
+    filter_bar: gtk::Box,
+    genre_scroll: gtk::ScrolledWindow,
+    genre_box: gtk::Box,
+    filter_button: gtk::MenuButton,
+    filter_dot: gtk::Image,
+    library_title: gtk::Label,
+    decade_dropdown: gtk::DropDown,
+    sort_dropdown: gtk::DropDown,
+    clear_filters_btn: gtk::Button,
     /// Track genre names currently in the FlowBox to avoid unnecessary rebuilds.
     current_genres: Vec<String>,
     /// Track decade values currently in the dropdown.
@@ -53,17 +53,17 @@ pub struct LibraryView {
     sort_order: SortOrder,
     grid_density: GridDensity,
     /// Cached textures keyed by artwork URL to avoid re-fetching on grid rebuild.
-    texture_cache: HashMap<String, gtk4::gdk::Texture>,
+    texture_cache: HashMap<String, gtk::gdk::Texture>,
     /// Watch progress data keyed by media_item_id: (progress_fraction, watched).
     watch_data: HashMap<String, (f64, bool)>,
     /// Continue Watching section container (label + horizontal scroll).
-    continue_watching_section: gtk4::Box,
+    continue_watching_section: gtk::Box,
     /// Horizontal box inside the Continue Watching scrolled window.
-    continue_watching_box: gtk4::Box,
+    continue_watching_box: gtk::Box,
     /// Recently Added section container.
-    recently_added_section: gtk4::Box,
+    recently_added_section: gtk::Box,
     /// Horizontal box inside the Recently Added scrolled window.
-    recently_added_box: gtk4::Box,
+    recently_added_box: gtk::Box,
     /// Tracks poster downloads for logging: (completed_count, total_to_fetch, batch_start_time).
     poster_load_tracker: Option<(usize, usize, std::time::Instant)>,
     /// True when an async library fetch is in flight; prevents redundant
@@ -132,7 +132,7 @@ pub enum LibraryViewOutput {
 pub enum LibraryViewCmd {
     Loaded(Vec<MediaItem>),
     Error(String),
-    ArtworkReady(String, gtk4::gdk::Texture),
+    ArtworkReady(String, gtk::gdk::Texture),
 }
 
 impl std::fmt::Debug for LibraryViewCmd {
@@ -150,8 +150,8 @@ impl Component for LibraryView {
 
     view! {
         #[root]
-        gtk4::Box {
-            set_orientation: gtk4::Orientation::Vertical,
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
             set_hexpand: true,
             set_vexpand: true,
         }
@@ -165,7 +165,7 @@ impl Component for LibraryView {
     ) -> ComponentParts<Self> {
         let widgets = view_output!();
 
-        let stack = gtk4::Stack::new();
+        let stack = gtk::Stack::new();
         stack.set_hexpand(true);
         stack.set_vexpand(true);
 
@@ -192,10 +192,10 @@ impl Component for LibraryView {
             .build();
 
         // Add "Clear Filters" button to no_results_page
-        let clear_btn = gtk4::Button::builder()
+        let clear_btn = gtk::Button::builder()
             .label("Clear Filters")
             .css_classes(["pill", "suggested-action"])
-            .halign(gtk4::Align::Center)
+            .halign(gtk::Align::Center)
             .build();
         let sender_clear = sender.input_sender().clone();
         clear_btn.connect_clicked(move |_| {
@@ -203,7 +203,7 @@ impl Component for LibraryView {
         });
         no_results_page.set_child(Some(&clear_btn));
 
-        let grid: TypedGridView<MediaCardData, gtk4::SingleSelection> = TypedGridView::new();
+        let grid: TypedGridView<MediaCardData, gtk::SingleSelection> = TypedGridView::new();
         let grid_view = grid.view.clone();
         grid_view.set_min_columns(3);
         grid_view.set_max_columns(10);
@@ -218,7 +218,7 @@ impl Component for LibraryView {
         });
 
         // Right-click context menu on grid items
-        let right_click = gtk4::GestureClick::builder()
+        let right_click = gtk::GestureClick::builder()
             .button(3) // secondary button
             .build();
         let sender_ctx = sender.input_sender().clone();
@@ -228,19 +228,19 @@ impl Component for LibraryView {
             if let Some(position) = pick_grid_position(&grid_view_ctx, x, y) {
                 show_watch_context_menu(&grid_view_ctx, &sender_ctx, position, x, y);
             }
-            gesture.set_state(gtk4::EventSequenceState::Claimed);
+            gesture.set_state(gtk::EventSequenceState::Claimed);
         });
         grid_view.add_controller(right_click);
 
-        let grid_page = gtk4::ScrolledWindow::builder()
+        let grid_page = gtk::ScrolledWindow::builder()
             .hexpand(true)
             .vexpand(true)
-            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .hscrollbar_policy(gtk::PolicyType::Never)
             .child(&grid_view)
             .build();
 
         // Search bar with entry
-        let search_entry = gtk4::SearchEntry::builder()
+        let search_entry = gtk::SearchEntry::builder()
             .placeholder_text("Search library...")
             .hexpand(true)
             .build();
@@ -255,7 +255,7 @@ impl Component for LibraryView {
             let _ = sender_stop.send(LibraryViewMsg::SearchChanged(String::new()));
         });
 
-        let search_bar = gtk4::SearchBar::builder()
+        let search_bar = gtk::SearchBar::builder()
             .search_mode_enabled(false)
             .show_close_button(true)
             .child(&search_entry)
@@ -263,8 +263,8 @@ impl Component for LibraryView {
         search_bar.connect_entry(&search_entry);
 
         // Filter bar: single horizontal row with genre scroll + filter popover button
-        let filter_bar = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
+        let filter_bar = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .spacing(8)
             .margin_start(12)
             .margin_end(12)
@@ -273,22 +273,22 @@ impl Component for LibraryView {
             .build();
 
         // Genre chips in a horizontally scrollable row
-        let genre_scroll = gtk4::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk4::PolicyType::Automatic)
-            .vscrollbar_policy(gtk4::PolicyType::Never)
+        let genre_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
             .hexpand(true)
             .build();
-        let genre_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
+        let genre_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .spacing(4)
             .build();
         genre_scroll.set_child(Some(&genre_box));
 
         // --- Filter popover (sort, density, decade, clear) ---
-        let filter_popover = gtk4::Popover::builder().build();
+        let filter_popover = gtk::Popover::builder().build();
 
-        let popover_content = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let popover_content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(12)
             .margin_start(12)
             .margin_end(12)
@@ -298,7 +298,7 @@ impl Component for LibraryView {
             .build();
 
         // Decade dropdown
-        let decade_dropdown = gtk4::DropDown::from_strings(&["All Years"]);
+        let decade_dropdown = gtk::DropDown::from_strings(&["All Years"]);
         decade_dropdown.set_selected(0);
 
         let sender_decade = sender.input_sender().clone();
@@ -307,7 +307,7 @@ impl Component for LibraryView {
             if selected == 0 {
                 let _ = sender_decade.send(LibraryViewMsg::DecadeFilterChanged(None));
             } else if let Some(item) = dd.model().and_then(|m| m.item(selected))
-                && let Ok(string_obj) = item.downcast::<gtk4::StringObject>()
+                && let Ok(string_obj) = item.downcast::<gtk::StringObject>()
             {
                 let text = string_obj.string();
                 if let Ok(decade) = text.trim_end_matches('s').parse::<i32>() {
@@ -321,7 +321,7 @@ impl Component for LibraryView {
 
         // Sort dropdown
         let sort_labels: Vec<&str> = SortOrder::all().iter().map(|s| s.label()).collect();
-        let sort_dropdown = gtk4::DropDown::from_strings(&sort_labels);
+        let sort_dropdown = gtk::DropDown::from_strings(&sort_labels);
         sort_dropdown.set_selected(0);
 
         let sender_sort = sender.input_sender().clone();
@@ -337,7 +337,7 @@ impl Component for LibraryView {
 
         // Density dropdown
         let density_labels: Vec<&str> = GridDensity::all().iter().map(|d| d.label()).collect();
-        let density_dropdown = gtk4::DropDown::from_strings(&density_labels);
+        let density_dropdown = gtk::DropDown::from_strings(&density_labels);
         density_dropdown.set_selected(1); // Medium (default)
 
         let sender_density = sender.input_sender().clone();
@@ -352,10 +352,10 @@ impl Component for LibraryView {
         let density_row = labeled_row("Thumbnail size", &density_dropdown);
 
         // Clear filters button inside popover
-        let clear_filters_btn = gtk4::Button::builder()
+        let clear_filters_btn = gtk::Button::builder()
             .label("Clear Filters")
             .css_classes(["flat"])
-            .halign(gtk4::Align::Center)
+            .halign(gtk::Align::Center)
             .visible(false)
             .build();
         let popover_clear = filter_popover.clone();
@@ -373,7 +373,7 @@ impl Component for LibraryView {
         filter_popover.set_child(Some(&popover_content));
 
         // Filter button that opens the popover
-        let filter_button = gtk4::MenuButton::builder()
+        let filter_button = gtk::MenuButton::builder()
             .icon_name("view-sort-descending-symbolic")
             .tooltip_text("Filter & Sort")
             .popover(&filter_popover)
@@ -381,7 +381,7 @@ impl Component for LibraryView {
             .build();
 
         // Active filter indicator dot
-        let filter_dot = gtk4::Image::builder()
+        let filter_dot = gtk::Image::builder()
             .icon_name("media-record-symbolic")
             .css_classes(["accent"])
             .visible(false)
@@ -399,8 +399,8 @@ impl Component for LibraryView {
         stack.set_visible_child(&empty_page);
 
         // Continue Watching section (hidden initially)
-        let continue_watching_section = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let continue_watching_section = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(8)
             .margin_start(16)
             .margin_end(16)
@@ -409,20 +409,20 @@ impl Component for LibraryView {
             .visible(false)
             .build();
 
-        let cw_label = gtk4::Label::builder()
+        let cw_label = gtk::Label::builder()
             .label("Continue Watching")
-            .halign(gtk4::Align::Start)
+            .halign(gtk::Align::Start)
             .css_classes(["title-3"])
             .build();
 
-        let continue_watching_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
+        let continue_watching_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .spacing(12)
             .build();
 
-        let cw_scroll = gtk4::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk4::PolicyType::Automatic)
-            .vscrollbar_policy(gtk4::PolicyType::Never)
+        let cw_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
             .max_content_height(200)
             .child(&continue_watching_box)
             .build();
@@ -431,8 +431,8 @@ impl Component for LibraryView {
         continue_watching_section.append(&cw_scroll);
 
         // Recently Added section (hidden initially)
-        let recently_added_section = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let recently_added_section = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(8)
             .margin_start(16)
             .margin_end(16)
@@ -441,20 +441,20 @@ impl Component for LibraryView {
             .visible(false)
             .build();
 
-        let ra_label = gtk4::Label::builder()
+        let ra_label = gtk::Label::builder()
             .label("Recently Added")
-            .halign(gtk4::Align::Start)
+            .halign(gtk::Align::Start)
             .css_classes(["title-3"])
             .build();
 
-        let recently_added_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
+        let recently_added_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .spacing(12)
             .build();
 
-        let ra_scroll = gtk4::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk4::PolicyType::Automatic)
-            .vscrollbar_policy(gtk4::PolicyType::Never)
+        let ra_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
             .max_content_height(200)
             .child(&recently_added_box)
             .build();
@@ -463,8 +463,8 @@ impl Component for LibraryView {
         recently_added_section.append(&ra_scroll);
 
         // Library title showing type + count (e.g., "Movies (1,247)")
-        let library_title = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
+        let library_title = gtk::Label::builder()
+            .halign(gtk::Align::Start)
             .margin_start(16)
             .margin_top(4)
             .css_classes(["title-4"])
@@ -884,7 +884,7 @@ impl LibraryView {
                     let fetch_url = url;
                     sender.oneshot_command(async move {
                         match cache.get_or_download(&fetch_url).await {
-                            Ok(path) => match gtk4::gdk::Texture::from_filename(&path) {
+                            Ok(path) => match gtk::gdk::Texture::from_filename(&path) {
                                 Ok(texture) => LibraryViewCmd::ArtworkReady(fetch_url, texture),
                                 Err(_) => LibraryViewCmd::Error(String::new()),
                             },
@@ -942,7 +942,7 @@ impl LibraryView {
         }
 
         for genre in &genres {
-            let btn = gtk4::ToggleButton::builder()
+            let btn = gtk::ToggleButton::builder()
                 .label(genre)
                 .css_classes(["pill"])
                 .build();
@@ -953,7 +953,7 @@ impl LibraryView {
                 let mut selected = Vec::new();
                 let mut child = box_ref.first_child();
                 while let Some(ref widget) = child {
-                    if let Ok(toggle) = widget.clone().downcast::<gtk4::ToggleButton>()
+                    if let Ok(toggle) = widget.clone().downcast::<gtk::ToggleButton>()
                         && toggle.is_active()
                     {
                         selected.push(toggle.label().map(|l| l.to_string()).unwrap_or_default());
@@ -982,7 +982,7 @@ impl LibraryView {
             labels.push(format!("{d}s"));
         }
         let label_strs: Vec<&str> = labels.iter().map(String::as_str).collect();
-        let model = gtk4::StringList::new(&label_strs);
+        let model = gtk::StringList::new(&label_strs);
         self.decade_dropdown.set_model(Some(&model));
         self.decade_dropdown.set_selected(0);
         self.current_decades = decades;
@@ -992,7 +992,7 @@ impl LibraryView {
     fn deselect_all_genre_chips(&self) {
         let mut child = self.genre_box.first_child();
         while let Some(ref widget) = child {
-            if let Ok(toggle) = widget.clone().downcast::<gtk4::ToggleButton>() {
+            if let Ok(toggle) = widget.clone().downcast::<gtk::ToggleButton>() {
                 toggle.set_active(false);
             }
             child = widget.next_sibling();
@@ -1013,33 +1013,33 @@ impl LibraryView {
         progress: Option<f64>,
         source: &Option<Arc<dyn MediaSource>>,
         artwork_cache: &Option<Arc<ArtworkCache>>,
-        texture_cache: &HashMap<String, gtk4::gdk::Texture>,
+        texture_cache: &HashMap<String, gtk::gdk::Texture>,
         cmd_sender: &relm4::Sender<LibraryViewCmd>,
         output_sender: &relm4::Sender<LibraryViewOutput>,
-    ) -> gtk4::Box {
-        let card = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+    ) -> gtk::Box {
+        let card = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(4)
             .width_request(120)
             .css_classes(["media-card"])
             .build();
 
-        let picture = gtk4::Picture::builder()
-            .content_fit(gtk4::ContentFit::Cover)
+        let picture = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Cover)
             .width_request(120)
             .height_request(180)
             .css_classes(["media-card-poster"])
             .build();
 
-        let overlay = gtk4::Overlay::new();
+        let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&picture));
 
         // Progress bar (only for continue watching)
         if let Some(pct) = progress {
             if pct > 0.0 {
-                let progress_bar = gtk4::ProgressBar::builder()
-                    .halign(gtk4::Align::Fill)
-                    .valign(gtk4::Align::End)
+                let progress_bar = gtk::ProgressBar::builder()
+                    .halign(gtk::Align::Fill)
+                    .valign(gtk::Align::End)
                     .fraction(pct)
                     .css_classes(["watch-progress"])
                     .build();
@@ -1047,15 +1047,15 @@ impl LibraryView {
             }
         }
 
-        let frame = gtk4::Frame::builder()
+        let frame = gtk::Frame::builder()
             .css_classes(["media-card-frame"])
             .child(&overlay)
             .build();
 
-        let title = gtk4::Label::builder()
+        let title = gtk::Label::builder()
             .label(&item.title)
-            .halign(gtk4::Align::Start)
-            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .halign(gtk::Align::Start)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
             .max_width_chars(14)
             .css_classes(["caption"])
             .build();
@@ -1072,9 +1072,9 @@ impl LibraryView {
                 let cache = Arc::clone(cache);
                 let sender = cmd_sender.clone();
                 let fetch_url = url;
-                gtk4::glib::spawn_future_local(async move {
+                gtk::glib::spawn_future_local(async move {
                     if let Ok(path) = cache.get_or_download(&fetch_url).await
-                        && let Ok(texture) = gtk4::gdk::Texture::from_filename(&path)
+                        && let Ok(texture) = gtk::gdk::Texture::from_filename(&path)
                     {
                         let _ = sender.send(LibraryViewCmd::ArtworkReady(fetch_url, texture));
                     }
@@ -1085,7 +1085,7 @@ impl LibraryView {
         // Click handler → navigate to detail
         let item_clone = item.clone();
         let os = output_sender.clone();
-        let gesture = gtk4::GestureClick::new();
+        let gesture = gtk::GestureClick::new();
         gesture.connect_released(move |_, _, _, _| {
             let _ = os.send(LibraryViewOutput::ShowDetail(item_clone.clone()));
         });
@@ -1184,14 +1184,14 @@ impl LibraryView {
 }
 
 /// Build a simple "label: widget" row for the filter popover.
-fn labeled_row(label_text: &str, control: &impl gtk4::prelude::IsA<gtk4::Widget>) -> gtk4::Box {
-    let row = gtk4::Box::builder()
-        .orientation(gtk4::Orientation::Horizontal)
+fn labeled_row(label_text: &str, control: &impl gtk::prelude::IsA<gtk::Widget>) -> gtk::Box {
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .build();
-    let label = gtk4::Label::builder()
+    let label = gtk::Label::builder()
         .label(label_text)
-        .halign(gtk4::Align::Start)
+        .halign(gtk::Align::Start)
         .hexpand(true)
         .css_classes(["dim-label"])
         .build();
@@ -1202,7 +1202,7 @@ fn labeled_row(label_text: &str, control: &impl gtk4::prelude::IsA<gtk4::Widget>
 
 /// Find which grid item is at the given (x, y) coordinates.
 /// Returns the position index if found.
-fn pick_grid_position(grid_view: &gtk4::GridView, _x: f64, _y: f64) -> Option<u32> {
+fn pick_grid_position(grid_view: &gtk::GridView, _x: f64, _y: f64) -> Option<u32> {
     // Use the selection model to get the item at the click position
     // GTK GridView doesn't have a direct pick method, so we iterate
     // and check which child contains the point
@@ -1213,7 +1213,7 @@ fn pick_grid_position(grid_view: &gtk4::GridView, _x: f64, _y: f64) -> Option<u3
     }
 
     // Use the selected item from the selection model
-    let selection = model.downcast_ref::<gtk4::SingleSelection>()?;
+    let selection = model.downcast_ref::<gtk::SingleSelection>()?;
     let selected = selection.selected();
     if selected < n_items {
         Some(selected)
@@ -1224,33 +1224,33 @@ fn pick_grid_position(grid_view: &gtk4::GridView, _x: f64, _y: f64) -> Option<u3
 
 /// Show a context menu popover at the given position with Watch/Unwatch actions.
 fn show_watch_context_menu(
-    grid_view: &gtk4::GridView,
+    grid_view: &gtk::GridView,
     sender: &relm4::Sender<LibraryViewMsg>,
     position: u32,
     x: f64,
     y: f64,
 ) {
-    let menu = gtk4::gio::Menu::new();
+    let menu = gtk::gio::Menu::new();
     menu.append(Some("Mark as Watched"), Some("watch.mark-watched"));
     menu.append(Some("Mark as Unwatched"), Some("watch.mark-unwatched"));
 
-    let popover = gtk4::PopoverMenu::from_model(Some(&menu));
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
     popover.set_parent(grid_view);
-    popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
     popover.set_has_arrow(true);
 
     // Action group for the popover
-    let action_group = gtk4::gio::SimpleActionGroup::new();
+    let action_group = gtk::gio::SimpleActionGroup::new();
 
     let sender_watched = sender.clone();
-    let watched_action = gtk4::gio::SimpleAction::new("mark-watched", None);
+    let watched_action = gtk::gio::SimpleAction::new("mark-watched", None);
     watched_action.connect_activate(move |_, _| {
         let _ = sender_watched.send(LibraryViewMsg::MarkWatchedAt(position));
     });
     action_group.add_action(&watched_action);
 
     let sender_unwatched = sender.clone();
-    let unwatched_action = gtk4::gio::SimpleAction::new("mark-unwatched", None);
+    let unwatched_action = gtk::gio::SimpleAction::new("mark-unwatched", None);
     unwatched_action.connect_activate(move |_, _| {
         let _ = sender_unwatched.send(LibraryViewMsg::MarkUnwatchedAt(position));
     });

@@ -1,4 +1,4 @@
-use gtk4::prelude::*;
+use gtk::prelude::*;
 use relm4::typed_view::grid::RelmGridItem;
 
 use crate::models::media::{MediaItem, MediaType};
@@ -9,7 +9,7 @@ pub struct MediaCardData {
     pub media_id: String,
     pub title: String,
     pub year: Option<i32>,
-    pub poster_texture: Option<gtk4::gdk::Texture>,
+    pub poster_texture: Option<gtk::gdk::Texture>,
     pub poster_url: Option<String>,
     pub media_type: MediaType,
     pub media_item: Option<MediaItem>,
@@ -26,9 +26,9 @@ pub struct MediaCardData {
     pub watched: bool,
     /// Direct reference to the GTK Picture widget for lazy poster updates.
     #[allow(clippy::type_complexity)]
-    pub picture_widget: Option<gtk4::Picture>,
+    pub picture_widget: Option<gtk::Picture>,
     /// Direct reference to the placeholder icon widget.
-    pub placeholder_widget: Option<gtk4::Image>,
+    pub placeholder_widget: Option<gtk::Image>,
 }
 
 impl MediaCardData {
@@ -54,51 +54,51 @@ impl MediaCardData {
 }
 
 pub struct MediaCardWidgets {
-    picture: gtk4::Picture,
-    placeholder_icon: gtk4::Image,
+    picture: gtk::Picture,
+    placeholder_icon: gtk::Image,
     #[allow(dead_code)]
-    frame: gtk4::Frame,
-    title_label: gtk4::Label,
-    year_label: gtk4::Label,
-    resolution_badge: gtk4::Label,
-    rating_badge: gtk4::Label,
-    progress_bar: gtk4::ProgressBar,
-    watched_icon: gtk4::Image,
+    frame: gtk::Frame,
+    title_label: gtk::Label,
+    year_label: gtk::Label,
+    resolution_badge: gtk::Label,
+    rating_badge: gtk::Label,
+    progress_bar: gtk::ProgressBar,
+    watched_icon: gtk::Image,
 }
 
 impl RelmGridItem for MediaCardData {
-    type Root = gtk4::Box;
+    type Root = gtk::Box;
     type Widgets = MediaCardWidgets;
 
-    fn setup(_item: &gtk4::ListItem) -> (Self::Root, Self::Widgets) {
-        let container = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+    fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
+        let container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(0)
             .css_classes(["media-card"])
             .width_request(180)
             .build();
 
-        let picture = gtk4::Picture::builder()
-            .content_fit(gtk4::ContentFit::Cover)
+        let picture = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Cover)
             .width_request(180)
             .height_request(270)
             .css_classes(["media-card-poster"])
             .build();
 
         // Placeholder icon shown when no poster texture is loaded
-        let placeholder_icon = gtk4::Image::builder()
+        let placeholder_icon = gtk::Image::builder()
             .icon_name("video-x-generic-symbolic")
             .pixel_size(48)
-            .halign(gtk4::Align::Center)
-            .valign(gtk4::Align::Center)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
             .css_classes(["media-card-placeholder-icon"])
             .visible(false)
             .build();
 
         // Resolution badge (top-right)
-        let resolution_badge = gtk4::Label::builder()
-            .halign(gtk4::Align::End)
-            .valign(gtk4::Align::Start)
+        let resolution_badge = gtk::Label::builder()
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
             .margin_top(8)
             .margin_end(8)
             .css_classes(["media-badge", "resolution-badge"])
@@ -106,9 +106,9 @@ impl RelmGridItem for MediaCardData {
             .build();
 
         // Rating badge (top-left)
-        let rating_badge = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
-            .valign(gtk4::Align::Start)
+        let rating_badge = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Start)
             .margin_top(8)
             .margin_start(8)
             .css_classes(["media-badge", "rating-badge"])
@@ -116,19 +116,19 @@ impl RelmGridItem for MediaCardData {
             .build();
 
         // Watch progress bar (bottom of poster, visible for in-progress items)
-        let progress_bar = gtk4::ProgressBar::builder()
-            .halign(gtk4::Align::Fill)
-            .valign(gtk4::Align::End)
+        let progress_bar = gtk::ProgressBar::builder()
+            .halign(gtk::Align::Fill)
+            .valign(gtk::Align::End)
             .css_classes(["watch-progress"])
             .visible(false)
             .build();
 
         // Watched checkmark (bottom-right of poster)
-        let watched_icon = gtk4::Image::builder()
+        let watched_icon = gtk::Image::builder()
             .icon_name("emblem-ok-symbolic")
             .pixel_size(20)
-            .halign(gtk4::Align::End)
-            .valign(gtk4::Align::End)
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::End)
             .margin_bottom(8)
             .margin_end(8)
             .css_classes(["watched-indicator"])
@@ -136,7 +136,7 @@ impl RelmGridItem for MediaCardData {
             .build();
 
         // Overlay stacks badges, placeholder icon, and progress on top of the poster
-        let overlay = gtk4::Overlay::new();
+        let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&picture));
         overlay.add_overlay(&placeholder_icon);
         overlay.add_overlay(&resolution_badge);
@@ -145,23 +145,23 @@ impl RelmGridItem for MediaCardData {
         overlay.add_overlay(&watched_icon);
 
         // Wrap overlay in a frame for rounded corners + hover effects
-        let frame = gtk4::Frame::builder()
+        let frame = gtk::Frame::builder()
             .css_classes(["media-card-frame"])
             .child(&overlay)
             .build();
 
-        let title_label = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
-            .ellipsize(gtk4::pango::EllipsizeMode::End)
+        let title_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
             .max_width_chars(20)
             .lines(2)
             .wrap(true)
-            .wrap_mode(gtk4::pango::WrapMode::WordChar)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
             .css_classes(["media-card-title"])
             .build();
 
-        let year_label = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
+        let year_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
             .css_classes(["media-card-year", "dim-label"])
             .build();
 
@@ -211,7 +211,7 @@ impl RelmGridItem for MediaCardData {
             widgets.picture.set_opacity(1.0);
             widgets.placeholder_icon.set_visible(false);
         } else {
-            widgets.picture.set_paintable(None::<&gtk4::gdk::Texture>);
+            widgets.picture.set_paintable(None::<&gtk::gdk::Texture>);
             widgets.picture.add_css_class("loading");
             widgets.picture.set_opacity(0.0);
             widgets.placeholder_icon.set_visible(true);

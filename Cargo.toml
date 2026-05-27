@@ -8,18 +8,13 @@ description = "A modern, native media player for the Linux desktop"
 
 [dependencies]
 # UI
-relm4 = { version = "0.10", features = ["macros", "libadwaita"] }
-gtk4 = { version = "0.10", features = ["v4_14"] }
-libadwaita = { version = "0.8", features = ["v1_5"] }
+relm4 = { version = "0.11", features = ["libadwaita"] }
+gtk = { version = "0.11", package = "gtk4", features = ["v4_14"] }
+adw = { version = "0.9", package = "libadwaita", features = ["v1_5"] }
 
-# Video backend (mpv)
-libmpv2 = { version = "5.0", features = ["render"] }
-libmpv2-sys = "4.0"
-
-# GL interop
-gdk4-wayland = { version = "0.10", optional = true }
-gdk4-x11 = { version = "0.10", optional = true }
-khronos-egl = { version = "6", features = ["dynamic"] }
+# Video backend (GStreamer)
+gst = { version = "0.25", package = "gstreamer" }
+gst-video = { version = "0.25", package = "gstreamer-video" }
 
 # HTTP + serialization
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -57,9 +52,6 @@ tokio = { version = "1", features = ["net"] }
 wiremock = "0.6"
 
 [features]
-default = ["wayland", "x11"]
-wayland = ["dep:gdk4-wayland"]
-x11 = ["dep:gdk4-x11"]
 integration = []
 
 [profile.release]

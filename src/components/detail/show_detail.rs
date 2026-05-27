@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use adw::prelude::*;
-use gtk4::prelude::*;
-use libadwaita as adw;
+use gtk::prelude::*;
+use adw as adw;
 use relm4::prelude::*;
 use tracing::info;
 
@@ -18,15 +18,15 @@ pub struct ShowDetail {
     source: Option<Arc<dyn MediaSource>>,
     artwork_cache: Option<Arc<ArtworkCache>>,
     // Widgets
-    title_label: gtk4::Label,
-    year_label: gtk4::Label,
-    rating_label: gtk4::Label,
-    content_rating_label: gtk4::Label,
-    overview_label: gtk4::Label,
-    backdrop: gtk4::Picture,
-    season_dropdown: gtk4::DropDown,
-    season_artwork: gtk4::Picture,
-    episodes_list: gtk4::ListBox,
+    title_label: gtk::Label,
+    year_label: gtk::Label,
+    rating_label: gtk::Label,
+    content_rating_label: gtk::Label,
+    overview_label: gtk::Label,
+    backdrop: gtk::Picture,
+    season_dropdown: gtk::DropDown,
+    season_artwork: gtk::Picture,
+    episodes_list: gtk::ListBox,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -66,9 +66,9 @@ pub enum ShowDetailOutput {
 pub enum ShowDetailCmd {
     SeasonsReady(Vec<MediaItem>),
     EpisodesReady(Vec<MediaItem>),
-    BackdropReady(gtk4::gdk::Texture),
-    SeasonArtworkReady(gtk4::gdk::Texture),
-    EpisodeThumbReady(usize, gtk4::gdk::Texture),
+    BackdropReady(gtk::gdk::Texture),
+    SeasonArtworkReady(gtk::gdk::Texture),
+    EpisodeThumbReady(usize, gtk::gdk::Texture),
     Error(String),
     Noop,
 }
@@ -88,8 +88,8 @@ impl Component for ShowDetail {
 
     view! {
         #[root]
-        gtk4::Box {
-            set_orientation: gtk4::Orientation::Vertical,
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
             set_hexpand: true,
             set_vexpand: true,
         }
@@ -106,14 +106,14 @@ impl Component for ShowDetail {
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&adw::HeaderBar::new());
 
-        let scrolled = gtk4::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk4::PolicyType::Never)
+        let scrolled = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
             .build();
 
         let clamp = adw::Clamp::builder().maximum_size(900).build();
-        let content_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let content_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(16)
             .margin_start(16)
             .margin_end(16)
@@ -122,33 +122,33 @@ impl Component for ShowDetail {
             .build();
 
         // Backdrop image
-        let backdrop = gtk4::Picture::builder()
-            .content_fit(gtk4::ContentFit::Cover)
+        let backdrop = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Cover)
             .height_request(280)
             .css_classes(["media-backdrop"])
             .build();
 
-        let title_label = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
+        let title_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["title-1"])
             .build();
 
-        let meta_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
+        let meta_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .spacing(12)
-            .halign(gtk4::Align::Start)
+            .halign(gtk::Align::Start)
             .build();
 
-        let year_label = gtk4::Label::builder()
+        let year_label = gtk::Label::builder()
             .css_classes(["dim-label"])
             .visible(false)
             .build();
-        let rating_label = gtk4::Label::builder()
+        let rating_label = gtk::Label::builder()
             .css_classes(["dim-label"])
             .visible(false)
             .build();
-        let content_rating_label = gtk4::Label::builder()
+        let content_rating_label = gtk::Label::builder()
             .css_classes(["dim-label"])
             .visible(false)
             .build();
@@ -157,28 +157,28 @@ impl Component for ShowDetail {
         meta_box.append(&rating_label);
         meta_box.append(&content_rating_label);
 
-        let overview_label = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
+        let overview_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
             .wrap(true)
             .visible(false)
             .build();
 
         // Season row: dropdown + artwork
-        let season_row = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
+        let season_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .spacing(12)
             .margin_top(8)
             .build();
 
-        let season_dropdown = gtk4::DropDown::builder().halign(gtk4::Align::Start).build();
+        let season_dropdown = gtk::DropDown::builder().halign(gtk::Align::Start).build();
 
         let sender_season = sender.input_sender().clone();
         season_dropdown.connect_selected_notify(move |dd| {
             let _ = sender_season.send(ShowDetailMsg::SelectSeason(dd.selected()));
         });
 
-        let season_artwork = gtk4::Picture::builder()
-            .content_fit(gtk4::ContentFit::Cover)
+        let season_artwork = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Cover)
             .width_request(60)
             .height_request(90)
             .visible(false)
@@ -188,9 +188,9 @@ impl Component for ShowDetail {
         season_row.append(&season_dropdown);
         season_row.append(&season_artwork);
 
-        let episodes_list = gtk4::ListBox::builder()
+        let episodes_list = gtk::ListBox::builder()
             .css_classes(["boxed-list"])
-            .selection_mode(gtk4::SelectionMode::None)
+            .selection_mode(gtk::SelectionMode::None)
             .build();
 
         content_box.append(&backdrop);
@@ -273,7 +273,7 @@ impl Component for ShowDetail {
                     let cache = Arc::clone(cache);
                     sender.oneshot_command(async move {
                         match cache.get_or_download(&url).await {
-                            Ok(path) => match gtk4::gdk::Texture::from_filename(&path) {
+                            Ok(path) => match gtk::gdk::Texture::from_filename(&path) {
                                 Ok(tex) => ShowDetailCmd::BackdropReady(tex),
                                 Err(_) => ShowDetailCmd::Noop,
                             },
@@ -303,7 +303,7 @@ impl Component for ShowDetail {
             ShowDetailMsg::SeasonsLoaded(seasons) => {
                 self.seasons = seasons.clone();
 
-                let string_list = gtk4::StringList::new(&[] as &[&str]);
+                let string_list = gtk::StringList::new(&[] as &[&str]);
                 for s in &seasons {
                     let name = if s.season_number == Some(0) {
                         "Specials".to_string()
@@ -336,7 +336,7 @@ impl Component for ShowDetail {
                     let cache = Arc::clone(cache);
                     sender.oneshot_command(async move {
                         match cache.get_or_download(&url).await {
-                            Ok(path) => match gtk4::gdk::Texture::from_filename(&path) {
+                            Ok(path) => match gtk::gdk::Texture::from_filename(&path) {
                                 Ok(tex) => ShowDetailCmd::SeasonArtworkReady(tex),
                                 Err(_) => ShowDetailCmd::Noop,
                             },
@@ -393,8 +393,8 @@ impl Component for ShowDetail {
                     }
 
                     // Episode thumbnail as prefix
-                    let thumb_picture = gtk4::Picture::builder()
-                        .content_fit(gtk4::ContentFit::Cover)
+                    let thumb_picture = gtk::Picture::builder()
+                        .content_fit(gtk::ContentFit::Cover)
                         .width_request(120)
                         .height_request(68)
                         .css_classes(["media-card-frame"])
@@ -410,7 +410,7 @@ impl Component for ShowDetail {
                         let idx = i;
                         sender.oneshot_command(async move {
                             match cache.get_or_download(&url).await {
-                                Ok(path) => match gtk4::gdk::Texture::from_filename(&path) {
+                                Ok(path) => match gtk::gdk::Texture::from_filename(&path) {
                                     Ok(tex) => ShowDetailCmd::EpisodeThumbReady(idx, tex),
                                     Err(_) => ShowDetailCmd::Noop,
                                 },
@@ -420,18 +420,18 @@ impl Component for ShowDetail {
                     }
 
                     if let Some(ref runtime) = ep.format_runtime() {
-                        let duration_label = gtk4::Label::builder()
+                        let duration_label = gtk::Label::builder()
                             .label(runtime)
                             .css_classes(["dim-label"])
-                            .valign(gtk4::Align::Center)
+                            .valign(gtk::Align::Center)
                             .build();
                         row.add_suffix(&duration_label);
                     }
 
                     if ep.file_path.is_some() {
-                        let play_icon = gtk4::Image::builder()
+                        let play_icon = gtk::Image::builder()
                             .icon_name("media-playback-start-symbolic")
-                            .valign(gtk4::Align::Center)
+                            .valign(gtk::Align::Center)
                             .build();
                         row.add_suffix(&play_icon);
 
@@ -493,13 +493,13 @@ impl Component for ShowDetail {
                     // Navigate: ListBoxRow → ActionRow → Box → prefix area
                     let mut child = row_widget.first_child();
                     while let Some(ref widget) = child {
-                        if let Ok(picture) = widget.clone().downcast::<gtk4::Picture>() {
+                        if let Ok(picture) = widget.clone().downcast::<gtk::Picture>() {
                             picture.set_paintable(Some(&texture));
                             break;
                         }
                         // Check inside action row
                         if let Some(inner) = widget.first_child()
-                            && let Ok(picture) = inner.downcast::<gtk4::Picture>()
+                            && let Ok(picture) = inner.downcast::<gtk::Picture>()
                         {
                             picture.set_paintable(Some(&texture));
                             break;

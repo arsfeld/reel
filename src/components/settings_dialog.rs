@@ -1,12 +1,12 @@
 use adw::prelude::*;
-use gtk4::prelude::*;
-use libadwaita as adw;
+use gtk::prelude::*;
+use adw as adw;
 
 use crate::settings::Settings;
 
 /// Build and present the preferences dialog.
 #[allow(clippy::too_many_lines)]
-pub fn show_preferences(parent: &impl IsA<gtk4::Widget>, settings: &Settings) -> Settings {
+pub fn show_preferences(parent: &impl IsA<gtk::Widget>, settings: &Settings) -> Settings {
     let dialog = adw::PreferencesDialog::builder()
         .title("Preferences")
         .search_enabled(true)
@@ -28,7 +28,7 @@ pub fn show_preferences(parent: &impl IsA<gtk4::Widget>, settings: &Settings) ->
         .build();
 
     let hwdec_model =
-        gtk4::StringList::new(&["Auto (Safe)", "Auto", "VAAPI", "NVDEC", "Vulkan", "None"]);
+        gtk::StringList::new(&["Auto (Safe)", "Auto", "VAAPI", "NVDEC", "Vulkan", "None"]);
     let hwdec_combo = adw::ComboRow::builder()
         .title("Hardware Decoding")
         .subtitle("GPU acceleration method")
@@ -106,7 +106,7 @@ pub fn show_preferences(parent: &impl IsA<gtk4::Widget>, settings: &Settings) ->
 
     let display_group = adw::PreferencesGroup::builder().title("Display").build();
 
-    let sort_model = gtk4::StringList::new(&["Title", "Year", "Date Added", "Rating"]);
+    let sort_model = gtk::StringList::new(&["Title", "Year", "Date Added", "Rating"]);
     let sort_combo = adw::ComboRow::builder()
         .title("Default Sort")
         .model(&sort_model)
@@ -181,7 +181,7 @@ pub fn show_preferences(parent: &impl IsA<gtk4::Widget>, settings: &Settings) ->
 }
 
 /// Build and present the About dialog.
-pub fn show_about(parent: &impl IsA<gtk4::Widget>) {
+pub fn show_about(parent: &impl IsA<gtk::Widget>) {
     let about = adw::AboutDialog::builder()
         .application_name("Reel")
         .application_icon("dev.arsfeld.Reel")
@@ -189,7 +189,7 @@ pub fn show_about(parent: &impl IsA<gtk4::Widget>) {
         .comments("A modern, native media player for the Linux desktop")
         .website("https://github.com/arosenfeld/reel")
         .issue_url("https://github.com/arosenfeld/reel/issues")
-        .license_type(gtk4::License::Gpl30)
+        .license_type(gtk::License::Gpl30)
         .developers(vec!["Alexandre Rosenfeld".to_string()])
         .build();
 

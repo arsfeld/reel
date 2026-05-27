@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use gtk4::prelude::*;
-use libadwaita as adw;
+use gtk::prelude::*;
+use adw as adw;
 use relm4::prelude::*;
 
 use crate::models::media::MediaItem;
@@ -11,54 +11,54 @@ use crate::services::media_source::MediaSource;
 
 /// A shelf card on the home screen. Smaller than grid cards (~160×240).
 struct HomeCard {
-    container: gtk4::Box,
-    picture: gtk4::Picture,
-    title_label: gtk4::Label,
-    subtitle_label: gtk4::Label,
-    progress_bar: gtk4::ProgressBar,
+    container: gtk::Box,
+    picture: gtk::Picture,
+    title_label: gtk::Label,
+    subtitle_label: gtk::Label,
+    progress_bar: gtk::ProgressBar,
     /// Click gesture controller for this card.
-    gesture: gtk4::GestureClick,
+    gesture: gtk::GestureClick,
 }
 
 impl HomeCard {
     fn new() -> Self {
-        let container = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(4)
             .width_request(160)
             .css_classes(["home-card"])
             .build();
 
-        let picture = gtk4::Picture::builder()
-            .content_fit(gtk4::ContentFit::Cover)
+        let picture = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Cover)
             .width_request(160)
             .height_request(240)
             .css_classes(["home-card-poster", "loading"])
             .build();
 
-        let progress_bar = gtk4::ProgressBar::builder()
-            .halign(gtk4::Align::Fill)
-            .valign(gtk4::Align::End)
+        let progress_bar = gtk::ProgressBar::builder()
+            .halign(gtk::Align::Fill)
+            .valign(gtk::Align::End)
             .css_classes(["watch-progress"])
             .visible(false)
             .build();
 
-        let overlay = gtk4::Overlay::new();
+        let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&picture));
         overlay.add_overlay(&progress_bar);
 
-        let title_label = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
-            .ellipsize(gtk4::pango::EllipsizeMode::End)
+        let title_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
             .max_width_chars(18)
             .lines(2)
             .wrap(true)
-            .wrap_mode(gtk4::pango::WrapMode::WordChar)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
             .css_classes(["home-card-title"])
             .build();
 
-        let subtitle_label = gtk4::Label::builder()
-            .halign(gtk4::Align::Start)
+        let subtitle_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
             .css_classes(["home-card-subtitle", "dim-label"])
             .visible(false)
             .build();
@@ -67,7 +67,7 @@ impl HomeCard {
         container.append(&title_label);
         container.append(&subtitle_label);
 
-        let gesture = gtk4::GestureClick::new();
+        let gesture = gtk::GestureClick::new();
         container.add_controller(gesture.clone());
 
         Self {
@@ -126,7 +126,7 @@ impl HomeCard {
         }
     }
 
-    fn set_poster(&self, texture: &gtk4::gdk::Texture) {
+    fn set_poster(&self, texture: &gtk::gdk::Texture) {
         self.picture.set_paintable(Some(texture));
         self.picture.remove_css_class("loading");
         self.picture.set_opacity(1.0);
@@ -138,19 +138,19 @@ pub struct HomeView {
     artwork_cache: Option<Arc<ArtworkCache>>,
     /// The vertical container holding all shelf sections.
     #[allow(dead_code)]
-    shelves_box: gtk4::Box,
+    shelves_box: gtk::Box,
     /// Continue Watching shelf.
-    cw_section: gtk4::Box,
-    cw_row: gtk4::Box,
+    cw_section: gtk::Box,
+    cw_row: gtk::Box,
     cw_cards: Vec<(HomeCard, MediaItem)>,
     /// Recently Added shelf.
-    ra_section: gtk4::Box,
-    ra_row: gtk4::Box,
+    ra_section: gtk::Box,
+    ra_row: gtk::Box,
     ra_cards: Vec<(HomeCard, MediaItem)>,
     /// Empty state page (shown when no data).
     empty_page: adw::StatusPage,
     /// Stack switches between shelves and empty page.
-    stack: gtk4::Stack,
+    stack: gtk::Stack,
     /// Prevent concurrent loads.
     loading: bool,
 }
@@ -202,7 +202,7 @@ pub enum HomeViewCmd {
     PosterLoaded {
         index: usize,
         row: PosterRow,
-        texture: gtk4::gdk::Texture,
+        texture: gtk::gdk::Texture,
     },
     Error(String),
 }
@@ -223,8 +223,8 @@ impl Component for HomeView {
 
     view! {
         #[root]
-        gtk4::Box {
-            set_orientation: gtk4::Orientation::Vertical,
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
             set_hexpand: true,
             set_vexpand: true,
         }
@@ -237,7 +237,7 @@ impl Component for HomeView {
     ) -> ComponentParts<Self> {
         let widgets = view_output!();
 
-        let stack = gtk4::Stack::new();
+        let stack = gtk::Stack::new();
 
         // Empty state
         let empty_page = adw::StatusPage::builder()
@@ -247,9 +247,9 @@ impl Component for HomeView {
             .build();
 
         // "Connect to Plex" button on the empty page
-        let connect_btn = gtk4::Button::builder()
+        let connect_btn = gtk::Button::builder()
             .label("Connect to Plex")
-            .halign(gtk4::Align::Center)
+            .halign(gtk::Align::Center)
             .css_classes(["pill", "suggested-action"])
             .build();
         let sender_btn = sender.output_sender().clone();
@@ -259,14 +259,14 @@ impl Component for HomeView {
         empty_page.set_child(Some(&connect_btn));
 
         // Shelves container
-        let scroll = gtk4::ScrolledWindow::builder()
+        let scroll = gtk::ScrolledWindow::builder()
             .hexpand(true)
             .vexpand(true)
-            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .hscrollbar_policy(gtk::PolicyType::Never)
             .build();
 
-        let shelves_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let shelves_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(16)
             .margin_start(24)
             .margin_end(24)
@@ -275,26 +275,26 @@ impl Component for HomeView {
             .build();
 
         // --- Continue Watching shelf ---
-        let cw_section = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let cw_section = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(8)
             .visible(false)
             .build();
 
-        let cw_label = gtk4::Label::builder()
+        let cw_label = gtk::Label::builder()
             .label("Continue Watching")
-            .halign(gtk4::Align::Start)
+            .halign(gtk::Align::Start)
             .css_classes(["title-2"])
             .build();
 
-        let cw_row = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
+        let cw_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .spacing(12)
             .build();
 
-        let cw_scroll = gtk4::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk4::PolicyType::Automatic)
-            .vscrollbar_policy(gtk4::PolicyType::Never)
+        let cw_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
             .max_content_height(300)
             .child(&cw_row)
             .build();
@@ -303,26 +303,26 @@ impl Component for HomeView {
         cw_section.append(&cw_scroll);
 
         // --- Recently Added shelf ---
-        let ra_section = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+        let ra_section = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .spacing(8)
             .visible(false)
             .build();
 
-        let ra_label = gtk4::Label::builder()
+        let ra_label = gtk::Label::builder()
             .label("Recently Added")
-            .halign(gtk4::Align::Start)
+            .halign(gtk::Align::Start)
             .css_classes(["title-2"])
             .build();
 
-        let ra_row = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Horizontal)
+        let ra_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .spacing(12)
             .build();
 
-        let ra_scroll = gtk4::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk4::PolicyType::Automatic)
-            .vscrollbar_policy(gtk4::PolicyType::Never)
+        let ra_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
             .max_content_height(300)
             .child(&ra_row)
             .build();
@@ -549,10 +549,10 @@ impl HomeView {
             let url_clone = artwork_url.clone();
             let sender_clone = sender.command_sender().clone();
 
-            gtk4::glib::spawn_future_local(async move {
+            gtk::glib::spawn_future_local(async move {
                 match cache_clone.get_or_download(&url_clone).await {
                     Ok(path) => {
-                        if let Ok(texture) = gtk4::gdk::Texture::from_filename(&path) {
+                        if let Ok(texture) = gtk::gdk::Texture::from_filename(&path) {
                             let _ = sender_clone.send(HomeViewCmd::PosterLoaded {
                                 index: idx,
                                 row,

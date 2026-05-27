@@ -1,4 +1,4 @@
-use gtk4::prelude::*;
+use gtk::prelude::*;
 
 /// Manages screensaver/idle inhibition during video playback.
 ///
@@ -19,7 +19,7 @@ impl ScreensaverInhibitor {
     }
 
     /// Inhibit the screensaver. No-op if already inhibited.
-    pub fn inhibit(&mut self, window: &impl IsA<gtk4::Window>) {
+    pub fn inhibit(&mut self, window: &impl IsA<gtk::Window>) {
         if self.inhibit_cookie.is_some() {
             return;
         }
@@ -31,7 +31,7 @@ impl ScreensaverInhibitor {
 
         let cookie = app.inhibit(
             Some(window),
-            gtk4::ApplicationInhibitFlags::IDLE,
+            gtk::ApplicationInhibitFlags::IDLE,
             Some("Video playback in progress"),
         );
         if cookie != 0 {
@@ -40,7 +40,7 @@ impl ScreensaverInhibitor {
     }
 
     /// Release screensaver inhibition. No-op if not inhibited.
-    pub fn uninhibit(&mut self, window: &impl IsA<gtk4::Window>) {
+    pub fn uninhibit(&mut self, window: &impl IsA<gtk::Window>) {
         let Some(cookie) = self.inhibit_cookie.take() else {
             return;
         };

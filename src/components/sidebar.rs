@@ -1,4 +1,4 @@
-use gtk4::prelude::*;
+use gtk::prelude::*;
 use relm4::prelude::*;
 
 use crate::models::library::LibraryType;
@@ -7,10 +7,10 @@ pub struct Sidebar {
     selected: LibraryType,
     home_selected: bool,
     syncing: bool,
-    listbox: gtk4::ListBox,
-    movies_count: gtk4::Label,
-    shows_count: gtk4::Label,
-    collections_count: gtk4::Label,
+    listbox: gtk::ListBox,
+    movies_count: gtk::Label,
+    shows_count: gtk::Label,
+    collections_count: gtk::Label,
 }
 
 #[derive(Debug)]
@@ -45,119 +45,119 @@ impl SimpleComponent for Sidebar {
     type Output = SidebarOutput;
 
     view! {
-        gtk4::Box {
-            set_orientation: gtk4::Orientation::Vertical,
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
             set_width_request: 220,
 
             adw::HeaderBar {
                 set_show_end_title_buttons: false,
                 #[wrap(Some)]
-                set_title_widget = &gtk4::Label {
+                set_title_widget = &gtk::Label {
                     set_label: "Reel",
                     add_css_class: "title",
                 },
             },
 
             #[name = "listbox"]
-            gtk4::ListBox {
+            gtk::ListBox {
                 add_css_class: "navigation-sidebar",
-                set_selection_mode: gtk4::SelectionMode::Single,
+                set_selection_mode: gtk::SelectionMode::Single,
 
                 // --- Home row ---
-                gtk4::ListBoxRow {
+                gtk::ListBoxRow {
                     set_selectable: true,
-                    gtk4::Box {
-                        set_orientation: gtk4::Orientation::Horizontal,
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
                         set_spacing: 12,
                         set_margin_all: 8,
 
-                        gtk4::Image {
+                        gtk::Image {
                             set_icon_name: Some("go-home-symbolic"),
                         },
-                        gtk4::Label {
+                        gtk::Label {
                             set_label: "Home",
                             set_hexpand: true,
-                            set_halign: gtk4::Align::Start,
+                            set_halign: gtk::Align::Start,
                         },
                     },
                 },
 
                 // --- Movies row ---
-                gtk4::ListBoxRow {
+                gtk::ListBoxRow {
                     set_selectable: true,
-                    gtk4::Box {
-                        set_orientation: gtk4::Orientation::Horizontal,
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
                         set_spacing: 12,
                         set_margin_all: 8,
 
-                        gtk4::Image {
+                        gtk::Image {
                             set_icon_name: Some("video-display-symbolic"),
                         },
                         #[name = "movies_label"]
-                        gtk4::Label {
+                        gtk::Label {
                             set_label: "Movies",
                             set_hexpand: true,
-                            set_halign: gtk4::Align::Start,
+                            set_halign: gtk::Align::Start,
                         },
                         #[name = "movies_count"]
-                        gtk4::Label {
+                        gtk::Label {
                             add_css_class: "dim-label",
                             add_css_class: "caption",
-                            set_halign: gtk4::Align::End,
+                            set_halign: gtk::Align::End,
                             set_margin_end: 4,
                         },
                     },
                 },
 
                 // --- TV Shows row ---
-                gtk4::ListBoxRow {
+                gtk::ListBoxRow {
                     set_selectable: true,
-                    gtk4::Box {
-                        set_orientation: gtk4::Orientation::Horizontal,
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
                         set_spacing: 12,
                         set_margin_all: 8,
 
-                        gtk4::Image {
+                        gtk::Image {
                             set_icon_name: Some("view-list-symbolic"),
                         },
                         #[name = "shows_label"]
-                        gtk4::Label {
+                        gtk::Label {
                             set_label: "TV Shows",
                             set_hexpand: true,
-                            set_halign: gtk4::Align::Start,
+                            set_halign: gtk::Align::Start,
                         },
                         #[name = "shows_count"]
-                        gtk4::Label {
+                        gtk::Label {
                             add_css_class: "dim-label",
                             add_css_class: "caption",
-                            set_halign: gtk4::Align::End,
+                            set_halign: gtk::Align::End,
                             set_margin_end: 4,
                         },
                     },
                 },
 
                 // --- Collections row ---
-                gtk4::ListBoxRow {
+                gtk::ListBoxRow {
                     set_selectable: true,
-                    gtk4::Box {
-                        set_orientation: gtk4::Orientation::Horizontal,
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
                         set_spacing: 12,
                         set_margin_all: 8,
 
-                        gtk4::Image {
+                        gtk::Image {
                             set_icon_name: Some("view-grid-symbolic"),
                         },
                         #[name = "collections_label"]
-                        gtk4::Label {
+                        gtk::Label {
                             set_label: "Collections",
                             set_hexpand: true,
-                            set_halign: gtk4::Align::Start,
+                            set_halign: gtk::Align::Start,
                         },
                         #[name = "collections_count"]
-                        gtk4::Label {
+                        gtk::Label {
                             add_css_class: "dim-label",
                             add_css_class: "caption",
-                            set_halign: gtk4::Align::End,
+                            set_halign: gtk::Align::End,
                             set_margin_end: 4,
                         },
                     },
