@@ -3,8 +3,8 @@ mod media_card;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use adw;
 use gtk::prelude::*;
-use adw as adw;
 use relm4::prelude::*;
 use relm4::typed_view::grid::TypedGridView;
 use tracing::info;
@@ -94,6 +94,11 @@ pub enum LibraryViewMsg {
     MarkWatchedAt(u32),
     /// Mark an item at grid position as unwatched.
     MarkUnwatchedAt(u32),
+    /// Show watch-state context menu at grid coordinates.
+    ContextMenuAt {
+        x: f64,
+        y: f64,
+    },
 }
 
 impl std::fmt::Debug for LibraryViewMsg {
@@ -116,6 +121,7 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::SetWatchData(data) => write!(f, "SetWatchData({} items)", data.len()),
             Self::MarkWatchedAt(pos) => write!(f, "MarkWatchedAt({pos})"),
             Self::MarkUnwatchedAt(pos) => write!(f, "MarkUnwatchedAt({pos})"),
+            Self::ContextMenuAt { x, y } => write!(f, "ContextMenuAt({x}, {y})"),
         }
     }
 }
@@ -207,10 +213,11 @@ impl Component for LibraryView {
         let grid_view = grid.view.clone();
         grid_view.set_min_columns(3);
         grid_view.set_max_columns(10);
-        grid_view.set_margin_start(12);
-        grid_view.set_margin_end(12);
-        grid_view.set_margin_top(12);
-        grid_view.set_margin_bottom(12);
+        grid_view.set_margin_start(20);
+        grid_view.set_margin_end(20);
+        grid_view.set_margin_top(16);
+        grid_view.set_margin_bottom(16);
+        grid_view.set_single_click_activate(true);
 
         let sender_activate = sender.input_sender().clone();
         grid_view.connect_activate(move |_view, position| {
@@ -222,12 +229,8 @@ impl Component for LibraryView {
             .button(3) // secondary button
             .build();
         let sender_ctx = sender.input_sender().clone();
-        let grid_view_ctx = grid_view.clone();
         right_click.connect_released(move |gesture, _n_press, x, y| {
-            // Find which item was right-clicked by hit-testing
-            if let Some(position) = pick_grid_position(&grid_view_ctx, x, y) {
-                show_watch_context_menu(&grid_view_ctx, &sender_ctx, position, x, y);
-            }
+            let _ = sender_ctx.send(LibraryViewMsg::ContextMenuAt { x, y });
             gesture.set_state(gtk::EventSequenceState::Claimed);
         });
         grid_view.add_controller(right_click);
@@ -270,6 +273,7 @@ impl Component for LibraryView {
             .margin_end(12)
             .margin_top(4)
             .margin_bottom(4)
+            .css_classes(["library-filter-bar"])
             .build();
 
         // Genre chips in a horizontally scrollable row
@@ -311,8 +315,7 @@ impl Component for LibraryView {
             {
                 let text = string_obj.string();
                 if let Ok(decade) = text.trim_end_matches('s').parse::<i32>() {
-                    let _ =
-                        sender_decade.send(LibraryViewMsg::DecadeFilterChanged(Some(decade)));
+                    let _ = sender_decade.send(LibraryViewMsg::DecadeFilterChanged(Some(decade)));
                 }
             }
         });
@@ -406,13 +409,14 @@ impl Component for LibraryView {
             .margin_end(16)
             .margin_top(8)
             .margin_bottom(8)
+            .css_classes(["library-section"])
             .visible(false)
             .build();
 
         let cw_label = gtk::Label::builder()
             .label("Continue Watching")
             .halign(gtk::Align::Start)
-            .css_classes(["title-3"])
+            .css_classes(["library-section-title"])
             .build();
 
         let continue_watching_box = gtk::Box::builder()
@@ -423,7 +427,7 @@ impl Component for LibraryView {
         let cw_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Never)
-            .max_content_height(200)
+            .max_content_height(240)
             .child(&continue_watching_box)
             .build();
 
@@ -438,13 +442,14 @@ impl Component for LibraryView {
             .margin_end(16)
             .margin_top(8)
             .margin_bottom(8)
+            .css_classes(["library-section"])
             .visible(false)
             .build();
 
         let ra_label = gtk::Label::builder()
             .label("Recently Added")
             .halign(gtk::Align::Start)
-            .css_classes(["title-3"])
+            .css_classes(["library-section-title"])
             .build();
 
         let recently_added_box = gtk::Box::builder()
@@ -455,7 +460,7 @@ impl Component for LibraryView {
         let ra_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Never)
-            .max_content_height(200)
+            .max_content_height(240)
             .child(&recently_added_box)
             .build();
 
@@ -479,6 +484,7 @@ impl Component for LibraryView {
 
         // Apply .rich-list for spacious grid style
         grid_view.add_css_class("rich-list");
+        grid_view.add_css_class("library-grid");
 
         let model = Self {
             grid,
@@ -725,6 +731,17 @@ impl Component for LibraryView {
                     if let Some(ref media_item) = borrow.media_item {
                         let _ = sender.output(LibraryViewOutput::MarkUnwatched(media_item.clone()));
                     }
+                }
+            }
+            LibraryViewMsg::ContextMenuAt { x, y } => {
+                if let Some(position) = self.pick_grid_position_at(x, y) {
+                    show_watch_context_menu(
+                        &self.grid.view,
+                        &sender.input_sender(),
+                        position,
+                        x,
+                        y,
+                    );
                 }
             }
             LibraryViewMsg::SetWatchData(data) => {
@@ -1006,6 +1023,29 @@ impl LibraryView {
         self.filter_dot.set_visible(has_active);
     }
 
+    /// Resolve a grid item index from click coordinates via widget hit-testing.
+    fn pick_grid_position_at(&self, x: f64, y: f64) -> Option<u32> {
+        let grid_view = &self.grid.view;
+        let mut widget = grid_view.pick(x, y, gtk::PickFlags::DEFAULT)?;
+        loop {
+            if widget.has_css_class("media-card") {
+                let media_id = widget.widget_name();
+                if media_id.is_empty() {
+                    return None;
+                }
+                for i in 0..self.grid.len() {
+                    if let Some(item) = self.grid.get(i) {
+                        if item.borrow().media_id == media_id {
+                            return Some(i);
+                        }
+                    }
+                }
+                return None;
+            }
+            widget = widget.parent()?;
+        }
+    }
+
     /// Build a shelf card widget (poster + optional progress bar + title).
     /// Used by Continue Watching and Recently Added shelves.
     fn build_shelf_card(
@@ -1020,19 +1060,27 @@ impl LibraryView {
         let card = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(4)
-            .width_request(120)
+            .width_request(140)
             .css_classes(["media-card"])
             .build();
 
         let picture = gtk::Picture::builder()
             .content_fit(gtk::ContentFit::Cover)
-            .width_request(120)
-            .height_request(180)
+            .width_request(140)
+            .height_request(210)
             .css_classes(["media-card-poster"])
             .build();
 
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&picture));
+
+        let scrim = gtk::Box::builder()
+            .halign(gtk::Align::Fill)
+            .valign(gtk::Align::End)
+            .height_request(48)
+            .css_classes(["media-card-scrim"])
+            .build();
+        overlay.add_overlay(&scrim);
 
         // Progress bar (only for continue watching)
         if let Some(pct) = progress {
@@ -1052,12 +1100,16 @@ impl LibraryView {
             .child(&overlay)
             .build();
 
+        let title_text = match item.year {
+            Some(year) => format!("{} · {year}", item.title),
+            None => item.title.clone(),
+        };
         let title = gtk::Label::builder()
-            .label(&item.title)
+            .label(&title_text)
             .halign(gtk::Align::Start)
             .ellipsize(gtk::pango::EllipsizeMode::End)
-            .max_width_chars(14)
-            .css_classes(["caption"])
+            .max_width_chars(16)
+            .css_classes(["media-card-title"])
             .build();
 
         card.append(&frame);
@@ -1198,28 +1250,6 @@ fn labeled_row(label_text: &str, control: &impl gtk::prelude::IsA<gtk::Widget>) 
     row.append(&label);
     row.append(control);
     row
-}
-
-/// Find which grid item is at the given (x, y) coordinates.
-/// Returns the position index if found.
-fn pick_grid_position(grid_view: &gtk::GridView, _x: f64, _y: f64) -> Option<u32> {
-    // Use the selection model to get the item at the click position
-    // GTK GridView doesn't have a direct pick method, so we iterate
-    // and check which child contains the point
-    let model = grid_view.model()?;
-    let n_items = model.n_items();
-    if n_items == 0 {
-        return None;
-    }
-
-    // Use the selected item from the selection model
-    let selection = model.downcast_ref::<gtk::SingleSelection>()?;
-    let selected = selection.selected();
-    if selected < n_items {
-        Some(selected)
-    } else {
-        None
-    }
 }
 
 /// Show a context menu popover at the given position with Watch/Unwatch actions.

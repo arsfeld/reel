@@ -51,6 +51,13 @@ impl MediaCardData {
             placeholder_widget: None,
         }
     }
+
+    fn title_with_year(&self) -> String {
+        match self.year {
+            Some(year) => format!("{} · {year}", self.title),
+            None => self.title.clone(),
+        }
+    }
 }
 
 pub struct MediaCardWidgets {
@@ -70,7 +77,9 @@ impl RelmGridItem for MediaCardData {
     type Root = gtk::Box;
     type Widgets = MediaCardWidgets;
 
-    fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
+    fn setup(list_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
+        list_item.set_activatable(true);
+
         let container = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(0)
@@ -135,9 +144,18 @@ impl RelmGridItem for MediaCardData {
             .visible(false)
             .build();
 
+        // Bottom gradient scrim for progress/badges readability
+        let scrim = gtk::Box::builder()
+            .halign(gtk::Align::Fill)
+            .valign(gtk::Align::End)
+            .height_request(56)
+            .css_classes(["media-card-scrim"])
+            .build();
+
         // Overlay stacks badges, placeholder icon, and progress on top of the poster
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&picture));
+        overlay.add_overlay(&scrim);
         overlay.add_overlay(&placeholder_icon);
         overlay.add_overlay(&resolution_badge);
         overlay.add_overlay(&rating_badge);
@@ -163,6 +181,7 @@ impl RelmGridItem for MediaCardData {
         let year_label = gtk::Label::builder()
             .halign(gtk::Align::Start)
             .css_classes(["media-card-year", "dim-label"])
+            .visible(false)
             .build();
 
         container.append(&frame);
@@ -190,14 +209,9 @@ impl RelmGridItem for MediaCardData {
         widgets.picture.set_width_request(self.card_width);
         widgets.picture.set_height_request(self.card_height);
 
-        widgets.title_label.set_label(&self.title);
-
-        if let Some(year) = self.year {
-            widgets.year_label.set_label(&year.to_string());
-            widgets.year_label.set_visible(true);
-        } else {
-            widgets.year_label.set_visible(false);
-        }
+        root.set_widget_name(&self.media_id);
+        widgets.title_label.set_label(&self.title_with_year());
+        widgets.year_label.set_visible(false);
 
         let has_poster = self.poster_texture.is_some();
 
@@ -234,7 +248,7 @@ impl RelmGridItem for MediaCardData {
         if has_poster {
             if let Some(rating) = self.rating {
                 if rating > 0.0 {
-                    widgets.rating_badge.set_label(&format!("{rating:.1}"));
+                    widgets.rating_badge.set_label(&format!("★ {rating:.1}"));
                     widgets.rating_badge.set_visible(true);
                 } else {
                     widgets.rating_badge.set_visible(false);
