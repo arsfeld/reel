@@ -12,7 +12,7 @@ use tracing::info;
 use crate::models::library::LibraryType;
 use crate::models::media::MediaItem;
 use crate::services::artwork::ArtworkCache;
-use crate::services::library_filter::{self, FilterState, GridDensity, SortOrder};
+use crate::services::library_filter::{self, FilterState, GridDensity, SortOrder, ViewMode};
 use crate::services::media_source::MediaSource;
 
 use media_card::MediaCardData;
@@ -30,6 +30,8 @@ pub struct LibraryView {
     error_page: adw::StatusPage,
     no_results_page: adw::StatusPage,
     grid_page: gtk::ScrolledWindow,
+    /// Overlay wrapping grid_page + alphabet bar.
+    grid_overlay: gtk::Overlay,
     search_bar: gtk::SearchBar,
     search_entry: gtk::SearchEntry,
     // Filter/sort bar widgets
@@ -69,6 +71,24 @@ pub struct LibraryView {
     /// True when an async library fetch is in flight; prevents redundant
     /// concurrent LoadLibrary calls from starting duplicate fetches.
     loading_in_progress: bool,
+    /// Active filter count badge shown on the filter button.
+    filter_count_badge: gtk::Label,
+    /// Hero header container (icon + title + subtitle).
+    library_hero: gtk::Box,
+    /// Hero subtitle label (e.g., "1,247 movies · Browse your collection").
+    library_hero_subtitle: gtk::Label,
+    /// View mode: grid or list.
+    view_mode: ViewMode,
+    /// Skeleton grid container for loading state.
+    skeleton_grid: gtk::Box,
+    /// Scrolled window wrapping skeleton grid.
+    skeleton_scroll: gtk::ScrolledWindow,
+    /// Alphabet jump bar overlay.
+    alphabet_bar: gtk::Box,
+    /// List view widget (alternative to grid).
+    list_box: gtk::ListBox,
+    /// Scrolled window wrapping the list view.
+    list_scroll: gtk::ScrolledWindow,
 }
 
 #[allow(dead_code)]
@@ -86,6 +106,7 @@ pub enum LibraryViewMsg {
     ClearFilters,
     FocusSearch,
     DensityChanged(GridDensity),
+    ViewModeChanged(ViewMode),
     LoadCollections,
     LoadCollectionItems(String),
     /// Set watch progress data: media_item_id -> (progress_fraction, watched).
@@ -116,6 +137,7 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::ClearFilters => write!(f, "ClearFilters"),
             Self::FocusSearch => write!(f, "FocusSearch"),
             Self::DensityChanged(d) => write!(f, "DensityChanged({d:?})"),
+            Self::ViewModeChanged(vm) => write!(f, "ViewModeChanged({vm:?})"),
             Self::LoadCollections => write!(f, "LoadCollections"),
             Self::LoadCollectionItems(key) => write!(f, "LoadCollectionItems({key})"),
             Self::SetWatchData(data) => write!(f, "SetWatchData({} items)", data.len()),
@@ -390,15 +412,68 @@ impl Component for LibraryView {
             .visible(false)
             .build();
 
+        // Active filter count badge (shows on filter button when filters active)
+        let filter_count_badge = gtk::Label::builder()
+            .css_classes(["filter-count-badge"])
+            .visible(false)
+            .build();
+
+        let filter_btn_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(2)
+            .build();
+        filter_btn_box.append(&filter_button);
+        filter_btn_box.append(&filter_count_badge);
+
+        // --- View mode toggle (grid / list) ---
+        let view_mode_toggle = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(0)
+            .css_classes(["view-mode-toggle", "linked"])
+            .build();
+
+        let grid_btn = gtk::ToggleButton::builder()
+            .icon_name("view-grid-symbolic")
+            .tooltip_text("Grid view")
+            .active(true)
+            .build();
+
+        let list_btn = gtk::ToggleButton::builder()
+            .icon_name("view-list-symbolic")
+            .tooltip_text("List view")
+            .build();
+
+        // Wire toggle behavior: exactly one active at a time
+        let list_btn_weak = list_btn.clone();
+        let sender_vm_g = sender.input_sender().clone();
+        grid_btn.connect_toggled(move |btn| {
+            if btn.is_active() {
+                list_btn_weak.set_active(false);
+                let _ = sender_vm_g.send(LibraryViewMsg::ViewModeChanged(ViewMode::Grid));
+            }
+        });
+
+        let grid_btn_weak2 = grid_btn.clone();
+        let sender_vm_l = sender.input_sender().clone();
+        list_btn.connect_toggled(move |btn| {
+            if btn.is_active() {
+                grid_btn_weak2.set_active(false);
+                let _ = sender_vm_l.send(LibraryViewMsg::ViewModeChanged(ViewMode::List));
+            }
+        });
+
+        view_mode_toggle.append(&grid_btn);
+        view_mode_toggle.append(&list_btn);
+
         filter_bar.append(&genre_scroll);
         filter_bar.append(&filter_dot);
-        filter_bar.append(&filter_button);
+        filter_bar.append(&filter_btn_box);
+        filter_bar.append(&view_mode_toggle);
 
         stack.add_child(&loading_page);
         stack.add_child(&empty_page);
         stack.add_child(&error_page);
         stack.add_child(&no_results_page);
-        stack.add_child(&grid_page);
         stack.set_visible_child(&empty_page);
 
         // Continue Watching section (hidden initially)
@@ -467,17 +542,114 @@ impl Component for LibraryView {
         recently_added_section.append(&ra_label);
         recently_added_section.append(&ra_scroll);
 
-        // Library title showing type + count (e.g., "Movies (1,247)")
+        // --- Library hero header (icon + title + subtitle) ---
+        let library_hero = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .css_classes(["library-hero"])
+            .build();
+
+        let hero_icon = gtk::Image::builder()
+            .icon_name("folder-videos-symbolic")
+            .pixel_size(36)
+            .css_classes(["library-hero-icon"])
+            .build();
+
+        let hero_text = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(0)
+            .build();
+
         let library_title = gtk::Label::builder()
             .halign(gtk::Align::Start)
-            .margin_start(16)
-            .margin_top(4)
-            .css_classes(["title-4"])
+            .css_classes(["library-hero-title"])
             .build();
+
+        let library_hero_subtitle = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .css_classes(["library-hero-subtitle", "dim-label"])
+            .build();
+
+        hero_text.append(&library_title);
+        hero_text.append(&library_hero_subtitle);
+        library_hero.append(&hero_icon);
+        library_hero.append(&hero_text);
+
+        // --- Skeleton loading grid (shimmer placeholders) ---
+        let skeleton_grid = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .hexpand(true)
+            .vexpand(true)
+            .visible(false)
+            .build();
+
+        let skeleton_scroll = gtk::ScrolledWindow::builder()
+            .hexpand(true)
+            .vexpand(true)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .child(&skeleton_grid)
+            .build();
+
+        // --- Alphabet jump bar ---
+        let alphabet_bar = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(0)
+            .valign(gtk::Align::Center)
+            .halign(gtk::Align::End)
+            .css_classes(["alphabet-bar"])
+            .visible(false)
+            .build();
+
+        // Populate alphabet bar with A-Z letter buttons
+        let sender_alpha = sender.input_sender().clone();
+        for letter in 'A'..='Z' {
+            let btn = gtk::Button::builder()
+                .label(&letter.to_string())
+                .css_classes(["flat"])
+                .build();
+            let sender_l = sender_alpha.clone();
+            btn.connect_clicked(move |_| {
+                let _ = sender_l.send(LibraryViewMsg::SearchChanged(letter.to_string()));
+            });
+            alphabet_bar.append(&btn);
+        }
+
+        // Add "#" button for numeric/symbol titles
+        let hash_btn = gtk::Button::builder()
+            .label("#")
+            .css_classes(["flat"])
+            .build();
+        let sender_hash = sender_alpha.clone();
+        hash_btn.connect_clicked(move |_| {
+            let _ = sender_hash.send(LibraryViewMsg::SearchChanged("#".to_string()));
+        });
+        alphabet_bar.append(&hash_btn);
+
+        // Overlay alphabet bar on top of the scrolled grid page
+        let grid_overlay = gtk::Overlay::new();
+        grid_overlay.set_child(Some(&grid_page));
+        grid_overlay.add_overlay(&alphabet_bar);
+
+        // --- List view (compact alternative to grid) ---
+        let list_box = gtk::ListBox::builder()
+            .css_classes(["rich-list"])
+            .selection_mode(gtk::SelectionMode::None)
+            .build();
+
+        let list_scroll = gtk::ScrolledWindow::builder()
+            .hexpand(true)
+            .vexpand(true)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .child(&list_box)
+            .build();
+
+        stack.add_child(&grid_overlay);
+        stack.add_child(&list_scroll);
+        stack.add_child(&skeleton_scroll);
 
         root.append(&search_bar);
         root.append(&filter_bar);
-        root.append(&library_title);
+        root.append(&library_hero);
         root.append(&continue_watching_section);
         root.append(&recently_added_section);
         root.append(&stack);
@@ -497,6 +669,7 @@ impl Component for LibraryView {
             error_page,
             no_results_page,
             grid_page,
+            grid_overlay,
             search_bar,
             search_entry,
             filter_bar,
@@ -523,6 +696,15 @@ impl Component for LibraryView {
             recently_added_box,
             poster_load_tracker: None,
             loading_in_progress: false,
+            filter_count_badge,
+            library_hero,
+            library_hero_subtitle,
+            view_mode: ViewMode::default(),
+            skeleton_grid,
+            skeleton_scroll,
+            alphabet_bar,
+            list_box,
+            list_scroll,
         };
 
         ComponentParts { model, widgets }
@@ -539,7 +721,7 @@ impl Component for LibraryView {
                 // If same library type and we already have items, just show existing data.
                 // This preserves filter/sort state when navigating back from detail pages.
                 if library_type == self.library_type && !self.all_items.is_empty() {
-                    self.stack.set_visible_child(&self.grid_page);
+                    self.stack.set_visible_child(&self.grid_overlay);
                     return;
                 }
 
@@ -559,7 +741,18 @@ impl Component for LibraryView {
 
                 self.library_type = library_type;
                 self.loading_in_progress = true;
-                self.stack.set_visible_child(&self.loading_page);
+
+                // Update hero header right away with library name
+                let type_name = match library_type {
+                    LibraryType::Movie => "Movies",
+                    LibraryType::Show => "TV Shows",
+                };
+                self.library_title.set_label(type_name);
+                self.library_hero_subtitle.set_label("Loading...");
+
+                // Build skeleton grid placeholders for a more polished loading state
+                self.build_skeleton_grid();
+                self.stack.set_visible_child(&self.skeleton_scroll);
 
                 let Some(source) = self.source.clone() else {
                     self.loading_in_progress = false;
@@ -674,6 +867,10 @@ impl Component for LibraryView {
                 self.grid_density = density;
                 // Update grid view column constraints
                 self.grid.view.set_min_columns(density.min_columns());
+                self.rebuild_grid(&sender);
+            }
+            LibraryViewMsg::ViewModeChanged(view_mode) => {
+                self.view_mode = view_mode;
                 self.rebuild_grid(&sender);
             }
             LibraryViewMsg::ClearFilters => {
@@ -845,6 +1042,101 @@ impl Component for LibraryView {
 }
 
 impl LibraryView {
+    /// Build a compact list view from the filtered indices.
+    fn build_list_view(&mut self, filtered_indices: &[usize], sender: &ComponentSender<Self>) {
+        // Clear existing rows
+        while let Some(child) = self.list_box.first_child() {
+            self.list_box.remove(&child);
+        }
+
+        for &item_idx in filtered_indices {
+            let item = &self.all_items[item_idx];
+            let row = gtk::ListBoxRow::builder()
+                .css_classes(["library-list-row"])
+                .activatable(true)
+                .build();
+
+            let hbox = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(12)
+                .margin_start(8)
+                .margin_end(8)
+                .margin_top(6)
+                .margin_bottom(6)
+                .build();
+
+            // Small poster thumbnail
+            let poster = gtk::Picture::builder()
+                .content_fit(gtk::ContentFit::Cover)
+                .width_request(48)
+                .height_request(72)
+                .css_classes(["library-list-poster"])
+                .build();
+
+            // Try to load poster from cache
+            if let (Some(poster_path), Some(source)) = (&item.poster_path, &self.source) {
+                let url = source.artwork_url(poster_path, 96, 144);
+                if let Some(texture) = self.texture_cache.get(&url) {
+                    poster.set_paintable(Some(texture));
+                }
+            }
+
+            // Text column
+            let text_col = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(2)
+                .valign(gtk::Align::Center)
+                .build();
+
+            let title_text = match item.year {
+                Some(year) => format!("{} ({})", item.title, year),
+                None => item.title.clone(),
+            };
+            let title = gtk::Label::builder()
+                .label(&title_text)
+                .halign(gtk::Align::Start)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .css_classes(["library-list-title"])
+                .build();
+
+            let meta_parts: Vec<String> = [
+                item.content_rating.clone(),
+                item.video_resolution
+                    .as_ref()
+                    .map(|r| MediaItem::format_resolution(r).to_string()),
+                item.format_runtime(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+
+            let meta = gtk::Label::builder()
+                .label(&meta_parts.join(" · "))
+                .halign(gtk::Align::Start)
+                .css_classes(["library-list-meta", "dim-label"])
+                .visible(!meta_parts.is_empty())
+                .build();
+
+            text_col.append(&title);
+            text_col.append(&meta);
+
+            hbox.append(&poster);
+            hbox.append(&text_col);
+            row.set_child(Some(&hbox));
+
+            // Click handler → navigate to detail
+            let item_clone = item.clone();
+            let output_sender = sender.output_sender().clone();
+            let gesture = gtk::GestureClick::new();
+            gesture.connect_released(move |_, _, _, _| {
+                let _ = output_sender.send(LibraryViewOutput::ShowDetail(item_clone.clone()));
+            });
+            row.add_controller(gesture);
+
+            self.list_box.append(&row);
+        }
+    }
+
     /// Rebuild the grid from all_items using current search/filter/sort state.
     fn rebuild_grid(&mut self, sender: &ComponentSender<Self>) {
         let start = std::time::Instant::now();
@@ -927,22 +1219,121 @@ impl LibraryView {
             start.elapsed()
         );
 
-        self.stack.set_visible_child(&self.grid_page);
+        // Show appropriate view based on mode
+        match self.view_mode {
+            ViewMode::Grid => {
+                self.stack.set_visible_child(&self.grid_overlay);
+            }
+            ViewMode::List => {
+                self.build_list_view(&filtered_indices, sender);
+                self.stack.set_visible_child(&self.list_scroll);
+            }
+        }
 
-        // Update library title header
+        // Update library hero header
         let type_name = match self.library_type {
             LibraryType::Movie => "Movies",
             LibraryType::Show => "TV Shows",
         };
         let showing_count = filtered_indices.len();
         let total_count = self.all_items.len();
+        self.library_title.set_label(type_name);
         if showing_count == total_count {
-            self.library_title
-                .set_label(&format!("{type_name} ({total_count})"));
+            self.library_hero_subtitle
+                .set_label(&format!("{total_count} {type_name_lower} · Browse your collection",
+                    type_name_lower = match self.library_type {
+                        LibraryType::Movie => "movies",
+                        LibraryType::Show => "shows",
+                    }));
         } else {
-            self.library_title
-                .set_label(&format!("{type_name} ({showing_count} of {total_count})"));
+            self.library_hero_subtitle
+                .set_label(&format!("{showing_count} of {total_count} {type_name_lower} · Filtered",
+                    type_name_lower = match self.library_type {
+                        LibraryType::Movie => "movies",
+                        LibraryType::Show => "shows",
+                    }));
         }
+
+        // Show shelves when data exists
+        self.rebuild_continue_watching(sender);
+        self.rebuild_recently_added(sender);
+
+        // Show alphabet bar when sorting by title (most useful for letter jumping)
+        let show_alpha = matches!(
+            self.sort_order,
+            SortOrder::TitleAsc | SortOrder::TitleDesc
+        ) && filtered_indices.len() > 20;
+        self.alphabet_bar.set_visible(show_alpha);
+    }
+
+    /// Build a skeleton grid of shimmer placeholder cards for the loading state.
+    fn build_skeleton_grid(&mut self) {
+        // Clear existing placeholders
+        while let Some(child) = self.skeleton_grid.first_child() {
+            self.skeleton_grid.remove(&child);
+        }
+
+        let card_w = self.grid_density.card_width();
+        let card_h = self.grid_density.card_height();
+
+        // Build a grid-like layout of skeleton cards
+        let flow = gtk::FlowBox::builder()
+            .hexpand(true)
+            .margin_start(20)
+            .margin_end(20)
+            .margin_top(16)
+            .margin_bottom(16)
+            .selection_mode(gtk::SelectionMode::None)
+            .row_spacing(12)
+            .column_spacing(0)
+            .build();
+
+        let placeholder_count = self.grid_density.min_columns() as i32 * 3;
+        for i in 0..placeholder_count {
+            let card = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(6)
+                .width_request(card_w)
+                .margin_start(6)
+                .margin_end(10)
+                .build();
+
+            let poster = gtk::Box::builder()
+                .width_request(card_w)
+                .height_request(card_h)
+                .css_classes(["skeleton-card"])
+                .build();
+
+            let title_line = gtk::Box::builder()
+                .width_request((card_w as f64 * 0.85) as i32)
+                .height_request(12)
+                .css_classes(["skeleton-card"])
+                .halign(gtk::Align::Start)
+                .margin_start(3)
+                .build();
+
+            // Stagger animation delay
+            let delay_ms = (i % 6) as u32 * 80;
+            let poster_clone = poster.clone();
+            let title_clone = title_line.clone();
+            gtk::glib::timeout_add_local_once(
+                std::time::Duration::from_millis(delay_ms as u64),
+                move || {
+                    poster_clone.set_opacity(1.0);
+                    title_clone.set_opacity(1.0);
+                },
+            );
+
+            // Start invisible, fade in with stagger
+            poster.set_opacity(0.0);
+            title_line.set_opacity(0.0);
+
+            card.append(&poster);
+            card.append(&title_line);
+            flow.append(&card);
+        }
+
+        self.skeleton_grid.append(&flow);
     }
 
     /// Rebuild genre toggle chips from current all_items.
@@ -1016,11 +1407,26 @@ impl LibraryView {
         }
     }
 
-    /// Show/hide the clear filters button and filter-dot indicator.
+    /// Show/hide the clear filters button, filter-dot indicator, and filter count badge.
     fn update_clear_button_visibility(&self) {
         let has_active = self.filter_state.is_active() || !self.search_query.is_empty();
         self.clear_filters_btn.set_visible(has_active);
         self.filter_dot.set_visible(has_active);
+
+        // Update filter count badge
+        let mut count = 0u32;
+        if let Some(ref gf) = self.filter_state.genres {
+            count += gf.selected_genres.len() as u32;
+        }
+        if self.filter_state.decade.is_some() {
+            count += 1;
+        }
+        if count > 0 {
+            self.filter_count_badge.set_label(&count.to_string());
+            self.filter_count_badge.set_visible(true);
+        } else {
+            self.filter_count_badge.set_visible(false);
+        }
     }
 
     /// Resolve a grid item index from click coordinates via widget hit-testing.

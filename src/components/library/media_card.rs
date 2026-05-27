@@ -17,6 +17,8 @@ pub struct MediaCardData {
     pub video_resolution: Option<String>,
     /// Numeric rating for badge display (e.g., 8.0).
     pub rating: Option<f64>,
+    /// Content rating for badge display (e.g., "PG-13", "R", "TV-MA").
+    pub content_rating: Option<String>,
     /// Card dimensions (set by density; default 180x270).
     pub card_width: i32,
     pub card_height: i32,
@@ -43,6 +45,7 @@ impl MediaCardData {
             media_item: Some(item.clone()),
             video_resolution: item.video_resolution.clone(),
             rating: item.rating,
+            content_rating: item.content_rating.clone(),
             card_width: 180,
             card_height: 270,
             watch_progress: None,
@@ -69,6 +72,7 @@ pub struct MediaCardWidgets {
     year_label: gtk::Label,
     resolution_badge: gtk::Label,
     rating_badge: gtk::Label,
+    content_rating_badge: gtk::Label,
     progress_bar: gtk::ProgressBar,
     watched_icon: gtk::Image,
 }
@@ -124,6 +128,16 @@ impl RelmGridItem for MediaCardData {
             .visible(false)
             .build();
 
+        // Content rating badge (bottom-left of poster, e.g. "PG-13", "R")
+        let content_rating_badge = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::End)
+            .margin_bottom(10)
+            .margin_start(8)
+            .css_classes(["content-rating-badge"])
+            .visible(false)
+            .build();
+
         // Watch progress bar (bottom of poster, visible for in-progress items)
         let progress_bar = gtk::ProgressBar::builder()
             .halign(gtk::Align::Fill)
@@ -159,6 +173,7 @@ impl RelmGridItem for MediaCardData {
         overlay.add_overlay(&placeholder_icon);
         overlay.add_overlay(&resolution_badge);
         overlay.add_overlay(&rating_badge);
+        overlay.add_overlay(&content_rating_badge);
         overlay.add_overlay(&progress_bar);
         overlay.add_overlay(&watched_icon);
 
@@ -196,6 +211,7 @@ impl RelmGridItem for MediaCardData {
             year_label,
             resolution_badge,
             rating_badge,
+            content_rating_badge,
             progress_bar,
             watched_icon,
         };
@@ -229,6 +245,18 @@ impl RelmGridItem for MediaCardData {
             widgets.picture.add_css_class("loading");
             widgets.picture.set_opacity(0.0);
             widgets.placeholder_icon.set_visible(true);
+        }
+
+        // Content rating badge: bottom-left, visible with poster + content rating
+        if has_poster {
+            if let Some(ref cr) = self.content_rating {
+                widgets.content_rating_badge.set_label(cr);
+                widgets.content_rating_badge.set_visible(true);
+            } else {
+                widgets.content_rating_badge.set_visible(false);
+            }
+        } else {
+            widgets.content_rating_badge.set_visible(false);
         }
 
         // Resolution badge: visible only with poster + resolution data
