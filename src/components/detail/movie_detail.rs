@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use adw;
 use gtk::prelude::*;
 use relm4::prelude::*;
 use tracing::info;
@@ -15,8 +14,9 @@ pub struct MovieDetail {
     item: Option<MediaItem>,
     source: Option<Arc<dyn MediaSource>>,
     artwork_cache: Option<Arc<ArtworkCache>>,
-    // Widgets we need to update
+    // Widgets
     title_label: gtk::Label,
+    meta_box: gtk::Box,
     year_label: gtk::Label,
     runtime_label: gtk::Label,
     rating_label: gtk::Label,
@@ -27,12 +27,16 @@ pub struct MovieDetail {
     overview_label: gtk::Label,
     play_button: gtk::Button,
     backdrop: gtk::Picture,
+    poster: gtk::Picture,
+    poster_spacer: gtk::Box,
     // Enriched sections
     cast_section: gtk::Box,
     cast_scroll: gtk::ScrolledWindow,
     cast_box: gtk::Box,
     tech_label: gtk::Label,
+    tech_panel: gtk::Box,
     collections_box: gtk::Box,
+    collections_panel: gtk::Box,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -65,6 +69,7 @@ pub enum MovieDetailOutput {
 #[allow(clippy::large_enum_variant)]
 pub enum MovieDetailCmd {
     BackdropReady(gtk::gdk::Texture),
+    PosterReady(gtk::gdk::Texture),
     DetailLoaded(MediaDetail),
     CastPhotoReady(usize, gtk::gdk::Texture),
     Noop,
@@ -108,20 +113,85 @@ impl Component for MovieDetail {
             .vexpand(true)
             .build();
 
-        let clamp = adw::Clamp::builder().maximum_size(900).build();
-        let content_box = gtk::Box::builder()
+        let main_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(16)
-            .margin_start(16)
-            .margin_end(16)
-            .margin_top(16)
-            .margin_bottom(16)
+            .hexpand(true)
             .build();
 
+        // ═══ HERO: backdrop + gradient overlay + floating poster ═══
+
+        let hero_overlay = gtk::Overlay::builder()
+            .height_request(420)
+            .hexpand(true)
+            .build();
+
+        // Backdrop image (base layer)
         let backdrop = gtk::Picture::builder()
             .content_fit(gtk::ContentFit::Cover)
-            .height_request(360)
-            .css_classes(["media-backdrop"])
+            .css_classes(["detail-hero"])
+            .vexpand(true)
+            .hexpand(true)
+            .build();
+
+        // Gradient overlay for text readability
+        let hero_gradient = gtk::Box::builder()
+            .css_classes(["detail-hero-overlay"])
+            .vexpand(true)
+            .hexpand(true)
+            .build();
+
+        // Poster art — clamped to match content width, floats at bottom-left overlapping hero edge
+        let poster_clamp = adw::Clamp::builder()
+            .maximum_size(960)
+            .valign(gtk::Align::End)
+            .build();
+        let poster = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Cover)
+            .width_request(170)
+            .height_request(255)
+            .css_classes(["detail-poster-hero"])
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::End)
+            .margin_start(28)
+            .visible(false)
+            .build();
+        poster_clamp.set_child(Some(&poster));
+
+        hero_overlay.add_overlay(&backdrop);
+        hero_overlay.add_overlay(&hero_gradient);
+        hero_overlay.add_overlay(&poster_clamp);
+
+        main_box.append(&hero_overlay);
+
+        // ═══ Clamped content below hero ═══
+
+        let clamp = adw::Clamp::builder().maximum_size(960).build();
+        let content_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(18)
+            .margin_start(20)
+            .margin_end(20)
+            .margin_top(16)
+            .margin_bottom(32)
+            .build();
+
+        // ═══ Title + metadata area (indented to account for poster) ═══
+
+        let title_meta_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(0)
+            .build();
+
+        // Spacer matching poster width + margins
+        let poster_spacer = gtk::Box::builder()
+            .width_request(198) // 170 poster + 28 margin
+            .visible(false)
+            .build();
+
+        let title_meta_content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(8)
+            .hexpand(true)
             .build();
 
         let title_label = gtk::Label::builder()
@@ -132,24 +202,24 @@ impl Component for MovieDetail {
 
         let meta_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
+            .spacing(8)
             .halign(gtk::Align::Start)
             .build();
 
         let year_label = gtk::Label::builder()
-            .css_classes(["dim-label"])
+            .css_classes(["detail-badge"])
             .visible(false)
             .build();
         let runtime_label = gtk::Label::builder()
-            .css_classes(["dim-label"])
+            .css_classes(["detail-badge"])
             .visible(false)
             .build();
         let rating_label = gtk::Label::builder()
-            .css_classes(["dim-label"])
+            .css_classes(["detail-badge", "accent"])
             .visible(false)
             .build();
         let content_rating_label = gtk::Label::builder()
-            .css_classes(["dim-label"])
+            .css_classes(["detail-badge"])
             .visible(false)
             .build();
 
@@ -158,12 +228,13 @@ impl Component for MovieDetail {
         meta_box.append(&rating_label);
         meta_box.append(&content_rating_label);
 
-        // Credits labels (populated when MediaDetail arrives)
+        // Credits (populated when MediaDetail arrives)
         let director_label = gtk::Label::builder()
             .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["dim-label"])
             .visible(false)
+            .margin_top(2)
             .build();
         let writer_label = gtk::Label::builder()
             .halign(gtk::Align::Start)
@@ -172,17 +243,39 @@ impl Component for MovieDetail {
             .visible(false)
             .build();
 
+        title_meta_content.append(&title_label);
+        title_meta_content.append(&meta_box);
+        title_meta_content.append(&director_label);
+        title_meta_content.append(&writer_label);
+
+        title_meta_row.append(&poster_spacer);
+        title_meta_row.append(&title_meta_content);
+        content_box.append(&title_meta_row);
+
+        // ═══ Genre chips ═══
+
         let genres_box = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .halign(gtk::Align::Start)
             .max_children_per_line(10)
+            .row_spacing(6)
+            .column_spacing(6)
+            .build();
+        content_box.append(&genres_box);
+
+        // ═══ Action buttons ═══
+
+        let actions_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(10)
+            .halign(gtk::Align::Start)
+            .css_classes(["detail-actions"])
             .build();
 
         let play_button = gtk::Button::builder()
-            .label("Play")
+            .label("▶  Play")
             .css_classes(["suggested-action", "pill"])
             .halign(gtk::Align::Start)
-            .margin_top(8)
             .build();
 
         let sender_play = sender.input_sender().clone();
@@ -190,14 +283,20 @@ impl Component for MovieDetail {
             let _ = sender_play.send(MovieDetailMsg::Play);
         });
 
+        actions_row.append(&play_button);
+        content_box.append(&actions_row);
+
+        // ═══ Overview ═══
+
         let overview_label = gtk::Label::builder()
             .halign(gtk::Align::Start)
             .wrap(true)
-            .margin_top(8)
             .visible(false)
             .build();
+        content_box.append(&overview_label);
 
-        // Cast section (populated when MediaDetail arrives)
+        // ═══ Cast section ═══
+
         let cast_section = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(8)
@@ -206,51 +305,55 @@ impl Component for MovieDetail {
         let cast_heading = gtk::Label::builder()
             .label("Cast")
             .halign(gtk::Align::Start)
-            .css_classes(["title-4"])
+            .css_classes(["detail-section-title"])
             .build();
         let cast_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Never)
-            .height_request(130)
+            .height_request(140)
             .build();
         let cast_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
+            .spacing(10)
             .build();
         cast_scroll.set_child(Some(&cast_box));
         cast_section.append(&cast_heading);
         cast_section.append(&cast_scroll);
+        content_box.append(&cast_section);
 
-        // Technical info label (populated when MediaDetail arrives)
+        // ═══ Technical info panel ═══
+
+        let tech_panel = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(["detail-panel"])
+            .visible(false)
+            .build();
         let tech_label = gtk::Label::builder()
             .halign(gtk::Align::Start)
             .wrap(true)
-            .css_classes(["dim-label", "caption"])
+            .css_classes(["dim-label"])
+            .build();
+        tech_panel.append(&tech_label);
+        content_box.append(&tech_panel);
+
+        // ═══ Collections panel ═══
+
+        let collections_panel = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(["detail-panel"])
             .visible(false)
             .build();
-
-        // Collections section (populated when MediaDetail arrives)
         let collections_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(8)
             .halign(gtk::Align::Start)
-            .visible(false)
             .build();
-
-        content_box.append(&backdrop);
-        content_box.append(&title_label);
-        content_box.append(&meta_box);
-        content_box.append(&director_label);
-        content_box.append(&writer_label);
-        content_box.append(&genres_box);
-        content_box.append(&play_button);
-        content_box.append(&overview_label);
-        content_box.append(&cast_section);
-        content_box.append(&tech_label);
-        content_box.append(&collections_box);
+        collections_panel.append(&collections_box);
+        content_box.append(&collections_panel);
 
         clamp.set_child(Some(&content_box));
-        scrolled.set_child(Some(&clamp));
+        main_box.append(&clamp);
+        scrolled.set_child(Some(&main_box));
         toolbar.set_content(Some(&scrolled));
         root.append(&toolbar);
 
@@ -259,6 +362,7 @@ impl Component for MovieDetail {
             source: None,
             artwork_cache: None,
             title_label,
+            meta_box,
             year_label,
             runtime_label,
             rating_label,
@@ -269,11 +373,15 @@ impl Component for MovieDetail {
             overview_label,
             play_button,
             backdrop,
+            poster,
+            poster_spacer,
             cast_section,
             cast_scroll,
             cast_box,
             tech_label,
+            tech_panel,
             collections_box,
+            collections_panel,
         };
 
         ComponentParts { model, widgets }
@@ -291,6 +399,8 @@ impl Component for MovieDetail {
 
                 self.title_label.set_label(&item.display_title());
 
+                // Metadata badges (visibility toggled; children are permanent)
+
                 if let Some(year) = item.year {
                     self.year_label.set_label(&year.to_string());
                     self.year_label.set_visible(true);
@@ -306,7 +416,7 @@ impl Component for MovieDetail {
                 }
 
                 if let Some(rating) = item.rating {
-                    self.rating_label.set_label(&format!("{rating:.1}"));
+                    self.rating_label.set_label(&format!("★ {rating:.1}"));
                     self.rating_label.set_visible(true);
                 } else {
                     self.rating_label.set_visible(false);
@@ -319,14 +429,14 @@ impl Component for MovieDetail {
                     self.content_rating_label.set_visible(false);
                 }
 
-                // Genres
+                // Genre chips
                 while let Some(child) = self.genres_box.first_child() {
                     self.genres_box.remove(&child);
                 }
                 for genre in &item.genres {
                     let label = gtk::Label::builder()
                         .label(genre)
-                        .css_classes(["caption", "dim-label"])
+                        .css_classes(["genre-chip"])
                         .build();
                     self.genres_box.insert(&label, -1);
                 }
@@ -345,30 +455,56 @@ impl Component for MovieDetail {
                 self.director_label.set_visible(false);
                 self.writer_label.set_visible(false);
                 self.cast_section.set_visible(false);
-                self.tech_label.set_visible(false);
-                self.collections_box.set_visible(false);
+                self.tech_panel.set_visible(false);
+                self.collections_panel.set_visible(false);
 
-                // Load backdrop
-                if let (Some(art_path), Some(source), Some(cache)) =
-                    (&item.backdrop_path, &self.source, &self.artwork_cache)
-                {
-                    let url = source.artwork_url(art_path, 900, 360);
-                    let cache = Arc::clone(cache);
-                    sender.oneshot_command(async move {
-                        match cache.get_or_download(&url).await {
-                            Ok(path) => match gtk::gdk::Texture::from_filename(&path) {
-                                Ok(tex) => MovieDetailCmd::BackdropReady(tex),
+                // Reset poster
+                self.poster.set_visible(false);
+                self.poster_spacer.set_visible(false);
+
+                // Load backdrop (prefer backdrop, fall back to poster for hero)
+                if let (Some(source), Some(cache)) = (&self.source, &self.artwork_cache) {
+                    // Backdrop
+                    if let Some(art_path) = &item.backdrop_path {
+                        let url = source.artwork_url(art_path, 1280, 420);
+                        let cache = Arc::clone(cache);
+                        sender.oneshot_command(async move {
+                            match cache.get_or_download(&url).await {
+                                Ok(path) => match gtk::gdk::Texture::from_filename(&path) {
+                                    Ok(tex) => MovieDetailCmd::BackdropReady(tex),
+                                    Err(e) => {
+                                        tracing::debug!("Failed to load backdrop: {e}");
+                                        MovieDetailCmd::Noop
+                                    }
+                                },
                                 Err(e) => {
-                                    tracing::debug!("Failed to load backdrop: {e}");
+                                    tracing::debug!("Failed to download backdrop: {e}");
                                     MovieDetailCmd::Noop
                                 }
-                            },
-                            Err(e) => {
-                                tracing::debug!("Failed to download backdrop: {e}");
-                                MovieDetailCmd::Noop
                             }
-                        }
-                    });
+                        });
+                    }
+
+                    // Poster
+                    if let Some(poster_path) = &item.poster_path {
+                        let url = source.artwork_url(poster_path, 340, 510);
+                        let cache = Arc::clone(cache);
+                        sender.oneshot_command(async move {
+                            match cache.get_or_download(&url).await {
+                                Ok(path) => match gtk::gdk::Texture::from_filename(&path) {
+                                    Ok(tex) => MovieDetailCmd::PosterReady(tex),
+                                    Err(e) => {
+                                        tracing::debug!("Failed to load poster: {e}");
+                                        MovieDetailCmd::Noop
+                                    }
+                                },
+                                Err(e) => {
+                                    tracing::debug!("Failed to download poster: {e}");
+                                    MovieDetailCmd::Noop
+                                }
+                            }
+                        });
+                    }
                 }
 
                 // Fetch enriched metadata (cast, crew, technical info)
@@ -413,17 +549,25 @@ impl Component for MovieDetail {
             MovieDetailCmd::BackdropReady(texture) => {
                 self.backdrop.set_paintable(Some(&texture));
             }
+            MovieDetailCmd::PosterReady(texture) => {
+                self.poster.set_paintable(Some(&texture));
+                self.poster.set_visible(true);
+                self.poster_spacer.set_visible(true);
+            }
             MovieDetailCmd::DetailLoaded(detail) => {
                 self.populate_enrichment(&detail, &sender);
             }
             MovieDetailCmd::CastPhotoReady(idx, texture) => {
-                // Find the cast card at this index and set its picture
                 if let Some(child) = self.cast_box.observe_children().item(idx as u32)
                     && let Ok(card) = child.downcast::<gtk::Box>()
                     && let Some(picture) = card.first_child()
-                    && let Ok(picture) = picture.downcast::<gtk::Picture>()
                 {
-                    picture.set_paintable(Some(&texture));
+                    // Navigate: cast-card box → inner box → picture
+                    if let Some(inner) = picture.first_child()
+                        && let Ok(picture) = inner.downcast::<gtk::Picture>()
+                    {
+                        picture.set_paintable(Some(&texture));
+                    }
                 }
             }
             MovieDetailCmd::Noop => {}
@@ -451,13 +595,18 @@ impl MovieDetail {
 
         // Cast
         if !detail.cast.is_empty() {
-            // Clear existing cast cards
             while let Some(child) = self.cast_box.first_child() {
                 self.cast_box.remove(&child);
             }
 
             for (idx, member) in detail.cast.iter().enumerate() {
+                // Outer glass card wrapper
                 let card = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Vertical)
+                    .css_classes(["cast-card"])
+                    .build();
+
+                let inner = gtk::Box::builder()
                     .orientation(gtk::Orientation::Vertical)
                     .spacing(4)
                     .width_request(80)
@@ -465,8 +614,8 @@ impl MovieDetail {
 
                 let picture = gtk::Picture::builder()
                     .content_fit(gtk::ContentFit::Cover)
-                    .width_request(80)
-                    .height_request(80)
+                    .width_request(72)
+                    .height_request(72)
                     .css_classes(["cast-photo"])
                     .build();
 
@@ -478,8 +627,8 @@ impl MovieDetail {
                     .css_classes(["caption"])
                     .build();
 
-                card.append(&picture);
-                card.append(&name_label);
+                inner.append(&picture);
+                inner.append(&name_label);
 
                 if let Some(ref character) = member.character {
                     let char_label = gtk::Label::builder()
@@ -489,9 +638,10 @@ impl MovieDetail {
                         .max_width_chars(12)
                         .css_classes(["caption", "dim-label"])
                         .build();
-                    card.append(&char_label);
+                    inner.append(&char_label);
                 }
 
+                card.append(&inner);
                 self.cast_box.append(&card);
 
                 // Load cast photo asynchronously
@@ -515,7 +665,7 @@ impl MovieDetail {
             self.cast_section.set_visible(true);
         }
 
-        // Technical info
+        // Technical info (frosted panel)
         if let Some(ref tech) = detail.technical {
             let mut parts: Vec<String> = Vec::new();
             if let Some(res) = tech.display_resolution() {
@@ -539,12 +689,13 @@ impl MovieDetail {
             }
 
             if !parts.is_empty() {
-                self.tech_label.set_label(&parts.join(" · "));
-                self.tech_label.set_visible(true);
+                self.tech_label
+                    .set_label(&format!("Technical Details\n{}", parts.join(" · ")));
+                self.tech_panel.set_visible(true);
             }
         }
 
-        // Collections
+        // Collections (frosted panel)
         if !detail.collections.is_empty() {
             while let Some(child) = self.collections_box.first_child() {
                 self.collections_box.remove(&child);
@@ -553,6 +704,7 @@ impl MovieDetail {
             let prefix = gtk::Label::builder()
                 .label("Part of:")
                 .css_classes(["dim-label"])
+                .margin_end(6)
                 .build();
             self.collections_box.append(&prefix);
 
@@ -564,7 +716,7 @@ impl MovieDetail {
                 self.collections_box.append(&label);
             }
 
-            self.collections_box.set_visible(true);
+            self.collections_panel.set_visible(true);
         }
     }
 }
