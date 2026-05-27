@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use adw;
 use adw::prelude::*;
 use gtk::glib;
 use relm4::prelude::*;

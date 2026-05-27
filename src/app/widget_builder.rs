@@ -1,6 +1,4 @@
-use adw;
 use adw::prelude::*;
-use gtk;
 use gtk::glib;
 use relm4::prelude::*;
 
@@ -26,6 +24,7 @@ pub struct BuiltWidgets {
 }
 
 /// Build the full widget hierarchy and attach controllers to the root window.
+#[allow(clippy::too_many_lines)]
 pub fn build_widgets(
     root: &adw::ApplicationWindow,
     sender: &ComponentSender<App>,

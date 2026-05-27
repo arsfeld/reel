@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use adw;
 use adw::prelude::*;
 
 use relm4::prelude::*;
@@ -31,6 +30,7 @@ use super::AppCmd;
 use super::AppMsg;
 
 /// Handle VideoOutput messages from the video player component.
+#[allow(clippy::too_many_lines)]
 pub fn handle_video_output(
     app: &mut App,
     output: VideoPlayerOutput,

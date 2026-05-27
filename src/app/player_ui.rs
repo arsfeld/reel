@@ -1,6 +1,4 @@
-use adw;
 use adw::prelude::*;
-use gtk;
 
 use crate::models::media::MediaItem;
 
