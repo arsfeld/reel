@@ -340,8 +340,6 @@ impl Component for App {
             .build();
         player_header.pack_start(&player_back);
         player_header.set_title_widget(Some(&player_window_title));
-        let window_controls = gtk::WindowControls::new(gtk::PackType::End);
-        player_header.pack_end(&window_controls);
 
         let player_chrome_revealer = gtk::Revealer::builder()
             .child(&player_header)
