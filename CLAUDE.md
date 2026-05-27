@@ -662,6 +662,14 @@ x11 = ["dep:gdk4-x11"]
 integration = []  # Gate tests needing real libmpv/display
 ```
 
+### File Size Limits
+
+- **Hard cap**: No `src/**/*.rs` file may exceed 2000 lines. Enforced by `tests/file_size_limits.rs` (`cargo test`).
+- **Soft target**: Files over 800 lines should be split into focused submodules.
+- **Grandfathered files**: Known-large files listed in the test's `GRANDFATHERED` array. When you split one, remove it from the list.
+- **Per-function cap**: `clippy.toml` enforces `too-many-lines-threshold = 100` per function.
+- **App component split**: `src/app/mod.rs` keeps the component skeleton (struct, enums, `init()`, `update()`, `update_cmd()`). Free functions live in `src/app/utils.rs`, `db_helpers.rs`, `dialogs.rs`, `player_ui.rs`, `source_validation.rs`, `watch_events.rs`. Widget construction in `widget_builder.rs`. Heavy message handlers in `handlers.rs`.
+
 ### TDD Workflow
 
 1. Write test for the next behavior
