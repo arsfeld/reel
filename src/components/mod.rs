@@ -1,5 +1,6 @@
 pub mod connection;
 pub mod detail;
+pub mod home;
 pub mod library;
 pub mod player;
 pub mod settings_dialog;

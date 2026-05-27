@@ -1,0 +1,857 @@
+‎Infuse App - App Store
+https://apps.apple.com/us/app/infuse/id1136220934
+
+<!DOCTYPE html>
+
+‎Infuse App - App Store 
+
+Infuse 
+
+An elegant video player
+
+Free · In‑App Purchases
+
+Share 
+
+28K Ratings 
+
+4.7 
+
+Age Rating 
+
+4+ 
+Years 
+
+Category 
+
+Entertainment 
+
+Developer 
+
+Firecore, LLC 
+
+Language 
+
+EN 
++ 36 More 
+
+Size 
+
+197 
+MB 
+
+iPhone, iPad, Mac, Apple Vision, Apple TV
+
+Ignite your video content with Infuse – the beautiful way to watch almost any video format on your iPhone, iPad, Apple TV, Mac, and Vision. No need to convert files! Infuse is optimized for iOS 26, with powerful streaming options, Trakt sync, and unmatched AirPlay & subtitle support. Gorgeous interface. Precise controls. And silky-smooth playback.
+
+- PLAY MORE VIDEO TYPES
+A powerful video player that plays just about anything, including MP4, MKV, M4V and MOV – plus many others. Includes support for HDR, HDR10+, Dolby Vision, plus Dolby and DTS audio.
+
+- STREAM FROM OTHER DEVICES
+Browse and play videos stored on your Mac, PC, NAS, Wi-Fi hard drive, apps like Plex, Emby, and Jellyfin, or from cloud services like Dropbox, Google Drive, OneDrive, Box, pCloud, Yandex.Disk, MEGA, Aliyun Drive, and others – no syncing required!
+
+- AIRPLAY & GOOGLE CAST OPTIONS
+Stream a wide variety of videos types such as MKV, MP4, M4V, and others over AirPlay & Google Cast with full surround sound and subtitles.
+
+- TRAKT 2-WAY SYNC
+Connect with Trakt to sync watched history, submit ratings and post comments.
+
+- OPTIMIZED SUBTITLES POWERED BY OPENSUBTITLES
+Bring your own subtitles, or download them on the fly (for free) in virtually any language.
+
+===== 
+
+“Looks great, plays anything you throw at it...surprisingly powerful”
+- Lifehacker
+
+“The best media player for iPhone and iPad...superior to VLC.”
+- Cult of Mac
+
+“I can't give the UI high enough praise. It's great.”
+- 9to5Mac
+
+“I see no reason whatsoever to remove Infuse from my Home screen anytime soon.”
+- iDownloadBlog 
+
+“A beautiful UI.”
+- Trakt co-founder
+
+“A mini Kodi!”
+- Infuse user
+
+=====
+
+MORE THAN JUST A PRETTY FACE
+
+THE BASICS
+- Silky-smooth video player (plays full 4K w/ HDR & Dolby Vision)
+- Stream from a Mac, PC, NAS or Wi-Fi enabled hard drive
+- Connect with Plex, Emby, Jellyfin, Kodi (XBMC), WMC and other media servers
+- Beautiful layout with quick access to video info
+- Artwork and metadata added automatically
+- Split View & PIP
+- Spatial audio
+
+SUPPORTED FORMATS
+- Video: 33GP, AVI, AV1, ASF, BDMV, DIVX, DVDMEDIA, DVR-MS, FLV, H.264 (AVC), H.265 (HEVC), ISO/IMG, M4V, MKV, MOV, MP4, MPEG, MTS/M2TS, MXF, OGM, OGV, RMVB, TS, VC1, VIDEO_TS, VOB, VP9, WEBM, WMV, WTV
+- Audio: AAC, AC3/E-AC3, DOLBY TRUEHD, DTS, DTS-HD MA, FLAC, MP3, OGG, PCM, WMA
+- Subtitles: DVB, DVDSUB, MICRODVD, MPL2, PGS, SMI, SSA/ASS, SRT, SUB, SUP, TIMED TEXT, TXT, VOBSUB, VTT, XSUB
+
+PLAYER FEATURES
+- Multiple audio tracks
+- Chapters
+- Gesture controls
+- 8 video zoom options
+- Continuous playback
+- TV out via HDMI or VGA adapter
+- Deinterlacing
+
+EXTRAS
+- Folders
+- One-click subtitle downloads from OpenSubtitles
+- Scrobble plays to Trakt
+- Download videos from networked devices
+- Drag and drop uploads via web browser
+- Get extra onboard storage with SanDisk iXpand and other USB drives
+
+GET MORE WITH INFUSE PRO!
+- Play even more video formats
+- Stream video trailers for movies and TV shows
+- Enjoy high-resolution Dolby® and DTS® audio
+- Access videos stored in cloud services like Dropbox, Google Drive, Box, OneDrive, pCloud, Yandex.Disk, MEGA, Aliyun Drive, and more
+- Stream a wide variety of video types over AirPlay and Google Cast
+- Sync libraries, settings, watched history, and playback progress between devices
+
+====
+
+Note: DRM-protected movies & TV shows purchased from the iTunes store are not supported.
+
+Metadata and artwork provided by TMDB, which is a community maintained movie and TV show database.
+
+====
+
+Infuse Pro is available as a optional subscription, and includes a free trial period that begins once your purchase has been confirmed with your iTunes Account. When the trial period concludes, your subscription will start and renew automatically. Your iTunes Account will be charged for the upcoming period unless you disable auto-renew or cancel your subscription in your Account Settings at least 24-hours prior to the end of the current period. Visit firecore.com/terms-privacy for full terms and privacy policy. 
+more 
+
+Ratings & Reviews
+
+4.7
+
+out of 5
+
+28K Ratings
+
+FIX AIRPLAY LAGS & BLUETOOTH PLAYER MALFUNCTION
+
+10/21/2025 
+
+BabyBoyNoneSuch
+
+This is by far the best app to play movies (of finest quality and high resolution) and the fact that it supports Dolby Vision and Audio is just everything. But here’s the down side to the latest update, during airplay via TV-WiFi Router-IPhone, the audio quality starts to get worse by the muffled and distorted audio quality it gives unless you open a pic from gallery just so it could change the picture quality to Dolby Vision and still have to go back to the infuse player in order to smoothen the audio results, I mean why can’t infuse app just play the Dolby vision and audio directly? Secondly, when you use airplay with wireless (Bluetooth speakers or home theater) at some point, the audio stops and disconnects the TV from the Bluetooth speakers, but works smoothly when you use ARX/AUX cables for audio output, but why that when wireless technology is has been a major technological innovation/breakthrough?! Please look into these issues. And also, the PIP works only once or twice daily after paying for PRO services? Afterwards, you won’t find the PiP button again when you have to use it. It was supposed to be unlimited for PRO users as stated in the article.
+
+FIX AIRPLAY LAGS & BLUETOOTH PLAYER MALFUNCTION
+
+10/21/2025 
+
+BabyBoyNoneSuch
+
+This is by far the best app to play movies (of finest quality and high resolution) and the fact that it supports Dolby Vision and Audio is just everything. But here’s the down side to the latest update, during airplay via TV-WiFi Router-IPhone, the audio quality starts to get worse by the muffled and distorted audio quality it gives unless you open a pic from gallery just so it could change the picture quality to Dolby Vision and still have to go back to the infuse player in order to smoothen the audio results, I mean why can’t infuse app just play the Dolby vision and audio directly? Secondly, when you use airplay with wireless (Bluetooth speakers or home theater) at some point, the audio stops and disconnects the TV from the Bluetooth speakers, but works smoothly when you use ARX/AUX cables for audio output, but why that when wireless technology is has been a major technological innovation/breakthrough?! Please look into these issues. And also, the PIP works only once or twice daily after paying for PRO services? Afterwards, you won’t find the PiP button again when you have to use it. It was supposed to be unlimited for PRO users as stated in the article. 
+
+The Awesome and the Not So Awesome (but still Awesome)
+
+10/16/2022 
+
+Supergrrover
+
+This is the best player I have ever tried and I’ve tried a ton (and keep evaluating new ones as they come out.) I’ve been using Infuse since it came out and always come back to it as my main choice. The Pro will play absolutely everything and flawlessly. The bad - I’ve been burned buying the previous pro stand alone version all of which have fallen by the wayside and left to rot. I am not a subscription fan. I understand innovation takes money and backing and I’ve sucked it up and do the subscription now. The added features have been awesome so I deal with it. (Although a bit cheaper would be nicer.) What I would like added is having a library/share with dual addresses - with one public and one private address for the same share so I don’t double up my posters and metadata for my NAS at home that I can access via a public IP on the road. All that being said, this is still the best player on the market and that warrants some props and some cash. Again, based on performance and features, you will not find one better.
+
+The Awesome and the Not So Awesome (but still Awesome)
+
+10/16/2022 
+
+Supergrrover
+
+This is the best player I have ever tried and I’ve tried a ton (and keep evaluating new ones as they come out.) I’ve been using Infuse since it came out and always come back to it as my main choice. The Pro will play absolutely everything and flawlessly. The bad - I’ve been burned buying the previous pro stand alone version all of which have fallen by the wayside and left to rot. I am not a subscription fan. I understand innovation takes money and backing and I’ve sucked it up and do the subscription now. The added features have been awesome so I deal with it. (Although a bit cheaper would be nicer.) What I would like added is having a library/share with dual addresses - with one public and one private address for the same share so I don’t double up my posters and metadata for my NAS at home that I can access via a public IP on the road. All that being said, this is still the best player on the market and that warrants some props and some cash. Again, based on performance and features, you will not find one better. 
+
+File sorting and viewing not working properly
+
+02/29/2024 
+
+RyanjcCPI
+
+The latest version has made some changes that have affected the sort functionality. Previous versions of this app let you sort your movie files from any folder. That’s been removed and you can only sort from the main library screen and that sort order applies to all folders. That’s ok except sort by file name no longer works and I rely on that. I have all my video files named specifically in the way I want them sorted. Sorting by file name works perfectly in Emby but no longer with Infuse. The sort seems to be stuck on sorting by title. Please fix this and return the previous functionality the app had. Also, viewing your library by grid or list also does not behave the way it used to. Again, you can only control the viewing style from the main library screen but it does not apply to all folders. If I choose to view my main library by list, it works there but doesn’t apply to the movie folders. The folders stay in grid format. On my phone I like to view my movie files in list format. Please fix this as well. Other than that, I love Infuse and I have been using it for years. I’m just a bit disappointed with the latest releases of this app.
+
+File sorting and viewing not working properly
+
+02/29/2024 
+
+RyanjcCPI
+
+The latest version has made some changes that have affected the sort functionality. Previous versions of this app let you sort your movie files from any folder. That’s been removed and you can only sort from the main library screen and that sort order applies to all folders. That’s ok except sort by file name no longer works and I rely on that. I have all my video files named specifically in the way I want them sorted. Sorting by file name works perfectly in Emby but no longer with Infuse. The sort seems to be stuck on sorting by title. Please fix this and return the previous functionality the app had. Also, viewing your library by grid or list also does not behave the way it used to. Again, you can only control the viewing style from the main library screen but it does not apply to all folders. If I choose to view my main library by list, it works there but doesn’t apply to the movie folders. The folders stay in grid format. On my phone I like to view my movie files in list format. Please fix this as well. Other than that, I love Infuse and I have been using it for years. I’m just a bit disappointed with the latest releases of this app. 
+
+Best Video player
+
+Feb 7 
+
+Isy306;)
+
+This video player has blown my expectations out of the water. I just wanted something that could allow me to stream offline movies from my Mac to avoid needing to using up my limited space on my phone. Not only does this app makes it stupidly easy, but even if you use an encrypted external drive and put your Mac to sleep, you’re still able to flawlessly stream. No need to wait for your Mac to reformat your content for streaming. Which would take a long time if each movie you have took a while to reformat and you happen to have a bunch of them. It may vary by your internet connection but in my case I have a fast connection. My other favorite part of this app is how beautiful and modern the design looks and how it also provides thumbnails for the content you’ve added. The best part is that you can keep all your content stored on your Mac and you’re still able to see the thumbnails unlike other apps where they only show you the thumbnails if the content is locally stored on your phone.My final point is that even if you don’t upgrade to the pro version, this app has everything you need if you just want something that works and you watch all of your favorite content at home anyways.This app is amazing for anyone who wishes to separate themselves from streaming services and wish to own their media in a way that still feels as modern as a streaming service. In other words, this is a great way of creating your own personal streaming service for only stuff that you actually care watch.
+
+Best Video player
+
+Feb 7 
+
+Isy306;)
+
+This video player has blown my expectations out of the water. I just wanted something that could allow me to stream offline movies from my Mac to avoid needing to using up my limited space on my phone. Not only does this app makes it stupidly easy, but even if you use an encrypted external drive and put your Mac to sleep, you’re still able to flawlessly stream. No need to wait for your Mac to reformat your content for streaming. Which would take a long time if each movie you have took a while to reformat and you happen to have a bunch of them. It may vary by your internet connection but in my case I have a fast connection. My other favorite part of this app is how beautiful and modern the design looks and how it also provides thumbnails for the content you’ve added. The best part is that you can keep all your content stored on your Mac and you’re still able to see the thumbnails unlike other apps where they only show you the thumbnails if the content is locally stored on your phone.My final point is that even if you don’t upgrade to the pro version, this app has everything you need if you just want something that works and you watch all of your favorite content at home anyways.This app is amazing for anyone who wishes to separate themselves from streaming services and wish to own their media in a way that still feels as modern as a streaming service. In other words, this is a great way of creating your own personal streaming service for only stuff that you actually care watch. 
+
+What’s New
+
+Version History
+
+NEW
+- Use custom artwork for home screen favorite icons
+- Added original language option for artwork
+
+IMPROVED
+- Improved language support for metadata and artwork
+- Improved token lifespan for 115 Cloud Drive 
+
+FIXED
+- Fixed font size when seasons have custom titles
+- Fixed appearance of quick menus
+- Fixed a playback related crash
+- Fixed minor issues with mark as watched/unwatched button
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.4.5 May 19
+
+NEW
+- API additions for metadata, playback, downloads, and playlists (firecore.com/api)
+
+IMPROVED
+- Under-the-hood improvements for add shares menus
+- Improved tappable area of playback controls
+
+FIXED
+- Fixed issues with TV show indexing
+- Fixed incorrect color of popup menus
+- Fixed dimmed multi-select menu
+- Fixed crash when adding items to playlists/collections
+- Fixed inconsistent behavior of Mark as Watched/Unwatched buttons
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.4.4 May 5
+
+NEW
+- Reorder Home Screen favorites
+- Option to hide the Library icon
+- Mark multiple items as watched/unwatched
+- Support for ruby subtitle tags
+- Added See All button for favorites section
+
+IMPROVED
+- Improved subtitle tag parser
+- Improvements for extras in local folders
+- Improved tappable area for seek bar
+- Improved color handling for WebVTT subtitles
+- Improved extras indexing when specials are present
+
+FIXED
+- Fixed scrolling issues for Emby, Jellyfin, and Plex servers
+- Fixed favorites section unexpectedly moving after adding a media share
+- Fixed extras not being detected for single-episode TV shows
+- Fix issues with Emby artwork not updating
+- Fixed handling of invalid deep links
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.4.3 Apr 21
+
+NEW
+- Added support for Bwdif deinterlacing (Highest Quality)
+- Recognize default tags in external audio track names
+- Support for extras for local files/folders
+
+IMPROVED
+- Improvements for skip intros and credits
+- Improvements for iOS 26.4
+
+FIXED
+- Fixed issues with Picture-in-Picture (PiP) features
+- Fixed video aspect ratio issues
+- Fixed judder when scrolling to extras section
+- Fixed special episodes being treated as extras
+- Fixed ability to disable movie folder indexing with .nomedia files
+- Fixed indexing of movies inside folders added as favorites
+- Fixes for MEGA connections
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.4.2 Apr 7
+
+NEW
+- Added extras for Blu-ray and DVD folders
+- Added Kerberos authentication for SMB
+- Added poster shaped artwork for Favorites
+
+IMPROVED
+- Improved support for TheIntroDB.org
+- Improved layout of Extras section for movies
+- Improved SMB performance and reliabillty 
+- Improved filtering of unplayable Plex Pass extras
+- Improved support for MEGA
+
+FIXED
+- Fixed deinterlacing features
+- Fixed a crash when using deep link features
+- Fixed incorrect Playlist icon
+- Fixed animations when scrolling through extras
+- Fixed ability to add ‘All Movies’ and ‘All TV Shows’ sections
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.4.1 Mar 31
+
+NEW
+- Display extras, deleted scenes, trailers, etc... for movies and TV shows
+- Skip intros, credits, and recaps
+- Pin library and folder favorites to the home screen
+- Choose different default languages for metadata and artwork
+- Increased max number of Watching list items
+- Options to scan or ignore local metadata and artwork
+- Support external audio tracks for videos
+- Support for VVC (h.266) videos
+
+IMPROVED
+- Supercharged playback core with many improvements
+- Improved handling of local TV show artwork
+- Improvements for Trakt sync
+- Improved default home screen lists
+- Many other minor improvements and fixes
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.4 Mar 24
+
+NEW
+- Added an option for fnOS when connecting to Jellyfin
+
+IMPROVED
+- Optimizations and fixes for Trakt sync
+- Improved handling of Emby rate limits 
+
+FIXED
+- Fixed missing lists when searching by cast & crew
+- Fixed error when deleting files over WebDAV
+- Fixed a crash when deleting files on Plex
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.3.9 Feb 24
+
+FIXED
+- Fixed connection issues with Feiniu (飞牛) servers
+- Fixed crash when running speed tests
+- Fixed poster artwork in Control Center
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.3.8 Feb 15
+
+NEW
+- Search for titles when opening deep linked items that are not present in the Library
+
+FIXED
+- Fixed issues with missing cast and crew artwork
+- Fixed offline files moving to the top of Recently Added
+- Fixed connection issues with Emby & Jellfyin
+- Fixed playback of some Chinese ASS subtitles with unavailable fonts
+- Fixed crash when deleting items on Plex servers
+- Fixed artwork fetching for users in some regions
+- Fixed issue when deleting some files over WebDAV
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.3.7 Feb 4
+
+NEW
+- Plex Home (managed) user profiles
+- Playback Stats (HUD) overlay to display real-time details during playback
+- Added ‘Select’ and ‘Select All’ to context menu
+
+IMPROVED
+- Improved purchase flow when starting from App Store page
+- Improved reactivity levels for Ambient Mode
+- Improved external subtitles detection for movie folders
+- Improved color tag parsing logic in subtitles
+- Minor improvements for HDR subtitle brightness
+
+FIXED
+- Fixed a memory leak in software decoder
+- Fixed login flow for Jellyfin 10.12
+- Fixed appearance of file sort button
+- Fixed issues with automatic light/dark icon switching
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.3.6 Jan 20
+
+IMPROVED
+- Minor UI improvements for Settings screen
+- Minor improvements for multi-select feature
+- Optimized memory allocation for .ASS subtitles
+- Improved parsing of some SRT subtitles
+- Improved filtering of escaping symbols from subtitles
+- Improved character spacing for playback time
+
+FIXED
+- Fixed connections to local shares when using a VPN on cellular connections
+- Fixed .ASS subtitles sync related to {\move} (and related) tags
+- Fixed automatic encoding detection in text subtitles
+- Fixed issues with updating watched statuses from Trakt
+- Fixed a crash when a search query contains certain Chinese characters
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.3.5 12/17/2025
+
+Minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.3.4 12/05/2025
+
+NEW
+- Ambient Mode displays glowing colors in the black bar areas
+- Transliterate Simplified/Traditional Chinese text for search
+- Added TMDB details page for deep linked TV series not present in Library
+
+IMPROVED
+- Improved handling of HDR subtitles
+
+FIXED
+- Fixed order of Emby watching list after a video is removed
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.3.3 12/02/2025
+
+NEW
+- Remove items from Continue Watching list on Emby and Plex servers
+
+IMPROVED
+- Improved series loading times for Jellyfin 10.11
+- Improved sort order for special characters
+- Improvements for iOS 26
+- Minor visual improvements
+
+FIXED
+- Fixed crash when adding iCloud Drive links
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.3.2 11/19/2025
+
+NEW
+- Option to skip to other TV episodes during playback
+- Added TMDB details page for deep linked movies not present in Library
+- Allowed Gesture Control setting to apply to temporary 2x playback speed gesture
+
+IMPROVED
+- Improved speed of fetching metadata and artwork from TMDB 
+- Improved flow for adding links for TV episodes from iCloud Drive
+- Improved handling of season and series arwork from Emby and Jellyfin
+- Improvements and optimizations for playback core
+- Improved flow when opening videos through the Apple Files app
+- Improved gesture control settings
+
+FIXED
+- Fixed issues with managing Jellyfin playlists
+- Fixed appearance of favorite icons when long-pressing app icon
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.3.1 11/05/2025
+
+NEW
+- New nav bar order and behavior (iOS 26)
+
+IMPROVED
+- Playback related under-the-hood improvements and fixes
+- Improved handling of SSA/ASS subtitles and font handling
+- Improved handling of trial eligibility
+- Updated Trakt logo (iOS 26)
+
+FIXED
+- Fixed incorrect grouping of items with removed ratings
+- Fixed minor layout issues on Settings screen
+- Fixed embedded SSA/ASS subtitles with unusual timestamps
+- Fixed subtitle timestamps and duration issues
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.3 10/20/2025
+
+IMPROVED
+- Improved appearance of player controls
+- Under-the-hood improvements and optimizations
+
+FIXED
+- Resolved issues with missing folder in Files app
+- Other minor improvements and fixes
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.2.7 10/06/2025
+
+FIXED
+- Fixed missing episodes in search results sorted by release date
+- Fixed select version popup behavior when landscape lock is ON
+- Fixed control overlap of search results in Search/Library
+- Fixed partly hidden watched progress bar when focusing on an item
+- Fixed incorrect color of quick buttons in light mode
+- Fixed an issue when adding a Plex share in Add Files
+- Other minor improvements and fixes
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.2.6 09/22/2025
+
+NEW
+- Liquid Glass design
+
+IMPROVED
+- Optimizations for iOS 26
+- Improved handling of empty Plex Watchlist
+
+FIXED
+- Fixed scrobbling manually marked items to Trakt when setting is disabled
+- Fixed missing letter scrollbar for Plex
+- Fixed issues with Next Episode/Skip Credits button
+- Fixed issues with Background Playback setting
+- Other minor improvements and fixes
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.2.5 09/18/2025
+
+IMPROVED
+- Improved handling of purchases
+- Other minor improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.2.4 09/02/2025
+
+NEW
+- Context menu for Emby, Jellyfin, and Plex servers
+
+IMPROVED
+- Playback core improvements
+- Improvements for network performance and security
+- Improvements for media share browsing
+- Various minor UI improvements
+
+FIXED
+- Fixed issues with Emby, Jellyfin, and Plex playlists
+- Fixed issue with Next Episode button
+- Other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.2.3 08/26/2025
+
+Minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.2.2 08/08/2025
+
+NEW
+- Favorite and unfavorite items in Emby/Jellyfin
+- Display Trakt VIP status
+- Linked movie and TV show ratings to webpage
+- Support for Jellyfin 10.11
+
+IMPROVED
+- Improved handling of purchases (StoreKit 2)
+- Improvements for iCloud Sync
+
+FIXED
+- Fixed issues with watched statuses unexpectedly changing
+- Fixed issue with RTL (Arabic/Hebrew) subtitles not fully appearing
+- Fixed error with Hulu STRMLNK files
+- Fixed rare issues with auto skip intro
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.2.1 08/06/2025
+
+NEW
+- Stream videos from iCloud Drive
+- Ratings from Metacritic (PRO)
+- Deep link to movies, series, and episodes using TMDB IDs
+- HDR subtitles brightness setting
+- Extra options for ‘Show External Ratings’ setting
+- Hide video titles when using continuous playback
+
+IMPROVED
+- Updated layout of video details page
+- Improved performance and reliability of Trakt connections
+- Improved handling of 3rd party services used with Plex
+- Improved handling end of file in some cases
+
+FIXED
+- Fixed duplicate file listings from some WebDAV servers
+- Fixed hiding of ratings in list view when ‘Show External Ratings’ is OFF
+- Fixed UI issues when reordering items
+- Fixed UI issues when long-pressing items
+- Fixed performance issues when using search
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.2 07/22/2025
+
+NEW
+- Skip credits for Emby
+- Option to disable automatic scanning of individual network shares
+- New handling of share syncing to allow for multiple connections
+- Ability to edit usernames for saved shares
+
+FIXED
+- Fixed issues with multi-select mode
+- Fixed some cases of visible ratings when Hide Ratings is disabled
+- Fixed sync of duplicate cloud shares
+- Fixed minor UI issues with favorite reordering
+- Fixed some reported crashes
+- Other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+
+8.1.9 06/24/2025
+
+NEW
+- Use custom artwork for home screen favorite icons
+- Added original language option for artwork
+
+IMPROVED
+- Improved language support for metadata and artwork
+- Improved token lifespan for 115 Cloud Drive 
+
+FIXED
+- Fixed font size when seasons have custom titles
+- Fixed appearance of quick menus
+- Fixed a playback related crash
+- Fixed minor issues with mark as watched/unwatched button
+- Many other minor fixes and improvements
+
+For full release details visit: firecore.com/releases
+
+Thanks so much for using Infuse! 
+more 
+Version 8.4.5 May 19
+
+App Privacy
+
+App Privacy
+
+The developer, Firecore, LLC, indicated that the app’s privacy practices may include handling of data as described below. This information has not been verified by Apple. For more information, see the developer’s privacy policy .
+
+To help you better understand the developer’s responses, see Privacy Definitions and Examples . 
+
+Privacy practices may vary, for example, based on the features you use or your age. Learn More 
+
+Data Not Linked to You
+
+The following data, which may be collected but is not linked to your identity, may be used for the following purposes:
+
+Analytics
+
+Diagnostics 
+Crash Data
+
+Performance Data
+
+The developer, Firecore, LLC, indicated that the app’s privacy practices may include handling of data as described below. For more information, see the developer’s privacy policy .
+
+Data Not Linked to You
+
+The following data may be collected but it is not linked to your identity:
+
+Diagnostics 
+
+Privacy practices may vary, for example, based on the features you use or your age. Learn More 
+
+Accessibility
+
+Accessibility
+
+The developer, Firecore, LLC, indicated that this app supports the following accessibility features to help make common tasks in the app faster and easier to complete. Learn More 
+
+VoiceOver
+Navigate and explore the app using gestures, braille, and speech output. 
+
+Dark Interface
+Apply a dark color scheme to the screens, menus, and controls to reduce eye strain. 
+
+Differentiate Without Color Alone
+Use shapes or text, in addition to or instead of color, to distinguish key information. 
+
+Captions
+Display the dialogue and relevant sounds of video or audio-only content with text, usually time-synchronized. 
+
+The developer indicated that this app supports the following accessibility features. Learn More 
+
+Supported Features
+
+VoiceOver
+
+Dark Interface
+
+Differentiate Without Color Alone
+
+Captions
+
+Information
+
+Seller 
+Firecore, LLC 
+
+Size 
+197 MB 
+
+Category 
+Entertainment 
+
+Compatibility Requires iOS 18.0 or later. 
+iPhone
+
+Requires iOS 18.0 or later. 
+
+iPad
+
+Requires iPadOS 18.0 or later. 
+
+Mac
+
+Requires macOS 15.0 or later. 
+
+Apple Vision
+
+Requires visionOS 26.0 or later. 
+
+Apple TV
+
+Requires tvOS 18.5 or later. 
+
+Languages English and 36 more 
+English, Arabic, Basque, Bulgarian, Burmese, Catalan, Croatian, Czech, Danish, Dutch, Estonian, Finnish, French, German, Greek, Gujarati, Hebrew, Hindi, Hungarian, Italian, Japanese, Korean, Latvian, Norwegian Bokmål, Polish, Portuguese, Romanian, Russian, Simplified Chinese, Slovak, Slovenian, Spanish, Swedish, Traditional Chinese, Turkish, Ukrainian, Vietnamese 
+
+Age Rating 4+ 
+
+4+ 
+
+Learn More 
+
+In-App Purchases Yes 
+
+Infuse Pro - Monthly $1.99 
+
+Infuse Pro - Yearly $16.99 
+
+DTS Audio $0.00 
+
+Dolby Audio $0.00 
+
+Infuse Pro - Lifetime $99.99 
+
+Infuse Pro - Yearly $16.99 
+
+Infuse Pro - Monthly $1.99 
+
+Learn More 
+
+Copyright 
+© 2026 Firecore, LLC 
+
+Developer Website 
+
+Privacy Policy 
+
+Supports
+
+Family Sharing
+
+Some in-app purchases and subscriptions may be shareable with your family group when Family Sharing is enabled.
+
+
+[… truncated 622 chars …]

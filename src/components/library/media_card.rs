@@ -24,6 +24,11 @@ pub struct MediaCardData {
     pub watch_progress: Option<f64>,
     /// Whether the item has been fully watched.
     pub watched: bool,
+    /// Direct reference to the GTK Picture widget for lazy poster updates.
+    #[allow(clippy::type_complexity)]
+    pub picture_widget: Option<gtk4::Picture>,
+    /// Direct reference to the placeholder icon widget.
+    pub placeholder_widget: Option<gtk4::Image>,
 }
 
 impl MediaCardData {
@@ -42,6 +47,8 @@ impl MediaCardData {
             card_height: 270,
             watch_progress: None,
             watched: false,
+            picture_widget: None,
+            placeholder_widget: None,
         }
     }
 }
@@ -193,6 +200,10 @@ impl RelmGridItem for MediaCardData {
         }
 
         let has_poster = self.poster_texture.is_some();
+
+        // Save widget references so ArtworkReady can update them directly
+        self.picture_widget = Some(widgets.picture.clone());
+        self.placeholder_widget = Some(widgets.placeholder_icon.clone());
 
         if let Some(ref texture) = self.poster_texture {
             widgets.picture.set_paintable(Some(texture));

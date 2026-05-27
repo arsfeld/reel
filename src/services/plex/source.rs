@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use async_trait::async_trait;
 
 use crate::models::{
@@ -17,11 +19,17 @@ use super::error::PlexError;
 pub struct PlexSource {
     client: PlexClient,
     name: String,
+    /// Cached library sections. Fetched once on first call; reused thereafter.
+    libraries_cache: OnceLock<Vec<LibrarySection>>,
 }
 
 impl PlexSource {
     pub fn new(client: PlexClient, name: String) -> Self {
-        Self { client, name }
+        Self {
+            client,
+            name,
+            libraries_cache: OnceLock::new(),
+        }
     }
 }
 
@@ -54,11 +62,18 @@ impl MediaSource for PlexSource {
     }
 
     async fn libraries(&self) -> Result<Vec<LibrarySection>, SourceError> {
+        if let Some(cached) = self.libraries_cache.get() {
+            return Ok(cached.clone());
+        }
         let plex_libs = self.client.libraries().await?;
-        Ok(plex_libs
+        let sections: Vec<LibrarySection> = plex_libs
             .iter()
             .filter_map(plex_library_to_section)
-            .collect())
+            .collect();
+        // OnceLock::set returns Err if already set — we only get here
+        // when it's empty, so this always succeeds.
+        let _ = self.libraries_cache.set(sections.clone());
+        Ok(sections)
     }
 
     async fn library_items(&self, library_key: &str) -> Result<Vec<MediaItem>, SourceError> {
@@ -105,6 +120,24 @@ impl MediaSource for PlexSource {
 
     async fn collection_items(&self, collection_key: &str) -> Result<Vec<MediaItem>, SourceError> {
         let plex_items = self.client.collection_items(collection_key).await?;
+        let base_url = self.client.base_url();
+        Ok(plex_items
+            .iter()
+            .filter_map(|m| plex_metadata_to_media_item(m, base_url))
+            .collect())
+    }
+
+    async fn recently_added(&self) -> Result<Vec<MediaItem>, SourceError> {
+        let plex_items = self.client.recently_added().await?;
+        let base_url = self.client.base_url();
+        Ok(plex_items
+            .iter()
+            .filter_map(|m| plex_metadata_to_media_item(m, base_url))
+            .collect())
+    }
+
+    async fn continue_watching(&self) -> Result<Vec<MediaItem>, SourceError> {
+        let plex_items = self.client.on_deck().await?;
         let base_url = self.client.base_url();
         Ok(plex_items
             .iter()
@@ -255,5 +288,33 @@ mod tests {
         let client = PlexClient::new("http://localhost:32400", "token");
         let source = PlexSource::new(client, "Test".into());
         let _boxed: Box<dyn MediaSource> = Box::new(source);
+    }
+
+    #[tokio::test]
+    async fn plex_source_libraries_caches_result() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/library/sections"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                r#"{"MediaContainer":{"size":1,"Directory":[
+                    {"key":"1","title":"Movies","type":"movie","count":500}
+                ]}}"#,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token");
+        let source = PlexSource::new(client, "Test".into());
+
+        let libs1 = source.libraries().await.unwrap();
+        assert_eq!(libs1.len(), 1);
+        assert_eq!(libs1[0].title, "Movies");
+
+        // Second call: returns cached result, no network request
+        let libs2 = source.libraries().await.unwrap();
+        assert_eq!(libs2.len(), 1);
+        assert_eq!(libs2[0].title, "Movies");
     }
 }

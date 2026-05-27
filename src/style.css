@@ -171,8 +171,45 @@
 /* --- Cast Photos --- */
 
 .cast-photo {
-    border-radius: 40px;
+    border-radius: 50px;
     background-color: alpha(@card_bg_color, 0.5);
+    transition: transform 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                box-shadow 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.cast-photo:hover {
+    transform: scale(1.08);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* --- Detail Hero --- */
+
+.backdrop-gradient {
+    background: linear-gradient(
+        to top,
+        alpha(black, 0.75) 0%,
+        alpha(black, 0.3) 60%,
+        transparent 100%
+    );
+}
+
+.media-poster-hero {
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4),
+                0 2px 6px rgba(0, 0, 0, 0.2);
+    background-color: alpha(@card_bg_color, 0.3);
+}
+
+/* --- Filter indicator dot --- */
+
+.accent {
+    color: @accent_color;
+}
+
+/* --- Poster fade-in --- */
+
+.media-card-poster {
+    transition: opacity 300ms ease-out;
 }
 
 /* --- Toast Colors --- */

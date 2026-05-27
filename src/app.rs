@@ -13,6 +13,7 @@ use tracing::info;
 use crate::components::connection::{ConnectionDialog, ConnectionDialogOutput};
 use crate::components::detail::movie_detail::{MovieDetail, MovieDetailMsg, MovieDetailOutput};
 use crate::components::detail::show_detail::{ShowDetail, ShowDetailMsg, ShowDetailOutput};
+use crate::components::home::{HomeView, HomeViewMsg, HomeViewOutput};
 use crate::components::library::{LibraryView, LibraryViewMsg, LibraryViewOutput};
 use crate::components::player::drop_target;
 use crate::components::player::shortcuts::{self, PlayerAction};
@@ -39,6 +40,7 @@ use crate::settings::Settings;
 
 #[allow(dead_code)]
 pub struct App {
+    home_view: Controller<HomeView>,
     video_area: Controller<VideoArea>,
     sidebar: Controller<Sidebar>,
     library_view: Controller<LibraryView>,
@@ -49,6 +51,8 @@ pub struct App {
     toast_overlay: adw::ToastOverlay,
     stack: gtk4::Stack,
     nav_view: adw::NavigationView,
+    split_view: adw::NavigationSplitView,
+    view_switcher_bar: adw::ViewSwitcherBar,
     current_view: CurrentView,
     db_conn: Option<Connection>,
     now_playing: Option<MediaItem>,
@@ -63,12 +67,16 @@ pub struct App {
     settings: Settings,
     /// MPRIS D-Bus bridge channels.
     mpris: MprisBridge,
+    /// Guard: true when syncing ViewSwitcher ↔ Sidebar to avoid re-entrant loops.
+    switcher_syncing: bool,
 }
 
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum AppMsg {
+    NavigateHome,
     Navigate(LibraryType),
+    ShowHomeDetail(MediaItem),
     ShowMovieDetail(crate::models::media::MediaItem),
     ShowShowDetail(crate::models::media::MediaItem),
     GoBack,
@@ -98,6 +106,8 @@ pub enum AppMsg {
     OpenPreferences,
     OpenAbout,
     MprisInput(MprisCommand),
+    /// User changed the ViewSwitcher tab (Movies/TV Shows).
+    ViewSwitcherChanged(LibraryType),
 }
 
 #[derive(Debug)]
@@ -142,8 +152,21 @@ impl Component for App {
         let sidebar = Sidebar::builder()
             .launch(())
             .forward(sender.input_sender(), |output| match output {
+                SidebarOutput::NavigateHome => AppMsg::NavigateHome,
                 SidebarOutput::Navigate(target) => AppMsg::Navigate(target),
                 SidebarOutput::ShowCollections => AppMsg::ShowCollections,
+            });
+
+        let home_view = HomeView::builder()
+            .launch(())
+            .forward(sender.input_sender(), |output| match output {
+                HomeViewOutput::ShowDetail(item) => AppMsg::ShowHomeDetail(item),
+                HomeViewOutput::PlayMedia { url, media_item } => AppMsg::PlayMedia {
+                    url,
+                    media_item: Some(media_item),
+                },
+                HomeViewOutput::ShowConnectionDialog => AppMsg::ShowConnectionDialog,
+                HomeViewOutput::Error(msg) => AppMsg::ShowToast(msg),
             });
 
         let library_view = LibraryView::builder().launch(()).forward(
@@ -203,25 +226,54 @@ impl Component for App {
 
         let nav_view = adw::NavigationView::new();
 
-        // Library root page (with header bar + settings button)
-        let library_toolbar = adw::ToolbarView::new();
-        let library_header = adw::HeaderBar::new();
+        // --- ViewSwitcher + ViewStack for Movies / TV Shows ---
+        // The ViewStack drives the ViewSwitcher tabs. Each page contains the
+        // LibraryView widget (re-parented when switching).
+        let view_stack = adw::ViewStack::new();
+        let _movies_page = view_stack.add_titled_with_icon(
+            library_view.widget(),
+            Some("Movies"),
+            "Movies",
+            "video-display-symbolic",
+        );
+        let _shows_page = view_stack.add_titled_with_icon(
+            &gtk4::Box::builder()
+                .orientation(gtk4::Orientation::Vertical)
+                .build(),
+            Some("TV Shows"),
+            "TV Shows",
+            "view-list-symbolic",
+        );
 
-        // Hamburger menu
+        let view_switcher = adw::ViewSwitcher::builder()
+            .stack(&view_stack)
+            .build();
+
+        // ViewSwitcherBar for narrow widths (revealed via breakpoint)
+        let view_switcher_bar = adw::ViewSwitcherBar::builder()
+            .stack(&view_stack)
+            .reveal(false)
+            .build();
+
+        // Wire ViewSwitcher page changes to app messages
+        let sender_switcher = sender.input_sender().clone();
+        view_stack.connect_visible_child_notify(move |stack| {
+            let page = stack.visible_child_name().unwrap_or_default();
+            let lt = if page == "TV Shows" {
+                LibraryType::Show
+            } else {
+                LibraryType::Movie
+            };
+            let _ = sender_switcher.send(AppMsg::ViewSwitcherChanged(lt));
+        });
+
+        // --- Hamburger menu (shared between all views) ---
         let menu = gtk4::gio::Menu::new();
         menu.append(Some("Preferences"), Some("app.preferences"));
         menu.append(Some("Plex Connection"), Some("app.plex-connection"));
         menu.append(Some("About Reel"), Some("app.about"));
 
-        let menu_button = gtk4::MenuButton::builder()
-            .icon_name("open-menu-symbolic")
-            .tooltip_text("Menu")
-            .menu_model(&menu)
-            .primary(true)
-            .build();
-        library_header.pack_end(&menu_button);
-
-        // Register menu actions
+        // Register menu actions once on the root window
         let action_group = gtk4::gio::SimpleActionGroup::new();
 
         let prefs_action = gtk4::gio::SimpleAction::new("preferences", None);
@@ -246,8 +298,31 @@ impl Component for App {
         action_group.add_action(&about_action);
 
         root.insert_action_group("app", Some(&action_group));
+
+        // --- Library root page (header bar + switcher bar + content) ---
+        let library_toolbar = adw::ToolbarView::new();
+        let library_header = adw::HeaderBar::new();
+
+        // ViewSwitcher as title widget
+        library_header.set_title_widget(Some(&view_switcher));
+
+        let lib_menu_button = gtk4::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .tooltip_text("Menu")
+            .menu_model(&menu)
+            .primary(true)
+            .build();
+        library_header.pack_end(&lib_menu_button);
+
         library_toolbar.add_top_bar(&library_header);
-        library_toolbar.set_content(Some(library_view.widget()));
+
+        // Content: switcher bar (narrow) + library view
+        let library_content = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .build();
+        library_content.append(&view_switcher_bar);
+        library_content.append(library_view.widget());
+        library_toolbar.set_content(Some(&library_content));
 
         let library_nav_page = adw::NavigationPage::builder()
             .title("Library")
@@ -256,11 +331,43 @@ impl Component for App {
             .build();
         nav_view.add(&library_nav_page);
 
+        // Home page — lives inside the split view so the sidebar is always visible
+        let home_toolbar = adw::ToolbarView::new();
+        let home_header = adw::HeaderBar::new();
+
+        let home_menu_button = gtk4::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .tooltip_text("Menu")
+            .menu_model(&menu)
+            .primary(true)
+            .build();
+        home_header.pack_end(&home_menu_button);
+
+        home_toolbar.add_top_bar(&home_header);
+        home_toolbar.set_content(Some(home_view.widget()));
+
+        let home_nav_page = adw::NavigationPage::builder()
+            .title("Home")
+            .tag("home")
+            .child(&home_toolbar)
+            .build();
+        nav_view.add(&home_nav_page);
+
         let content_nav_page = adw::NavigationPage::builder()
             .title("Content")
             .child(&nav_view)
             .build();
         split_view.set_content(Some(&content_nav_page));
+
+        // --- Responsive sidebar ---
+        // NavigationSplitView handles its own responsive collapse natively.
+        // The ViewSwitcherBar is revealed only when the sidebar is collapsed.
+        split_view.connect_collapsed_notify({
+            let bar = view_switcher_bar.clone();
+            move |sv| {
+                bar.set_reveal(sv.is_collapsed());
+            }
+        });
 
         // Player page
         let player_page = gtk4::Box::builder()
@@ -391,6 +498,7 @@ impl Component for App {
         }
 
         let mut model = Self {
+            home_view,
             video_area,
             sidebar,
             library_view,
@@ -401,6 +509,8 @@ impl Component for App {
             toast_overlay,
             stack,
             nav_view,
+            split_view,
+            view_switcher_bar,
             current_view: CurrentView::default(),
             db_conn,
             now_playing: None,
@@ -410,6 +520,7 @@ impl Component for App {
             active_source: None,
             settings: Settings::load(),
             mpris: mpris::spawn_mpris_server(),
+            switcher_syncing: false,
         };
 
         // Relay MPRIS commands from tokio to the GTK main loop
@@ -432,7 +543,7 @@ impl Component for App {
                 // First run: auto-prompt Plex connection
                 sender_init.input(AppMsg::ShowConnectionDialog);
             } else {
-                sender_init.input(AppMsg::Navigate(LibraryType::Movie));
+                sender_init.input(AppMsg::NavigateHome);
             }
         });
 
@@ -445,13 +556,63 @@ impl Component for App {
     #[allow(clippy::too_many_lines)]
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
+            AppMsg::NavigateHome => {
+                self.current_view = CurrentView::Home;
+                self.stack.set_visible_child_name("shell");
+                self.nav_view.replace_with_tags(&["home"]);
+                root.set_fullscreened(false);
+                root.set_title(Some("Reel"));
+                // Load home data: in-progress from local DB + recently_added from source
+                let in_progress = load_in_progress(&self.db_conn);
+                self.home_view
+                    .emit(HomeViewMsg::LoadHome { in_progress });
+            }
             AppMsg::Navigate(library_type) => {
                 self.current_view = CurrentView::Library(library_type);
                 self.stack.set_visible_child_name("shell");
+                self.nav_view.replace_with_tags(&["library"]);
                 root.set_fullscreened(false);
                 root.set_title(Some("Reel"));
+                // Sync sidebar selection from ViewSwitcher / other triggers
+                if !self.switcher_syncing {
+                    self.switcher_syncing = true;
+                    self.sidebar
+                        .emit(crate::components::sidebar::SidebarMsg::SelectExternal(
+                            library_type,
+                        ));
+                    self.switcher_syncing = false;
+                }
                 self.library_view
                     .emit(LibraryViewMsg::LoadLibrary(library_type));
+            }
+            AppMsg::ShowHomeDetail(item) => {
+                self.stack.set_visible_child_name("shell");
+                self.current_view = match item.media_type {
+                    MediaType::Movie => CurrentView::MovieDetail(item.id.clone()),
+                    MediaType::Show => CurrentView::ShowDetail(item.id.clone()),
+                    _ => CurrentView::Home,
+                };
+                match item.media_type {
+                    MediaType::Movie => {
+                        self.movie_detail
+                            .emit(MovieDetailMsg::LoadMovie(item.clone()));
+                        let page = adw::NavigationPage::builder()
+                            .title(&item.title)
+                            .child(self.movie_detail.widget())
+                            .build();
+                        self.nav_view.push(&page);
+                    }
+                    MediaType::Show => {
+                        self.show_detail
+                            .emit(ShowDetailMsg::LoadShow(item.clone()));
+                        let page = adw::NavigationPage::builder()
+                            .title(&item.title)
+                            .child(self.show_detail.widget())
+                            .build();
+                        self.nav_view.push(&page);
+                    }
+                    _ => {}
+                }
             }
             AppMsg::ShowMovieDetail(item) => {
                 self.current_view = CurrentView::MovieDetail(item.id.clone());
@@ -705,6 +866,10 @@ impl Component for App {
 
                 self.active_source = Some(source.clone());
 
+                self.home_view.emit(HomeViewMsg::SetSource(
+                    source.clone(),
+                    artwork_cache.clone(),
+                ));
                 self.library_view.emit(LibraryViewMsg::SetSource(
                     source.clone(),
                     artwork_cache.clone(),
@@ -746,6 +911,7 @@ impl Component for App {
             AppMsg::ShowCollections => {
                 self.current_view = CurrentView::Collections;
                 self.stack.set_visible_child_name("shell");
+                self.nav_view.replace_with_tags(&["library"]);
                 root.set_fullscreened(false);
                 root.set_title(Some("Reel"));
                 self.library_view.emit(LibraryViewMsg::LoadCollections);
@@ -863,6 +1029,20 @@ impl Component for App {
                     root.close();
                 }
             },
+            AppMsg::ViewSwitcherChanged(library_type) => {
+                if self.switcher_syncing {
+                    return;
+                }
+                self.switcher_syncing = true;
+                self.sidebar
+                    .emit(crate::components::sidebar::SidebarMsg::SelectExternal(
+                        library_type,
+                    ));
+                self.switcher_syncing = false;
+                self.current_view = CurrentView::Library(library_type);
+                self.library_view
+                    .emit(LibraryViewMsg::LoadLibrary(library_type));
+            }
         }
     }
 
@@ -907,6 +1087,16 @@ impl Component for App {
 
                 self.active_source = Some(plex_source.clone());
 
+                self.home_view.emit(HomeViewMsg::SetSource(
+                    plex_source.clone(),
+                    artwork_cache.clone(),
+                ));
+                // Re-trigger home data load now that the source is available.
+                // NavigateHome fires before validation completes, so LoadHome
+                // was skipped — retry it here.
+                let in_progress = load_in_progress(&self.db_conn);
+                self.home_view
+                    .emit(HomeViewMsg::LoadHome { in_progress });
                 self.library_view.emit(LibraryViewMsg::SetSource(
                     plex_source.clone(),
                     artwork_cache.clone(),
@@ -1222,6 +1412,33 @@ fn show_file_chooser(window: &adw::ApplicationWindow, sender: relm4::Sender<AppM
     );
 }
 
+/// Query the local database for in-progress items (Continue Watching).
+fn load_in_progress(
+    db_conn: &Option<Connection>,
+) -> Vec<(MediaItem, WatchProgress)> {
+    let Some(conn) = db_conn else {
+        return Vec::new();
+    };
+
+    let watch_repo = WatchProgressRepo::new(conn);
+    let in_progress = match watch_repo.list_in_progress(30) {
+        Ok(items) => items,
+        Err(e) => {
+            tracing::warn!("Failed to load in-progress items: {e}");
+            return Vec::new();
+        }
+    };
+
+    let media_repo = crate::db::media_repo::MediaRepo::new(conn);
+    let mut result = Vec::new();
+    for wp in in_progress {
+        if let Ok(Some(item)) = media_repo.find_by_id(&wp.media_item_id) {
+            result.push((item, wp));
+        }
+    }
+    result
+}
+
 /// Test the saved URL; if unreachable, re-discover the server via plex.tv.
 async fn validate_or_rediscover_source(
     url: String,
@@ -1233,10 +1450,12 @@ async fn validate_or_rediscover_source(
 
     info!("Validating saved Plex connection: {url}");
 
-    // Quick connectivity test on the saved URL
+    // Quick connectivity test on the saved URL.
+    // Use a short timeout — a reachable Plex server responds in <500ms.
+    // If it takes longer, the URL is likely stale and we should re-discover.
     let Ok(http) = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(3))
-        .timeout(std::time::Duration::from_secs(5))
+        .connect_timeout(std::time::Duration::from_secs(1))
+        .timeout(std::time::Duration::from_secs(2))
         .danger_accept_invalid_certs(true)
         .build()
     else {

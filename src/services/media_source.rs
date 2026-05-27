@@ -51,6 +51,20 @@ pub trait MediaSource: Send + Sync {
         ))
     }
 
+    /// Fetch recently added items across all libraries. Default: not supported.
+    async fn recently_added(&self) -> Result<Vec<MediaItem>, SourceError> {
+        Err(SourceError::NotSupported(
+            "Recently added not supported by this source".into(),
+        ))
+    }
+
+    /// Fetch on-deck / continue watching items. Default: not supported.
+    async fn continue_watching(&self) -> Result<Vec<MediaItem>, SourceError> {
+        Err(SourceError::NotSupported(
+            "Continue watching not supported by this source".into(),
+        ))
+    }
+
     /// Report playback progress to the source. Default: no-op.
     async fn report_progress(
         &self,

@@ -1,0 +1,408 @@
+gtk4 - Rust
+https://docs.rs/gtk4/latest/gtk4/
+
+<!DOCTYPE html>gtk4 - Rust
+
+Docs.rs
+
+gtk4-0.11.3
+
+gtk4 0.11.3
+
+Permalink
+
+Docs.rs crate page
+
+MIT
+
+Links
+
+Homepage
+
+Documentation
+
+Repository
+
+crates.io
+
+Source
+
+Owners
+
+GuillaumeGomez
+
+sdroege
+
+bilelmoussaoui
+
+github:gtk-rs:crates-io
+
+Dependencies
+
+cairo-rs ^0.22.0
+
+normal
+
+field-offset ^0.3
+
+normal
+
+futures-channel ^0.3
+
+normal
+
+gdk4 ^0.11.0
+
+normal
+
+gdk-pixbuf ^0.22.0
+
+normal
+
+gio ^0.22.0
+
+normal
+
+glib ^0.22.0
+
+normal
+
+graphene-rs ^0.22.0
+
+normal
+
+gsk4 ^0.11.0
+
+normal
+
+gtk4-macros ^0.11.0
+
+normal
+
+gtk4-sys ^0.11.0
+
+normal
+
+libc ^0.2
+
+normal
+
+pango ^0.22.0
+
+normal
+
+gir-format-check ^0.1
+
+dev
+
+Versions
+
+12.82%
+of the crate is documented
+
+Platform
+
+aarch64-apple-darwin
+
+aarch64-unknown-linux-gnu
+
+i686-pc-windows-msvc
+
+x86_64-pc-windows-msvc
+
+x86_64-unknown-linux-gnu
+
+Feature flags
+
+docs.rs
+
+About docs.rs
+
+Badges
+
+Builds
+
+Metadata
+
+Shorthand URLs
+
+Download
+
+Rustdoc JSON
+
+Build queue
+
+Privacy policy
+
+Rust
+
+Rust website
+
+The Book
+
+Standard Library API Reference
+
+Rust by Example
+
+The Cargo Guide
+
+Clippy Documentation
+
+Skip to main content
+Crate gtk4
+
+Crate gtk4 Copy item path
+Source 
+Expand description
+
+§Rust GTK 4 bindings
+
+The project website is here.
+
+Rust bindings of GTK 4, part of gtk4-rs.
+
+This library contains safe Rust bindings for GTK 4, a
+multi-platform GUI toolkit. It is a part of gtk-rs.
+
+Most of this documentation is generated from the C API.
+Until all parts of the documentation have been reviewed there will be incongruities
+with the actual Rust API.
+
+For a gentle introduction to gtk-rs we recommend the online book
+GUI development with Rust and GTK 4.
+
+See also:
+
+gtk-rs project overview
+
+General GLib family types and object system overview
+
+GTK documentation
+
+GTK Visual Index
+
+§Minimum supported Rust version
+
+Currently, the minimum supported Rust version is 1.83.
+
+§“Hello, World!” example program
+
+GTK needs to be initialized before use by calling init. Creating an
+Application will call init for you.
+
+The gtk4 crate is usually renamed to gtk. You can find an example in
+the features section for how to do this globally in your Cargo.toml.
+
+<code><span class="kw">use </span>gtk4 <span class="kw">as </span>gtk;
+<span class="kw">use </span>gtk::prelude::<span class="kw-2">*</span>;
+<span class="kw">use </span>gtk::{glib, Application, ApplicationWindow};
+
+<span class="kw">fn </span>main() -> glib::ExitCode {
+<span class="kw">let </span>app = Application::builder()
+.application_id(<span class="string">"org.example.HelloWorld"</span>)
+.build();
+
+app.connect_activate(|app| {
+<span class="comment">// We create the main window.
+</span><span class="kw">let </span>window = ApplicationWindow::builder()
+.application(app)
+.default_width(<span class="number">320</span>)
+.default_height(<span class="number">200</span>)
+.title(<span class="string">"Hello, World!"</span>)
+.build();
+
+<span class="comment">// Show the window.
+</span>window.present();
+});
+
+app.run()
+}</code>
+
+§The main loop
+
+In a typical GTK application you set up the UI, assign signal handlers
+and run the main event loop.
+
+<code><span class="kw">use </span>gtk4 <span class="kw">as </span>gtk;
+<span class="kw">use </span>gtk::prelude::<span class="kw-2">*</span>;
+<span class="kw">use </span>gtk::{glib, Application, ApplicationWindow, Button};
+
+<span class="kw">fn </span>main() -> glib::ExitCode {
+<span class="kw">let </span>application = Application::builder()
+.application_id(<span class="string">"com.example.FirstGtkApp"</span>)
+.build();
+
+application.connect_activate(|app| {
+<span class="kw">let </span>window = ApplicationWindow::builder()
+.application(app)
+.title(<span class="string">"First GTK Program"</span>)
+.default_width(<span class="number">350</span>)
+.default_height(<span class="number">70</span>)
+.build();
+
+<span class="kw">let </span>button = Button::with_label(<span class="string">"Click me!"</span>);
+button.connect_clicked(|<span class="kw">_</span>| {
+<span class="macro">eprintln!</span>(<span class="string">"Clicked!"</span>);
+});
+window.set_child(<span class="prelude-val">Some</span>(<span class="kw-2">&</span>button));
+
+window.present();
+});
+
+application.run()
+}</code>
+
+§Threads
+
+GTK is not thread-safe. Accordingly, none of this crate’s structs implement
+Send or Sync.
+
+The thread where init was called is considered the main thread. OS X has
+its own notion of the main thread and init must be called on that thread.
+After successful initialization, calling any gtk or gdk
+functions (including init) from other threads will panic.
+
+Any thread can schedule a closure to be run by the main loop on the main
+thread via glib::idle_add or
+glib::timeout_add. While
+working with GTK you might need the glib::idle_add_local
+or glib::timeout_add_local version without the
+Send bound. Those may only be called from the main thread.
+
+§Panics
+
+The gtk and gdk crates have some run-time safety and contract
+checks.
+
+Any constructor or free function will panic if called before init or on
+a non-main thread.
+
+Any &str or &Path parameter with an interior null (\0) character will cause a panic.
+
+Some functions will panic if supplied out-of-range integer parameters. All
+such cases will be documented individually but they are not yet.
+
+A panic in a closure that handles signals or in any other closure passed
+to a gtk function will abort the process.
+
+§Features
+
+§Library versions
+
+By default this crate provides only GTK 4.0 APIs. You can access additional
+functionality by selecting one of the v4_2, v4_4, etc. features.
+
+Cargo.toml example:
+
+<code>[dependencies.gtk]
+package = "gtk4"
+version = "0.x.y"
+features = ["v4_2"]</code>
+
+Take care when choosing the version to target: some of your users might
+not have easy access to the latest ones. The higher the version, the fewer
+users will have it installed.
+
+§Documentation
+
+The Rust API Stable/Development
+
+Book Stable/Development
+
+Examples
+
+The C API
+
+GTK Installation Instructions
+
+§Using
+
+We recommend using crates from crates.io,
+as demonstrated here.
+
+If you want to track the bleeding edge, use the git dependency instead:
+
+<code>[dependencies]
+gtk = { git = "https://github.com/gtk-rs/gtk4-rs.git", package = "gtk4" }</code>
+
+Avoid mixing versioned and git crates like this:
+
+<code># This will not compile
+[dependencies]
+gdk = {version = "0.1", package = "gdk4"}
+gtk = { git = "https://github.com/gtk-rs/gtk4-rs.git", package = "gtk4" }</code>
+
+§Features
+
+FeatureDescription
+
+v4_22Enable the new APIs part of GTK 4.22
+
+v4_20Enable the new APIs part of GTK 4.20
+
+v4_18Enable the new APIs part of GTK 4.18
+
+v4_16Enable the new APIs part of GTK 4.16
+
+v4_14Enable the new APIs part of GTK 4.14
+
+v4_12Enable the new APIs part of GTK 4.12
+
+v4_10Enable the new APIs part of GTK 4.10
+
+v4_8Enable the new APIs part of GTK 4.8
+
+v4_6Enable the new APIs part of GTK 4.6
+
+v4_4Enable the new APIs part of GTK 4.4
+
+v4_2Enable the new APIs part of GTK 4.2
+
+gnome_50Enable all version feature flags of this crate and its dependencies to match the GNOME 50 SDK
+
+gnome_49Enable all version feature flags of this crate and its dependencies to match the GNOME 49 SDK
+
+gnome_48Enable all version feature flags of this crate and its dependencies to match the GNOME 48 SDK
+
+gnome_47Enable all version feature flags of this crate and its dependencies to match the GNOME 47 SDK
+
+gnome_46Enable all version feature flags of this crate and its dependencies to match the GNOME 46 SDK
+
+gnome_45Enable all version feature flags of this crate and its dependencies to match the GNOME 45 SDK
+
+gnome_44Enable all version feature flags of this crate and its dependencies to match the GNOME 44 SDK
+
+gnome_43Enable all version feature flags of this crate and its dependencies to match the GNOME 43 SDK
+
+gnome_42Enable all version feature flags of this crate and its dependencies to match the GNOME 42 SDK
+
+unsafe-assume-initializedDisable checks that gtk is initialized, for use in C ABI libraries
+
+xml_validationEnable xml_validation feature of gtk4-macros
+
+blueprintEnable blueprint feature of gtk4-macros
+
+§See Also
+
+glib
+
+gio
+
+gdk4
+
+gsk4
+
+§License
+
+The Rust bindings of gtk4 are available under the MIT License, please refer to it.
+
+Re-exports§
+pub use subclass::widget::TemplateChild;pub use cairo;pub use gdk;pub use gdk_pixbuf;pub use gio;pub use glib;pub use graphene;pub use gsk;pub use gtk4_sys as ffi;pub use pango;
+Modules§
+accessiblebuildersBuilder pattern types.preludeTraits intended for blanket imports.subclassTraits intended for creating custom types.
+Structs§
+ATContextGLib type: GObject with reference counted clone semantics.AboutDialogGLib type: GObject with reference counted clone semantics.AccessibleGLib type: GObject with reference counted clone semantics.AccessibleHyperlinkv4_22GLib type: GObject with reference counted clone semantics.AccessibleHypertextv4_22GLib type: GObject with reference counted clone semantics.AccessibleListv4_14GLib type: Boxed type with copy-on-clone semantics.AccessibleRangev4_10GLib type: GObject with reference counted clone semantics.AccessibleTextv4_14GLib type: GObject with reference counted clone semantics.AccessibleTextRangev4_14GLib type: Inline allocated boxed type with stack copy semantics.ActionBarGLib type: GObject with reference counted clone semantics.ActionableGLib type: GObject with reference counted clone semantics.ActivateActionGLib type: GObject with reference counted clone semantics.AdjustmentGLib type: GObject with reference counted clone semantics.AlertDialogv4_10GLib type: GObject with reference counted clone semantics.AlternativeTriggerGLib type: GObject with reference counted clone semantics.AnyFilterGLib type: GObject with reference counted clone semantics.AppChooserDeprecatedGLib type: GObject with reference counted clone semantics.AppChooserButtonDeprecatedGLib type: GObject with reference counted clone semantics.AppChooserDialogDeprecatedGLib type: GObject with reference counted clone semantics.AppChooserWidgetDeprecatedGLib type: GObject with reference counted clone semantics.ApplicationGLib type: GObject with reference counted clone semantics.ApplicationInhibitFlagsApplicationWindowGLib type: GObject with reference counted clone semantics.AspectFrameGLib type: GObject with reference counted clone semantics.AssistantDeprecatedGLib type: GObject with reference counted clone semantics.AssistantPageDeprecatedGLib type: GObject with reference counted clone semantics.BinLayoutGLib type: GObject with reference counted clone semantics.BitsetGLib type: Shared boxed type with reference counted clone semantics.BitsetIterBookmarkListGLib type: GObject with reference counted clone semantics.BoolFilterGLib type: GObject with reference counted clone semantics.BorderGLib type: Inline allocated boxed type with stack copy semantics.BoxGLib type: GObject with reference counted clone semantics.BoxLayoutGLib type: GObject with reference counted clone semantics.BuildableGLib type: GObject with reference counted clone semantics.BuilderGLib type: GObject with reference counted clone semantics.BuilderCScopeGLib type: GObject with reference counted clone semantics.BuilderClosureFlagsBuilderListItemFactoryGLib type: GObject with reference counted clone semantics.BuilderRustScopeAn implementation of BuilderScope that can bind Rust callbacks.BuilderScopeGLib type: GObject with reference counted clone semantics.ButtonGLib type: GObject with reference counted clone semantics.CalendarGLib type: GObject with reference counted clone semantics.CallbackActionGLib type: GObject with reference counted clone semantics.CellAreaDeprecatedGLib type: GObject with reference counted clone semantics.CellAreaBoxDeprecatedGLib type: GObject with reference counted clone semantics.CellAreaContextDeprecatedGLib type: GObject with reference counted clone semantics.CellEditableDeprecatedGLib type: GObject with reference counted clone semantics.CellLayoutDeprecatedGLib type: GObject with reference counted clone semantics.CellRendererDeprecatedGLib type: GObject with reference counted clone semantics.CellRendererAccelDeprecatedGLib type: GObject with reference counted clone semantics.CellRendererComboDeprecatedGLib type: GObject with reference counted clone semantics.CellRendererPixbufDeprecatedGLib type: GObject with reference counted clone semantics.CellRendererProgressDeprecatedGLib type: GObject with reference counted clone semantics.CellRendererSpinDeprecatedGLib type: GObject with reference counted clone semantics.CellRendererSpinnerDeprecatedGLib type: GObject with reference counted clone semantics.CellRendererStateDeprecatedCellRendererTextDeprecatedGLib type: GObject with reference counted clone semantics.CellRendererToggleDeprecatedGLib type: GObject with reference counted clone semantics.CellViewDeprecatedGLib type: GObject with reference counted clone semantics.CenterBoxGLib type: GObject with reference counted clone semantics.CenterLayoutGLib type: GObject with reference counted clone semantics.CheckButtonGLib type: GObject with reference counted clone semantics.ClosureExpressionGLib type: Shared boxed type with reference counted clone semantics.ColorButtonDeprecatedGLib type: GObject with reference counted clone semantics.ColorChooserDeprecatedGLib type: GObject with reference counted clone semantics.ColorChooserDialogDeprecatedGLib type: GObject with reference counted clone semantics.ColorChooserWidgetDeprecatedGLib type: GObject with reference counted clone semantics.ColorDialogv4_10GLib type: GObject with reference counted clone semantics.ColorDialogButtonv4_10GLib type: GObject with reference counted clone semantics.ColumnViewGLib type: GObject with reference counted clone semantics.ColumnViewCellv4_12GLib type: GObject with reference counted clone semantics.ColumnViewColumnGLib type: GObject with reference counted clone semantics.ColumnViewRowv4_12GLib type: GObject with reference counted clone semantics.ColumnViewSorterv4_10GLib type: GObject with reference counted clone semantics.ComboBoxDeprecatedGLib type: GObject with reference counted clone semantics.ComboBoxTextDeprecatedGLib type: GObject with reference counted clone semantics.ConstantExpressionGLib type: Shared boxed type with reference counted clone semantics.ConstraintGLib type: GObject with reference counted clone semantics.ConstraintGuideGLib type: GObject with reference counted clone semantics.ConstraintLayoutGLib type: GObject with reference counted clone semantics.ConstraintLayoutChildGLib type: GObject with reference counted clone semantics.ConstraintTargetGLib type: GObject with reference counted clone semantics.CssLocationGLib type: Inline allocated boxed type with stack copy semantics.CssProviderGLib type: GObject with reference counted clone semantics.CssSectionGLib type: Shared boxed type with reference counted clone semantics.CustomFilterGLib type: GObject with reference counted clone semantics.CustomSorterGLib type: GObject with reference counted clone semantics.DebugFlagsDialogDeprecatedGLib type: GObject with reference counted clone semantics.DialogFlagsDeprecatedDirectoryListGLib type: GObject with reference counted clone semantics.DragIconGLib type: GObject with reference counted clone semantics.DragSourceGLib type: GObject with reference counted clone semantics.DrawingAreaGLib type: GObject with reference counted clone semantics.DropControllerMotionGLib type: GObject with reference counted clone semantics.DropDownGLib type: GObject with reference counted clone semantics.DropTargetGLib type: GObject with reference counted clone semantics.DropTargetAsyncGLib type: GObject with reference counted clone semantics.EditableGLib type: GObject with reference counted clone semantics.EditableLabelGLib type: GObject with reference counted clone semantics.EmojiChooserGLib type: GObject with reference counted clone semantics.EntryGLib type: GObject with reference counted clone semantics.EntryBufferGLib type: GObject with reference counted clone semantics.EntryCompletionDeprecatedGLib type: GObject with reference counted clone semantics.EventControllerGLib type: GObject with reference counted clone semantics.EventControllerFocusGLib type: GObject with reference counted clone semantics.EventControllerKeyGLib type: GObject with reference counted clone semantics.EventControllerLegacyGLib type: GObject with reference counted clone semantics.EventControllerMotionGLib type: GObject with reference counted clone semantics.EventControllerScrollGLib type: GObject with reference counted clone semantics.EventControllerScrollFlagsEveryFilterGLib type: GObject with reference counted clone semantics.ExpanderGLib type: GObject with reference counted clone semantics.ExpressionGLib type: Shared boxed type with reference counted clone semantics.ExpressionWatchGLib type: Shared boxed type with reference counted clone semantics.FileChooserDeprecatedGLib type: GObject with reference counted clone semantics.FileChooserDialogDeprecatedGLib type: GObject with reference counted clone semantics.FileChooserNativeDeprecatedGLib type: GObject with reference counted clone semantics.FileChooserWidgetDeprecatedGLib type: GObject with reference counted clone semantics.FileDialogv4_10GLib type: GObject with reference counted clone semantics.FileFilterGLib type: GObject with reference counted clone semantics.FileLauncherv4_10GLib type: GObject with reference counted clone semantics.FilterGLib type: GObject with reference counted clone semantics.FilterListModelGLib type: GObject with reference counted clone semantics.FixedGLib type: GObject with reference counted clone semantics.FixedLayoutGLib type: GObject with reference counted clone semantics.FixedLayoutChildGLib type: GObject with reference counted clone semantics.FlattenListModelGLib type: GObject with reference counted clone semantics.FlowBoxGLib type: GObject with reference counted clone semantics.FlowBoxChildGLib type: GObject with reference counted clone semantics.FontButtonDeprecatedGLib type: GObject with reference counted clone semantics.FontChooserDeprecatedGLib type: GObject with reference counted clone semantics.FontChooserDialogDeprecatedGLib type: GObject with reference counted clone semantics.FontChooserLevelDeprecatedFontChooserWidgetDeprecatedGLib type: GObject with reference counted clone semantics.FontDialogv4_10GLib type: GObject with reference counted clone semantics.FontDialogButtonv4_10GLib type: GObject with reference counted clone semantics.FrameGLib type: GObject with reference counted clone semantics.GLAreaGLib type: GObject with reference counted clone semantics.GestureGLib type: GObject with reference counted clone semantics.GestureClickGLib type: GObject with reference counted clone semantics.GestureDragGLib type: GObject with reference counted clone semantics.GestureLongPressGLib type: GObject with reference counted clone semantics.GesturePanGLib type: GObject with reference counted clone semantics.GestureRotateGLib type: GObject with reference counted clone semantics.GestureSingleGLib type: GObject with reference counted clone semantics.GestureStylusGLib type: GObject with reference counted clone semantics.GestureSwipeGLib type: GObject with reference counted clone semantics.GestureZoomGLib type: GObject with reference counted clone semantics.GraphicsOffloadv4_14GLib type: GObject with reference counted clone semantics.GridGLib type: GObject with reference counted clone semantics.GridLayoutGLib type: GObject with reference counted clone semantics.GridLayoutChildGLib type: GObject with reference counted clone semantics.GridViewGLib type: GObject with reference counted clone semantics.HeaderBarGLib type: GObject with reference counted clone semantics.IMContextGLib type: GObject with reference counted clone semantics.IMContextSimpleGLib type: GObject with reference counted clone semantics.IMMulticontextGLib type: GObject with reference counted clone semantics.IconLookupFlagsIconPaintableGLib type: GObject with reference counted clone semantics.IconThemeGLib type: GObject with reference counted clone semantics.IconViewDeprecatedGLib type: GObject with reference counted clone semantics.ImageGLib type: GObject with reference counted clone semantics.InfoBarDeprecatedGLib type: GObject with reference counted clone semantics.InputHintsInscriptionv4_8GLib type: GObject with reference counted clone semantics.KeyvalTriggerGLib type: GObject with reference counted clone semantics.LabelGLib type: GObject with reference counted clone semantics.LayoutChildGLib type: GObject with reference counted clone semantics.LayoutManagerGLib type: GObject with reference counted clone semantics.LevelBarGLib type: GObject with reference counted clone semantics.LinkButtonGLib type: GObject with reference counted clone semantics.ListBaseGLib type: GObject with reference counted clone semantics.ListBoxGLib type: GObject with reference counted clone semantics.ListBoxRowGLib type: GObject with reference counted clone semantics.ListHeaderv4_12GLib type: GObject with reference counted clone semantics.ListItemGLib type: GObject with reference counted clone semantics.ListItemFactoryGLib type: GObject with reference counted clone semantics.ListScrollFlagsv4_12ListStoreDeprecatedGLib type: GObject with reference counted clone semantics.ListViewGLib type: GObject with reference counted clone semantics.LockButtonDeprecatedGLib type: GObject with reference counted clone semantics.MapListModelGLib type: GObject with reference counted clone semantics.MediaControlsGLib type: GObject with reference counted clone semantics.MediaFileGLib type: GObject with reference counted clone semantics.MediaStreamGLib type: GObject with reference counted clone semantics.MenuButtonGLib type: GObject with reference counted clone semantics.MessageDialogDeprecatedGLib type: GObject with reference counted clone semantics.MnemonicActionGLib type: GObject with reference counted clone semantics.MnemonicTriggerGLib type: GObject with reference counted clone semantics.MountOperationGLib type: GObject with reference counted clone semantics.MultiFilterGLib type: GObject with reference counted clone semantics.MultiSelectionGLib type: GObject with reference counted clone semantics.MultiSorterGLib type: GObject with reference counted clone semantics.NamedActionGLib type: GObject with reference counted clone semantics.NativeGLib type: GObject with reference counted clone semantics.NativeDialogGLib type: GObject with reference counted clone semantics.NeverTriggerGLib type: GObject with reference counted clone semantics.NoSelectionGLib type: GObject with reference counted clone semantics.NotebookGLib type: GObject with reference counted clone semantics.NotebookPageGLib type: GObject with reference counted clone semantics.NothingActionGLib type: GObject with reference counted clone semantics.NumericSorterGLib type: GObject with reference counted clone semantics.ObjectExpressionGLib type: Shared boxed type with reference counted clone semantics.OrientableGLib type: GObject with reference counted clone semantics.OverlayGLib type: GObject with reference counted clone semantics.OverlayLayoutGLib type: GObject with reference counted clone semantics.OverlayLayoutChildGLib type: GObject with reference counted clone semantics.PadActionEntryGLib type: Inline allocated boxed type with stack copy semantics.PadControllerGLib type: GObject with reference counted clone semantics.PageRangeGLib type: Inline allocated boxed type with stack copy semantics.PageSetupGLib type: GObject with reference counted clone semantics.PageSetupUnixDialogLinuxGLib type: GObject with reference counted clone semantics.PanedGLib type: GObject with reference counted clone semantics.PaperSizeGLib type: Boxed type with copy-on-clone semantics.ParamSpecExpressionGLib type: Shared boxed type with reference counted clone semantics.PasswordEntryGLib type: GObject with reference counted clone semantics.PasswordEntryBufferv4_4GLib type: GObject with reference counted clone semantics.PickFlagsPictureGLib type: GObject with reference counted clone semantics.PopoverGLib type: GObject with reference counted clone semantics.PopoverBinv4_22GLib type: GObject with reference counted clone semantics.PopoverMenuGLib type: GObject with reference counted clone semantics.PopoverMenuBarGLib type: GObject with reference counted clone semantics.PopoverMenuFlagsPrintCapabilitiesLinuxPrintContextGLib type: GObject with reference counted clone semantics.PrintDialogv4_14GLib type: GObject with reference counted clone semantics.PrintJobLinuxGLib type: GObject with reference counted clone semantics.PrintOperationGLib type: GObject with reference counted clone semantics.PrintOperationPreviewGLib type: GObject with reference counted clone semantics.PrintSettingsGLib type: GObject with reference counted clone semantics.PrintSetupv4_14GLib type: Shared boxed type with reference counted clone semantics.PrintUnixDialogLinuxGLib type: GObject with reference counted clone semantics.PrinterLinuxGLib type: GObject with reference counted clone semantics.ProgressBarGLib type: GObject with reference counted clone semantics.PropertyExpressionGLib type: Shared boxed type with reference counted clone semantics.RangeGLib type: GObject with reference counted clone semantics.RecentDataGLib type: Inline allocated boxed type with stack copy semantics.RecentInfoGLib type: Shared boxed type with reference counted clone semantics.RecentManagerGLib type: GObject with reference counted clone semantics.RequisitionGLib type: Inline allocated boxed type with stack copy semantics.RevealerGLib type: GObject with reference counted clone semantics.RootGLib type: GObject with reference counted clone semantics.ScaleGLib type: GObject with reference counted clone semantics.ScaleButtonGLib type: GObject with reference counted clone semantics.ScrollInfov4_12GLib type: Shared boxed type with reference counted clone semantics.ScrollableGLib type: GObject with reference counted clone semantics.ScrollbarGLib type: GObject with reference counted clone semantics.ScrolledWindowGLib type: GObject with reference counted clone semantics.SearchBarGLib type: GObject with reference counted clone semantics.SearchEntryGLib type: GObject with reference counted clone semantics.SectionModelv4_12GLib type: GObject with reference counted clone semantics.SelectionFilterModelGLib type: GObject with reference counted clone semantics.SelectionModelGLib type: GObject with reference counted clone semantics.SeparatorGLib type: GObject with reference counted clone semantics.SettingsGLib type: GObject with reference counted clone semantics.ShortcutGLib type: GObject with reference counted clone semantics.ShortcutActionGLib type: GObject with reference counted clone semantics.ShortcutActionFlagsShortcutControllerGLib type: GObject with reference counted clone semantics.ShortcutLabelDeprecatedGLib type: GObject with reference counted clone semantics.ShortcutManagerGLib type: GObject with reference counted clone semantics.ShortcutTriggerGLib type: GObject with reference counted clone semantics.ShortcutsGroupDeprecatedGLib type: GObject with reference counted clone semantics.ShortcutsSectionDeprecatedGLib type: GObject with reference counted clone semantics.ShortcutsShortcutDeprecatedGLib type: GObject with reference counted clone semantics.ShortcutsWindowDeprecatedGLib type: GObject with reference counted clone semantics.SignalActionGLib type: GObject with reference counted clone semantics.SignalListItemFactoryGLib type: GObject with reference counted clone semantics.SingleSelectionGLib type: GObject with reference counted clone semantics.SizeGroupGLib type: GObject with reference counted clone semantics.SliceListModelGLib type: GObject with reference counted clone semantics.SnapshotGLib type: GObject with reference counted clone semantics.SortListModelGLib type: GObject with reference counted clone semantics.SorterGLib type: GObject with reference counted clone semantics.SpinButtonGLib type: GObject with reference counted clone semantics.SpinnerGLib type: GObject with reference counted clone semantics.StackGLib type: GObject with reference counted clone semantics.StackPageGLib type: GObject with reference counted clone semantics.StackSidebarGLib type: GObject with reference counted clone semantics.StackSwitcherGLib type: GObject with reference counted clone semantics.StateFlagsStatusbarDeprecatedGLib type: GObject with reference counted clone semantics.StringFilterGLib type: GObject with reference counted clone semantics.StringListGLib type: GObject with reference counted clone semantics.StringObjectGLib type: GObject with reference counted clone semantics.StringSorterGLib type: GObject with reference counted clone semantics.StyleContextDeprecatedGLib type: GObject with reference counted clone semantics.StyleContextPrintFlagsStyleProviderGLib type: GObject with reference counted clone semantics.Svgv4_22GLib type: GObject with reference counted clone semantics.SvgFeaturesv4_22SwitchGLib type: GObject with reference counted clone semantics.SymbolicPaintablev4_6GLib type: GObject with reference counted clone semantics.TextGLib type: GObject with reference counted clone semantics.TextBufferGLib type: GObject with reference counted clone semantics.TextBufferNotifyFlagsv4_16TextChildAnchorGLib type: GObject with reference counted clone semantics.TextIterGLib type: Inline allocated boxed type with stack copy semantics.TextMarkGLib type: GObject with reference counted clone semantics.TextSearchFlagsTextTagGLib type: GObject with reference counted clone semantics.TextTagTableGLib type: GObject with reference counted clone semantics.TextViewGLib type: GObject with reference counted clone semantics.TickCallbackIdToggleButtonGLib type: GObject with reference counted clone semantics.TooltipGLib type: GObject with reference counted clone semantics.TreeDragDestDeprecatedGLib type: GObject with reference counted clone semantics.TreeDragSourceDeprecatedGLib type: GObject with reference counted clone semantics.TreeExpanderGLib type: GObject with reference counted clone semantics.TreeIterGLib type: Inline allocated boxed type with stack copy semantics.TreeListModelGLib type: GObject with reference counted clone semantics.TreeListRowGLib type: GObject with reference counted clone semantics.TreeListRowSorterGLib type: GObject with reference counted clone semantics.TreeModelDeprecatedGLib type: GObject with reference counted clone semantics.TreeModelFilterDeprecatedGLib type: GObject with reference counted clone semantics.TreeModelFlagsDeprecatedTreeModelSortDeprecatedGLib type: GObject with reference counted clone semantics.TreePathGLib type: Boxed type with copy-on-clone semantics.TreeRowReferenceGLib type: Boxed type with copy-on-clone semantics.TreeSelectionDeprecatedGLib type: GObject with reference counted clone semantics.TreeSortableDeprecatedGLib type: GObject with reference counted clone semantics.TreeStoreDeprecatedGLib type: GObject with reference counted clone semantics.TreeViewDeprecatedGLib type: GObject with reference counted clone semantics.TreeViewColumnDeprecatedGLib type: GObject with reference counted clone semantics.UriLauncherv4_10GLib type: GObject with reference counted clone semantics.VideoGLib type: GObject with reference counted clone semantics.ViewportGLib type: GObject with reference counted clone semantics.VolumeButtonDeprecatedGLib type: GObject with reference counted clone semantics.WidgetGLib type: GObject with reference counted clone semantics.WidgetPaintableGLib type: GObject with reference counted clone semantics.WindowGLib type: GObject with reference counted clone semantics.WindowControlsGLib type: GObject with reference counted clone semantics.WindowGroupGLib type: GObject with reference counted clone semantics.WindowHandleGLib type: GObject with reference counted clone semantics.
+Enums§
+AccessibleAnnouncementPriorityv4_14AccessibleAutocompleteAccessibleInvalidStateAccessiblePlatformStatev4_10AccessiblePropertyAccessibleRelationAccessibleRoleAccessibleSortAccessibleStateAccessibleTextContentChangev4_14AccessibleTextGranular
+
+[… truncated 5887 chars …]

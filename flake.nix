@@ -34,6 +34,10 @@
         hicolor-icon-theme
         libepoxy
 
+        # OpenGL / EGL (needed by GTK GLArea + mpv render context)
+        libGL
+        mesa  # provides actual GL/EGL drivers + vendor JSON for libglvnd dispatch
+
         # System libraries
         glib
         cairo
@@ -75,6 +79,9 @@
 
           # Set up GTK schema paths
           export XDG_DATA_DIRS="${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk4}/share/gsettings-schemas/${pkgs.gtk4.name}:$XDG_DATA_DIRS"
+
+          # Wire Mesa EGL vendor so libglvnd can dispatch to GPU drivers
+          export __EGL_VENDOR_LIBRARY_DIRS="${pkgs.mesa}/share/glvnd/egl_vendor.d"
 
           export RUST_BACKTRACE=1
           export PKG_CONFIG_PATH="${pkgs.lib.makeSearchPathOutput "dev" "lib/pkgconfig" buildInputs}:$PKG_CONFIG_PATH"

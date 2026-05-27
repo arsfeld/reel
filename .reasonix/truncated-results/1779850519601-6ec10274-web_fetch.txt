@@ -1,0 +1,2021 @@
+Infuse Release Notes | Firecore
+https://firecore.com/releases
+
+<!DOCTYPE html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Infuse Release Notes | Firecore
+
+Skip to main content
+
+Infuse Release Notes
+
+A complete history of Infuse updates — major releases, new features, performance improvements, and bug fixes — across iPhone, iPad, Apple TV, Mac, and Vision Pro.
+
+iOS / iPadOS
+tvOS
+macOS
+visionOS
+
+Infuse 8.4.5
+
+iOS / iPadOS
+
+May 19, 2026
+
+New
+
+Use custom artwork for home screen favorite icons
+
+Added original language option for artwork
+
+Improved
+
+Improved language support for metadata and artwork
+
+Improved token lifespan for 115 Cloud Drive 
+
+Fixed
+
+Fixed font size when seasons have custom titles
+
+Fixed appearance of quick menus
+
+Fixed a playback related crash
+
+Fixed minor issues with mark as watched/unwatched button
+
+Fixed possible noise when volume boost is active
+
+Other minor improvements and fixes
+
+Infuse 8.4.4
+
+iOS / iPadOS
+
+May 5, 2026
+
+New
+
+API additions for metadata, playback, downloads, and playlists (firecore.com/api)
+
+Improved
+
+Under-the-hood improvements for add shares menus
+
+Improved tappable area of playback controls
+
+Fixed
+
+Fixed issues with TV show indexing
+
+Fixed incorrect color of popup menus
+
+Fixed dimmed multi-select menu
+
+Fixed crash when adding items to playlists/collections
+
+Fixed inconsistent behavior of Mark as Watched/Unwatched buttons
+
+Other minor improvements and fixes
+
+Infuse 8.4.3
+
+iOS / iPadOS
+
+Apr 21, 2026
+
+New
+
+Reorder Home Screen favorites
+
+Option to hide the Library icon
+
+Mark multiple items as watched/unwatched
+
+Support for ruby subtitle tags
+
+Added See All button for favorites section
+
+Improved
+
+Improved subtitle tag parser
+
+Improvements for extras in local folders
+
+Improved tappable area for seek bar
+
+Improved color handling for WebVTT subtitles
+
+Improved extras indexing when specials are present
+
+Fixed
+
+Fixed scrolling issues for Emby, Jellyfin, and Plex servers
+
+Fixed favorites section unexpectedly moving after adding a media share
+
+Fixed extras not being detected for single-episode TV shows
+
+Fixed issues with Emby artwork not updating
+
+Fixed error when resuming playback of certain files
+
+Fixed handling of invalid deep links
+
+Other minor improvements and fixes
+
+Infuse 8.4.2
+
+iOS / iPadOS
+
+Apr 7, 2026
+
+New
+
+Added support for Bwdif deinterlacing (Highest Quality)
+
+Recognize default tags in external audio track names
+
+Support for extras for local files/folders
+
+Improved
+
+Improvements for skip intros and credits
+
+Improvements for iOS 26.4
+
+Fixed
+
+Fixed issues with Picture-in-Picture (PiP) features
+
+Fixed video aspect ratio issues
+
+Fixed judder when scrolling to extras section
+
+Fixed special episodes being treated as extras
+
+Fixed ability to disable movie folder indexing with .nomedia files
+
+Fixed indexing of movies inside folders added as favorites
+
+Fixes for MEGA connections
+
+Other minor improvements and fixes
+
+Infuse 8.4.1
+
+iOS / iPadOS
+
+Mar 31, 2026
+
+New
+
+Added extras for Blu-ray and DVD folders
+
+Added Kerberos authentication for SMB
+
+Added poster shaped artwork for Favorites
+
+Improved
+
+Improved support for TheIntroDB.org
+
+Improved layout of Extras section for movies
+
+Improved SMB performance and reliability
+
+Improved filtering of unplayable Plex Pass extras
+
+Fixed
+
+Fixed deinterlacing features
+
+Fixed a crash when using deep link features
+
+Fixed incorrect Playlist icon
+
+Fixed ability to add ‘All Movies’ and ‘All TV Shows’ sections
+
+Other minor improvements and fixes
+
+Infuse 8.4
+
+iOS / iPadOS
+
+Mar 24, 2026
+
+New
+
+Display extras, deleted scenes, trailers, etc... for movies and TV shows
+
+Skip intros, credits, and recaps
+
+Pin library and folder favorites to the home screen
+
+Choose different default languages for metadata and artwork
+
+Increased max number of Watching list items
+
+Options to scan or ignore local metadata and artwork
+
+Support external audio tracks for videos
+
+Support for VVC (h.266) videos
+
+Improved
+
+Supercharged playback core with many improvements
+
+Improved handling of local TV show artwork
+
+Improvements for Trakt sync
+
+Improved default home screen lists
+
+Many other minor improvements and fixes
+
+Infuse 8.3.9
+
+iOS / iPadOS
+
+Feb 24, 2026
+
+New
+
+Added an option for fnOS when connecting to Jellyfin
+
+Improved
+
+Optimizations and fixes for Trakt sync
+
+Improved handling of Emby rate limits
+
+Fixed
+
+Fixed missing lists when searching by cast & crew
+
+Fixed error when deleting files over WebDAV
+
+Fixed a crash when deleting files on Plex
+
+Other minor improvements and fixes
+
+Infuse 8.3.8
+
+iOS / iPadOS
+
+Feb 15, 2026
+
+Fixed
+
+Fixed connection issues with Feiniu (飞牛) servers
+
+Fixed crash when running speed tests
+
+Fixed poster artwork in Control Center
+
+Other minor improvements and fixes
+
+Infuse 8.3.7
+
+iOS / iPadOS
+
+Feb 4, 2026
+
+New
+
+Search for titles when opening deep linked items that are not present in the Library
+
+Fixed
+
+Fixed issues with missing cast and crew artwork
+
+Fixed offline files moving to the top of Recently Added
+
+Fixed connection issues with Emby & Jellyfin
+
+Fixed connection issues with Feiniu (飞牛) servers
+
+Fixed playback of some Chinese ASS subtitles with unavailable fonts
+
+Fixed crash when deleting items on Plex servers
+
+Fixed artwork fetching in some regions
+
+Other minor improvements and fixes
+
+Infuse 8.3.6
+
+iOS / iPadOS
+
+Jan 20, 2026
+
+New
+
+Plex Home (managed) user profiles
+
+Playback Stats (HUD) overlay to display real-time details during playback
+
+Added ‘Select’ and ‘Select All’ to context menu
+
+Improved
+
+Improved purchase flow when starting from App Store page
+
+Improved reactivity levels for Ambient Mode
+
+Improved external subtitles detection for movie folders
+
+Improved color tag parsing logic in subtitles
+
+Minor improvements for HDR subtitle brightness
+
+Fixed
+
+Fixed a memory leak in software decoder
+
+Fixed login flow for Jellyfin 10.12
+
+Fixed appearance of file sort button
+
+Fixed issues with automatic light/dark icon switching
+
+Other minor improvements and fixes
+
+Infuse 8.3.5
+
+iOS / iPadOS
+
+Dec 17, 2025
+
+New
+
+Renamed ‘Library’ tab to ‘Search’
+
+Improved
+
+Optimized memory allocation for .ASS subtitles
+
+Improved parsing of some SRT subtitles
+
+Improved filtering of escaping symbols from subtitles
+
+Improved character spacing for playback time
+
+Minor UI improvements for Settings screen
+
+Minor improvements for multi-select feature
+
+Fixed
+
+Fixed connections to local shares when using a VPN on cellular connections
+
+Fixed .ASS subtitles sync related to {\move} (and related) tags
+
+Fixed automatic encoding detection in text subtitles
+
+Fixed issues with updating watched statuses from Trakt
+
+Fixed a crash when a search query contains certain Chinese characters
+
+Other minor improvements and fixes
+
+Infuse 8.3.4
+
+iOS / iPadOS
+
+Dec 4, 2025
+
+Fixed
+
+Fixed an App Store related crash
+
+Infuse 8.3.3
+
+iOS / iPadOS
+
+Dec 2, 2025
+
+New
+
+New ‘Ambient Mode’ displays glowing colors in the black bar areas
+
+Transliterate Simplified/Traditional Chinese text for search
+
+Added TMDB details page for deep linked TV series not present in Library
+
+Support color tags in SRT subtitles
+
+Improved
+
+Improved handling of HDR subtitles
+
+Fixed
+
+Fixed order of Emby watching list after a video is removed
+
+Fixes for Turkish subtitles
+
+Fixed visual issues with playback bar for RTL languages
+
+Other minor improvements and fixes
+
+Infuse 8.3.2
+
+iOS / iPadOS
+
+Nov 19, 2025
+
+New
+
+Remove items from Continue Watching list on Emby and Plex servers
+
+Improved
+
+Improved series loading times for Jellyfin 10.11
+
+Improved sort order for special characters
+
+Improvements for iOS 26
+
+Minor visual improvements
+
+Fixed
+
+Fixed crash when adding iCloud Drive links
+
+Fixed loading data on details page for some shows (Emby/Jellyfin)
+
+Fixed slow loading of episode thumbnails (Emby/Jellyfin)
+
+Fixed missing Rate button for TV shows (Emby/Jellyfin)
+
+Other minor improvements and fixes
+
+Infuse 8.3.1
+
+iOS / iPadOS
+
+Nov 5, 2025
+
+New
+
+Option to skip to other movies and TV episodes during playback
+
+Added TMDB details page for deep linked movies not present in Library
+
+Improved
+
+Improved speed of fetching metadata and artwork from TMDB
+
+Improved flow for adding links for TV episodes from iCloud Drive
+
+Improved handling of season and series artwork from Emby and Jellyfin
+
+Improvements and optimizations for playback core
+
+Improved flow when opening videos through the Apple Files app
+
+Improved gesture control settings
+
+Fixed
+
+Fixed issues with managing Jellyfin playlists
+
+Fixed appearance of favorite icons when long-pressing app icon
+
+Other minor improvements and fixes
+
+Infuse 8.3
+
+iOS / iPadOS
+
+Oct 20, 2025
+
+New
+
+New nav bar order and behavior (iOS 26)
+
+Improved
+
+Playback related under-the-hood improvements and fixes
+
+Improved handling of SSA/ASS subtitles and font handling
+
+Improved handling of trial eligibility
+
+Updated Trakt logo (iOS 26)
+
+Fixed
+
+Fixed incorrect grouping of items with removed ratings
+
+Fixed minor layout issues on Settings screen
+
+Fixed embedded SSA/ASS subtitles with unusual timestamps
+
+Fixed subtitle timestamps and duration issues
+
+Other minor improvements and fixes
+
+Infuse 8.2.7
+
+iOS / iPadOS
+
+Oct 6, 2025
+
+Improved
+
+Improved appearance of player controls
+
+Under-the-hood improvements and optimizations
+
+Fixed
+
+Resolved issues with missing Infuse folder in Files app
+
+Other minor improvements and fixes
+
+Infuse 8.2.6
+
+iOS / iPadOS
+
+Sep 22, 2025
+
+Fixed
+
+Fixed missing episodes in search results sorted by release date
+
+Fixed select version popup behavior when landscape lock is ON
+
+Fixed control overlap of search results in Search/Library
+
+Fixed incorrect color of quick buttons in light mode
+
+Fixed an issue when adding a Plex share in Add Files
+
+Other minor improvements and fixes
+
+Infuse 8.2.5
+
+iOS / iPadOS
+
+Sep 18, 2025
+
+New
+
+Liquid Glass design
+
+Improved
+
+Optimizations for iOS 26
+
+Improved handling of empty Plex Watchlist
+
+Fixed
+
+Fixed scrobbling manually marked items to Trakt when setting is disabled
+
+Fixed missing letter scrollbar for Plex
+
+Fixed issues with Next Episode/Skip Credits button
+
+Fixed issues with Background Playback setting
+
+Other minor improvements and fixes
+
+Infuse 8.2.4
+
+iOS / iPadOS
+
+Sep 1, 2025
+
+New
+
+Option to remove user ratings
+
+Improved
+
+Improved handling of purchases
+
+Fixed
+
+Minor fixes and improvements
+
+Infuse 8.2.3
+
+iOS / iPadOS
+
+Aug 26, 2025
+
+New
+
+Context menus for Emby, Jellyfin, and Plex
+
+Manage playlists on Emby, Jellyfin, and Plex
+
+Improved
+
+Playback core improvements
+
+Improvements for network performance and security
+
+Improvements for media share browsing
+
+Various minor UI improvements
+
+Fixed
+
+Fixed issues with Emby, Jellyfin, and Plex playlists
+
+Fixed issue with Next Episode button
+
+Other minor fixes and improvements
+
+Infuse 8.2.2
+
+iOS / iPadOS
+
+Aug 7, 2025
+
+Fixed
+
+Minor fixes and improvements
+
+Infuse 8.2.1
+
+iOS / iPadOS
+
+Aug 5, 2025
+
+New
+
+Favorite and unfavorite items on Emby/Jellyfin
+
+Linked movie and TV show ratings to webpage
+
+Display Trakt VIP status
+
+Support for Jellyfin 10.11
+
+Improved
+
+Improved handling of purchases
+
+Improvements for iCloud Sync
+
+Fixed
+
+Fixed issues with watched statuses unexpectedly changing
+
+Fixed issue with RTL (Arabic/Hebrew) subtitles not fully appearing
+
+Fixed error with Hulu STRMLNK files
+
+Fixed rare issues with auto skip intro
+
+Other minor fixes and improvements
+
+Infuse 8.2
+
+iOS / iPadOS
+
+Jul 22, 2025
+
+New
+
+Stream videos from iCloud Drive
+
+Ratings from Metacritic (PRO)
+
+Deep link to movies, series, and episodes using TMDB IDs
+
+HDR subtitles brightness setting
+
+Extra options for ‘Show External Ratings’ setting
+
+Hide video titles when using continuous playback
+
+Improved
+
+Updated layout of video details page
+
+Improved AI video upscaling
+
+Improved performance and reliability of Trakt connections
+
+Improved handling of 3rd party services used with Plex
+
+Improved handling end of file in some cases
+
+Fixed
+
+Fixed duplicate file listings from some WebDAV servers
+
+Fixed hiding of ratings in list view when ‘Show External Ratings’ is OFF
+
+Fixed UI issues when reordering items
+
+Fixed UI issues when long-pressing items
+
+Fixed performance issues when using search
+
+Other minor fixes and improvements
+
+Infuse 8.1.9
+
+iOS / iPadOS
+
+Jun 24, 2025
+
+New
+
+Skip credits for Emby
+
+Option to disable automatic scanning of individual network shares
+
+New handling of share syncing to allow for multiple connections
+
+Ability to edit usernames for saved shares
+
+Fixed
+
+Fixed issues with multi-select mode
+
+Fixed some cases of visible ratings when ‘Show External Ratings’ is disabled
+
+Fixed sync of duplicate cloud shares
+
+Fixed minor UI issues with favorite reordering
+
+Fixed some reported crashes
+
+Other minor fixes and improvements
+
+Infuse 8.1.8
+
+iOS / iPadOS
+
+Jun 9, 2025
+
+New
+
+Reorder library and folder favorites
+
+Added ‘Delay’ option for Auto Skip Intros setting
+
+Option to hide external ratings (TMDB, Trakt, etc...)
+
+Fixed
+
+Fixed connection issues with legacy Jellyfin versions (pre-10.9)
+
+Fixed background for top-aligned subtitles
+
+Fixed accessing some STRM URLs from Jellyfin
+
+Many other minor fixes and improvements
+
+Infuse 8.1.7
+
+iOS / iPadOS
+
+May 27, 2025
+
+New
+
+New ‘Aspect Fit’ zoom mode (iPhone)
+
+Tap zoom button to cycle through different options
+
+Added extra video details (file size, bitrate, fps) to details page
+
+Added option to disable Dolby Atmos
+
+Hide unavailable audio settings when playing Dolby Atmos content
+
+Improved
+
+Improvements for 115 Cloud Drive
+
+Improved login flow for cloud services
+
+Minor API improvements for Jellyfin
+
+Fixed
+
+Fixed issues when using external subtitles with secondary DVD/Blu-ray titles
+
+Fixed handling of SUP subtitles with increased vertical alignment
+
+Fixed playback UI in RTL locales
+
+Fixed an error when closing player
+
+Fixed time offset setting for SUP subtitles
+
+Fixed handling of subtitles choice between playback sessions
+
+Many other minor fixes and improvements
+
+Infuse 8.1.6
+
+iOS / iPadOS
+
+May 13, 2025
+
+New
+
+All-new iCloud Sync features (faster and more reliable)
+
+Option to disable live preview thumbnails
+
+Switched to user/password login for 115 Cloud Drive
+
+Improved
+
+Improved support for background refresh tasks
+
+Fixed
+
+Fixed cases of SUP subtitles being skipped on video start
+
+Fixed hang when using invalid SUP subtitles
+
+Fixed parsing filenames that contain both Chinese and English titles
+
+Fixed stuck SUP subtitles when seeking
+
+Fixed opening Amazon.de .strmlnk files
+
+Many other minor fixes and improvements
+
+Infuse 8.1.5
+
+iOS / iPadOS
+
+Apr 28, 2025
+
+New
+
+Added option to automatically skip intros (Emby, Jellyfin, Plex)
+
+Improved
+
+Improved handling of .STRMLNK files with multi versions
+
+Improved appearance of longer movie/TV show titles
+
+Improved Trakt purchase sharing
+
+Fixed
+
+Fixed handling of .STRMLNK files from Google Drive
+
+Fixed handling of .STRM files from Plex
+
+Many other minor fixes and improvements
+
+Infuse 8.1.4
+
+iOS / iPadOS
+
+Apr 22, 2025
+
+New
+
+Use .STRMLNK files to link to titles on external services (Apple TV+, Amazon, Netflix, etc...)
+
+Support for external SUP/PGS subtitles
+
+Display edition information for multi-version files on Emby/Jellyfin
+
+Improved
+
+Improved iCloud Sync
+
+Improved support for ProMotion devices
+
+Improvements for 115 Cloud Drive
+
+Improved sorting of Chinese titles (Pinyin)
+
+Various behind the scenes cleanup and optimizations
+
+Fixed
+
+Fixes for Plex cast/crew list
+
+Fix playback when using 302 redirects on some servers
+
+Fixed cases of unrelated videos appearing in cast/crew lists
+
+Fixed using a comma in 115 QPS input field
+
+Fixed playback for movies with short audio tracks
+
+Fixed parsing of some Chinese file names
+
+Many other minor fixes and improvements
+
+Infuse 8.1.3
+
+iOS / iPadOS
+
+Apr 1, 2025
+
+New
+
+Added 115 Cloud Drive streaming
+
+Added Baidu NetDisk streaming
+
+Improved
+
+Improved handling of Dolby Atmos
+
+Improved streaming to HomePods
+
+Improved sorting of Chinese titles
+
+Improved Trakt purchase sharing
+
+Improved handling of URLs from .STRM files
+
+Fixed
+
+Fixed issues with connecting to some SMB devices
+
+Fixed playback with external subtitles via Plex
+
+Fixed cast/crew lists when TMDB ID is shared between movies and TV shows
+
+Fixed overriding of cast and crew lists
+
+Fixed initial episode focus position
+
+Fixed various crashes during playback
+
+Fixed delay when scanning local videos
+
+Other minor fixes and improvements
+
+Infuse 8.1.2
+
+iOS / iPadOS
+
+Mar 11, 2025
+
+New
+
+AI video upscaling
+
+Support for SMB 3.1.1
+
+Improved
+
+Improved upscaling for high-framerate (50+ fps) videos
+
+Fixed
+
+Fixed Plex metadata updates via server notifications
+
+Fixed sorting by date for 123 Cloud Drive
+
+Fixed missing ‘Show Logos’ option
+
+Fixed missing playlist name in context menus
+
+Fixed visual artifacts when downloading unwatched items
+
+Fixed removal of Plex items after deletion
+
+Fixed animation for item deletion
+
+Fixed sorting with ‘The’ article
+
+Fixed crash when opening Add Files menu
+
+Other minor fixes and improvements
+
+Infuse 8.1.1
+
+iOS / iPadOS
+
+Feb 25, 2025
+
+New
+
+Added movie and TV show logos for Plex
+
+Improved
+
+Improved collection of diagnostics and crash logs
+
+Fixed
+
+Fixed local folder artwork presentation
+
+Fixed missing blurred episode thumbnails in some cases
+
+Other minor fixes and improvements
+
+Infuse 8.1
+
+iOS / iPadOS
+
+Feb 18, 2025
+
+New
+
+Added alphabet scrollbar while browsing
+
+Added 123 Cloud Drive streaming
+
+Added support for .STRM files
+
+Added Dolby Vision metatags from Emby and Jellyfin
+
+Improved
+
+Improved support for Dolby Vision (Profile 8) videos
+
+Improved playback progress syncing with Emby and Jellyfin
+
+Revamped internal file browsing infrastructure
+
+Various UI improvements
+
+Fixed
+
+Fixed issue where TV episode air date was not visible
+
+Fixed various crashes during playback
+
+Other minor fixes and improvements
+
+Infuse 8.0.9
+
+iOS / iPadOS
+
+Jan 15, 2025
+
+Improved
+
+Improved handling of active stream limits on some servers
+
+Fixed
+
+Fixed crashes during playback
+
+Other minor fixes and improvements
+
+Infuse 8.0.8
+
+iOS / iPadOS
+
+Dec 25, 2024
+
+Improved
+
+Improved video loading speed
+
+Fixed
+
+Fixed playback when using HTTP redirects in some cases
+
+Other minor fixes and improvements
+
+Infuse 8.0.7
+
+iOS / iPadOS
+
+Dec 23, 2024
+
+Fixed
+
+Fixed playback when using HTTP redirects
+
+Fixed Watched/Unwatched buttons in list view
+
+Fixed minor UI issues with progress bar during playback
+
+Other minor fixes and improvements
+
+Infuse 8.0.6
+
+iOS / iPadOS
+
+Dec 18, 2024
+
+New
+
+Added haptic feedback for quick 2x playback speed control
+
+Improved
+
+Optimized playback pipeline for faster start times
+
+Under-the-hood improvements for Home Screen
+
+Fixed
+
+Fixed UI issues with brightness indicator
+
+Fixed reloading series backdrops in Up Next in some cases
+
+Other minor fixes and improvements
+
+Infuse 8.0.5
+
+iOS / iPadOS
+
+Dec 3, 2024
+
+New
+
+Added tap/hold gesture to enable temporary 2x playback speed
+
+Improved
+
+Improved contrast of cache bar colors
+
+Improved touch area for buttons during playback
+
+Fixed
+
+Fixed appearance of volume controls
+
+Fixed behavior related to orientation lock
+
+Fixed thumbnail presentation of unfetched posters
+
+Other minor fixes and improvements
+
+Infuse 8.0.4
+
+iOS / iPadOS
+
+Nov 20, 2024
+
+New
+
+Skip Intro, Preview, and Credits for Jellyfin 10.10+
+
+Added new Library indexing and scanning options
+
+Added ‘Limited’ streaming cache option to allow for lower initial bandwidth usage
+
+Improved
+
+Improvements for Jellyfin 10.10
+
+Increased font sizes on Home, Library, and details pages
+
+Updated Trakt logo
+
+Fixed
+
+Fixed missing audio for some Dolby Atmos files
+
+Other minor improvements and fixes
+
+Infuse 8.0.3
+
+iOS / iPadOS
+
+Nov 5, 2024
+
+Improved
+
+Streaming cache improvements
+
+Improved reliability when indexing some WebDAV shares
+
+Improved thumbnail sizes for home and details pages
+
+Fixed
+
+Fixed issue with player closing when adjusting playback settings
+
+Fixed refreshing Home when media share connections are restored
+
+Other minor improvements and fixes
+
+Infuse 8.0.2
+
+iOS / iPadOS
+
+Oct 29, 2024
+
+Improved
+
+Improved indexing reliability of some WebDAV shares
+
+Improved limits for streaming disk cache
+
+Fixed
+
+Fixed updating of Home Screen items
+
+Fixed issues with dark/light appearance switching
+
+Other minor improvements and fixes
+
+Infuse 8.0.1
+
+iOS / iPadOS
+
+Oct 22, 2024
+
+New
+
+Added Voice Over support to Home
+
+Improved
+
+Improved visibility of volume control
+
+Fixed
+
+Fixed some cases of blurry posters on Home
+
+Fixed an error when opening Plex Watchlist
+
+Fixed some reports of crashing
+
+Fixed duplicate genres for Emby/Jellyfin episodes
+
+Fixed logo position in certain cases
+
+Fixed button highlighting on tap
+
+Other minor improvements and fixes
+
+Infuse 8.0
+
+iOS / iPadOS
+
+Oct 15, 2024
+
+New
+
+Refreshed layout and designs
+
+All-new modern infrastructure
+
+Redesigned player controls
+
+Added quick access to playback speed and volume boost
+
+Improved
+
+Optimizations for iOS 18 and iPhone 16 screens
+
+Many other minor fixes and improvements
+
+Infuse 7.8.4
+
+iOS / iPadOS
+
+Sep 30, 2024
+
+Fixed
+
+Fixed issues with subtitles on iOS 18
+
+Fixed issue with entering MAC addresses
+
+Other minor fixes and improvements
+
+Infuse 7.8.3
+
+iOS / iPadOS
+
+Sep 17, 2024
+
+New
+
+Optimized for iOS 18
+
+Fixed
+
+Fixed issue where subtitles would appear with missing characters
+
+Other minor fixes and improvements
+
+Infuse 7.8.2
+
+iOS / iPadOS
+
+Sep 4, 2024
+
+New
+
+Added Slovenian translation
+
+Improved
+
+Improvements for SMB streaming
+
+Other minor fixes and improvements
+
+Infuse 7.8.1
+
+iOS / iPadOS
+
+Aug 7, 2024
+
+Fixed
+
+Fixed issues with artwork fetching on iOS 18
+
+Other minor fixes and improvements
+
+Infuse 7.8
+
+iOS / iPadOS
+
+Jun 19, 2024
+
+New
+
+Support for multiple video versions from Emby and Jellyfin
+
+Automatic version selection for Emby, Jellyfin, and Plex
+
+Improved
+
+Minor visual improvements for sorting menus
+
+Fixed
+
+Fixed InfuseSync installation and settings issues
+
+Fixed issues where InfuseSync may be required in Direct Mode
+
+Other minor fixes and improvements
+
+Infuse 7.7.7
+
+iOS / iPadOS
+
+May 29, 2024
+
+Fixed
+
+Fixed issue with displaying TV seasons
+
+Fixes for Emby sorting
+
+Fixed volume level overlay unexpectedly appearing when adaptive volume is active
+
+Other minor fixes and improvements
+
+Infuse 7.7.6
+
+iOS / iPadOS
+
+May 28, 2024
+
+New
+
+New sort options for Emby & Jellyfin
+
+Support for Jellyfin 10.9
+
+Improved
+
+Improved error message when opening unavailable items
+
+Improvements for upcoming Google Drive account permission changes
+
+Fixed
+
+Resolved issues with adding new MEGA & OneDrive connections
+
+Removed redundant network requests when entering a folder for the first time
+
+Other minor fixes and improvements
+
+Infuse 7.7.5
+
+iOS / iPadOS
+
+May 7, 2024
+
+New
+
+New sort options for Plex
+
+Option to disable ‘Smart Folders’ for faster browsing
+
+Improved
+
+Improved handling of Plex collections
+
+Updated Watching/Watchlist icon
+
+Fixed
+
+Fixed incorrect sort order for Plex collections
+
+Fixed reloading cast/crew images when scrolling
+
+Other minor fixes and improvements
+
+Infuse 7.7.4
+
+iOS / iPadOS
+
+Apr 23, 2024
+
+New
+
+Browse Plex collections in Direct Mode
+
+Direct search for cast/crew in Emby/Jellyfin
+
+Add/remove items from Plex Watchlist
+
+Hide Library tab when using Direct Mode only
+
+Fixed
+
+Resolved issues with listing some Plex Watchlist items
+
+Resolved issue with file sort order when using Jellyfin
+
+Other minor fixes and improvements
+
+Infuse 7.7.3
+
+iOS / iPadOS
+
+Apr 9, 2024
+
+New
+
+Dolby Atmos spatial audio
+
+Direct search for cast/crew in Plex
+
+Display ‘Dolby Atmos’ tags for compatible audio tracks
+
+Added 3s custom seek time option
+
+Display more items in Emby lists
+
+Custom seek times now apply to gestures
+
+Improved
+
+Playback core improvements
+
+Optimized caching of cast/crew thumbnails
+
+Fixed
+
+Resolved playback issues when seeking some videos
+
+Other minor fixes and improvements
+
+Infuse 7.7.2
+
+iOS / iPadOS
+
+Mar 19, 2024
+
+New
+
+Expanded support for Dolby Vision (Profile 8)
+
+Skip intro for Emby
+
+Access Plex Watchlist from Home Screen
+
+AV1 hardware decoding (A17/M3 devices)
+
+Search cast/crew from video details page
+
+Option to quickly add/remove items from Watching list
+
+Access longer Home Screen lists in Direct Mode
+
+Improved
+
+Improved efficiency of metadata fetching
+
+Improved descriptions of some codecs (VP9, AV1, Opus)
+
+Fixed
+
+Fixed episode selection when opening seasons via Up Next list
+
+Fixed issue where videos would play with a black screen
+
+Fixed unnecessary metadata refetching for some TV shows
+
+Fixed UI freezing issue when pasting Emby URLs
+
+Fixed access to individual series set as Favorites
+
+Other minor fixes and improvements
+
+Infuse 7.7.1
+
+iOS / iPadOS
+
+Feb 27, 2024
+
+New
+
+Search collections in Emby, Jellyfin, and Plex
+
+Improved
+
+Improvements for SMB streaming
+
+Improved library scanning speed for cloud services
+
+Improved flow when adding media server connections
+
+Fixed
+
+Fixed watched status updates for Emby
+
+Fixed missing text when switching between light/dark modes
+
+Fixed episode numbers in playlists
+
+Fixed incorrect sort order on Home for pinned lists
+
+Fixed ‘Show Poster Titles’ option when browsing
+
+Fixed behavior of ‘Skip Credits’ button in some cases
+
+Fixed minor UI issue after refreshing while browsing
+
+Fixed rare issue with lost focus position after playback
+
+Other minor fixes and improvements
+
+Infuse 7.7
+
+iOS / iPadOS
+
+Feb 13, 2024
+
+New
+
+Direct Mode for Emby, Jellyfin, and Plex
+
+Support Plex skip features (intros, credits, commercials)
+
+Improved
+
+Improved speed and reliability of Trakt sync
+
+Fixed
+
+Fixed issues with meta ID tags in NFO files when manually searching for TMDB matches
+
+Other minor fixes and improvements
+
+Infuse 7.6.7
+
+iOS / iPadOS
+
+Jan 30, 2024
+
+New
+
+Set custom forward/back seek times
+
+Recognize movie ID tags in NFO files for improved matching accuracy
+
+Improved
+
+Improved reliability of Trakt playback history sync
+
+Improved initial scroll position when opening video details page
+
+Fixed
+
+Fixed issue with incorrect release dates for Plex items
+
+Other minor fixes and improvements
+
+Infuse 7.6.6
+
+iOS / iPadOS
+
+Jan 10, 2024
+
+New
+
+Recognize movie ID tags in filenames for improved matching accuracy
+
+Fixed
+
+Fixed delays in Trakt sync
+
+Other minor fixes and improvements
+
+Infuse 7.6.5
+
+iOS / iPadOS
+
+Dec 19, 2023
+
+New
+
+VoiceOver rotor actions
+
+Linked Spotlight search results to details page
+
+Support 3rd party email clients when submitting diagnostics
+
+Added Spanish (Latin America) translation
+
+Improved
+
+Improved transfer speeds when submitting diagnostics
+
+Fixed
+
+Fix for a crash with broken season items in Up Next
+
+Other minor fixes and improvements
+
+Infuse 7.6.4
+
+iOS / iPadOS
+
+Nov 28, 2023
+
+New
+
+Added info message when deleting local files
+
+Fixed
+
+Fixed missing/empty local folders
+
+Added missing VoiceOver strings
+
+Fixes for incorrect episodes being played
+
+Fixed issues with deleted items not being removed from lists
+
+Fixed issues with PIN code app lock
+
+Other minor fixes and improvements
+
+Infuse 7.6.3
+
+iOS / iPadOS
+
+Nov 14, 2023
+
+Fixed
+
+Fixed user & password copy/paste on iOS 17
+
+Fixed missing Emby TV shows in Up Next
+
+Fixed sorting when using ‘Sort Title’
+
+Fixed incorrect episode selection
+
+Other minor fixes and improvements
+
+Infuse 7.6.2
+
+iOS / iPadOS
+
+Oct 31, 2023
+
+New
+
+New APIs for 3rd-party apps to play, bookmark, and save videos
+
+Added ‘Sort Title’ tag support in NFO files
+
+Add direct URLs in bulk using .links files
+
+Support ‘clearlogo.png’ for local logo artwork overrides
+
+Improved
+
+Optimized for iOS 17
+
+Improved reliability of network connections
+
+Improved set up process for new shares
+
+Improved priority of secure (HTTPS) connections
+
+Fixed
+
+Fixed issues with empty ‘Plot’ fields when using NFO files
+
+Fixed an issue with cast/crew tags in NFO files
+
+Fixed missing device name when using Wi-Fi upload
+
+Other minor fixes and improvements
+
+Infuse 7.6.1
+
+iOS / iPadOS
+
+Sep 26, 2023
+
+Improved
+
+Improved handling of complex subtitles
+
+Improved reliability of fetching metadata and trailers
+
+Fixed
+
+Fixed appearance of season names after editing metadata on pre-playback
+
+Fixed custom collections in miniseries
+
+Fixed crashes caused by broken direct URLs
+
+Fixed incorrect episode order after reloading metadata on pre-playback
+
+Other minor fixes and improvements
+
+Infuse 7.6
+
+iOS / iPadOS
+
+Sep 5, 2023
+
+New
+
+Stream from Aliyun Drive
+
+Added Traditional Chinese (HK) translation
+
+Added Hindi translation
+
+Improved
+
+Improved categorization of miniseries
+
+Improved support for HAProxy (and similar services)
+
+Improved handling of long series titles in season picker
+
+Minor improvements for genre fetching
+
+Fixed
+
+Fixed black screen for certain HEVC videos
+
+Fixed audio sync for certain files
+
+Fixed minor issues with merged genres
+
+Fixed filtering of iTunes videos
+
+Other minor fixes and improvements
+
+Infuse 7.5.9
+
+iOS / iPadOS
+
+Aug 15, 2023
+
+New
+
+New Library section for Miniseries
+
+Display custom TV season names from TMDB
+
+Improved
+
+Improved presentation of miniseries episodes on details page
+
+Fixed
+
+Fixed issues with media server watched status syncing
+
+Fixed watch statuses for TV shows when browsing a share directly
+
+Fixed genres for TV shows on Emby
+
+Other minor fixes and improvements
+
+Infuse 7.5.8
+
+iOS / iPadOS
+
+Jul 11, 2023
+
+Improved
+
+Improved handling of genres from Emby, Jellyfin, and Plex
+
+Improved indexing of TV shows when metadata in the chosen dialect is not available
+
+Improved purchase sharing via Trakt
+
+Improved metrics for background refresh
+
+Fixed
+
+Fixed indexing issues when using Shoko with Jellyfin
+
+Fixed a crash when playing HEVC videos on iOS 15 and earlier
+
+Fixed volume boost for DTS tracks with embedded downmix parameters
+
+Fixed volume boost for audio tracks without an explicit channel layout
+
+Fixed a crash for filenames which contain specific characters and diacritics
+
+Other minor fixes and improvements
+
+Infuse 7.5.7
+
+iOS / iPadOS
+
+Jun 28, 2023
+
+New
+
+Default volume boost option
+
+Option to include LFE channel in stereo downmix
+
+Option for original or normalized volume on downmix
+
+Added padding for subtitles with top position tags
+
+Improved
+
+Improved audio quality when downmixing
+
+Improved playback of h.264 videos with invalid timestamps
+
+Improved connection reliability for Jellyfin
+
+Improved handling of YUV422P10LE and YUV444P10LE videos
+
+Improved background task schedules
+
+Fixed
+
+Fixed issues with audio clipping on downmix
+
+Fixed crackling audio when using spatial audio
+
+Fixed buzzing audio when seeking certain videos
+
+Fixed issues when resuming current episode via context menu
+
+Fixed iCloud sync for cast and crew
+
+Fixed crash on some videos when using volume boost
+
+Fixed connection issues for Emby 4.8
+
+Fixes for fetching metadata updates
+
+Other minor fixes and improvements
+
+Infuse 7.5.6
+
+iOS / iPadOS
+
+Jun 7, 2023
+
+Fixed
+
+Fixed OpenSubtitles downloads for some languages
+
+Other minor fixes and improvements
+
+Infuse 7.5.5
+
+iOS / iPadOS
+
+May 30, 2023
+
+New
+
+New OpenSubtitles integration
+
+Re-added support for mixed language file names
+
+Switched to using merged TV show genres from TMDB
+
+Improved
+
+Improved color accuracy for Hi10p files
+
+Fixed
+
+Fixes for deleting local files
+
+Fixed freezes when opening TV shows
+
+Other minor fixes and improvements
+
+Infuse 7.5.4
+
+iOS / iPadOS
+
+May 14, 2023
+
+Fixed
+
+Temporarily rolled back mixed language filename handling to address a crash
+
+Fixed issues with indexing Recycle Bin folders
+
+Other minor fixes and improvements
+
+Infuse 7.5.3
+
+iOS / iPadOS
+
+May 10, 2023
+
+New
+
+Option to fetch metadata and artwork in the title’s original language
+
+IPv6 support for SMB
+
+Support for newer .eyetv files
+
+Added detailed error messages for iCloud sync
+
+Option to hide the Trailer button
+
+Support for position tags in SRT subtitles
+
+Improved
+
+Improved support for mixed language file names
+
+Improved handling of regional languages and dialects
+
+Improvements for SMB streaming
+
+Improved UI flow for deleting files
+
+Fixed
+
+Resolved issues with the Hide Spoilers option
+
+Fixed confirmation prompt text when deleting local files
+
+Fixed purchase prompt in dark mode
+
+Fixed a crash when playing series folders
+
+Resolved issues with deleting some local files
+
+Resolved playback of some files without mastering metadata
+
+Resolved issue with pausing when seeking with some HDR files
+
+Other minor fixes and improvements
+
+Infuse 7.5.2
+
+iOS / iPadOS
+
+Apr 18, 2023
+
+New
+
+Extended Parental Controls to cover trailers
+
+Deleting local files now m
+
+[… truncated 250815 chars …]

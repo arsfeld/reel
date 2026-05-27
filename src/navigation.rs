@@ -4,6 +4,8 @@ use crate::models::library::LibraryType;
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 pub enum CurrentView {
+    /// Home page (Continue Watching + Recently Added)
+    Home,
     /// Library grid (movies or shows)
     Library(LibraryType),
     /// Movie detail page
@@ -20,6 +22,6 @@ pub enum CurrentView {
 
 impl Default for CurrentView {
     fn default() -> Self {
-        Self::Library(LibraryType::Movie)
+        Self::Home
     }
 }

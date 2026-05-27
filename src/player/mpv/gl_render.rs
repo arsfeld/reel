@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_void};
 use std::ptr;
-use std::sync::OnceLock;
+use std::sync::atomic::AtomicPtr;
+use std::sync::{Mutex, OnceLock};
 
 use libmpv2_sys::*;
 use tracing::{error, info, warn};
@@ -13,66 +14,67 @@ static GL_FLUSH_FN: OnceLock<Option<unsafe extern "C" fn()>> = OnceLock::new();
 
 const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
 
-/// Thread-safe proc address resolver that uses EGL + dlsym fallback.
-/// This function is called by mpv from its render thread.
+/// Proc address resolver using EGL + dlsym fallback.
+/// Called from BOTH the main GTK thread and mpv's render thread —
+/// all mutable state uses proper synchronization.
 ///
 /// # Safety
-/// Called from mpv's render thread with a valid GL function name.
+/// Called from mpv with a valid GL function name.
 pub unsafe extern "C" fn get_proc_address(
     _ctx: *mut c_void,
     name: *const libc::c_char,
 ) -> *mut c_void {
-    unsafe {
-        static mut PROC_CACHE: Option<HashMap<String, *mut c_void>> = None;
-        static mut EGL_GET_PROC: Option<*mut c_void> = None;
+    // Thread-safe: OnceLock ensures one-time init, Mutex protects HashMap access.
+    // Raw pointers can't go in statics (not Send/Sync), so we store as usize.
+    static PROC_CACHE: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+    static EGL_GET_PROC: OnceLock<AtomicPtr<c_void>> = OnceLock::new();
 
-        let cache_ptr = &raw mut PROC_CACHE;
-        if (*cache_ptr).is_none() {
-            *cache_ptr = Some(HashMap::new());
-            let egl_ptr = &raw mut EGL_GET_PROC;
-            *egl_ptr = Some(libc::dlsym(
-                libc::RTLD_DEFAULT,
-                c"eglGetProcAddress".as_ptr(),
-            ));
+    let cache = PROC_CACHE.get_or_init(|| {
+        let _ = EGL_GET_PROC.get_or_init(|| {
+            let ptr = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"eglGetProcAddress".as_ptr()) };
+            AtomicPtr::new(ptr)
+        });
+        Mutex::new(HashMap::new())
+    });
+
+    let name_str = unsafe { CStr::from_ptr(name) }.to_string_lossy().to_string();
+
+    // Fast path: check cache
+    {
+        let cache_guard = cache.lock().unwrap();
+        if let Some(&cached) = cache_guard.get(&name_str) {
+            return cached as *mut c_void;
         }
-
-        let name_str = CStr::from_ptr(name).to_string_lossy().to_string();
-
-        let cache_ptr = &raw mut PROC_CACHE;
-        if let Some(cache) = &*cache_ptr
-            && let Some(&cached) = cache.get(&name_str)
-        {
-            return cached;
-        }
-
-        let mut func = ptr::null_mut();
-
-        // Try EGL first
-        let egl_ptr = &raw const EGL_GET_PROC;
-        if let Some(egl_get_proc) = *egl_ptr
-            && !egl_get_proc.is_null()
-        {
-            type EglGetProcFn = unsafe extern "C" fn(*const libc::c_char) -> *mut c_void;
-            let get_proc: EglGetProcFn = std::mem::transmute(egl_get_proc);
-            func = get_proc(name);
-        }
-
-        // Fallback to dlsym
-        if func.is_null() {
-            func = libc::dlsym(libc::RTLD_DEFAULT, name);
-        }
-
-        let cache_ptr = &raw mut PROC_CACHE;
-        if let Some(cache) = &mut *cache_ptr {
-            cache.insert(name_str.clone(), func);
-        }
-
-        if func.is_null() {
-            warn!("Failed to resolve GL proc: {}", name_str);
-        }
-
-        func
     }
+
+    let mut func = ptr::null_mut();
+
+    // Try EGL first
+    if let Some(egl_atomic) = EGL_GET_PROC.get() {
+        let egl_get_proc = egl_atomic.load(std::sync::atomic::Ordering::Relaxed);
+        if !egl_get_proc.is_null() {
+            type EglGetProcFn = unsafe extern "C" fn(*const libc::c_char) -> *mut c_void;
+            let get_proc: EglGetProcFn = unsafe { std::mem::transmute(egl_get_proc) };
+            func = unsafe { get_proc(name) };
+        }
+    }
+
+    // Fallback to dlsym
+    if func.is_null() {
+        func = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name) };
+    }
+
+    // Cache result
+    {
+        let mut cache_guard = cache.lock().unwrap();
+        cache_guard.insert(name_str.clone(), func as usize);
+    }
+
+    if func.is_null() {
+        warn!("Failed to resolve GL proc: {}", name_str);
+    }
+
+    func
 }
 
 fn load_gl_fn_ptr(name: &str) -> Option<*mut c_void> {

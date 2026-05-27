@@ -1,0 +1,1478 @@
+NavigationSplitView in libadwaita - Rust
+https://world.pages.gitlab.gnome.org/Rust/libadwaita-rs/stable/latest/docs/libadwaita/struct.NavigationSplitView.html
+
+<!DOCTYPE html>NavigationSplitView in libadwaita - RustSkip to main content
+
+NavigationSplitView
+
+libadwaita
+
+Struct NavigationSplitView Copy item path
+Source 
+<code>pub struct NavigationSplitView { <span class="comment">/* private fields */</span> }</code>
+Available on crate feature v1_4 only.
+Expand description
+
+A widget presenting sidebar and content side by side or as a navigation view.
+
+NavigationSplitView has two NavigationPage children: sidebar and
+content, and displays them side by side.
+
+When collapsed is set to TRUE, it instead
+puts both children inside an NavigationView. The
+show-content controls which child is visible
+while collapsed.
+
+See also OverlaySplitView.
+
+NavigationSplitView is typically used together with an Breakpoint
+setting the collapsed property to TRUE on small widths, as follows:
+
+<code><object class="AdwWindow">
+<property name="width-request">280</property>
+<property name="height-request">200</property>
+<property name="default-width">800</property>
+<property name="default-height">800</property>
+<child>
+<object class="AdwBreakpoint">
+<condition>max-width: 400sp</condition>
+<setter object="split_view" property="collapsed">True</setter>
+</object>
+</child>
+<property name="content">
+<object class="AdwNavigationSplitView" id="split_view">
+<property name="sidebar">
+<object class="AdwNavigationPage">
+<property name="title" translatable="yes">Sidebar</property>
+<property name="child">
+<!-- ... -->
+</property>
+</object>
+</property>
+<property name="content">
+<object class="AdwNavigationPage">
+<property name="title" translatable="yes">Content</property>
+<property name="child">
+<!-- ... -->
+</property>
+</object>
+</property>
+</object>
+</property>
+</object></code>
+
+§Sizing
+
+When not collapsed, NavigationSplitView changes the sidebar width
+depending on its own width.
+
+If possible, it tries to allocate a fraction of the total width, controlled
+with the sidebar-width-fraction property.
+
+The sidebar also has minimum and maximum sizes, controlled with the
+min-sidebar-width and
+max-sidebar-width properties.
+
+The minimum and maximum sizes are using the length unit specified with the
+sidebar-width-unit.
+
+By default, sidebar is using 25% of the total width, with 180sp as the
+minimum size and 280sp as the maximum size.
+
+§Header Bar Integration
+
+When used inside NavigationSplitView, HeaderBar will
+automatically hide the window buttons in the middle.
+
+When collapsed, it also displays a back button for the content widget, as
+well as the page titles. See NavigationView documentation for details.
+
+§Actions
+
+NavigationSplitView defines the same actions as NavigationView, but
+they can be used even when the split view is not collapsed:
+
+navigation.push takes a string parameter specifying the tag of the page
+to push. If it matches the tag of the content widget, it sets
+show-content to TRUE.
+
+navigation.pop doesn’t take any parameters and sets
+show-content to FALSE.
+
+§NavigationSplitView as gtk::Buildable
+
+The NavigationSplitView implementation of the gtk::Buildable
+interface supports setting the sidebar widget by specifying “sidebar” as the
+“type” attribute of a <child> element, Specifying “content” child type or
+omitting it results in setting the content widget.
+
+§CSS nodes
+
+NavigationSplitView has a single CSS node with the name
+navigation-split-view.
+
+When collapsed, it contains a child node with the name navigation-view
+containing both children.
+
+<code>navigation-split-view
+╰── navigation-view
+├── [sidebar child]
+╰── [content child]</code>
+
+When not collapsed, it contains two nodes with the name widget, one with
+the .sidebar-pane style class, the other one with .content-view style
+class, containing the sidebar and content children respectively.
+
+<code>navigation-split-view
+├── widget.sidebar-pane
+│ ╰── [sidebar child]
+╰── widget.content-pane
+╰── [content child]</code>
+
+§Accessibility
+
+NavigationSplitView uses the [enum@Gtk.AccessibleRole.group] role.
+
+§Properties
+
+§collapsed
+
+Whether the split view is collapsed.
+
+When collapsed, the children are put inside an NavigationView,
+otherwise they are displayed side by side.
+
+The show-content controls which child is
+visible while collapsed.
+
+Readable | Writeable
+
+§content
+
+The content widget.
+
+Readable | Writeable
+
+§max-sidebar-width
+
+The maximum sidebar width.
+
+Maximum width is affected by
+sidebar-width-unit.
+
+The sidebar widget can still be allocated with larger width if its own
+minimum width exceeds it.
+
+Readable | Writeable
+
+§min-sidebar-width
+
+The minimum sidebar width.
+
+Minimum width is affected by
+sidebar-width-unit.
+
+The sidebar widget can still be allocated with larger width if its own
+minimum width exceeds it.
+
+Readable | Writeable
+
+§show-content
+
+Determines the visible page when collapsed.
+
+If set to TRUE, the content widget will be the visible page when
+collapsed is TRUE; otherwise the sidebar
+widget will be visible.
+
+If the split view is already collapsed, the visible page changes
+immediately.
+
+Readable | Writeable
+
+§sidebar
+
+The sidebar widget.
+
+Readable | Writeable
+
+§sidebar-position
+
+The sidebar position.
+
+If set to [enum@Gtk.PackType.start], the sidebar is displayed before the
+content, and the sidebar will be the root page when collapsed.
+
+If set to [enum@Gtk.PackType.end], the sidebar is displayed after the
+content, and the content will be the root page.
+
+Readable | Writeable
+
+§sidebar-width-fraction
+
+The preferred sidebar width as a fraction of the total width.
+
+The preferred width is additionally limited by
+min-sidebar-width and
+max-sidebar-width.
+
+The sidebar widget can be allocated with larger width if its own minimum
+width exceeds the preferred width.
+
+Readable | Writeable
+
+§sidebar-width-unit
+
+The length unit for minimum and maximum sidebar widths.
+
+See min-sidebar-width and
+max-sidebar-width.
+
+Readable | Writeable
+
+Widget
+
+§can-focus
+
+Whether the widget or any of its descendents can accept
+the input focus.
+
+This property is meant to be set by widget implementations,
+typically in their instance init function.
+
+Readable | Writeable
+
+§can-target
+
+Whether the widget can receive pointer events.
+
+Readable | Writeable
+
+§css-classes
+
+A list of css classes applied to this widget.
+
+Readable | Writeable
+
+§css-name
+
+The name of this widget in the CSS tree.
+
+This property is meant to be set by widget implementations,
+typically in their instance init function.
+
+Readable | Writeable | Construct Only
+
+§cursor
+
+The cursor used by @widget.
+
+Readable | Writeable
+
+§focus-on-click
+
+Whether the widget should grab focus when it is clicked with the mouse.
+
+This property is only relevant for widgets that can take focus.
+
+Readable | Writeable
+
+§focusable
+
+Whether this widget itself will accept the input focus.
+
+Readable | Writeable
+
+§halign
+
+How to distribute horizontal space if widget gets extra space.
+
+Readable | Writeable
+
+§has-default
+
+Whether the widget is the default widget.
+
+Readable
+
+§has-focus
+
+Whether the widget has the input focus.
+
+Readable
+
+§has-tooltip
+
+Enables or disables the emission of the query-tooltip
+signal on @widget.
+
+A true value indicates that @widget can have a tooltip, in this case
+the widget will be queried using query-tooltip to
+determine whether it will provide a tooltip or not.
+
+Readable | Writeable
+
+§height-request
+
+Overrides for height request of the widget.
+
+If this is -1, the natural request will be used.
+
+Readable | Writeable
+
+§hexpand
+
+Whether to expand horizontally.
+
+Readable | Writeable
+
+§hexpand-set
+
+Whether to use the hexpand property.
+
+Readable | Writeable
+
+§layout-manager
+
+The gtk::LayoutManager instance to use to compute
+the preferred size of the widget, and allocate its children.
+
+This property is meant to be set by widget implementations,
+typically in their instance init function.
+
+Readable | Writeable
+
+§limit-events
+
+Makes this widget act like a modal dialog, with respect to
+event delivery.
+
+Global event controllers will not handle events with targets
+inside the widget, unless they are set up to ignore propagation
+limits. See Gtk::EventController::set_propagation_limit().
+
+Readable | Writeable
+
+§margin-bottom
+
+Margin on bottom side of widget.
+
+This property adds margin outside of the widget’s normal size
+request, the margin will be added in addition to the size from
+[WidgetExtManual::set_size_request()][crate::gtk::prelude::WidgetExtManual::set_size_request()] for example.
+
+Readable | Writeable
+
+§margin-end
+
+Margin on end of widget, horizontally.
+
+This property supports left-to-right and right-to-left text
+directions.
+
+This property adds margin outside of the widget’s normal size
+request, the margin will be added in addition to the size from
+[WidgetExtManual::set_size_request()][crate::gtk::prelude::WidgetExtManual::set_size_request()] for example.
+
+Readable | Writeable
+
+§margin-start
+
+Margin on start of widget, horizontally.
+
+This property supports left-to-right and right-to-left text
+directions.
+
+This property adds margin outside of the widget’s normal size
+request, the margin will be added in addition to the size from
+[WidgetExtManual::set_size_request()][crate::gtk::prelude::WidgetExtManual::set_size_request()] for example.
+
+Readable | Writeable
+
+§margin-top
+
+Margin on top side of widget.
+
+This property adds margin outside of the widget’s normal size
+request, the margin will be added in addition to the size from
+[WidgetExtManual::set_size_request()][crate::gtk::prelude::WidgetExtManual::set_size_request()] for example.
+
+Readable | Writeable
+
+§name
+
+The name of the widget.
+
+Readable | Writeable
+
+§opacity
+
+The requested opacity of the widget.
+
+Readable | Writeable
+
+§overflow
+
+How content outside the widget’s content area is treated.
+
+This property is meant to be set by widget implementations,
+typically in their instance init function.
+
+Readable | Writeable
+
+§parent
+
+The parent widget of this widget.
+
+Readable
+
+§receives-default
+
+Whether the widget will receive the default action when it is focused.
+
+Readable | Writeable
+
+§root
+
+The gtk::Root widget of the widget tree containing this widget.
+
+This will be NULL if the widget is not contained in a root widget.
+
+Readable
+
+§scale-factor
+
+The scale factor of the widget.
+
+Readable
+
+§sensitive
+
+Whether the widget responds to input.
+
+Readable | Writeable
+
+§tooltip-markup
+
+Sets the text of tooltip to be the given string, which is marked up
+with Pango markup.
+
+Also see Gtk::Tooltip::set_markup().
+
+This is a convenience property which will take care of getting the
+tooltip shown if the given string is not NULL:
+has-tooltip will automatically be set to true
+and there will be taken care of query-tooltip in
+the default signal handler.
+
+Note that if both tooltip-text and
+tooltip-markup are set, the last one wins.
+
+Readable | Writeable
+
+§tooltip-text
+
+Sets the text of tooltip to be the given string.
+
+Also see Gtk::Tooltip::set_text().
+
+This is a convenience property which will take care of getting the
+tooltip shown if the given string is not NULL:
+has-tooltip will automatically be set to true
+and there will be taken care of query-tooltip in
+the default signal handler.
+
+Note that if both tooltip-text and
+tooltip-markup are set, the last one wins.
+
+Readable | Writeable
+
+§valign
+
+How to distribute vertical space if widget gets extra space.
+
+Readable | Writeable
+
+§vexpand
+
+Whether to expand vertically.
+
+Readable | Writeable
+
+§vexpand-set
+
+Whether to use the vexpand property.
+
+Readable | Writeable
+
+§visible
+
+Whether the widget is visible.
+
+Readable | Writeable
+
+§width-request
+
+Overrides for width request of the widget.
+
+If this is -1, the natural request will be used.
+
+Readable | Writeable
+
+Accessible
+
+§accessible-role
+
+The accessible role of the given gtk::Accessible implementation.
+
+The accessible role cannot be changed once set.
+
+Readable | Writeable
+
+§Implements
+
+gtk::prelude::WidgetExt, [trait@glib::ObjectExt], gtk::prelude::AccessibleExt, gtk::prelude::BuildableExt, gtk::prelude::ConstraintTargetExt
+
+GLib type: GObject with reference counted clone semantics.
+
+Implementations§
+
+Source§
+impl NavigationSplitView
+
+Source
+pub fn new() -> NavigationSplitView
+
+Creates a new NavigationSplitView.
+
+§Returns
+
+the newly created NavigationSplitView
+
+Source
+pub fn builder() -> NavigationSplitViewBuilder
+
+Creates a new builder-pattern struct instance to construct NavigationSplitView objects.
+
+This method returns an instance of NavigationSplitViewBuilder which can be used to create NavigationSplitView objects.
+
+Source
+pub fn is_collapsed(&self) -> bool
+
+Gets whether @self is collapsed.
+
+§Returns
+
+whether @self is collapsed
+
+Source
+pub fn content(&self) -> Option<NavigationPage>
+
+Sets the content widget for @self.
+
+§Returns
+
+the content widget
+
+Source
+pub fn max_sidebar_width(&self) -> f64
+
+Gets the maximum sidebar width for @self.
+
+§Returns
+
+the maximum width
+
+Source
+pub fn min_sidebar_width(&self) -> f64
+
+Gets the minimum sidebar width for @self.
+
+§Returns
+
+the minimum width
+
+Source
+pub fn shows_content(&self) -> bool
+
+Gets which page is visible when @self is collapsed.
+
+§Returns
+
+whether to show content when collapsed
+
+Source
+pub fn sidebar(&self) -> Option<NavigationPage>
+
+Gets the sidebar widget for @self.
+
+§Returns
+
+the sidebar widget
+
+Source
+pub fn sidebar_position(&self) -> PackType
+
+Available on crate feature v1_7 only.
+
+Gets the sidebar position for @self.
+
+§Returns
+
+the sidebar position for @self
+
+Source
+pub fn sidebar_width_fraction(&self) -> f64
+
+Gets the preferred sidebar width fraction for @self.
+
+§Returns
+
+the preferred width fraction
+
+Source
+pub fn sidebar_width_unit(&self) -> LengthUnit
+
+Gets the length unit for minimum and maximum sidebar widths.
+
+§Returns
+
+the length unit
+
+Source
+pub fn set_collapsed(&self, collapsed: bool)
+
+Sets whether @self is collapsed.
+
+When collapsed, the children are put inside an NavigationView,
+otherwise they are displayed side by side.
+
+The show-content controls which child is
+visible while collapsed.
+
+§collapsed
+
+whether @self is collapsed
+
+Source
+pub fn set_content(&self, content: Option<&impl IsA<NavigationPage>>)
+
+Sets the content widget for @self.
+
+§content
+
+the content widget
+
+Source
+pub fn set_max_sidebar_width(&self, width: f64)
+
+Sets the maximum sidebar width for @self.
+
+Maximum width is affected by
+sidebar-width-unit.
+
+The sidebar widget can still be allocated with larger width if its own
+minimum width exceeds it.
+
+§width
+
+the maximum width
+
+Source
+pub fn set_min_sidebar_width(&self, width: f64)
+
+Sets the minimum sidebar width for @self.
+
+Minimum width is affected by
+sidebar-width-unit.
+
+The sidebar widget can still be allocated with larger width if its own
+minimum width exceeds it.
+
+§width
+
+the minimum width
+
+Source
+pub fn set_show_content(&self, show_content: bool)
+
+Sets which page is visible when @self is collapsed.
+
+If set to TRUE, the content widget will be the visible page when
+collapsed is TRUE; otherwise the sidebar
+widget will be visible.
+
+If the split view is already collapsed, the visible page changes immediately.
+
+§show_content
+
+whether to show content when collapsed
+
+Source
+pub fn set_sidebar(&self, sidebar: Option<&impl IsA<NavigationPage>>)
+
+Sets the sidebar widget for @self.
+
+§sidebar
+
+the sidebar widget
+
+Source
+pub fn set_sidebar_position(&self, position: PackType)
+
+Available on crate feature v1_7 only.
+
+Sets the sidebar position for @self.
+
+If set to [enum@Gtk.PackType.start], the sidebar is displayed before the
+content, and the sidebar will be the root page when collapsed.
+
+If set to [enum@Gtk.PackType.end], the sidebar is displayed after the
+content, and the content will be the root page.
+
+§position
+
+the new position
+
+Source
+pub fn set_sidebar_width_fraction(&self, fraction: f64)
+
+Sets the preferred sidebar width as a fraction of the total width of @self.
+
+The preferred width is additionally limited by
+min-sidebar-width and
+max-sidebar-width.
+
+The sidebar widget can be allocated with larger width if its own minimum
+width exceeds the preferred width.
+
+§fraction
+
+the preferred width fraction
+
+Source
+pub fn set_sidebar_width_unit(&self, unit: LengthUnit)
+
+Sets the length unit for minimum and maximum sidebar widths.
+
+See min-sidebar-width and
+max-sidebar-width.
+
+§unit
+
+the length unit
+
+Source
+pub fn connect_collapsed_notify<F: Fn(&Self) + 'static>(
+&self,
+f: F,
+) -> SignalHandlerId
+
+Source
+pub fn connect_content_notify<F: Fn(&Self) + 'static>(
+&self,
+f: F,
+) -> SignalHandlerId
+
+Source
+pub fn connect_max_sidebar_width_notify<F: Fn(&Self) + 'static>(
+&self,
+f: F,
+) -> SignalHandlerId
+
+Source
+pub fn connect_min_sidebar_width_notify<F: Fn(&Self) + 'static>(
+&self,
+f: F,
+) -> SignalHandlerId
+
+Source
+pub fn connect_show_content_notify<F: Fn(&Self) + 'static>(
+&self,
+f: F,
+) -> SignalHandlerId
+
+Source
+pub fn connect_sidebar_notify<F: Fn(&Self) + 'static>(
+&self,
+f: F,
+) -> SignalHandlerId
+
+Source
+pub fn connect_sidebar_position_notify<F: Fn(&Self) + 'static>(
+&self,
+f: F,
+) -> SignalHandlerId
+
+Available on crate feature v1_7 only.
+
+Source
+pub fn connect_sidebar_width_fraction_notify<F: Fn(&Self) + 'static>(
+&self,
+f: F,
+) -> SignalHandlerId
+
+Source
+pub fn connect_sidebar_width_unit_notify<F: Fn(&Self) + 'static>(
+&self,
+f: F,
+) -> SignalHandlerId
+
+Trait Implementations§
+
+Source§
+impl Clone for NavigationSplitView
+
+Source§
+fn clone(&self) -> Self
+
+Makes a clone of this shared reference.
+
+This increments the strong reference count of the object. Dropping the object will decrement it again.
+
+1.0.0 (const: unstable) · Source§
+fn clone_from(&mut self, source: &Self)
+
+Performs copy-assignment from source. Read more
+
+Source§
+impl Debug for NavigationSplitView
+
+Source§
+fn fmt(&self, f: &mut Formatter<'_>) -> Result
+
+Formats the value using the given formatter. Read more
+
+Source§
+impl Default for NavigationSplitView
+
+Source§
+fn default() -> Self
+
+Returns the “default value” for a type. Read more
+
+Source§
+impl HasParamSpec for NavigationSplitView
+
+Source§
+type ParamSpec = ParamSpecObject
+
+Source§
+type SetValue = NavigationSplitView
+
+Preferred value to be used as setter for the associated ParamSpec.
+
+Source§
+type BuilderFn = fn(&str) -> ParamSpecObjectBuilder<'_, NavigationSplitView>
+
+Source§
+fn param_spec_builder() -> Self::BuilderFn
+
+Source§
+impl Hash for NavigationSplitView
+
+Source§
+fn hash<H>(&self, state: &mut H)
+where
+H: Hasher,
+
+Hashes the memory address of this object.
+
+1.3.0 · Source§
+fn hash_slice<H>(data: &[Self], state: &mut H)
+where
+H: Hasher,
+Self: Sized,
+
+Feeds a slice of this type into the given Hasher. Read more
+
+Source§
+impl Ord for NavigationSplitView
+
+Source§
+fn cmp(&self, other: &Self) -> Ordering
+
+Comparison for two GObjects.
+
+Compares the memory addresses of the provided objects.
+
+1.21.0 (const: unstable) · Source§
+fn max(self, other: Self) -> Self
+where
+Self: Sized,
+
+Compares and returns the maximum of two values. Read more
+
+1.21.0 (const: unstable) · Source§
+fn min(self, other: Self) -> Self
+where
+Self: Sized,
+
+Compares and returns the minimum of two values. Read more
+
+1.50.0 (const: unstable) · Source§
+fn clamp(self, min: Self, max: Self) -> Self
+where
+Self: Sized,
+
+Restrict a value to a certain interval. Read more
+
+Source§
+impl ParentClassIs for NavigationSplitView
+
+Source§
+type Parent = Widget
+
+Source§
+impl<OT: ObjectType> PartialEq<OT> for NavigationSplitView
+
+Source§
+fn eq(&self, other: &OT) -> bool
+
+Equality for two GObjects.
+
+Two GObjects are equal if their memory addresses are equal.
+
+1.0.0 (const: unstable) · Source§
+fn ne(&self, other: &Rhs) -> bool
+
+Tests for !=. The default implementation is almost always sufficient,
+and should not be overridden without very good reason.
+
+Source§
+impl<OT: ObjectType> PartialOrd<OT> for NavigationSplitView
+
+Source§
+fn partial_cmp(&self, other: &OT) -> Option<Ordering>
+
+Partial comparison for two GObjects.
+
+Compares the memory addresses of the provided objects.
+
+1.0.0 (const: unstable) · Source§
+fn lt(&self, other: &Rhs) -> bool
+
+Tests less than (for self and other) and is used by the < operator. Read more
+
+1.0.0 (const: unstable) · Source§
+fn le(&self, other: &Rhs) -> bool
+
+Tests less than or equal to (for self and other) and is used by the
+<= operator. Read more
+
+1.0.0 (const: unstable) · Source§
+fn gt(&self, other: &Rhs) -> bool
+
+Tests greater than (for self and other) and is used by the >
+operator. Read more
+
+1.0.0 (const: unstable) · Source§
+fn ge(&self, other: &Rhs) -> bool
+
+Tests greater than or equal to (for self and other) and is used by
+the >= operator. Read more
+
+Source§
+impl StaticType for NavigationSplitView
+
+Source§
+fn static_type() -> Type
+
+Returns the type identifier of Self.
+
+Source§
+impl Eq for NavigationSplitView
+
+Source§
+impl IsA<Accessible> for NavigationSplitView
+
+Source§
+impl IsA<Buildable> for NavigationSplitView
+
+Source§
+impl IsA<ConstraintTarget> for NavigationSplitView
+
+Source§
+impl IsA<Widget> for NavigationSplitView
+
+Auto Trait Implementations§
+
+§
+impl Freeze for NavigationSplitView
+
+§
+impl RefUnwindSafe for NavigationSplitView
+
+§
+impl !Send for NavigationSplitView
+
+§
+impl !Sync for NavigationSplitView
+
+§
+impl Unpin for NavigationSplitView
+
+§
+impl UnsafeUnpin for NavigationSplitView
+
+§
+impl UnwindSafe for NavigationSplitView
+
+Blanket Implementations§
+
+Source§
+impl<O> AccessibleExt for O
+where
+O: IsA<Accessible>,
+
+Source§
+fn announce(&self, message: &str, priority: AccessibleAnnouncementPriority)
+
+Available on crate feature v4_14 only.
+
+Source§
+fn accessible_id(&self) -> Option<GString>
+
+Available on crate feature v4_22 only.
+
+Source§
+fn accessible_parent(&self) -> Option<Accessible>
+
+Available on crate feature v4_10 only.
+
+Source§
+fn accessible_role(&self) -> AccessibleRole
+
+Source§
+fn at_context(&self) -> ATContext
+
+Available on crate feature v4_10 only.
+
+Source§
+fn bounds(&self) -> Option<(i32, i32, i32, i32)>
+
+Available on crate feature v4_10 only.
+
+Source§
+fn first_accessible_child(&self) -> Option<Accessible>
+
+Available on crate feature v4_10 only.
+
+Source§
+fn next_accessible_sibling(&self) -> Option<Accessible>
+
+Available on crate feature v4_10 only.
+
+Source§
+fn platform_state(&self, state: AccessiblePlatformState) -> bool
+
+Available on crate feature v4_10 only.
+
+Source§
+fn reset_property(&self, property: AccessibleProperty)
+
+Source§
+fn reset_relation(&self, relation: AccessibleRelation)
+
+Source§
+fn reset_state(&self, state: AccessibleState)
+
+Source§
+fn set_accessible_parent(
+&self,
+parent: Option<&impl IsA<Accessible>>,
+next_sibling: Option<&impl IsA<Accessible>>,
+)
+
+Available on crate feature v4_10 only.
+
+Source§
+fn update_next_accessible_sibling(
+&self,
+new_sibling: Option<&impl IsA<Accessible>>,
+)
+
+Available on crate feature v4_10 only.
+
+Source§
+fn update_platform_state(&self, state: AccessiblePlatformState)
+
+Available on crate feature v4_18 only.
+
+Source§
+fn set_accessible_role(&self, accessible_role: AccessibleRole)
+
+Source§
+fn connect_accessible_role_notify<F>(&self, f: F) -> SignalHandlerId
+where
+F: Fn(&Self) + 'static,
+
+Source§
+impl<O> AccessibleExtManual for O
+where
+O: IsA<Accessible>,
+
+Source§
+fn update_property(&self, properties: &[Property<'_>])
+
+Source§
+fn update_relation(&self, relations: &[Relation<'_>])
+
+Source§
+fn update_state(&self, states: &[State])
+
+Source§
+impl<T> Any for T
+where
+T: 'static + ?Sized,
+
+Source§
+fn type_id(&self) -> TypeId
+
+Gets the TypeId of self. Read more
+
+Source§
+impl<T> Borrow<T> for T
+where
+T: ?Sized,
+
+Source§
+fn borrow(&self) -> &T
+
+Immutably borrows from an owned value. Read more
+
+Source§
+impl<T> BorrowMut<T> for T
+where
+T: ?Sized,
+
+Source§
+fn borrow_mut(&mut self) -> &mut T
+
+Mutably borrows from an owned value. Read more
+
+Source§
+impl<O> BuildableExt for O
+where
+O: IsA<Buildable>,
+
+Source§
+fn buildable_id(&self) -> Option<GString>
+
+Source§
+impl<T> Cast for T
+where
+T: ObjectType,
+
+Source§
+fn upcast<T>(self) -> T
+where
+T: ObjectType,
+Self: IsA<T>,
+
+Upcasts an object to a superclass or interface T. Read more
+
+Source§
+fn upcast_ref<T>(&self) -> &T
+where
+T: ObjectType,
+Self: IsA<T>,
+
+Upcasts an object to a reference of its superclass or interface T. Read more
+
+Source§
+fn downcast<T>(self) -> Result<T, Self>
+where
+T: ObjectType,
+Self: MayDowncastTo<T>,
+
+Tries to downcast to a subclass or interface implementor T. Read more
+
+Source§
+fn downcast_ref<T>(&self) -> Option<&T>
+where
+T: ObjectType,
+Self: MayDowncastTo<T>,
+
+Tries to downcast to a reference of its subclass or interface implementor T. Read more
+
+Source§
+fn dynamic_cast<T>(self) -> Result<T, Self>
+where
+T: ObjectType,
+
+Tries to cast to an object of type T. This handles upcasting, downcasting
+and casting between interface and interface implementors. All checks are performed at
+runtime, while upcast will do many checks at compile-time already. downcast will
+perform the same checks at runtime as dynamic_cast, but will also ensure some amount of
+compile-time safety. Read more
+
+Source§
+fn dynamic_cast_ref<T>(&self) -> Option<&T>
+where
+T: ObjectType,
+
+Tries to cast to reference to an object of type T. This handles upcasting, downcasting
+and casting between interface and interface implementors. All checks are performed at
+runtime, while downcast and upcast will do many checks at compile-time already. Read more
+
+Source§
+unsafe fn unsafe_cast<T>(self) -> T
+where
+T: ObjectType,
+
+Casts to T unconditionally. Read more
+
+Source§
+unsafe fn unsafe_cast_ref<T>(&self) -> &T
+where
+T: ObjectType,
+
+Casts to &T unconditionally. Read more
+
+Source§
+impl<T> CloneToUninit for T
+where
+T: Clone,
+
+Source§
+unsafe fn clone_to_uninit(&self, dest: *mut u8)
+
+🔬This is a nightly-only experimental API. (clone_to_uninit)
+
+Performs copy-assignment from self to dest. Read more
+
+Source§
+impl<T> From<T> for T
+
+Source§
+fn from(t: T) -> T
+
+Returns the argument unchanged.
+
+Source§
+impl<T> FromGlibContainerAsVec<<T as GlibPtrDefault>::GlibType, *const GList> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_num_as_vec(ptr: *const GList, num: usize) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_num_as_vec(_: *const GList, _: usize) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_num_as_vec(_: *const GList, _: usize) -> Vec<T>
+
+Source§
+impl<T> FromGlibContainerAsVec<<T as GlibPtrDefault>::GlibType, *const GPtrArray> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_num_as_vec(ptr: *const GPtrArray, num: usize) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_num_as_vec(
+_: *const GPtrArray,
+_: usize,
+) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_num_as_vec(_: *const GPtrArray, _: usize) -> Vec<T>
+
+Source§
+impl<T> FromGlibContainerAsVec<<T as GlibPtrDefault>::GlibType, *const GSList> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_num_as_vec(ptr: *const GSList, num: usize) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_num_as_vec(_: *const GSList, _: usize) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_num_as_vec(_: *const GSList, _: usize) -> Vec<T>
+
+Source§
+impl<T> FromGlibContainerAsVec<<T as GlibPtrDefault>::GlibType, *mut GList> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_num_as_vec(ptr: *mut GList, num: usize) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_num_as_vec(ptr: *mut GList, num: usize) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_num_as_vec(ptr: *mut GList, num: usize) -> Vec<T>
+
+Source§
+impl<T> FromGlibContainerAsVec<<T as GlibPtrDefault>::GlibType, *mut GPtrArray> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_num_as_vec(ptr: *mut GPtrArray, num: usize) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_num_as_vec(
+ptr: *mut GPtrArray,
+num: usize,
+) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_num_as_vec(ptr: *mut GPtrArray, num: usize) -> Vec<T>
+
+Source§
+impl<T> FromGlibContainerAsVec<<T as GlibPtrDefault>::GlibType, *mut GSList> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_num_as_vec(ptr: *mut GSList, num: usize) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_num_as_vec(ptr: *mut GSList, num: usize) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_num_as_vec(ptr: *mut GSList, num: usize) -> Vec<T>
+
+Source§
+impl<T> FromGlibPtrArrayContainerAsVec<<T as GlibPtrDefault>::GlibType, *const GList> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_as_vec(ptr: *const GList) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_as_vec(_: *const GList) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_as_vec(_: *const GList) -> Vec<T>
+
+Source§
+impl<T> FromGlibPtrArrayContainerAsVec<<T as GlibPtrDefault>::GlibType, *const GPtrArray> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_as_vec(ptr: *const GPtrArray) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_as_vec(_: *const GPtrArray) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_as_vec(_: *const GPtrArray) -> Vec<T>
+
+Source§
+impl<T> FromGlibPtrArrayContainerAsVec<<T as GlibPtrDefault>::GlibType, *const GSList> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_as_vec(ptr: *const GSList) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_as_vec(_: *const GSList) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_as_vec(_: *const GSList) -> Vec<T>
+
+Source§
+impl<T> FromGlibPtrArrayContainerAsVec<<T as GlibPtrDefault>::GlibType, *mut GList> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_as_vec(ptr: *mut GList) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_as_vec(ptr: *mut GList) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_as_vec(ptr: *mut GList) -> Vec<T>
+
+Source§
+impl<T> FromGlibPtrArrayContainerAsVec<<T as GlibPtrDefault>::GlibType, *mut GPtrArray> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_as_vec(ptr: *mut GPtrArray) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_as_vec(ptr: *mut GPtrArray) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_as_vec(ptr: *mut GPtrArray) -> Vec<T>
+
+Source§
+impl<T> FromGlibPtrArrayContainerAsVec<<T as GlibPtrDefault>::GlibType, *mut GSList> for T
+where
+T: GlibPtrDefault + FromGlibPtrNone<<T as GlibPtrDefault>::GlibType> + FromGlibPtrFull<<T as GlibPtrDefault>::GlibType>,
+
+Source§
+unsafe fn from_glib_none_as_vec(ptr: *mut GSList) -> Vec<T>
+
+Source§
+unsafe fn from_glib_container_as_vec(ptr: *mut GSList) -> Vec<T>
+
+Source§
+unsafe fn from_glib_full_as_vec(ptr: *mut GSList) -> Vec<T>
+
+Source§
+impl<O> GObjectPropertyExpressionExt for O
+where
+O: IsA<Object>,
+
+Source§
+fn property_expression(&self, property_name: &str) -> PropertyExpression
+
+Create an expression looking up an object’s property.
+
+Source§
+fn property_expression_weak(&self, property_name: &str) -> PropertyExpression
+
+Create an expression looking up an object’s property with a weak
+reference.
+
+Source§
+fn this_expression(property_name: &str) -> PropertyExpression
+
+Create an expression looking up a property in the bound this object.
+
+Source§
+impl<T, U> Into<U> for T
+where
+U: From<T>,
+
+Source§
+fn into(self) -> U
+
+Calls U::from(self).
+
+That is, this conversion is whatever the implementation of
+From<T> for U chooses to do.
+
+Source§
+impl<T> IntoClosureReturnValue for T
+where
+T: Into<Value>,
+
+Source§
+fn into_closure_return_value(self) -> Option<Value>
+
+Source§
+impl<U> IsSubclassableExt for U
+where
+U: IsClass + ParentClassIs,
+
+Source§
+fn parent_class_init<T>(class: &mut Class<U>)
+
+
+[… truncated 25113 chars …]

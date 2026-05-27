@@ -1,0 +1,2040 @@
+Gtk &ndash; 4.0
+https://docs.gtk.org/gtk4/
+
+<!DOCTYPE html>
+
+Gtk &ndash; 4.0
+
+Namespace
+
+Gtk &ndash; 4.0
+
+The GTK toolkit
+
+Version4.23.1
+
+AuthorsGTK Development Team
+
+LicenseLGPL-2.1-or-later
+
+Websitehttps://www.gtk.org
+
+Sourcehttps://gitlab.gnome.org/GNOME/gtk/
+
+Build
+
+C headersgtk/gtk.h
+
+pkg-config filesgtk4
+
+Dependencies
+
+Gdk&mdash;4.0
+The GTK windowing system abstraction
+
+Browse documentation
+
+Gsk&mdash;4.0
+The GTK rendering abstraction
+
+Browse documentation
+
+Related libraries
+
+GObject
+The base type system library
+
+Browse documentation
+
+GIO
+GObject Interfaces and Objects, Networking, IPC, and I/O
+
+Browse documentation
+
+Graphene
+A thin layer of mathematical types for 3D libraries
+
+Browse documentation
+
+Pango
+Text shaping and rendering
+
+Browse documentation
+
+Additional documentation
+
+Overview
+
+Getting Started with GTK
+
+Building GTK
+
+Compiling GTK Applications on UNIX
+
+Running and debugging GTK Applications
+
+Common Questions
+
+Contact information and bug reports
+
+Initializing GTK
+
+Overview of actions in GTK
+
+Overview of GTK input and event handling
+
+Drag-and-Drop in GTK
+
+Overview of the drawing model
+
+Coordinate systems in GTK
+
+CSS in GTK
+
+GTK CSS Properties
+
+Symbolic Icons
+
+Accessibility
+
+Dialogs
+
+List Widget Overview
+
+Text Widget Overview
+
+Tree and List Widget Overview
+
+Threading in GTK
+
+Migrating from GTK 2.x to GTK 4
+
+Migrating from GTK 3.x to GTK 4
+
+Preparing for GTK 5
+
+The Broadway windowing system
+
+Using GTK on Apple macOS
+
+Using GTK with Wayland
+
+Using GTK on Windows
+
+Using GTK with X11
+
+Tools and Demos
+
+Widget Gallery
+
+Classes Hierarchy
+
+Classes
+
+AboutDialog
+
+Displays information about a program.
+
+AccessibleHyperlink
+
+Represents a link (i.e. a uri).
+
+since: 4.22
+
+ActionBar
+
+Presents contextual actions.
+
+ActivateAction
+
+Activates a widget.
+
+Adjustment
+
+A model for a numeric value.
+
+AlertDialog
+
+Collects the arguments that are needed to present a message to the user.
+
+since: 4.10
+
+AlternativeTrigger
+
+Combines two shortcut triggers.
+
+AnyFilter
+
+Matches an item when at least one of its filters matches.
+
+AppChooserButton
+
+The GtkAppChooserButton lets the user select an application.
+
+deprecated: 4.10 
+
+AppChooserDialog
+
+GtkAppChooserDialog shows a GtkAppChooserWidget inside a GtkDialog.
+
+deprecated: 4.10 
+
+AppChooserWidget
+
+GtkAppChooserWidget is a widget for selecting applications.
+
+deprecated: 4.10 
+
+Application
+
+A high-level API for writing applications.
+
+ApplicationWindow
+
+A GtkWindow subclass that integrates with GtkApplication.
+
+AspectFrame
+
+Preserves the aspect ratio of its child.
+
+Assistant
+
+GtkAssistant is used to represent a complex as a series of steps.
+
+deprecated: 4.10 
+
+AssistantPage
+
+GtkAssistantPage is an auxiliary object used by GtkAssistant.
+
+deprecated: 4.10 
+
+ATContext
+
+Communicates with platform-specific assistive technologies API.
+
+BinLayout
+
+A layout manager for widgets with a single child.
+
+BookmarkList
+
+A list model that wraps GBookmarkFile.
+
+BoolFilter
+
+Evaluates a boolean expression to determine whether to include items.
+
+Box
+
+Arranges child widgets into a single row or column.
+
+BoxLayout
+
+Arranges children in a single row or column.
+
+Builder
+
+Reads XML descriptions of a user interface and instantiates the described objects.
+
+BuilderCScope
+
+A GtkBuilderScope implementation for the C language.
+
+BuilderListItemFactory
+
+Creates widgets by instantiating GtkBuilder UI templates.
+
+Button
+
+Calls a callback function when the button is clicked.
+
+Calendar
+
+Displays a Gregorian calendar, one month at a time.
+
+CallbackAction
+
+Invokes a callback.
+
+CClosureExpression
+
+A variant of GtkClosureExpression using a C closure.
+
+CellArea
+
+An abstract class for laying out GtkCellRenderers.
+
+deprecated: 4.10 
+
+CellAreaBox
+
+A cell area that renders GtkCellRenderers into a row or a column.
+
+deprecated: 4.10 
+
+CellAreaContext
+
+Stores geometrical information for a series of rows in a GtkCellArea.
+
+deprecated: 4.10 
+
+CellRenderer
+
+An object for rendering a single cell.
+
+deprecated: 4.10 
+
+CellRendererAccel
+
+Renders a keyboard accelerator in a cell.
+
+deprecated: 4.10 
+
+CellRendererCombo
+
+Renders a combobox in a cell.
+
+deprecated: 4.10 
+
+CellRendererPixbuf
+
+Renders a pixbuf in a cell.
+
+deprecated: 4.10 
+
+CellRendererProgress
+
+Renders numbers as progress bars.
+
+deprecated: 4.10 
+
+CellRendererSpin
+
+Renders a spin button in a cell.
+
+deprecated: 4.10 
+
+CellRendererSpinner
+
+Renders a spinning animation in a cell.
+
+deprecated: 4.10 
+
+CellRendererText
+
+Renders text in a cell.
+
+deprecated: 4.10 
+
+CellRendererToggle
+
+Renders a toggle button in a cell.
+
+deprecated: 4.10 
+
+CellView
+
+A widget displaying a single row of a GtkTreeModel.
+
+deprecated: 4.10 
+
+CenterBox
+
+Arranges three children in a row, keeping the middle child
+centered as well as possible.
+
+CenterLayout
+
+Manages up to three children.
+
+CheckButton
+
+Places a label next to an indicator.
+
+ClosureExpression
+
+An expression using a custom GClosure to compute the value from
+its parameters.
+
+ColorButton
+
+The GtkColorButton allows to open a color chooser dialog to change
+the color.
+
+deprecated: 4.10 
+
+ColorChooserDialog
+
+A dialog for choosing a color.
+
+deprecated: 4.10 
+
+ColorChooserWidget
+
+The GtkColorChooserWidget widget lets the user select a color.
+
+deprecated: 4.10 
+
+ColorDialog
+
+Asynchronous API to present a color chooser dialog.
+
+since: 4.10
+
+ColorDialogButton
+
+Opens a color chooser dialog to select a color.
+
+since: 4.10
+
+ColumnView
+
+Presents a large dynamic list of items using multiple columns with headers.
+
+ColumnViewCell
+
+Represents items in a cell in GtkColumnView.
+
+since: 4.12
+
+ColumnViewColumn
+
+Represents the columns in a GtkColumnView.
+
+ColumnViewRow
+
+Configures how rows are displayed in a GtkColumnView.
+
+since: 4.12
+
+ColumnViewSorter
+
+Sorts GtkColumnView columns.
+
+since: 4.10
+
+ComboBox
+
+A GtkComboBox is a widget that allows the user to choose from a list of
+valid choices.
+
+deprecated: 4.10 
+
+ComboBoxText
+
+A GtkComboBoxText is a simple variant of GtkComboBox for text-only
+use cases.
+
+deprecated: 4.10 
+
+ConstantExpression
+
+A constant value in a GtkExpression.
+
+Constraint
+
+Describes a constraint between attributes of two widgets,
+expressed as a linear equation.
+
+ConstraintGuide
+
+An invisible layout element in a GtkConstraintLayout.
+
+ConstraintLayout
+
+Uses constraints to describe relations between widgets.
+
+ConstraintLayoutChild
+
+GtkLayoutChild subclass for children in a GtkConstraintLayout.
+
+CssProvider
+
+A style provider for CSS.
+
+CustomFilter
+
+Determines whether to include items with a callback.
+
+CustomLayout
+
+Uses closures for size negotiation.
+
+CustomSorter
+
+Sorts items via a callback function.
+
+Dialog
+
+Dialogs are a convenient way to prompt the user for a small amount
+of input.
+
+deprecated: 4.10 
+
+DirectoryList
+
+A list model that wraps g_file_enumerate_children_async().
+
+DragIcon
+
+A GtkRoot implementation for drag icons.
+
+DragSource
+
+An event controller to initiate Drag-And-Drop operations.
+
+DrawingArea
+
+Allows drawing with cairo.
+
+DropControllerMotion
+
+An event controller tracking the pointer during Drag-and-Drop operations.
+
+DropDown
+
+Allows the user to choose an item from a list of options.
+
+DropTarget
+
+An event controller to receive Drag-and-Drop operations.
+
+DropTargetAsync
+
+An event controller to receive Drag-and-Drop operations, asynchronously.
+
+EditableLabel
+
+Allows users to edit the displayed text by switching to an “edit mode”.
+
+EmojiChooser
+
+Used by text widgets to let users insert Emoji characters.
+
+Entry
+
+A single-line text entry widget.
+
+EntryBuffer
+
+Holds the text that is displayed in a single-line text entry widget.
+
+EntryCompletion
+
+GtkEntryCompletion is an auxiliary object to provide completion functionality
+for GtkEntry.
+
+deprecated: 4.10 
+
+EnumList
+
+A GListModel representing values of a given enum.
+
+unstable since: 4.24
+
+EnumListItem
+
+GtkEnumListItem is the type of items in a GtkEnumList.
+
+unstable since: 4.24
+
+EventController
+
+The base class for event controllers.
+
+EventControllerFocus
+
+Tracks keyboard focus.
+
+EventControllerKey
+
+Provides access to key events.
+
+EventControllerLegacy
+
+Provides raw access to the event stream.
+
+EventControllerMotion
+
+Tracks the pointer position.
+
+EventControllerScroll
+
+Handles scroll events.
+
+EveryFilter
+
+Matches an item when each of its filters matches.
+
+Expander
+
+Allows the user to reveal or conceal a child widget.
+
+Expression
+
+Provides a way to describe references to values.
+
+FileChooserDialog
+
+GtkFileChooserDialog is a dialog suitable for use with
+“File Open” or “File Save” commands.
+
+deprecated: 4.10 
+
+FileChooserNative
+
+GtkFileChooserNative is an abstraction of a dialog suitable
+for use with “File Open” or “File Save as” commands.
+
+deprecated: 4.10 
+
+FileChooserWidget
+
+GtkFileChooserWidget is a widget for choosing files.
+
+deprecated: 4.10 
+
+FileDialog
+
+Asynchronous API to present a file chooser dialog.
+
+since: 4.10
+
+FileFilter
+
+Filters files by name or mime type.
+
+FileLauncher
+
+Asynchronous API to open a file with an application.
+
+since: 4.10
+
+Filter
+
+Describes the filtering to be performed by a GtkFilterListModel.
+
+FilterListModel
+
+A list model that filters the elements of another model.
+
+Fixed
+
+Places its child widgets at fixed positions and with fixed sizes.
+
+FixedLayout
+
+Places child widgets at fixed positions.
+
+FixedLayoutChild
+
+GtkLayoutChild subclass for children in a GtkFixedLayout.
+
+FlattenListModel
+
+A list model that concatenates other list models.
+
+FlowBox
+
+Puts child widgets in a reflowing grid.
+
+FlowBoxChild
+
+The kind of widget that can be added to a GtkFlowBox.
+
+FontButton
+
+The GtkFontButton allows to open a font chooser dialog to change
+the font.
+
+deprecated: 4.10 
+
+FontChooserDialog
+
+The GtkFontChooserDialog widget is a dialog for selecting a font.
+
+deprecated: 4.10 
+
+FontChooserWidget
+
+The GtkFontChooserWidget widget lets the user select a font.
+
+deprecated: 4.10 
+
+FontDialog
+
+Asynchronous API to present a font chooser dialog.
+
+since: 4.10
+
+FontDialogButton
+
+Opens a font chooser dialog to select a font.
+
+since: 4.10
+
+Frame
+
+Surrounds its child with a decorative frame and an optional label.
+
+Gesture
+
+The base class for gesture recognition.
+
+GestureClick
+
+Recognizes click gestures.
+
+GestureDrag
+
+Recognizes drag gestures.
+
+GestureLongPress
+
+Recognizes long press gestures.
+
+GesturePan
+
+Recognizes pan gestures.
+
+GestureRotate
+
+Recognizes 2-finger rotation gestures.
+
+GestureSingle
+
+A GtkGesture subclass optimized for singe-touch and mouse gestures.
+
+GestureStylus
+
+Recognizes tablet stylus input.
+
+GestureSwipe
+
+Recognizes swipe gestures.
+
+GestureZoom
+
+Recognizes 2-finger pinch/zoom gestures.
+
+GLArea
+
+Allows drawing with OpenGL.
+
+GraphicsOffload
+
+Bypasses gsk rendering by passing the content of its child directly to the compositor.
+
+since: 4.14
+
+Grid
+
+Arranges its child widgets in rows and columns.
+
+GridLayout
+
+Arranges child widgets in rows and columns.
+
+GridLayoutChild
+
+GtkLayoutChild subclass for children in a GtkGridLayout.
+
+GridView
+
+Presents a large dynamic grid of items.
+
+HeaderBar
+
+Creates a custom titlebar for a window.
+
+IconPaintable
+
+Contains information found when looking up an icon in GtkIconTheme
+or loading it from a file.
+
+IconTheme
+
+Loads themed icons.
+
+IconView
+
+GtkIconView is a widget which displays data in a grid of icons.
+
+deprecated: 4.10 
+
+Image
+
+Displays an image.
+
+IMContext
+
+The interface for GTK input methods.
+
+IMContextSimple
+
+Supports compose sequences, dead keys and numeric Unicode input.
+
+IMMulticontext
+
+Supports switching between multiple input methods.
+
+InfoBar
+
+GtkInfoBar can be used to show messages to the user without a dialog.
+
+deprecated: 4.10 
+
+Inscription
+
+Shows text in a predefined area.
+
+since: 4.8
+
+KeyvalTrigger
+
+Triggers when a specific keyval and modifiers are pressed.
+
+Label
+
+Displays a small amount of text.
+
+LayoutChild
+
+The base class for objects that are meant to hold layout properties.
+
+LayoutManager
+
+Handles the preferred size and allocation for children of a widget.
+
+LevelBar
+
+Shows a level indicator.
+
+LinkButton
+
+A button with a hyperlink.
+
+ListBase
+
+The abstract base class for GTK’s list widgets.
+
+ListBox
+
+Shows a vertical list.
+
+ListBoxRow
+
+The kind of widget that can be added to a GtkListBox.
+
+ListHeader
+
+Used by list widgets to represent the headers they display.
+
+since: 4.12
+
+ListItem
+
+Used by list widgets to represent items in a GListModel.
+
+ListItemFactory
+
+Creates widgets for the items taken from a GListModel.
+
+ListStore
+
+A list-like data structure that can be used with the GtkTreeView.
+
+deprecated: 4.10 
+
+ListView
+
+Presents a large dynamic list of items.
+
+LockButton
+
+GtkLockButton is a widget to obtain and revoke authorizations
+needed to operate the controls.
+
+deprecated: 4.10 
+
+MapListModel
+
+A list model that maps the items in another model to different items.
+
+MediaControls
+
+Shows controls for video playback.
+
+MediaFile
+
+Implements the GtkMediaStream interface for files.
+
+MediaStream
+
+The integration point for media playback inside GTK.
+
+MenuButton
+
+Displays a popup when clicked.
+
+MessageDialog
+
+GtkMessageDialog presents a dialog with some message text.
+
+deprecated: 4.10 
+
+MnemonicAction
+
+Activates a widget with a mnemonic.
+
+MnemonicTrigger
+
+Triggers when a specific mnemonic is pressed.
+
+MountOperation
+
+Asks the user for passwords and other information required to
+mount a volume.
+
+MultiFilter
+
+Base class for filters that combine multiple filters.
+
+MultiSelection
+
+A selection model that allows selecting multiple elements.
+
+MultiSorter
+
+Combines multiple sorters by trying them in turn.
+
+NamedAction
+
+Activates a named action.
+
+NativeDialog
+
+Base class for platform dialogs that don’t use GtkDialog.
+
+NeverTrigger
+
+A GtkShortcutTrigger that never triggers.
+
+NoSelection
+
+A selection model that does not allow selecting anything.
+
+Notebook
+
+Switches between children using tabs.
+
+NotebookPage
+
+An auxiliary object used by GtkNotebook.
+
+NothingAction
+
+Does nothing.
+
+NumericSorter
+
+Sorts items numerically.
+
+ObjectExpression
+
+A GObject value in a GtkExpression.
+
+Overlay
+
+Places “overlay” widgets on top of a single main child.
+
+OverlayLayout
+
+The layout manager used by GtkOverlay.
+
+OverlayLayoutChild
+
+GtkLayoutChild subclass for children in a GtkOverlayLayout.
+
+PadController
+
+Handles input from the pads found in drawing tablets.
+
+PageSetup
+
+Stores page size, orientation and margins for printing.
+
+PageSetupUnixDialog
+
+Presents a page setup dialog for platforms which don’t provide
+a native page setup dialog, like Unix.
+
+Paned
+
+Arranges its children in two panes, horizontally or vertically.
+
+ParamSpecExpression
+
+A GParamSpec for properties holding a GtkExpression.
+
+PasswordEntry
+
+A single-line text entry widget for entering passwords and other secrets.
+
+PasswordEntryBuffer
+
+A GtkEntryBuffer that locks the underlying memory to prevent it
+from being swapped to disk.
+
+since: 4.4
+
+Picture
+
+Displays a GdkPaintable.
+
+Popover
+
+Presents a bubble-like popup.
+
+PopoverBin
+
+A single child container with a popover.
+
+since: 4.22
+
+PopoverMenu
+
+A subclass of GtkPopover that implements menu behavior.
+
+PopoverMenuBar
+
+Presents a horizontal bar of items that pop up menus when clicked.
+
+PrintContext
+
+Encapsulates context information that is required when
+drawing pages for printing.
+
+PrintDialog
+
+Asynchronous API to present a print dialog to the user.
+
+since: 4.14
+
+Printer
+
+Represents a printer.
+
+PrintJob
+
+Represents a job that is sent to a printer.
+
+PrintOperation
+
+High-level, portable printing API.
+
+PrintSettings
+
+Collects the settings of a print dialog in a system-independent way.
+
+PrintUnixDialog
+
+A print dialog for platforms which don’t provide a native
+print dialog, like Unix.
+
+ProgressBar
+
+Displays the progress of a long-running operation.
+
+PropertyExpression
+
+A GObject property value in a GtkExpression.
+
+Range
+
+Base class for widgets which visualize an adjustment.
+
+RecentManager
+
+Manages and looks up recently used files.
+
+Revealer
+
+Animates the transition of its child from invisible to visible.
+
+Scale
+
+Allows to select a numeric value with a slider control.
+
+ScaleButton
+
+Provides a button which pops up a scale widget.
+
+Scrollbar
+
+Shows a horizontal or vertical scrollbar.
+
+ScrolledWindow
+
+Makes its child scrollable.
+
+SearchBar
+
+Reveals a search entry when search is started.
+
+SearchEntry
+
+A single-line text entry widget for use as a search entry.
+
+SelectionFilterModel
+
+A list model that presents the selection from a GtkSelectionModel.
+
+Separator
+
+Draws a horizontal or vertical line to separate other widgets.
+
+Settings
+
+Provides a mechanism to share global settings between applications.
+
+Shortcut
+
+Describes a keyboard shortcut.
+
+ShortcutAction
+
+Encodes an action that can be triggered by a keyboard shortcut.
+
+ShortcutController
+
+Manages keyboard shortcuts and their activation.
+
+ShortcutLabel
+
+GtkShortcutLabel displays a single keyboard shortcut or gesture.
+
+deprecated: 4.18 
+
+ShortcutsGroup
+
+A GtkShortcutsGroup represents a group of related keyboard shortcuts
+or gestures.
+
+deprecated: 4.18 
+
+ShortcutsSection
+
+A GtkShortcutsSection collects all the keyboard shortcuts and gestures
+for a major application mode.
+
+deprecated: 4.18 
+
+ShortcutsShortcut
+
+A GtkShortcutsShortcut represents a single keyboard shortcut or gesture
+with a short text.
+
+deprecated: 4.18 
+
+ShortcutsWindow
+
+A GtkShortcutsWindow shows information about the keyboard shortcuts
+and gestures of an application.
+
+deprecated: 4.18 
+
+ShortcutTrigger
+
+Tracks how a GtkShortcut can be activated.
+
+SignalAction
+
+Emits a signal on a widget.
+
+SignalListItemFactory
+
+Emits signals to manage listitems.
+
+SingleSelection
+
+A selection model that allows selecting a single item.
+
+SizeGroup
+
+Groups widgets together so they all request the same size.
+
+SliceListModel
+
+A list model that presents a slice of another model.
+
+Snapshot
+
+Assists in creating GskRenderNodes for widgets.
+
+Sorter
+
+Describes sorting criteria for a GtkSortListModel.
+
+SortListModel
+
+A list model that sorts the elements of another model.
+
+SpinButton
+
+Allows to enter or change numeric values.
+
+Spinner
+
+Displays an icon-size spinning animation.
+
+Stack
+
+Shows one of its children at a time.
+
+StackPage
+
+An auxiliary class used by GtkStack.
+
+StackSidebar
+
+Uses a sidebar to switch between GtkStack pages.
+
+StackSwitcher
+
+Shows a row of buttons to switch between GtkStack pages.
+
+Statusbar
+
+A GtkStatusbar widget is usually placed along the bottom of an application’s
+main GtkWindow.
+
+deprecated: 4.10 
+
+StringFilter
+
+Determines whether to include items by comparing strings to a fixed search term.
+
+StringList
+
+A list model that wraps an array of strings.
+
+StringObject
+
+The type of items in a GtkStringList.
+
+StringSorter
+
+Sorts items by comparing strings.
+
+StyleContext
+
+GtkStyleContext stores styling information affecting a widget.
+
+deprecated: 4.10 
+
+Svg
+
+A paintable implementation that renders SVG, with animations.
+
+since: 4.22
+
+SvgWidget
+
+A widget that renders SVG, with animations and event handling.
+
+unstable since: 4.24
+
+Switch
+
+Shows a “light switch” that has two states: on or off.
+
+Text
+
+A single-line text entry.
+
+TextBuffer
+
+Stores text and attributes for display in a GtkTextView.
+
+TextChildAnchor
+
+Marks a spot in a GtkTextBuffer where child widgets can be “anchored”.
+
+TextMark
+
+Marks a position in a GtkTextbuffer that is preserved
+across modifications.
+
+TextTag
+
+Can be applied to text contained in a GtkTextBuffer.
+
+TextTagTable
+
+Collects the tags in a GtkTextBuffer.
+
+TextView
+
+Displays the contents of a GtkTextBuffer.
+
+ToggleButton
+
+Shows a button which remains “pressed-in” when clicked.
+
+Tooltip
+
+Represents a widget tooltip.
+
+TreeExpander
+
+Provides an expander for a tree-like list.
+
+TreeListModel
+
+A list model that can create child models on demand.
+
+TreeListRow
+
+The type of item used by GtkTreeListModel.
+
+TreeListRowSorter
+
+Applies a gives sorter to the levels in a tree.
+
+TreeModelFilter
+
+A GtkTreeModel which hides parts of an underlying tree model.
+
+deprecated: 4.10 
+
+TreeModelSort
+
+A GtkTreeModel which makes an underlying tree model sortable.
+
+deprecated: 4.10 
+
+TreeSelection
+
+The selection object for GtkTreeView.
+
+deprecated: 4.10 
+
+TreeStore
+
+A tree-like data structure that can be used with the GtkTreeView.
+
+deprecated: 4.10 
+
+TreeView
+
+A widget for displaying both trees and lists.
+
+deprecated: 4.10 
+
+TreeViewColumn
+
+A visible column in a GtkTreeView widget.
+
+deprecated: 4.10 
+
+TryExpression
+
+A GtkExpression that tries to evaluate each of its expressions until it succeeds.
+
+since: 4.22
+
+UriLauncher
+
+Asynchronous API to open a uri with an application.
+
+since: 4.10
+
+Video
+
+Shows a GtkMediaStream with media controls.
+
+Viewport
+
+Implements scrollability for widgets that don’t support scrolling
+on their own.
+
+VolumeButton
+
+GtkVolumeButton is a GtkScaleButton subclass tailored for
+volume control.
+
+deprecated: 4.10 
+
+Widget
+
+The base class for all widgets.
+
+WidgetPaintable
+
+A GdkPaintable that displays the contents of a widget.
+
+Window
+
+A toplevel window which can contain other widgets.
+
+WindowControls
+
+Shows window frame controls.
+
+WindowGroup
+
+Creates groups of windows that behave like separate applications.
+
+WindowHandle
+
+Implements titlebar functionality for a window.
+
+Interfaces
+
+Accessible
+
+An interface for describing UI elements for Assistive Technologies.
+
+since: 4.10
+
+AccessibleHypertext
+
+An interface for accessible objects containing links.
+
+since: 4.22
+
+AccessibleRange
+
+An interface for accessible objects containing a numeric value.
+
+since: 4.10
+
+AccessibleText
+
+An interface for accessible objects containing formatted text.
+
+since: 4.14
+
+Actionable
+
+Provides a way to associate widgets with actions.
+
+AppChooser
+
+GtkAppChooser is an interface for widgets which allow the user to
+choose an application.
+
+deprecated: 4.10 
+
+Buildable
+
+Allows objects to extend and customize deserialization from ui files.
+
+BuilderScope
+
+Provides language binding support to GtkBuilder.
+
+CellEditable
+
+Interface for widgets that can be used for editing cells.
+
+deprecated: 4.10 
+
+CellLayout
+
+An interface for packing cells.
+
+deprecated: 4.10 
+
+ColorChooser
+
+GtkColorChooser is an interface that is implemented by widgets
+for choosing colors.
+
+deprecated: 4.10 
+
+ConstraintTarget
+
+Makes it possible to use an object as source or target in a
+GtkConstraint.
+
+Editable
+
+Interface for single-line text editing widgets.
+
+FileChooser
+
+GtkFileChooser is an interface that can be implemented by file
+selection widgets.
+
+deprecated: 4.10 
+
+FontChooser
+
+GtkFontChooser is an interface that can be implemented by widgets
+for choosing fonts.
+
+deprecated: 4.10 
+
+Native
+
+An interface for widgets that have their own GdkSurface.
+
+Orientable
+
+An interface for widgets that can be oriented horizontally or vertically.
+
+PrintOperationPreview
+
+The interface that is used to implement print preview.
+
+Root
+
+An interface for widgets that can act as the root of a widget hierarchy.
+
+Scrollable
+
+An interface for widgets with native scrolling ability.
+
+SectionModel
+
+An interface that adds support for sections to list models.
+
+since: 4.12
+
+SelectionModel
+
+An interface that adds support for selection to list models.
+
+ShortcutManager
+
+An interface that is used to implement shortcut scopes.
+
+StyleProvider
+
+An interface for style information used by GtkStyleContext.
+
+SymbolicPaintable
+
+An interface that supports symbolic colors in paintables.
+
+since: 4.6
+
+TreeDragDest
+
+Interface for Drag-and-Drop destinations in GtkTreeView.
+
+deprecated: 4.10 
+
+TreeDragSource
+
+Interface for Drag-and-Drop destinations in GtkTreeView.
+
+deprecated: 4.10 
+
+TreeModel
+
+The tree interface used by GtkTreeView.
+
+deprecated: 4.10 
+
+TreeSortable
+
+The interface for sortable models used by GtkTreeView.
+
+deprecated: 4.10 
+
+Structs
+
+AccessibleList
+
+Wraps a list of references to GtkAccessible objects.
+
+since: 4.14
+
+AccessibleTextRange
+
+A range inside the text of an accessible object.
+
+since: 4.14
+
+Bitset
+
+A set of unsigned integers.
+
+BitsetIter
+
+Iterates over the elements of a GtkBitset.
+
+Border
+
+Specifies a border around a rectangular area.
+
+BuildableParseContext
+
+Provides context for parsing GtkBuilder UI files.
+
+BuildableParser
+
+A sub-parser for GtkBuildable implementations.
+
+CssLocation
+
+Points at a location inside a CSS stream.
+
+CssSection
+
+Defines a part of a CSS document.
+
+CssStyleChange
+
+A CSS style change.
+
+ExpressionWatch
+
+An opaque structure representing a watched GtkExpression.
+
+PadActionEntry
+
+Struct defining a pad action entry.
+
+PageRange
+
+A range of pages to print.
+
+PaperSize
+
+GtkPaperSize handles paper sizes.
+
+PrintBackend
+
+A print backend.
+
+PrintSetup
+
+An auxiliary object for printing that allows decoupling the setup from the printing.
+
+since: 4.14
+
+RecentData
+
+Meta-data to be passed to gtk_recent_manager_add_full() when
+registering a recently used resource.
+
+RecentInfo
+
+Contains the metadata associated with an item in the
+recently used files list.
+
+RequestedSize
+
+Represents a request of a screen object in a given orientation.
+
+Requisition
+
+Represents the desired size of a widget.
+
+ScrollInfo
+
+Provides detailed information on how a scroll operation should be performed.
+
+since: 4.12
+
+SvgLocation
+
+Provides information about a location in an SVG document.
+
+since: 4.22
+
+TextIter
+
+Iterates over the contents of a GtkTextBuffer.
+
+TreeIter
+
+The GtkTreeIter is the primary structure
+for accessing a GtkTreeModel. Models are expected to put a unique
+integer in the stamp member, and put
+model-specific data in the three user_data
+members.
+
+deprecated: 4.10 
+
+TreePath
+
+An opaque structure representing a path to a row in a model.
+
+deprecated: 4.10 
+
+TreeRowReference
+
+A GtkTreeRowReference tracks model changes so that it always refers to the
+same row (a GtkTreePath refers to a position, not a fixed row). Create a
+new GtkTreeRowReference with gtk_tree_row_reference_new().
+
+deprecated: 4.10 
+
+Aliases
+
+Allocation
+
+The rectangle representing the area allocated for a widget by its parent.
+
+Enumerations
+
+AccessibleAnnouncementPriority
+
+The priority of an accessibility announcement.
+
+since: 4.14
+
+AccessibleAutocomplete
+
+The possible values for the GTK_ACCESSIBLE_PROPERTY_AUTOCOMPLETE
+accessible property.
+
+AccessibleInvalidState
+
+The possible values for the GTK_ACCESSIBLE_STATE_INVALID
+accessible state.
+
+AccessiblePlatformState
+
+The various platform states which can be queried
+using gtk_accessible_get_platform_state().
+
+since: 4.10
+
+AccessibleProperty
+
+The possible accessible properties of a GtkAccessible.
+
+AccessibleRelation
+
+The possible accessible relations of a GtkAccessible.
+
+AccessibleRole
+
+The accessible role for a GtkAccessible implementation.
+
+AccessibleSort
+
+The possible values for the GTK_ACCESSIBLE_PROPERTY_SORT
+accessible property.
+
+AccessibleState
+
+The possible accessible states of a GtkAccessible.
+
+AccessibleTextContentChange
+
+The type of contents change operation.
+
+since: 4.14
+
+AccessibleTextGranularity
+
+The granularity for queries about the text contents of a GtkAccessibleText
+implementation.
+
+since: 4.14
+
+AccessibleTristate
+
+The possible values for the GTK_ACCESSIBLE_STATE_PRESSED
+accessible state.
+
+Align
+
+Controls how a widget deals with extra space in a single dimension.
+
+ArrowType
+
+Indicates the direction in which an arrow should point.
+
+AssistantPageType
+
+Determines the role of a page inside a GtkAssistant.
+
+deprecated: 4.10 
+
+BaselinePosition
+
+Baseline position in a row of widgets.
+
+BorderStyle
+
+Describes how the border of a UI element should be rendered.
+
+ButtonsType
+
+Prebuilt sets of buttons for GtkDialog.
+
+CellRendererAccelMode
+
+The available modes for GtkCellRendererAccel:accel-mode.
+
+deprecated: 4.20 
+
+CellRendererMode
+
+Identifies how the user can interact with a particular cell.
+
+deprecated: 4.20 
+
+Collation
+
+Describes how a GtkStringSorter turns strings into sort keys to
+compare them.
+
+since: 4.10
+
+ConstraintAttribute
+
+The widget attributes that can be used when creating a GtkConstraint.
+
+ConstraintRelation
+
+The relation between two terms of a constraint.
+
+ConstraintStrength
+
+The strength of a constraint, expressed as a symbolic constant.
+
+ContentFit
+
+Controls how a content should be made to fit inside an allocation.
+
+since: 4.8
+
+CornerType
+
+Specifies which corner a child widget should be placed in when packed into
+a GtkScrolledWindow..
+
+CssParserWarning
+
+Warnings that can occur while parsing CSS.
+
+DeleteType
+
+Passed to various keybinding signals for deleting text.
+
+DirectionType
+
+Focus movement types.
+
+EditableProperties
+
+The identifiers for GtkEditable properties.
+
+EntryIconPosition
+
+Specifies the side of the entry at which an icon is placed.
+
+EventSequenceState
+
+Describes the state of a GdkEventSequence in a GtkGesture.
+
+FileChooserAction
+
+Describes whether a GtkFileChooser is being used to open existing files
+or to save to a possibly new file.
+
+FilterChange
+
+Describes changes in a filter in more detail and allows objects
+using the filter to optimize refiltering items.
+
+FilterMatch
+
+Describes the known strictness of a filter.
+
+FontLevel
+
+The level of granularity for the font selection.
+
+since: 4.10
+
+FontRendering
+
+Values for the GtkSettings:gtk-font-rendering setting
+that influence how GTK renders fonts.
+
+since: 4.16
+
+GraphicsOffloadEnabled
+
+Represents the state of graphics offloading.
+
+since: 4.14
+
+IconSize
+
+Built-in icon sizes.
+
+IconViewDropPosition
+
+An enum for determining where a dropped item goes.
+
+deprecated: 4.20 
+
+ImageType
+
+Describes the image data representation used by a GtkImage.
+
+InputPurpose
+
+Describes primary purpose of the input widget.
+
+InscriptionOverflow
+
+The different methods to handle text in GtkInscription when it doesn’t
+fit the available space.
+
+since: 4.8
+
+InterfaceColorScheme
+
+Values for the GtkSettings:gtk-interface-color-scheme
+and GtkCssProvider:prefers-color-scheme properties
+that indicates what color scheme is used.
+
+since: 4.20
+
+InterfaceContrast
+
+Values for the GtkSettings:gtk-interface-contrast
+and GtkCssProvider:prefers-contrast properties
+that indicates the preferred level of contrast.
+
+since: 4.20
+
+Justification
+
+Used for justifying the text inside a GtkLabel widget.
+
+LevelBarMode
+
+Describes how GtkLevelBar contents should be rendered.
+
+License
+
+The type of license for an application.
+
+ListTabBehavior
+
+Used to configure the focus behavior in the GTK_DIR_TAB_FORWARD
+and GTK_DIR_TAB_BACKWARD direction, like the Tab key
+in a GtkListView.
+
+since: 4.12
+
+MessageType
+
+The type of message being displayed in a GtkMessageDialog.
+
+MovementStep
+
+Passed as argument to various keybinding signals for moving the
+cursor position.
+
+NaturalWrapMode
+
+Options for selecting a different wrap mode for natural size requests.
+
+since: 4.6
+
+NotebookTab
+
+The parameter used in the action signals of GtkNotebook.
+
+NumberUpLayout
+
+Used to determine the layout of pages on a sheet when printing
+multiple pages per sheet.
+
+Ordering
+
+Describes the way two values can be compared.
+
+Orientation
+
+Represents the orientation of widgets and other objects.
+
+Overflow
+
+Defines how content overflowing a given area should be handled.
+
+PackType
+
+Represents the packing location of a children in its parent.
+
+PadActionType
+
+The type of a pad action.
+
+PageOrientation
+
+See also gtk_print_settings_set_orientation().
+
+PageSet
+
+See also gtk_print_job_set_page_set().
+
+PanDirection
+
+Describes the panning direction of a GtkGesturePan.
+
+PolicyType
+
+Determines how the size should be computed to achieve the one of the
+visibility mode for the scrollbars.
+
+PositionType
+
+Describes which edge of a widget a certain feature is positioned at.
+
+PrintDuplex
+
+See also gtk_print_settings_set_duplex().
+
+PrintOperationAction
+
+Determines what action the print operation should perform.
+
+PrintOperationResult
+
+The result of a print operation.
+
+PrintPages
+
+See also gtk_print_job_set_pages().
+
+PrintQuality
+
+See also gtk_print_settings_set_quality().
+
+PrintStatus
+
+The status gives a rough indication of the completion of a running
+print operation.
+
+PropagationLimit
+
+Describes limits of a GtkEventController for handling events
+targeting other widgets.
+
+PropagationPhase
+
+Describes the stage at which events are fed into a GtkEventController.
+
+ReducedMotion
+
+Values for the GtkSettings:gtk-interface-reduced-motion
+and GtkCssProvider:prefers-reduced-motion properties
+that indicates the preferred l
+
+[… truncated 30675 chars …]

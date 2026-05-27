@@ -28,8 +28,15 @@ impl PlexClient {
 
         // reqwest Client::builder().build() only fails if the TLS backend
         // cannot initialize, which indicates a broken system configuration.
+        //
+        // Accept invalid TLS certs — Plex servers use self-signed or
+        // plex.direct wildcard certificates whose OCSP/CRL validation
+        // can take seconds. This is standard practice for Plex clients.
         let http = reqwest::Client::builder()
             .default_headers(default_headers)
+            .danger_accept_invalid_certs(true)
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .timeout(std::time::Duration::from_secs(15))
             .build()
             .expect("TLS backend initialization failed");
 
@@ -199,6 +206,15 @@ impl PlexClient {
     /// Get on-deck (continue watching) items.
     pub async fn on_deck(&self) -> Result<Vec<PlexMetadata>, PlexError> {
         let url = format!("{}/library/onDeck", self.base_url);
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        let body: PlexMetadataResponse = resp.json().await?;
+        Ok(body.media_container.metadata)
+    }
+
+    /// Get recently added items across all libraries.
+    pub async fn recently_added(&self) -> Result<Vec<PlexMetadata>, PlexError> {
+        let url = format!("{}/library/recentlyAdded", self.base_url);
         let resp = self.http.get(&url).send().await?;
         Self::check_status(&resp)?;
         let body: PlexMetadataResponse = resp.json().await?;

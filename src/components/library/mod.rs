@@ -34,7 +34,11 @@ pub struct LibraryView {
     search_entry: gtk4::SearchEntry,
     // Filter/sort bar widgets
     filter_bar: gtk4::Box,
-    genre_flow: gtk4::FlowBox,
+    genre_scroll: gtk4::ScrolledWindow,
+    genre_box: gtk4::Box,
+    filter_button: gtk4::MenuButton,
+    filter_dot: gtk4::Image,
+    library_title: gtk4::Label,
     decade_dropdown: gtk4::DropDown,
     sort_dropdown: gtk4::DropDown,
     clear_filters_btn: gtk4::Button,
@@ -56,8 +60,15 @@ pub struct LibraryView {
     continue_watching_section: gtk4::Box,
     /// Horizontal box inside the Continue Watching scrolled window.
     continue_watching_box: gtk4::Box,
+    /// Recently Added section container.
+    recently_added_section: gtk4::Box,
+    /// Horizontal box inside the Recently Added scrolled window.
+    recently_added_box: gtk4::Box,
     /// Tracks poster downloads for logging: (completed_count, total_to_fetch, batch_start_time).
     poster_load_tracker: Option<(usize, usize, std::time::Instant)>,
+    /// True when an async library fetch is in flight; prevents redundant
+    /// concurrent LoadLibrary calls from starting duplicate fetches.
+    loading_in_progress: bool,
 }
 
 #[allow(dead_code)]
@@ -251,9 +262,9 @@ impl Component for LibraryView {
             .build();
         search_bar.connect_entry(&search_entry);
 
-        // Filter/sort bar
+        // Filter bar: single horizontal row with genre scroll + filter popover button
         let filter_bar = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
+            .orientation(gtk4::Orientation::Horizontal)
             .spacing(8)
             .margin_start(12)
             .margin_end(12)
@@ -261,20 +272,29 @@ impl Component for LibraryView {
             .margin_bottom(4)
             .build();
 
-        // Genre chips in a FlowBox
-        let genre_flow = gtk4::FlowBox::builder()
-            .selection_mode(gtk4::SelectionMode::None)
-            .homogeneous(false)
-            .max_children_per_line(20)
-            .min_children_per_line(1)
-            .row_spacing(4)
-            .column_spacing(4)
+        // Genre chips in a horizontally scrollable row
+        let genre_scroll = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Automatic)
+            .vscrollbar_policy(gtk4::PolicyType::Never)
+            .hexpand(true)
             .build();
-
-        // Controls row: decade dropdown + sort dropdown + clear button
-        let controls_row = gtk4::Box::builder()
+        let genre_box = gtk4::Box::builder()
             .orientation(gtk4::Orientation::Horizontal)
-            .spacing(8)
+            .spacing(4)
+            .build();
+        genre_scroll.set_child(Some(&genre_box));
+
+        // --- Filter popover (sort, density, decade, clear) ---
+        let filter_popover = gtk4::Popover::builder().build();
+
+        let popover_content = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(12)
+            .margin_start(12)
+            .margin_end(12)
+            .margin_top(12)
+            .margin_bottom(12)
+            .width_request(220)
             .build();
 
         // Decade dropdown
@@ -286,26 +306,23 @@ impl Component for LibraryView {
             let selected = dd.selected();
             if selected == 0 {
                 let _ = sender_decade.send(LibraryViewMsg::DecadeFilterChanged(None));
-            } else {
-                // Position 1+ maps to decades stored in current_decades
-                // We'll send the decade value via the string model
-                if let Some(item) = dd.model().and_then(|m| m.item(selected))
-                    && let Ok(string_obj) = item.downcast::<gtk4::StringObject>()
-                {
-                    let text = string_obj.string();
-                    // Parse "2020s" → 2020
-                    if let Ok(decade) = text.trim_end_matches('s').parse::<i32>() {
-                        let _ =
-                            sender_decade.send(LibraryViewMsg::DecadeFilterChanged(Some(decade)));
-                    }
+            } else if let Some(item) = dd.model().and_then(|m| m.item(selected))
+                && let Ok(string_obj) = item.downcast::<gtk4::StringObject>()
+            {
+                let text = string_obj.string();
+                if let Ok(decade) = text.trim_end_matches('s').parse::<i32>() {
+                    let _ =
+                        sender_decade.send(LibraryViewMsg::DecadeFilterChanged(Some(decade)));
                 }
             }
         });
 
+        let decade_row = labeled_row("Decade", &decade_dropdown);
+
         // Sort dropdown
         let sort_labels: Vec<&str> = SortOrder::all().iter().map(|s| s.label()).collect();
         let sort_dropdown = gtk4::DropDown::from_strings(&sort_labels);
-        sort_dropdown.set_selected(0); // TitleAsc
+        sort_dropdown.set_selected(0);
 
         let sender_sort = sender.input_sender().clone();
         sort_dropdown.connect_selected_notify(move |dd| {
@@ -316,22 +333,7 @@ impl Component for LibraryView {
             }
         });
 
-        // Clear filters button
-        let clear_filters_btn = gtk4::Button::builder()
-            .icon_name("edit-clear-symbolic")
-            .tooltip_text("Clear all filters")
-            .css_classes(["flat"])
-            .visible(false)
-            .build();
-        let sender_clear_bar = sender.input_sender().clone();
-        clear_filters_btn.connect_clicked(move |_| {
-            let _ = sender_clear_bar.send(LibraryViewMsg::ClearFilters);
-        });
-
-        let decade_label = gtk4::Label::new(Some("Decade:"));
-        decade_label.add_css_class("dim-label");
-        let sort_label = gtk4::Label::new(Some("Sort:"));
-        sort_label.add_css_class("dim-label");
+        let sort_row = labeled_row("Sort by", &sort_dropdown);
 
         // Density dropdown
         let density_labels: Vec<&str> = GridDensity::all().iter().map(|d| d.label()).collect();
@@ -347,19 +349,47 @@ impl Component for LibraryView {
             }
         });
 
-        let density_label = gtk4::Label::new(Some("Size:"));
-        density_label.add_css_class("dim-label");
+        let density_row = labeled_row("Thumbnail size", &density_dropdown);
 
-        controls_row.append(&decade_label);
-        controls_row.append(&decade_dropdown);
-        controls_row.append(&sort_label);
-        controls_row.append(&sort_dropdown);
-        controls_row.append(&density_label);
-        controls_row.append(&density_dropdown);
-        controls_row.append(&clear_filters_btn);
+        // Clear filters button inside popover
+        let clear_filters_btn = gtk4::Button::builder()
+            .label("Clear Filters")
+            .css_classes(["flat"])
+            .halign(gtk4::Align::Center)
+            .visible(false)
+            .build();
+        let popover_clear = filter_popover.clone();
+        let sender_clear_bar = sender.input_sender().clone();
+        clear_filters_btn.connect_clicked(move |_| {
+            let _ = sender_clear_bar.send(LibraryViewMsg::ClearFilters);
+            popover_clear.popdown();
+        });
 
-        filter_bar.append(&genre_flow);
-        filter_bar.append(&controls_row);
+        popover_content.append(&decade_row);
+        popover_content.append(&sort_row);
+        popover_content.append(&density_row);
+        popover_content.append(&clear_filters_btn);
+
+        filter_popover.set_child(Some(&popover_content));
+
+        // Filter button that opens the popover
+        let filter_button = gtk4::MenuButton::builder()
+            .icon_name("view-sort-descending-symbolic")
+            .tooltip_text("Filter & Sort")
+            .popover(&filter_popover)
+            .css_classes(["flat"])
+            .build();
+
+        // Active filter indicator dot
+        let filter_dot = gtk4::Image::builder()
+            .icon_name("media-record-symbolic")
+            .css_classes(["accent"])
+            .visible(false)
+            .build();
+
+        filter_bar.append(&genre_scroll);
+        filter_bar.append(&filter_dot);
+        filter_bar.append(&filter_button);
 
         stack.add_child(&loading_page);
         stack.add_child(&empty_page);
@@ -400,10 +430,55 @@ impl Component for LibraryView {
         continue_watching_section.append(&cw_label);
         continue_watching_section.append(&cw_scroll);
 
+        // Recently Added section (hidden initially)
+        let recently_added_section = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(8)
+            .margin_start(16)
+            .margin_end(16)
+            .margin_top(8)
+            .margin_bottom(8)
+            .visible(false)
+            .build();
+
+        let ra_label = gtk4::Label::builder()
+            .label("Recently Added")
+            .halign(gtk4::Align::Start)
+            .css_classes(["title-3"])
+            .build();
+
+        let recently_added_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(12)
+            .build();
+
+        let ra_scroll = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Automatic)
+            .vscrollbar_policy(gtk4::PolicyType::Never)
+            .max_content_height(200)
+            .child(&recently_added_box)
+            .build();
+
+        recently_added_section.append(&ra_label);
+        recently_added_section.append(&ra_scroll);
+
+        // Library title showing type + count (e.g., "Movies (1,247)")
+        let library_title = gtk4::Label::builder()
+            .halign(gtk4::Align::Start)
+            .margin_start(16)
+            .margin_top(4)
+            .css_classes(["title-4"])
+            .build();
+
         root.append(&search_bar);
         root.append(&filter_bar);
+        root.append(&library_title);
         root.append(&continue_watching_section);
+        root.append(&recently_added_section);
         root.append(&stack);
+
+        // Apply .rich-list for spacious grid style
+        grid_view.add_css_class("rich-list");
 
         let model = Self {
             grid,
@@ -419,7 +494,11 @@ impl Component for LibraryView {
             search_bar,
             search_entry,
             filter_bar,
-            genre_flow,
+            genre_scroll,
+            genre_box,
+            filter_button,
+            filter_dot,
+            library_title,
             decade_dropdown,
             sort_dropdown,
             clear_filters_btn,
@@ -434,7 +513,10 @@ impl Component for LibraryView {
             watch_data: HashMap::new(),
             continue_watching_section,
             continue_watching_box,
+            recently_added_section,
+            recently_added_box,
             poster_load_tracker: None,
+            loading_in_progress: false,
         };
 
         ComponentParts { model, widgets }
@@ -455,6 +537,12 @@ impl Component for LibraryView {
                     return;
                 }
 
+                // If a fetch is already in flight for the same library type,
+                // skip the redundant request.
+                if self.loading_in_progress && library_type == self.library_type {
+                    return;
+                }
+
                 // Switching library types: reset filters (genres differ) but keep sort
                 if library_type != self.library_type {
                     self.filter_state.clear();
@@ -464,9 +552,11 @@ impl Component for LibraryView {
                 }
 
                 self.library_type = library_type;
+                self.loading_in_progress = true;
                 self.stack.set_visible_child(&self.loading_page);
 
                 let Some(source) = self.source.clone() else {
+                    self.loading_in_progress = false;
                     self.stack.set_visible_child(&self.empty_page);
                     return;
                 };
@@ -525,6 +615,7 @@ impl Component for LibraryView {
                 }
             }
             LibraryViewMsg::LibraryLoaded(items) => {
+                self.loading_in_progress = false;
                 if items.is_empty() {
                     self.all_items.clear();
                     self.grid.clear();
@@ -544,6 +635,7 @@ impl Component for LibraryView {
                 );
             }
             LibraryViewMsg::LoadError(msg) => {
+                self.loading_in_progress = false;
                 self.error_page.set_description(Some(&msg));
                 self.stack.set_visible_child(&self.error_page);
             }
@@ -641,8 +733,9 @@ impl Component for LibraryView {
                 if !self.all_items.is_empty() {
                     self.rebuild_grid(&sender);
                 }
-                // Rebuild Continue Watching row
+                // Rebuild shelf rows
                 self.rebuild_continue_watching(&sender);
+                self.rebuild_recently_added(&sender);
             }
             LibraryViewMsg::LoadCollectionItems(collection_key) => {
                 self.stack.set_visible_child(&self.loading_page);
@@ -690,7 +783,20 @@ impl Component for LibraryView {
                         if borrow.poster_url.as_deref() == Some(url.as_str())
                             && borrow.poster_texture.is_none()
                         {
-                            borrow.poster_texture = Some(texture);
+                            borrow.poster_texture = Some(texture.clone());
+
+                            // Directly update the GTK Picture widget — mutating the
+                            // data model alone does NOT trigger RelmGridItem::bind()
+                            // to re-run, so we must set the paintable on the widget.
+                            if let Some(ref picture) = borrow.picture_widget {
+                                picture.set_paintable(Some(&texture));
+                                picture.remove_css_class("loading");
+                                picture.set_opacity(1.0);
+                            }
+                            if let Some(ref placeholder) = borrow.placeholder_widget {
+                                placeholder.set_visible(false);
+                            }
+
                             break;
                         }
                     }
@@ -805,6 +911,21 @@ impl LibraryView {
         );
 
         self.stack.set_visible_child(&self.grid_page);
+
+        // Update library title header
+        let type_name = match self.library_type {
+            LibraryType::Movie => "Movies",
+            LibraryType::Show => "TV Shows",
+        };
+        let showing_count = filtered_indices.len();
+        let total_count = self.all_items.len();
+        if showing_count == total_count {
+            self.library_title
+                .set_label(&format!("{type_name} ({total_count})"));
+        } else {
+            self.library_title
+                .set_label(&format!("{type_name} ({showing_count} of {total_count})"));
+        }
     }
 
     /// Rebuild genre toggle chips from current all_items.
@@ -815,9 +936,9 @@ impl LibraryView {
             return; // No change needed
         }
 
-        // Remove all existing children
-        while let Some(child) = self.genre_flow.first_child() {
-            self.genre_flow.remove(&child);
+        // Remove all existing children from the horizontal genre box
+        while let Some(child) = self.genre_box.first_child() {
+            self.genre_box.remove(&child);
         }
 
         for genre in &genres {
@@ -827,15 +948,12 @@ impl LibraryView {
                 .build();
 
             let sender_genre = sender.input_sender().clone();
-            let flow_ref = self.genre_flow.clone();
+            let box_ref = self.genre_box.clone();
             btn.connect_toggled(move |_btn| {
-                // Collect all currently toggled genres
                 let mut selected = Vec::new();
-                let mut child = flow_ref.first_child();
+                let mut child = box_ref.first_child();
                 while let Some(ref widget) = child {
-                    // FlowBoxChild wraps the ToggleButton
-                    if let Some(toggle) = widget.first_child()
-                        && let Ok(toggle) = toggle.downcast::<gtk4::ToggleButton>()
+                    if let Ok(toggle) = widget.clone().downcast::<gtk4::ToggleButton>()
                         && toggle.is_active()
                     {
                         selected.push(toggle.label().map(|l| l.to_string()).unwrap_or_default());
@@ -845,7 +963,7 @@ impl LibraryView {
                 let _ = sender_genre.send(LibraryViewMsg::GenreFilterChanged(selected));
             });
 
-            self.genre_flow.append(&btn);
+            self.genre_box.append(&btn);
         }
 
         self.current_genres = genres;
@@ -872,47 +990,127 @@ impl LibraryView {
 
     /// Deselect all genre toggle buttons.
     fn deselect_all_genre_chips(&self) {
-        let mut child = self.genre_flow.first_child();
+        let mut child = self.genre_box.first_child();
         while let Some(ref widget) = child {
-            if let Some(toggle) = widget.first_child()
-                && let Ok(toggle) = toggle.downcast::<gtk4::ToggleButton>()
-            {
+            if let Ok(toggle) = widget.clone().downcast::<gtk4::ToggleButton>() {
                 toggle.set_active(false);
             }
             child = widget.next_sibling();
         }
     }
 
-    /// Show/hide the clear filters button based on active filter state.
+    /// Show/hide the clear filters button and filter-dot indicator.
     fn update_clear_button_visibility(&self) {
-        self.clear_filters_btn
-            .set_visible(self.filter_state.is_active() || !self.search_query.is_empty());
+        let has_active = self.filter_state.is_active() || !self.search_query.is_empty();
+        self.clear_filters_btn.set_visible(has_active);
+        self.filter_dot.set_visible(has_active);
+    }
+
+    /// Build a shelf card widget (poster + optional progress bar + title).
+    /// Used by Continue Watching and Recently Added shelves.
+    fn build_shelf_card(
+        item: &MediaItem,
+        progress: Option<f64>,
+        source: &Option<Arc<dyn MediaSource>>,
+        artwork_cache: &Option<Arc<ArtworkCache>>,
+        texture_cache: &HashMap<String, gtk4::gdk::Texture>,
+        cmd_sender: &relm4::Sender<LibraryViewCmd>,
+        output_sender: &relm4::Sender<LibraryViewOutput>,
+    ) -> gtk4::Box {
+        let card = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(4)
+            .width_request(120)
+            .css_classes(["media-card"])
+            .build();
+
+        let picture = gtk4::Picture::builder()
+            .content_fit(gtk4::ContentFit::Cover)
+            .width_request(120)
+            .height_request(180)
+            .css_classes(["media-card-poster"])
+            .build();
+
+        let overlay = gtk4::Overlay::new();
+        overlay.set_child(Some(&picture));
+
+        // Progress bar (only for continue watching)
+        if let Some(pct) = progress {
+            if pct > 0.0 {
+                let progress_bar = gtk4::ProgressBar::builder()
+                    .halign(gtk4::Align::Fill)
+                    .valign(gtk4::Align::End)
+                    .fraction(pct)
+                    .css_classes(["watch-progress"])
+                    .build();
+                overlay.add_overlay(&progress_bar);
+            }
+        }
+
+        let frame = gtk4::Frame::builder()
+            .css_classes(["media-card-frame"])
+            .child(&overlay)
+            .build();
+
+        let title = gtk4::Label::builder()
+            .label(&item.title)
+            .halign(gtk4::Align::Start)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .max_width_chars(14)
+            .css_classes(["caption"])
+            .build();
+
+        card.append(&frame);
+        card.append(&title);
+
+        // Load poster texture
+        if let (Some(poster_path), Some(src)) = (&item.poster_path, source) {
+            let url = src.artwork_url(poster_path, 300, 450);
+            if let Some(texture) = texture_cache.get(&url) {
+                picture.set_paintable(Some(texture));
+            } else if let Some(cache) = artwork_cache {
+                let cache = Arc::clone(cache);
+                let sender = cmd_sender.clone();
+                let fetch_url = url;
+                gtk4::glib::spawn_future_local(async move {
+                    if let Ok(path) = cache.get_or_download(&fetch_url).await
+                        && let Ok(texture) = gtk4::gdk::Texture::from_filename(&path)
+                    {
+                        let _ = sender.send(LibraryViewCmd::ArtworkReady(fetch_url, texture));
+                    }
+                });
+            }
+        }
+
+        // Click handler → navigate to detail
+        let item_clone = item.clone();
+        let os = output_sender.clone();
+        let gesture = gtk4::GestureClick::new();
+        gesture.connect_released(move |_, _, _, _| {
+            let _ = os.send(LibraryViewOutput::ShowDetail(item_clone.clone()));
+        });
+        card.add_controller(gesture);
+
+        card
     }
 
     /// Rebuild the Continue Watching horizontal row from watch_data + all_items.
     fn rebuild_continue_watching(&mut self, sender: &ComponentSender<Self>) {
-        // Remove old children
         while let Some(child) = self.continue_watching_box.first_child() {
             self.continue_watching_box.remove(&child);
         }
 
-        // Find in-progress items (not watched, has progress)
-        let mut in_progress: Vec<&MediaItem> = self
+        let in_progress: Vec<&MediaItem> = self
             .all_items
             .iter()
             .filter(|item| {
-                if let Some(&(progress, watched)) = self.watch_data.get(&item.id) {
-                    !watched && progress > 0.0
-                } else {
-                    false
-                }
+                self.watch_data
+                    .get(&item.id)
+                    .map(|&(_, watched)| !watched)
+                    .unwrap_or(false)
             })
             .take(20)
             .collect();
-
-        // Sort by progress (most recently watched first — watch_data doesn't have timestamp,
-        // so just use insertion order which is last_watched_at DESC from the DB query)
-        let _ = &mut in_progress;
 
         if in_progress.is_empty() {
             self.continue_watching_section.set_visible(false);
@@ -923,87 +1121,83 @@ impl LibraryView {
 
         let source = self.source.clone();
         let artwork_cache = self.artwork_cache.clone();
+        let cmd_sender = sender.command_sender().clone();
+        let output_sender = sender.output_sender().clone();
 
         for item in &in_progress {
             let progress = self
                 .watch_data
                 .get(&item.id)
-                .map(|&(p, _)| p)
-                .unwrap_or(0.0);
+                .and_then(|&(p, watched)| if !watched { Some(p) } else { None });
 
-            // Build a small poster card
-            let card = gtk4::Box::builder()
-                .orientation(gtk4::Orientation::Vertical)
-                .spacing(4)
-                .width_request(120)
-                .css_classes(["media-card"])
-                .build();
-
-            let picture = gtk4::Picture::builder()
-                .content_fit(gtk4::ContentFit::Cover)
-                .width_request(120)
-                .height_request(180)
-                .css_classes(["media-card-poster"])
-                .build();
-
-            let progress_bar = gtk4::ProgressBar::builder()
-                .halign(gtk4::Align::Fill)
-                .valign(gtk4::Align::End)
-                .fraction(progress)
-                .css_classes(["watch-progress"])
-                .build();
-
-            let overlay = gtk4::Overlay::new();
-            overlay.set_child(Some(&picture));
-            overlay.add_overlay(&progress_bar);
-
-            let frame = gtk4::Frame::builder()
-                .css_classes(["media-card-frame"])
-                .child(&overlay)
-                .build();
-
-            let title = gtk4::Label::builder()
-                .label(&item.title)
-                .halign(gtk4::Align::Start)
-                .ellipsize(gtk4::pango::EllipsizeMode::End)
-                .max_width_chars(14)
-                .css_classes(["caption"])
-                .build();
-
-            card.append(&frame);
-            card.append(&title);
-
-            // Load poster texture
-            if let (Some(poster_path), Some(src)) = (&item.poster_path, &source) {
-                let url = src.artwork_url(poster_path, 300, 450);
-                if let Some(texture) = self.texture_cache.get(&url) {
-                    picture.set_paintable(Some(texture));
-                } else if let Some(cache) = &artwork_cache {
-                    let cache = Arc::clone(cache);
-                    let sender = sender.command_sender().clone();
-                    let fetch_url = url;
-                    gtk4::glib::spawn_future_local(async move {
-                        if let Ok(path) = cache.get_or_download(&fetch_url).await
-                            && let Ok(texture) = gtk4::gdk::Texture::from_filename(&path)
-                        {
-                            let _ = sender.send(LibraryViewCmd::ArtworkReady(fetch_url, texture));
-                        }
-                    });
-                }
-            }
-
-            // Click handler -> navigate to detail
-            let item_clone = (*item).clone();
-            let output_sender = sender.output_sender().clone();
-            let gesture = gtk4::GestureClick::new();
-            gesture.connect_released(move |_, _, _, _| {
-                let _ = output_sender.send(LibraryViewOutput::ShowDetail(item_clone.clone()));
-            });
-            card.add_controller(gesture);
-
+            let card = Self::build_shelf_card(
+                item,
+                progress,
+                &source,
+                &artwork_cache,
+                &self.texture_cache,
+                &cmd_sender,
+                &output_sender,
+            );
             self.continue_watching_box.append(&card);
         }
     }
+
+    /// Rebuild the Recently Added horizontal row from all_items (most recent first).
+    fn rebuild_recently_added(&mut self, sender: &ComponentSender<Self>) {
+        while let Some(child) = self.recently_added_box.first_child() {
+            self.recently_added_box.remove(&child);
+        }
+
+        let recent: Vec<&MediaItem> = self
+            .all_items
+            .iter()
+            .filter(|item| !item.added_at.is_empty())
+            .take(20)
+            .collect();
+
+        if recent.is_empty() {
+            self.recently_added_section.set_visible(false);
+            return;
+        }
+
+        self.recently_added_section.set_visible(true);
+
+        let source = self.source.clone();
+        let artwork_cache = self.artwork_cache.clone();
+        let cmd_sender = sender.command_sender().clone();
+        let output_sender = sender.output_sender().clone();
+
+        for item in &recent {
+            let card = Self::build_shelf_card(
+                item,
+                None, // no progress for recently added
+                &source,
+                &artwork_cache,
+                &self.texture_cache,
+                &cmd_sender,
+                &output_sender,
+            );
+            self.recently_added_box.append(&card);
+        }
+    }
+}
+
+/// Build a simple "label: widget" row for the filter popover.
+fn labeled_row(label_text: &str, control: &impl gtk4::prelude::IsA<gtk4::Widget>) -> gtk4::Box {
+    let row = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    let label = gtk4::Label::builder()
+        .label(label_text)
+        .halign(gtk4::Align::Start)
+        .hexpand(true)
+        .css_classes(["dim-label"])
+        .build();
+    row.append(&label);
+    row.append(control);
+    row
 }
 
 /// Find which grid item is at the given (x, y) coordinates.
