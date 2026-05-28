@@ -713,7 +713,16 @@ impl Component for App {
                 }
             }
             AppMsg::OpenPreferences => {
-                self.settings = settings_dialog::show_preferences(root, &self.settings);
+                let usage = self
+                    .db_conn
+                    .as_ref()
+                    .and_then(|conn| {
+                        crate::db::downloads_repo::DownloadsRepo::new(conn)
+                            .total_completed_bytes()
+                            .ok()
+                    })
+                    .unwrap_or(0);
+                self.settings = settings_dialog::show_preferences(root, &self.settings, usage);
             }
             AppMsg::OpenAbout => {
                 settings_dialog::show_about(root);
