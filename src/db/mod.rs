@@ -1,4 +1,5 @@
 pub mod error;
+pub mod init;
 pub mod media_repo;
 pub mod migrations;
 #[allow(dead_code)]
