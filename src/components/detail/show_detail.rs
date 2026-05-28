@@ -364,7 +364,7 @@ impl Component for ShowDetail {
         let season_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Never)
-            .height_request(215)
+            .height_request(248)
             .build();
 
         let season_cards_box = gtk::Box::builder()
@@ -757,14 +757,23 @@ impl Component for ShowDetail {
                 }
             }
             ShowDetailCmd::EpisodeThumbReady(idx, texture) => {
+                // The overlay's base child is the placeholder Box; the picture is
+                // an overlay child. Search the overlay's children for the Picture
+                // rather than assuming first_child.
                 if let Some(card) = self.episode_cards_box.observe_children().item(idx as u32)
                     && let Ok(card) = card.downcast::<gtk::Box>()
                     && let Some(overlay) = card.first_child()
                     && let Ok(overlay) = overlay.downcast::<gtk::Overlay>()
-                    && let Some(picture) = overlay.first_child()
-                    && let Ok(picture) = picture.downcast::<gtk::Picture>()
                 {
-                    picture.set_paintable(Some(&texture));
+                    let children = overlay.observe_children();
+                    for i in 0..children.n_items() {
+                        if let Some(child) = children.item(i)
+                            && let Ok(picture) = child.downcast::<gtk::Picture>()
+                        {
+                            picture.set_paintable(Some(&texture));
+                            break;
+                        }
+                    }
                 }
             }
             ShowDetailCmd::Error(msg) => {
@@ -917,14 +926,33 @@ impl ShowDetail {
                 .css_classes(["episode-card"])
                 .build();
 
-            // Thumbnail overlay: picture + episode number badge (top-left)
+            // Thumbnail: picture over a placeholder backing. The overlay's base
+            // child is the placeholder (dark fill + centered icon shown when no
+            // art is available); the picture layers on top and covers it once a
+            // texture loads. The number badge floats in the top-left corner.
             let thumb_overlay = gtk::Overlay::new();
+
+            let thumb_placeholder = gtk::Box::builder()
+                .width_request(290)
+                .height_request(163)
+                .css_classes(["episode-card-thumb"])
+                .build();
+            let placeholder_icon = gtk::Image::builder()
+                .icon_name("video-display-symbolic")
+                .pixel_size(32)
+                .hexpand(true)
+                .vexpand(true)
+                .halign(gtk::Align::Center)
+                .valign(gtk::Align::Center)
+                .css_classes(["episode-card-thumb-placeholder"])
+                .build();
+            thumb_placeholder.append(&placeholder_icon);
 
             let thumb_picture = gtk::Picture::builder()
                 .content_fit(gtk::ContentFit::Cover)
                 .width_request(290)
                 .height_request(163)
-                .css_classes(["episode-card-thumb"])
+                .css_classes(["episode-card-thumb-img"])
                 .build();
 
             let ep_badge = gtk::Label::builder()
@@ -936,6 +964,7 @@ impl ShowDetail {
                 .margin_top(6)
                 .build();
 
+            thumb_overlay.set_child(Some(&thumb_placeholder));
             thumb_overlay.add_overlay(&thumb_picture);
             thumb_overlay.add_overlay(&ep_badge);
             card.append(&thumb_overlay);

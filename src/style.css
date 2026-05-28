@@ -73,7 +73,6 @@
     font-size: 11px;
     padding: 3px 10px;
     border-radius: 99px;
-    transition: background-color 150ms ease, color 150ms ease;
 }
 
 .library-filter-bar .pill:checked {
@@ -137,7 +136,6 @@
 .alphabet-bar {
     padding: 4px 2px;
     opacity: 0.6;
-    transition: opacity 150ms ease;
 }
 
 .alphabet-bar:hover {
@@ -343,10 +341,6 @@ gridview > child:selected .media-card-frame {
     background-color: alpha(@card_bg_color, 0.25);
 }
 
-.detail-hero picture {
-    transition: opacity 400ms ease-out;
-}
-
 .detail-hero-overlay {
     background: linear-gradient(
         to top,
@@ -367,15 +361,15 @@ gridview > child:selected .media-card-frame {
         0 1px 4px rgba(0, 0, 0, 0.20),
         inset 0 0 0 1px alpha(white, 0.08);
     background-color: alpha(@card_bg_color, 0.35);
-    transition: transform 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
-                box-shadow 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
+/* GTK4 CSS has no transform/transition; the deeper, higher-offset shadow on
+   hover conveys the "lift" without a translate. */
 .detail-poster-hero:hover {
-    transform: translateY(-2px);
     box-shadow:
-        0 10px 28px rgba(0, 0, 0, 0.46),
-        0 3px 8px rgba(0, 0, 0, 0.24);
+        0 14px 32px rgba(0, 0, 0, 0.50),
+        0 4px 10px rgba(0, 0, 0, 0.28),
+        inset 0 0 0 1px alpha(white, 0.10);
 }
 
 /* ── Metadata pill badges (year, runtime, rating, content rating) ─── */
@@ -483,6 +477,10 @@ gridview > child:selected .media-card-frame {
 
 .season-card-poster {
     background-color: alpha(@card_bg_color, 0.4);
+    /* Round the top corners to match the card; the labels sit below with a
+       straight edge. GTK4 does not clip children to a parent's border-radius,
+       so the poster needs its own radius or its square corners poke past. */
+    border-radius: 14px 14px 0 0;
 }
 
 .season-card-label {
@@ -513,8 +511,22 @@ gridview > child:selected .media-card-frame {
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
 }
 
+/* Placeholder backing behind the thumbnail picture. Shows a dim centered icon
+   when no episode art is available; the picture overlays and covers it once a
+   texture loads. Top corners rounded to match the card. */
 .episode-card-thumb {
     background-color: alpha(@card_bg_color, 0.4);
+    border-radius: 14px 14px 0 0;
+}
+
+.episode-card-thumb-placeholder {
+    color: alpha(@window_fg_color, 0.30);
+}
+
+/* The picture layer itself — no background so the placeholder shows through
+   until a texture loads. Top corners rounded to match the card. */
+.episode-card-thumb-img {
+    border-radius: 14px 14px 0 0;
 }
 
 .episode-card-title {
