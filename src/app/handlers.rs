@@ -11,6 +11,7 @@ use crate::components::library::LibraryViewMsg;
 use crate::components::player::video_player::{VideoPlayerMsg, VideoPlayerOutput};
 use crate::components::sidebar::SidebarMsg;
 use crate::config;
+use crate::db::downloads_repo::DownloadsRepo;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::media::{MediaItem, SourceType};
 use crate::models::source::{Source, SourceConfig};
@@ -28,7 +29,7 @@ use super::AppCmd;
 use super::AppMsg;
 use super::db_helpers::load_watch_data;
 use super::player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
-use super::watch_events::dispatch_watch_events;
+use super::watch_events::{dispatch_watch_events, resume_position};
 
 /// Handle VideoOutput messages from the video player component.
 #[allow(clippy::too_many_lines)]
@@ -79,7 +80,13 @@ pub fn handle_video_output(
             let events = app
                 .watch_tracker
                 .process_position(position_secs, Instant::now());
-            dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+            dispatch_watch_events(
+                &app.db_conn,
+                events,
+                &app.active_source,
+                app.now_playing.as_ref().map(|i| i.id.as_str()),
+                sender,
+            );
         }
         VideoPlayerOutput::StateChanged(state) => {
             let _ = app.mpris.status_tx.send(state);
@@ -94,7 +101,13 @@ pub fn handle_video_output(
                         app.last_position,
                         Instant::now(),
                     );
-                    dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+                    dispatch_watch_events(
+                        &app.db_conn,
+                        events,
+                        &app.active_source,
+                        app.now_playing.as_ref().map(|i| i.id.as_str()),
+                        sender,
+                    );
                 }
                 PlayState::Paused | PlayState::Stopped => {
                     app.screensaver.uninhibit(root);
@@ -103,7 +116,13 @@ pub fn handle_video_output(
                         app.last_position,
                         Instant::now(),
                     );
-                    dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+                    dispatch_watch_events(
+                        &app.db_conn,
+                        events,
+                        &app.active_source,
+                        app.now_playing.as_ref().map(|i| i.id.as_str()),
+                        sender,
+                    );
                 }
             }
         }
@@ -113,7 +132,13 @@ pub fn handle_video_output(
             let _ = app.mpris.metadata_tx.send(mpris::MprisMetadata::default());
             let _ = app.mpris.position_tx.send(0);
             let events = app.watch_tracker.stop(app.last_position);
-            dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+            dispatch_watch_events(
+                &app.db_conn,
+                events,
+                &app.active_source,
+                app.now_playing.as_ref().map(|i| i.id.as_str()),
+                sender,
+            );
             app.now_playing = None;
             let watch_data = load_watch_data(&app.db_conn);
             app.library_view
@@ -154,20 +179,33 @@ pub fn handle_play_media(
     root: &adw::ApplicationWindow,
 ) {
     info!("Playing media: {}...", &url[..url.len().min(80)]);
-    // Resume where playback left off, preferring the source's own offset (e.g.
-    // Plex view offset) so it stays in sync across devices; fall back to locally
-    // tracked progress only when the source reports none.
+    // Resume where playback left off. For a downloaded item watched offline, an
+    // unsynced offline position wins over the source's (stale) offset — the one
+    // sanctioned inversion of "Plex is authoritative". Otherwise the source
+    // offset wins, then locally tracked progress. A source-`watched` item drops
+    // the offline mid-progress (latest-state-wins).
     app.pending_resume = None;
     if let Some(ref item) = media_item {
-        app.pending_resume = item.resume_position_secs().or_else(|| {
-            let conn = app.db_conn.as_ref()?;
-            let repo = WatchProgressRepo::new(conn);
-            repo.find_by_media_id(&item.id)
-                .ok()
-                .flatten()
-                .filter(|progress| progress.should_show_resume())
-                .map(|progress| progress.resume_position())
-        });
+        let source_offset = item.resume_position_secs();
+        let (offline_pending, local_tracked) = match app.db_conn.as_ref() {
+            Some(conn) => {
+                let offline = DownloadsRepo::new(conn)
+                    .latest_pending_sync_for(&item.id)
+                    .ok()
+                    .flatten()
+                    .map(|p| p.position_ms as f64 / 1000.0);
+                let local = WatchProgressRepo::new(conn)
+                    .find_by_media_id(&item.id)
+                    .ok()
+                    .flatten()
+                    .filter(|progress| progress.should_show_resume())
+                    .map(|progress| progress.resume_position());
+                (offline, local)
+            }
+            None => (None, None),
+        };
+        app.pending_resume =
+            resume_position(source_offset, offline_pending, local_tracked, item.watched);
     }
     app.now_playing = media_item.clone();
     app.last_position = 0.0;
@@ -292,6 +330,9 @@ pub fn handle_connection_saved(
     // A library loads when picked from the sidebar; the default view is Home.
 
     sender.input(AppMsg::ShowToast(format!("Connected to {name}")));
+
+    // Flush any offline-recorded progress back to the source on (re)connect.
+    super::watch_events::flush_pending_sync(app, sender);
 
     // The source is live — start any queued/recovered downloads.
     super::download_handlers::start_pending(app);
