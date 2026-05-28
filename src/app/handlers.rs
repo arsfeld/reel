@@ -248,6 +248,8 @@ pub fn handle_connection_saved(
         source.clone(),
         artwork_cache.clone(),
     ));
+    app.library_view
+        .emit(LibraryViewMsg::SetSavedUiState(app.settings.library.clone()));
     app.movie_detail.emit(
         crate::components::detail::movie_detail::MovieDetailMsg::SetSource(
             source.clone(),

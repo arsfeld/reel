@@ -18,6 +18,7 @@ use crate::services::library_filter::{
     self, FilterState, FilterTag, GridDensity, SortOrder, ViewMode,
 };
 use crate::services::media_source::MediaSource;
+use crate::settings::{LibrarySettings, LibraryUiState};
 
 use active_filters::ActiveFiltersBar;
 use filter_popover::FilterPopover;
@@ -57,6 +58,12 @@ pub struct LibraryView {
     filter_state: FilterState,
     sort_order: SortOrder,
     grid_density: GridDensity,
+    /// Persisted per-library filter/sort state, seeded from settings on
+    /// startup. Read on library load to restore; never written here (saves go
+    /// out as `SaveLibraryUiState` outputs).
+    saved_ui: LibrarySettings,
+    /// Composite key for the currently-loaded library, set once items load.
+    library_id: Option<String>,
     /// Cached textures keyed by artwork URL to avoid re-fetching on grid rebuild.
     texture_cache: HashMap<String, gtk::gdk::Texture>,
     /// Watch progress data keyed by media_item_id: (progress_fraction, watched).
@@ -94,6 +101,8 @@ pub struct LibraryView {
 pub enum LibraryViewMsg {
     LoadLibrary(LibraryType),
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
+    /// Seed the persisted per-library filter/sort state (from app settings).
+    SetSavedUiState(LibrarySettings),
     ItemActivated(u32),
     LibraryLoaded(Vec<MediaItem>),
     LoadError(String),
@@ -128,6 +137,7 @@ impl std::fmt::Debug for LibraryViewMsg {
         match self {
             Self::LoadLibrary(lt) => write!(f, "LoadLibrary({lt:?})"),
             Self::SetSource(..) => write!(f, "SetSource(..)"),
+            Self::SetSavedUiState(..) => write!(f, "SetSavedUiState(..)"),
             Self::ItemActivated(pos) => write!(f, "ItemActivated({pos})"),
             Self::LibraryLoaded(items) => write!(f, "LibraryLoaded({} items)", items.len()),
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
@@ -156,6 +166,11 @@ pub enum LibraryViewOutput {
     MarkWatched(MediaItem),
     MarkUnwatched(MediaItem),
     Error(String),
+    /// Persist the filter/sort state for a library (App writes it to settings).
+    SaveLibraryUiState {
+        library_id: String,
+        state: LibraryUiState,
+    },
 }
 
 pub enum LibraryViewCmd {
@@ -591,6 +606,8 @@ impl Component for LibraryView {
             filter_state: FilterState::default(),
             sort_order: SortOrder::default(),
             grid_density: GridDensity::default(),
+            saved_ui: LibrarySettings::default(),
+            library_id: None,
             texture_cache: HashMap::new(),
             watch_data: HashMap::new(),
             continue_watching_section,
@@ -617,6 +634,9 @@ impl Component for LibraryView {
             LibraryViewMsg::SetSource(source, artwork_cache) => {
                 self.source = Some(source);
                 self.artwork_cache = Some(artwork_cache);
+            }
+            LibraryViewMsg::SetSavedUiState(saved) => {
+                self.saved_ui = saved;
             }
             LibraryViewMsg::LoadLibrary(library_type) => {
                 // If same library type and we already have items, just show existing data.
@@ -726,12 +746,28 @@ impl Component for LibraryView {
                 let build_start = std::time::Instant::now();
                 self.all_items = items;
                 info!("Library loaded: {} items", self.all_items.len());
-                // Reconcile persisted filters against the freshly-loaded items,
-                // then refresh the popover's available values and the pill row.
-                self.filter_state = library_filter::reconcile(&self.filter_state, &self.all_items);
+
+                // Compute the persistence key for this library and restore any
+                // saved filter/sort state, reconciled against the loaded items
+                // so stale values (e.g. a genre no longer present) are dropped.
+                let lib_id = format!(
+                    "{}:{}:{}",
+                    self.all_items[0].source_type.as_str(),
+                    self.all_items[0].source_id,
+                    self.library_type.as_str()
+                );
+                let saved = self.saved_ui.get(&lib_id);
+                self.library_id = Some(lib_id);
+                self.filter_state = library_filter::reconcile(&saved.filters, &self.all_items);
+                self.sort_order = saved.sort;
+                if let Some(idx) = SortOrder::all().iter().position(|s| *s == self.sort_order) {
+                    self.sort_dropdown.set_selected(idx as u32);
+                }
+
                 self.filter_popover.set_items(&self.all_items);
                 self.filter_popover.set_state(&self.filter_state);
                 self.active_filters_bar.update(&self.filter_state);
+                self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
                 info!("Full UI build: {:?}", build_start.elapsed());
             }
@@ -751,6 +787,7 @@ impl Component for LibraryView {
                 self.active_filters_bar.update(&self.filter_state);
                 self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
+                self.persist_ui_state(&sender);
             }
             LibraryViewMsg::RemoveActiveFilter(tag) => {
                 // Emitted by a pill's ✘. Mutate state, then push it back into
@@ -760,10 +797,12 @@ impl Component for LibraryView {
                 self.active_filters_bar.update(&self.filter_state);
                 self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
+                self.persist_ui_state(&sender);
             }
             LibraryViewMsg::SortChanged(order) => {
                 self.sort_order = order;
                 self.rebuild_grid(&sender);
+                self.persist_ui_state(&sender);
             }
             LibraryViewMsg::DensityChanged(density) => {
                 self.grid_density = density;
@@ -784,6 +823,7 @@ impl Component for LibraryView {
                 self.active_filters_bar.update(&self.filter_state);
                 self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
+                self.persist_ui_state(&sender);
             }
             LibraryViewMsg::FocusSearch => {
                 self.search_bar.set_search_mode(true);
@@ -1235,6 +1275,20 @@ impl LibraryView {
         }
 
         self.skeleton_grid.append(&flow);
+    }
+
+    /// Emit a save request for the current library's filter/sort state. No-op
+    /// until a library has loaded (and thus `library_id` is known).
+    fn persist_ui_state(&self, sender: &ComponentSender<Self>) {
+        if let Some(ref id) = self.library_id {
+            let _ = sender.output(LibraryViewOutput::SaveLibraryUiState {
+                library_id: id.clone(),
+                state: LibraryUiState {
+                    filters: self.filter_state.clone(),
+                    sort: self.sort_order,
+                },
+            });
+        }
     }
 
     /// Update the filter-dot indicator and the filter-count badge on the

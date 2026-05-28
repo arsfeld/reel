@@ -68,7 +68,6 @@ pub struct LibrarySettings {
     pub per_library: HashMap<String, LibraryUiState>,
 }
 
-#[allow(dead_code)]
 impl LibrarySettings {
     /// Get the saved UI state for a library, or a default (no filters,
     /// Title A–Z) when none has been persisted yet.

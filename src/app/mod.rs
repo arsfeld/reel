@@ -122,6 +122,10 @@ pub enum AppMsg {
     ShowCollectionDetail(MediaItem),
     MarkWatched(MediaItem),
     MarkUnwatched(MediaItem),
+    SaveLibraryUiState {
+        library_id: String,
+        state: crate::settings::LibraryUiState,
+    },
     OpenPreferences,
     OpenAbout,
     MprisInput(MprisCommand),
@@ -204,6 +208,9 @@ impl Component for App {
                 LibraryViewOutput::MarkWatched(item) => AppMsg::MarkWatched(item),
                 LibraryViewOutput::MarkUnwatched(item) => AppMsg::MarkUnwatched(item),
                 LibraryViewOutput::Error(msg) => AppMsg::ShowToast(msg),
+                LibraryViewOutput::SaveLibraryUiState { library_id, state } => {
+                    AppMsg::SaveLibraryUiState { library_id, state }
+                }
             },
         );
 
@@ -588,6 +595,12 @@ impl Component for App {
                     "Marked \"{}\" as unwatched",
                     item.title
                 )));
+            }
+            AppMsg::SaveLibraryUiState { library_id, state } => {
+                self.settings.library.set(&library_id, state);
+                if let Err(e) = self.settings.save() {
+                    tracing::warn!("Failed to persist library filter/sort state: {e}");
+                }
             }
             AppMsg::OpenPreferences => {
                 self.settings = settings_dialog::show_preferences(root, &self.settings);
