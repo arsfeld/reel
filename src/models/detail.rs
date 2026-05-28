@@ -262,6 +262,7 @@ mod tests {
             hdr: None,
             added_at: String::new(),
             updated_at: String::new(),
+            playback_position_ms: None,
         };
 
         let detail = MediaDetail::from_item(item);

@@ -132,6 +132,9 @@ pub struct MediaItem {
     pub hdr: Option<HdrFormat>,
     pub added_at: String,
     pub updated_at: String,
+    /// Saved playback position in milliseconds (e.g. a Plex On Deck view
+    /// offset). `None` when the source reports no resume position.
+    pub playback_position_ms: Option<i64>,
 }
 
 impl MediaItem {
@@ -170,6 +173,19 @@ impl MediaItem {
             }
         })
     }
+
+    /// Resume progress as a 0..1 fraction, derived from the saved playback
+    /// position against the item's runtime. `None` when either the position or
+    /// a positive runtime is unknown. Used to draw the Continue Watching
+    /// progress bar for On Deck items that carry their own view offset.
+    pub fn resume_fraction(&self) -> Option<f64> {
+        let pos = self.playback_position_ms? as f64;
+        let total = self.runtime_minutes? as f64 * 60_000.0;
+        if total <= 0.0 {
+            return None;
+        }
+        Some((pos / total).clamp(0.0, 1.0))
+    }
 }
 
 #[cfg(test)]
@@ -201,6 +217,7 @@ mod tests {
             hdr: None,
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
+            playback_position_ms: None,
         }
     }
 
@@ -254,6 +271,37 @@ mod tests {
         let mut movie = test_movie();
         movie.runtime_minutes = Some(120);
         assert_eq!(movie.format_runtime(), Some("2h 0m".to_string()));
+    }
+
+    #[test]
+    fn resume_fraction_half_watched() {
+        let mut movie = test_movie();
+        movie.runtime_minutes = Some(100);
+        movie.playback_position_ms = Some(50 * 60_000);
+        assert_eq!(movie.resume_fraction(), Some(0.5));
+    }
+
+    #[test]
+    fn resume_fraction_none_without_position() {
+        let mut movie = test_movie();
+        movie.playback_position_ms = None;
+        assert_eq!(movie.resume_fraction(), None);
+    }
+
+    #[test]
+    fn resume_fraction_clamped_to_one() {
+        let mut movie = test_movie();
+        movie.runtime_minutes = Some(10);
+        movie.playback_position_ms = Some(999 * 60_000);
+        assert_eq!(movie.resume_fraction(), Some(1.0));
+    }
+
+    #[test]
+    fn resume_fraction_none_with_zero_runtime() {
+        let mut movie = test_movie();
+        movie.runtime_minutes = Some(0);
+        movie.playback_position_ms = Some(1000);
+        assert_eq!(movie.resume_fraction(), None);
     }
 
     #[test]

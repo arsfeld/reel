@@ -95,7 +95,6 @@ pub struct App {
 pub enum AppMsg {
     NavigateHome,
     Navigate(LibraryType),
-    ShowHomeDetail(MediaItem),
     ShowMovieDetail(crate::models::media::MediaItem),
     ShowShowDetail(crate::models::media::MediaItem),
     GoBack,
@@ -187,7 +186,12 @@ impl Component for App {
         let home_view = HomeView::builder()
             .launch(())
             .forward(sender.input_sender(), |output| match output {
-                HomeViewOutput::ShowDetail(item) => AppMsg::ShowHomeDetail(item),
+                HomeViewOutput::ShowDetail(item) => match item.media_type {
+                    MediaType::Movie => AppMsg::ShowMovieDetail(item),
+                    MediaType::Show => AppMsg::ShowShowDetail(item),
+                    MediaType::Collection => AppMsg::ShowCollectionDetail(item),
+                    _ => AppMsg::ShowToast("Unsupported media type".to_string()),
+                },
                 HomeViewOutput::PlayMedia { url, media_item } => AppMsg::PlayMedia {
                     url,
                     media_item: Some(media_item),
@@ -370,34 +374,6 @@ impl Component for App {
                 self.library_title.set_label(title);
                 self.library_view
                     .emit(LibraryViewMsg::LoadLibrary(library_type));
-            }
-            AppMsg::ShowHomeDetail(item) => {
-                self.stack.set_visible_child_name("shell");
-                self.current_view = match item.media_type {
-                    MediaType::Movie => CurrentView::MovieDetail(item.id.clone()),
-                    MediaType::Show => CurrentView::ShowDetail(item.id.clone()),
-                    _ => CurrentView::Home,
-                };
-                match item.media_type {
-                    MediaType::Movie => {
-                        self.movie_detail
-                            .emit(MovieDetailMsg::LoadMovie(item.clone()));
-                        let page = adw::NavigationPage::builder()
-                            .title(&item.title)
-                            .child(self.movie_detail.widget())
-                            .build();
-                        self.nav_view.push(&page);
-                    }
-                    MediaType::Show => {
-                        self.show_detail.emit(ShowDetailMsg::LoadShow(item.clone()));
-                        let page = adw::NavigationPage::builder()
-                            .title(&item.title)
-                            .child(self.show_detail.widget())
-                            .build();
-                        self.nav_view.push(&page);
-                    }
-                    _ => {}
-                }
             }
             AppMsg::ShowMovieDetail(item) => {
                 self.current_view = CurrentView::MovieDetail(item.id.clone());

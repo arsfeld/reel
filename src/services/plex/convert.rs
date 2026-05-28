@@ -107,6 +107,7 @@ pub fn plex_metadata_to_media_item(metadata: &PlexMetadata, source_id: &str) -> 
         hdr,
         added_at,
         updated_at,
+        playback_position_ms: metadata.view_offset,
     })
 }
 

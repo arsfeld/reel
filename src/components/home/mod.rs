@@ -50,11 +50,10 @@ pub enum HomeViewMsg {
     LoadHome {
         in_progress: Vec<(MediaItem, WatchProgress)>,
     },
-    HomeLoaded {
-        recently_added: Vec<MediaItem>,
-    },
     LoadError(String),
-    CardActivated(MediaItem),
+    /// A card was activated. `resume` is set for Continue Watching cards, which
+    /// resume playback rather than opening a detail page.
+    CardActivated { item: MediaItem, resume: bool },
 }
 
 impl std::fmt::Debug for HomeViewMsg {
@@ -65,11 +64,10 @@ impl std::fmt::Debug for HomeViewMsg {
             Self::LoadHome { in_progress } => {
                 write!(f, "LoadHome({} in progress)", in_progress.len())
             }
-            Self::HomeLoaded { recently_added } => {
-                write!(f, "HomeLoaded({} recent)", recently_added.len())
-            }
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
-            Self::CardActivated(item) => write!(f, "CardActivated({})", item.title),
+            Self::CardActivated { item, resume } => {
+                write!(f, "CardActivated({}, resume={resume})", item.title)
+            }
         }
     }
 }
@@ -85,7 +83,10 @@ pub enum HomeViewOutput {
 
 #[derive(Debug)]
 pub enum HomeViewCmd {
-    Fetched(Vec<MediaItem>),
+    HomeData {
+        continue_watching: Vec<MediaItem>,
+        recently_added: Vec<MediaItem>,
+    },
     PosterLoaded {
         generation: Generation,
         shelf_id: ShelfId,
@@ -240,21 +241,33 @@ impl Component for HomeView {
                 self.last_error = None;
                 self.clear_shelves();
 
-                // Build Continue Watching shelf from local DB data.
-                if !in_progress.is_empty() {
+                let is_plex = self
+                    .source
+                    .as_ref()
+                    .map(|s| s.source_type() == crate::models::media::SourceType::Plex)
+                    .unwrap_or(false);
+
+                // Non-Plex sources have no On Deck; build Continue Watching from
+                // the local DB progress the app pushes in.
+                if !is_plex && !in_progress.is_empty() {
                     let cw_id = self.add_shelf("Continue Watching");
                     let cards: Vec<(MediaItem, Option<f64>)> = in_progress
                         .iter()
                         .map(|(item, progress)| (item.clone(), Some(progress.progress_fraction())))
                         .collect();
-                    self.populate_shelf(cw_id, cards, &sender);
+                    self.populate_shelf(cw_id, cards, true, &sender);
                 }
 
-                // Fetch Recently Added from source (async).
+                // Fetch On Deck (Plex) + Recently Added from the source (async).
                 if let Some(ref source) = self.source {
                     self.refresh_visible_page();
                     let src = source.clone();
                     sender.oneshot_command(async move {
+                        let continue_watching = if is_plex {
+                            src.continue_watching().await.unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
                         match src.libraries().await {
                             Ok(libs) => {
                                 let mut all = Vec::new();
@@ -265,7 +278,10 @@ impl Component for HomeView {
                                 }
                                 all.sort_by(|a, b| b.added_at.cmp(&a.added_at));
                                 all.truncate(20);
-                                HomeViewCmd::Fetched(all)
+                                HomeViewCmd::HomeData {
+                                    continue_watching,
+                                    recently_added: all,
+                                }
                             }
                             Err(e) => HomeViewCmd::Error(e.to_string()),
                         }
@@ -275,17 +291,6 @@ impl Component for HomeView {
                     self.refresh_visible_page();
                 }
             }
-            HomeViewMsg::HomeLoaded { recently_added } => {
-                self.loading = false;
-
-                if !recently_added.is_empty() {
-                    let ra_id = self.add_shelf("Recently Added");
-                    let cards: Vec<(MediaItem, Option<f64>)> =
-                        recently_added.into_iter().map(|item| (item, None)).collect();
-                    self.populate_shelf(ra_id, cards, &sender);
-                }
-                self.refresh_visible_page();
-            }
             HomeViewMsg::LoadError(msg) => {
                 self.loading = false;
                 tracing::warn!("HomeView load error: {msg}");
@@ -293,7 +298,21 @@ impl Component for HomeView {
                 self.last_error = Some(msg);
                 self.refresh_visible_page();
             }
-            HomeViewMsg::CardActivated(item) => {
+            HomeViewMsg::CardActivated { item, resume } => {
+                let should_play = item.file_path.is_some()
+                    && (resume
+                        || item.media_type == crate::models::media::MediaType::Episode);
+                if should_play {
+                    if let (Some(source), Some(part)) = (self.source.as_ref(), item.file_path.as_ref())
+                    {
+                        let url = source.playback_url(part);
+                        let _ = sender.output(HomeViewOutput::PlayMedia {
+                            url,
+                            media_item: item,
+                        });
+                        return;
+                    }
+                }
                 let _ = sender.output(HomeViewOutput::ShowDetail(item));
             }
         }
@@ -306,10 +325,31 @@ impl Component for HomeView {
         _root: &Self::Root,
     ) {
         match cmd {
-            HomeViewCmd::Fetched(items) => {
-                sender.input(HomeViewMsg::HomeLoaded {
-                    recently_added: items,
-                });
+            HomeViewCmd::HomeData {
+                continue_watching,
+                recently_added,
+            } => {
+                self.loading = false;
+
+                if !continue_watching.is_empty() {
+                    let cw_id = self.add_shelf("Continue Watching");
+                    let cards: Vec<(MediaItem, Option<f64>)> = continue_watching
+                        .into_iter()
+                        .map(|item| {
+                            let frac = item.resume_fraction();
+                            (item, frac)
+                        })
+                        .collect();
+                    self.populate_shelf(cw_id, cards, true, &sender);
+                }
+
+                if !recently_added.is_empty() {
+                    let ra_id = self.add_shelf("Recently Added");
+                    let cards: Vec<(MediaItem, Option<f64>)> =
+                        recently_added.into_iter().map(|item| (item, None)).collect();
+                    self.populate_shelf(ra_id, cards, false, &sender);
+                }
+                self.refresh_visible_page();
             }
             HomeViewCmd::Error(msg) => {
                 sender.input(HomeViewMsg::LoadError(msg));
@@ -361,6 +401,7 @@ impl HomeView {
         &mut self,
         shelf_id: ShelfId,
         cards: Vec<(MediaItem, Option<f64>)>,
+        resume_on_click: bool,
         sender: &ComponentSender<Self>,
     ) {
         if cards.is_empty() {
@@ -374,7 +415,10 @@ impl HomeView {
                 let sender_card = sender.input_sender().clone();
                 let item_click = item.clone();
                 card.gesture.connect_released(move |_, _, _, _| {
-                    let _ = sender_card.send(HomeViewMsg::CardActivated(item_click.clone()));
+                    let _ = sender_card.send(HomeViewMsg::CardActivated {
+                        item: item_click.clone(),
+                        resume: resume_on_click,
+                    });
                 });
 
                 shelf.row.append(&card.container);
