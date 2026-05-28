@@ -12,9 +12,9 @@
 use std::sync::Arc;
 
 use relm4::ComponentSender;
-use rusqlite::Connection;
 use tracing::{debug, info, warn};
 
+use crate::db::database::Database;
 use crate::db::downloads_repo::DownloadsRepo;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::download::{PendingSync, SyncKind};
@@ -49,7 +49,7 @@ pub fn resume_position(
 }
 
 pub fn dispatch_watch_events(
-    db_conn: &Option<Connection>,
+    db: &Option<Database>,
     events: Vec<WatchStateEvent>,
     source: &Option<Arc<PlexSource>>,
     media_id: Option<&str>,
@@ -62,18 +62,20 @@ pub fn dispatch_watch_events(
                 position,
                 duration,
             } => {
-                if let Some(conn) = db_conn {
-                    let repo = WatchProgressRepo::new(conn);
-                    let progress = WatchProgress {
-                        media_item_id: media_id,
-                        position_seconds: position,
-                        duration_seconds: duration,
-                        watched: false,
-                        last_watched_at: iso_now(),
-                    };
-                    if let Err(e) = repo.upsert(&progress) {
-                        warn!("Failed to persist watch progress: {e}");
-                    }
+                if let Some(db) = db {
+                    db.with(|conn| {
+                        let mut repo = WatchProgressRepo::new(conn);
+                        let progress = WatchProgress {
+                            media_item_id: media_id,
+                            position_seconds: position,
+                            duration_seconds: duration,
+                            watched: false,
+                            last_watched_at: iso_now(),
+                        };
+                        if let Err(e) = repo.upsert(&progress) {
+                            warn!("Failed to persist watch progress: {e}");
+                        }
+                    });
                 }
             }
             WatchStateEvent::Scrobble {
@@ -81,12 +83,14 @@ pub fn dispatch_watch_events(
                 rating_key,
             } => {
                 // Mark as watched locally
-                if let Some(conn) = db_conn {
-                    let repo = WatchProgressRepo::new(conn);
-                    let timestamp = iso_now();
-                    if let Err(e) = repo.mark_watched(&media_id, &timestamp) {
-                        warn!("Failed to mark as watched: {e}");
-                    }
+                if let Some(db) = db {
+                    db.with(|conn| {
+                        let mut repo = WatchProgressRepo::new(conn);
+                        let timestamp = iso_now();
+                        if let Err(e) = repo.mark_watched(&media_id, &timestamp) {
+                            warn!("Failed to mark as watched: {e}");
+                        }
+                    });
                 }
                 // Fire-and-forget Plex scrobble; queue offline on failure.
                 if !rating_key.is_empty()
@@ -155,17 +159,18 @@ pub fn dispatch_watch_events(
 
 /// Persist a progress report that failed to reach the source while offline.
 /// Keyed for replay on reconnect by [`flush_pending_sync`].
-pub fn queue_offline_sync(db_conn: &Option<Connection>, pending: &PendingSync) {
-    if let Some(conn) = db_conn {
-        let repo = DownloadsRepo::new(conn);
-        if let Err(e) = repo.insert_pending_sync(pending) {
-            warn!("Failed to queue offline progress: {e}");
-        } else {
-            info!(
-                "Queued offline progress for {} ({:?})",
-                pending.media_item_id, pending.kind
-            );
-        }
+pub fn queue_offline_sync(db: &Option<Database>, pending: &PendingSync) {
+    if let Some(db) = db {
+        db.with(|conn| {
+            if let Err(e) = DownloadsRepo::new(conn).insert_pending_sync(pending) {
+                warn!("Failed to queue offline progress: {e}");
+            } else {
+                info!(
+                    "Queued offline progress for {} ({:?})",
+                    pending.media_item_id, pending.kind
+                );
+            }
+        });
     }
 }
 
@@ -175,10 +180,10 @@ pub fn queue_offline_sync(db_conn: &Option<Connection>, pending: &PendingSync) {
 /// the user's offline viewing position is preserved. Successfully-flushed rows
 /// are deleted via [`AppCmd::FlushedPending`].
 pub fn flush_pending_sync(app: &App, sender: &ComponentSender<App>) {
-    let Some(conn) = app.db_conn.as_ref() else {
+    let Some(db) = app.db.as_ref() else {
         return;
     };
-    let pending = match DownloadsRepo::new(conn).list_pending_sync() {
+    let pending = match db.with(|conn| DownloadsRepo::new(conn).list_pending_sync()) {
         Ok(p) if !p.is_empty() => p,
         Ok(_) => return,
         Err(e) => {
@@ -216,14 +221,16 @@ pub fn flush_pending_sync(app: &App, sender: &ComponentSender<App>) {
 }
 
 /// Delete pending-sync rows that were successfully flushed to the source.
-pub fn delete_flushed_pending(db_conn: &Option<Connection>, ids: &[i64]) {
-    if let Some(conn) = db_conn {
-        let repo = DownloadsRepo::new(conn);
-        for id in ids {
-            if let Err(e) = repo.delete_pending_sync(*id) {
-                warn!("Failed to delete flushed pending row {id}: {e}");
+pub fn delete_flushed_pending(db: &Option<Database>, ids: &[i64]) {
+    if let Some(db) = db {
+        db.with(|conn| {
+            let mut repo = DownloadsRepo::new(conn);
+            for id in ids {
+                if let Err(e) = repo.delete_pending_sync(*id) {
+                    warn!("Failed to delete flushed pending row {id}: {e}");
+                }
             }
-        }
+        });
     }
 }
 

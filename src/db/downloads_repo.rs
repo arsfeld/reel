@@ -1,383 +1,439 @@
 //! Repository for offline-download persistence: the `downloads`,
-//! `download_groups`, and `pending_sync` tables (schema v4).
+//! `download_groups`, and `pending_sync` tables (diesel).
 //!
-//! Downloads are self-contained and have no foreign key to `media_items`
-//! (see `schema::DOWNLOADS_SCHEMA`), so this repo never joins the library
-//! table — every field needed to render or resume a download lives on the row.
+//! Downloads are self-contained and have no foreign key to `media_items`, so
+//! this repo never joins the library table — every field needed to render or
+//! resume a download lives on the row. The foreign-schema self-heal in
+//! `db::init` drops these tables (not the on-disk files); `sidecar::verify_downloads`
+//! re-adopts from disk after such a wipe.
 
-use rusqlite::{Connection, Row, params};
+use diesel::prelude::*;
 
 use crate::models::download::{
     Download, DownloadGroup, DownloadState, FailReason, GroupScope, PendingSync, SyncKind,
 };
 use crate::models::media::{MediaType, SourceType};
+use crate::schema::{download_groups, downloads, pending_sync};
 
 use super::DbError;
 
-/// Repository for download, group, and pending-sync CRUD on SQLite.
+// ---------------------------------------------------------------------------
+// Row structs + conversions
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Queryable, Selectable)]
+#[diesel(table_name = downloads)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct DownloadRow {
+    media_item_id: String,
+    part_key: String,
+    source_type: String,
+    source_id: String,
+    state: String,
+    fail_reason: Option<String>,
+    byte_count: i64,
+    total_size: Option<i64>,
+    validator: Option<String>,
+    file_path: Option<String>,
+    group_id: Option<String>,
+    queue_order: i64,
+    enqueued_at: String,
+    completed_at: Option<String>,
+    media_type: String,
+    title: String,
+    year: Option<i32>,
+    parent_id: Option<String>,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+    poster_path: Option<String>,
+}
+
+#[derive(Debug, Insertable, AsChangeset)]
+#[diesel(table_name = downloads, treat_none_as_null = true)]
+struct NewDownloadRow {
+    media_item_id: String,
+    part_key: String,
+    source_type: String,
+    source_id: String,
+    state: String,
+    fail_reason: Option<String>,
+    byte_count: i64,
+    total_size: Option<i64>,
+    validator: Option<String>,
+    file_path: Option<String>,
+    group_id: Option<String>,
+    queue_order: i64,
+    enqueued_at: String,
+    completed_at: Option<String>,
+    media_type: String,
+    title: String,
+    year: Option<i32>,
+    parent_id: Option<String>,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+    poster_path: Option<String>,
+}
+
+impl From<DownloadRow> for Download {
+    fn from(r: DownloadRow) -> Self {
+        Download {
+            media_item_id: r.media_item_id,
+            part_key: r.part_key,
+            source_type: SourceType::from_str(&r.source_type).unwrap_or(SourceType::Plex),
+            source_id: r.source_id,
+            state: DownloadState::from_db_str(&r.state).unwrap_or(DownloadState::Failed),
+            fail_reason: r.fail_reason.as_deref().and_then(FailReason::from_db_str),
+            byte_count: r.byte_count,
+            total_size: r.total_size,
+            validator: r.validator,
+            file_path: r.file_path,
+            group_id: r.group_id,
+            queue_order: r.queue_order,
+            enqueued_at: r.enqueued_at,
+            completed_at: r.completed_at,
+            media_type: MediaType::from_str(&r.media_type).unwrap_or(MediaType::Movie),
+            title: r.title,
+            year: r.year,
+            parent_id: r.parent_id,
+            season_number: r.season_number,
+            episode_number: r.episode_number,
+            poster_path: r.poster_path,
+        }
+    }
+}
+
+impl From<&Download> for NewDownloadRow {
+    fn from(d: &Download) -> Self {
+        NewDownloadRow {
+            media_item_id: d.media_item_id.clone(),
+            part_key: d.part_key.clone(),
+            source_type: d.source_type.as_str().to_string(),
+            source_id: d.source_id.clone(),
+            state: d.state.as_str().to_string(),
+            fail_reason: d.fail_reason.map(|r| r.as_str().to_string()),
+            byte_count: d.byte_count,
+            total_size: d.total_size,
+            validator: d.validator.clone(),
+            file_path: d.file_path.clone(),
+            group_id: d.group_id.clone(),
+            queue_order: d.queue_order,
+            enqueued_at: d.enqueued_at.clone(),
+            completed_at: d.completed_at.clone(),
+            media_type: d.media_type.as_str().to_string(),
+            title: d.title.clone(),
+            year: d.year,
+            parent_id: d.parent_id.clone(),
+            season_number: d.season_number,
+            episode_number: d.episode_number,
+            poster_path: d.poster_path.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Queryable, Selectable, Insertable, AsChangeset)]
+#[diesel(table_name = download_groups, treat_none_as_null = true)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct GroupRow {
+    id: String,
+    scope: String,
+    parent_media_id: String,
+    title: String,
+    snapshot_at: String,
+}
+
+impl From<GroupRow> for DownloadGroup {
+    fn from(r: GroupRow) -> Self {
+        DownloadGroup {
+            id: r.id,
+            scope: GroupScope::from_db_str(&r.scope).unwrap_or(GroupScope::Show),
+            parent_media_id: r.parent_media_id,
+            title: r.title,
+            snapshot_at: r.snapshot_at,
+        }
+    }
+}
+
+impl From<&DownloadGroup> for GroupRow {
+    fn from(g: &DownloadGroup) -> Self {
+        GroupRow {
+            id: g.id.clone(),
+            scope: g.scope.as_str().to_string(),
+            parent_media_id: g.parent_media_id.clone(),
+            title: g.title.clone(),
+            snapshot_at: g.snapshot_at.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Queryable, Selectable)]
+#[diesel(table_name = pending_sync)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct PendingSyncRow {
+    id: i64,
+    media_item_id: String,
+    rating_key: String,
+    position_ms: i64,
+    duration_ms: i64,
+    kind: String,
+    offline_recorded_at: String,
+}
+
+#[derive(Debug, Insertable)]
+#[diesel(table_name = pending_sync)]
+struct NewPendingSyncRow {
+    media_item_id: String,
+    rating_key: String,
+    position_ms: i64,
+    duration_ms: i64,
+    kind: String,
+    offline_recorded_at: String,
+}
+
+impl From<PendingSyncRow> for PendingSync {
+    fn from(r: PendingSyncRow) -> Self {
+        PendingSync {
+            id: Some(r.id),
+            media_item_id: r.media_item_id,
+            rating_key: r.rating_key,
+            position_ms: r.position_ms,
+            duration_ms: r.duration_ms,
+            kind: SyncKind::from_db_str(&r.kind).unwrap_or(SyncKind::Timeline),
+            offline_recorded_at: r.offline_recorded_at,
+        }
+    }
+}
+
+impl From<&PendingSync> for NewPendingSyncRow {
+    fn from(p: &PendingSync) -> Self {
+        NewPendingSyncRow {
+            media_item_id: p.media_item_id.clone(),
+            rating_key: p.rating_key.clone(),
+            position_ms: p.position_ms,
+            duration_ms: p.duration_ms,
+            kind: p.kind.as_str().to_string(),
+            offline_recorded_at: p.offline_recorded_at.clone(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Repository
+// ---------------------------------------------------------------------------
+
+/// Repository for download, group, and pending-sync CRUD on SQLite (diesel).
 #[allow(dead_code)]
 pub struct DownloadsRepo<'a> {
-    conn: &'a Connection,
+    conn: &'a mut SqliteConnection,
 }
 
 #[allow(dead_code)]
 impl<'a> DownloadsRepo<'a> {
-    pub fn new(conn: &'a Connection) -> Self {
+    pub fn new(conn: &'a mut SqliteConnection) -> Self {
         Self { conn }
     }
 
     // --- downloads ---
 
     /// Insert or update a download, keyed by `media_item_id`.
-    pub fn upsert(&self, d: &Download) -> Result<(), DbError> {
-        self.conn.execute(
-            "INSERT INTO downloads (
-                media_item_id, part_key, source_type, source_id, state, fail_reason,
-                byte_count, total_size, validator, file_path, group_id, queue_order,
-                enqueued_at, completed_at, media_type, title, year, parent_id,
-                season_number, episode_number, poster_path
-            ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                ?16, ?17, ?18, ?19, ?20, ?21
-            )
-            ON CONFLICT(media_item_id) DO UPDATE SET
-                part_key = excluded.part_key,
-                source_type = excluded.source_type,
-                source_id = excluded.source_id,
-                state = excluded.state,
-                fail_reason = excluded.fail_reason,
-                byte_count = excluded.byte_count,
-                total_size = excluded.total_size,
-                validator = excluded.validator,
-                file_path = excluded.file_path,
-                group_id = excluded.group_id,
-                queue_order = excluded.queue_order,
-                enqueued_at = excluded.enqueued_at,
-                completed_at = excluded.completed_at,
-                media_type = excluded.media_type,
-                title = excluded.title,
-                year = excluded.year,
-                parent_id = excluded.parent_id,
-                season_number = excluded.season_number,
-                episode_number = excluded.episode_number,
-                poster_path = excluded.poster_path",
-            params![
-                d.media_item_id,
-                d.part_key,
-                d.source_type.as_str(),
-                d.source_id,
-                d.state.as_str(),
-                d.fail_reason.map(|r| r.as_str()),
-                d.byte_count,
-                d.total_size,
-                d.validator,
-                d.file_path,
-                d.group_id,
-                d.queue_order,
-                d.enqueued_at,
-                d.completed_at,
-                d.media_type.as_str(),
-                d.title,
-                d.year,
-                d.parent_id,
-                d.season_number,
-                d.episode_number,
-                d.poster_path,
-            ],
-        )?;
+    pub fn upsert(&mut self, d: &Download) -> Result<(), DbError> {
+        let new = NewDownloadRow::from(d);
+        diesel::insert_into(downloads::table)
+            .values(&new)
+            .on_conflict(downloads::media_item_id)
+            .do_update()
+            .set(&new)
+            .execute(self.conn)?;
         Ok(())
     }
 
     /// Find a download by its media item id.
-    pub fn find(&self, media_item_id: &str) -> Result<Option<Download>, DbError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM downloads WHERE media_item_id = ?1")?;
-        let mut rows = stmt.query(params![media_item_id])?;
-        match rows.next()? {
-            Some(row) => Ok(Some(row_to_download(row)?)),
-            None => Ok(None),
-        }
+    pub fn find(&mut self, media_item_id: &str) -> Result<Option<Download>, DbError> {
+        let row = downloads::table
+            .find(media_item_id)
+            .select(DownloadRow::as_select())
+            .first::<DownloadRow>(self.conn)
+            .optional()?;
+        Ok(row.map(Download::from))
     }
 
     /// All downloads, ordered by queue position then enqueue time.
-    pub fn list_all(&self) -> Result<Vec<Download>, DbError> {
-        self.query_downloads(
-            "SELECT * FROM downloads ORDER BY queue_order ASC, enqueued_at ASC",
-            params![],
-        )
+    pub fn list_all(&mut self) -> Result<Vec<Download>, DbError> {
+        let rows = downloads::table
+            .order((downloads::queue_order.asc(), downloads::enqueued_at.asc()))
+            .select(DownloadRow::as_select())
+            .load::<DownloadRow>(self.conn)?;
+        Ok(rows.into_iter().map(Download::from).collect())
     }
 
     /// Downloads in a given state.
-    pub fn list_by_state(&self, state: DownloadState) -> Result<Vec<Download>, DbError> {
-        self.query_downloads(
-            "SELECT * FROM downloads WHERE state = ?1 ORDER BY queue_order ASC, enqueued_at ASC",
-            params![state.as_str()],
-        )
+    pub fn list_by_state(&mut self, state: DownloadState) -> Result<Vec<Download>, DbError> {
+        let rows = downloads::table
+            .filter(downloads::state.eq(state.as_str()))
+            .order((downloads::queue_order.asc(), downloads::enqueued_at.asc()))
+            .select(DownloadRow::as_select())
+            .load::<DownloadRow>(self.conn)?;
+        Ok(rows.into_iter().map(Download::from).collect())
     }
 
     /// Members of a download group (only rows explicitly tagged with `group_id`;
     /// a separately-enqueued episode of the same show is excluded).
-    pub fn list_by_group(&self, group_id: &str) -> Result<Vec<Download>, DbError> {
-        self.query_downloads(
-            "SELECT * FROM downloads WHERE group_id = ?1 ORDER BY season_number ASC, episode_number ASC",
-            params![group_id],
-        )
+    pub fn list_by_group(&mut self, group_id: &str) -> Result<Vec<Download>, DbError> {
+        let rows = downloads::table
+            .filter(downloads::group_id.eq(group_id))
+            .order((
+                downloads::season_number.asc(),
+                downloads::episode_number.asc(),
+            ))
+            .select(DownloadRow::as_select())
+            .load::<DownloadRow>(self.conn)?;
+        Ok(rows.into_iter().map(Download::from).collect())
     }
 
     /// Completed downloads ordered oldest-completion first (prune order input).
-    pub fn list_completed_oldest_first(&self) -> Result<Vec<Download>, DbError> {
-        self.query_downloads(
-            "SELECT * FROM downloads WHERE state = 'completed'
-             ORDER BY completed_at ASC, media_item_id ASC",
-            params![],
-        )
+    pub fn list_completed_oldest_first(&mut self) -> Result<Vec<Download>, DbError> {
+        let rows = downloads::table
+            .filter(downloads::state.eq(DownloadState::Completed.as_str()))
+            .order((
+                downloads::completed_at.asc(),
+                downloads::media_item_id.asc(),
+            ))
+            .select(DownloadRow::as_select())
+            .load::<DownloadRow>(self.conn)?;
+        Ok(rows.into_iter().map(Download::from).collect())
     }
 
     /// Total bytes occupied by completed downloads (uses `total_size`, falling
     /// back to the advisory `byte_count` when the total is unknown).
-    pub fn total_completed_bytes(&self) -> Result<i64, DbError> {
-        let total: i64 = self.conn.query_row(
-            "SELECT COALESCE(SUM(COALESCE(total_size, byte_count)), 0)
-             FROM downloads WHERE state = 'completed'",
-            [],
-            |row| row.get(0),
-        )?;
-        Ok(total)
+    pub fn total_completed_bytes(&mut self) -> Result<i64, DbError> {
+        let rows = downloads::table
+            .filter(downloads::state.eq(DownloadState::Completed.as_str()))
+            .select((downloads::total_size, downloads::byte_count))
+            .load::<(Option<i64>, i64)>(self.conn)?;
+        Ok(rows
+            .into_iter()
+            .map(|(total, bytes)| total.unwrap_or(bytes))
+            .sum())
     }
 
     /// Update just the state (and optional fail reason) of a download.
     pub fn update_state(
-        &self,
+        &mut self,
         media_item_id: &str,
         state: DownloadState,
         fail_reason: Option<FailReason>,
     ) -> Result<(), DbError> {
-        self.conn.execute(
-            "UPDATE downloads SET state = ?1, fail_reason = ?2 WHERE media_item_id = ?3",
-            params![
-                state.as_str(),
-                fail_reason.map(|r| r.as_str()),
-                media_item_id
-            ],
-        )?;
+        diesel::update(downloads::table.find(media_item_id))
+            .set((
+                downloads::state.eq(state.as_str()),
+                downloads::fail_reason.eq(fail_reason.map(|r| r.as_str().to_string())),
+            ))
+            .execute(self.conn)?;
         Ok(())
     }
 
     /// Delete a download row (the file on disk is removed by the caller).
-    pub fn delete(&self, media_item_id: &str) -> Result<(), DbError> {
-        self.conn.execute(
-            "DELETE FROM downloads WHERE media_item_id = ?1",
-            params![media_item_id],
-        )?;
+    pub fn delete(&mut self, media_item_id: &str) -> Result<(), DbError> {
+        diesel::delete(downloads::table.find(media_item_id)).execute(self.conn)?;
         Ok(())
-    }
-
-    fn query_downloads(
-        &self,
-        sql: &str,
-        params: impl rusqlite::Params,
-    ) -> Result<Vec<Download>, DbError> {
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = stmt.query_map(params, |row| {
-            row_to_download(row).map_err(|e| match e {
-                DbError::Sqlite(e) => e,
-                other => rusqlite::Error::ToSqlConversionFailure(Box::new(other)),
-            })
-        })?;
-        let mut items = Vec::new();
-        for row in rows {
-            items.push(row?);
-        }
-        Ok(items)
     }
 
     // --- groups ---
 
     /// Insert or update a download group.
-    pub fn upsert_group(&self, g: &DownloadGroup) -> Result<(), DbError> {
-        self.conn.execute(
-            "INSERT INTO download_groups (id, scope, parent_media_id, title, snapshot_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(id) DO UPDATE SET
-                scope = excluded.scope,
-                parent_media_id = excluded.parent_media_id,
-                title = excluded.title,
-                snapshot_at = excluded.snapshot_at",
-            params![
-                g.id,
-                g.scope.as_str(),
-                g.parent_media_id,
-                g.title,
-                g.snapshot_at
-            ],
-        )?;
+    pub fn upsert_group(&mut self, g: &DownloadGroup) -> Result<(), DbError> {
+        let row = GroupRow::from(g);
+        diesel::insert_into(download_groups::table)
+            .values(&row)
+            .on_conflict(download_groups::id)
+            .do_update()
+            .set(&row)
+            .execute(self.conn)?;
         Ok(())
     }
 
     /// All download groups, ordered by title for a stable Downloads view.
-    pub fn list_groups(&self) -> Result<Vec<DownloadGroup>, DbError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM download_groups ORDER BY title ASC, id ASC")?;
-        let rows = stmt.query_map([], |row| {
-            row_to_group(row).map_err(|e| match e {
-                DbError::Sqlite(e) => e,
-                other => rusqlite::Error::ToSqlConversionFailure(Box::new(other)),
-            })
-        })?;
-        let mut groups = Vec::new();
-        for row in rows {
-            groups.push(row?);
-        }
-        Ok(groups)
+    pub fn list_groups(&mut self) -> Result<Vec<DownloadGroup>, DbError> {
+        let rows = download_groups::table
+            .order((download_groups::title.asc(), download_groups::id.asc()))
+            .select(GroupRow::as_select())
+            .load::<GroupRow>(self.conn)?;
+        Ok(rows.into_iter().map(DownloadGroup::from).collect())
     }
 
     /// Find a group by id.
-    pub fn find_group(&self, id: &str) -> Result<Option<DownloadGroup>, DbError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM download_groups WHERE id = ?1")?;
-        let mut rows = stmt.query(params![id])?;
-        match rows.next()? {
-            Some(row) => Ok(Some(row_to_group(row)?)),
-            None => Ok(None),
-        }
+    pub fn find_group(&mut self, id: &str) -> Result<Option<DownloadGroup>, DbError> {
+        let row = download_groups::table
+            .find(id)
+            .select(GroupRow::as_select())
+            .first::<GroupRow>(self.conn)
+            .optional()?;
+        Ok(row.map(DownloadGroup::from))
     }
 
     /// Delete a group (members' `group_id` is left intact; the caller decides
     /// member fate so a group delete and a member delete stay distinct).
-    pub fn delete_group(&self, id: &str) -> Result<(), DbError> {
-        self.conn
-            .execute("DELETE FROM download_groups WHERE id = ?1", params![id])?;
+    pub fn delete_group(&mut self, id: &str) -> Result<(), DbError> {
+        diesel::delete(download_groups::table.find(id)).execute(self.conn)?;
         Ok(())
     }
 
     // --- pending sync (offline progress) ---
 
     /// Queue a progress report recorded while offline. Returns the new rowid.
-    pub fn insert_pending_sync(&self, p: &PendingSync) -> Result<i64, DbError> {
-        self.conn.execute(
-            "INSERT INTO pending_sync (
-                media_item_id, rating_key, position_ms, duration_ms, kind, offline_recorded_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                p.media_item_id,
-                p.rating_key,
-                p.position_ms,
-                p.duration_ms,
-                p.kind.as_str(),
-                p.offline_recorded_at,
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+    pub fn insert_pending_sync(&mut self, p: &PendingSync) -> Result<i64, DbError> {
+        let new = NewPendingSyncRow::from(p);
+        let id = diesel::insert_into(pending_sync::table)
+            .values(&new)
+            .returning(pending_sync::id)
+            .get_result::<i64>(self.conn)?;
+        Ok(id)
     }
 
     /// All queued offline reports, oldest first (flush order).
-    pub fn list_pending_sync(&self) -> Result<Vec<PendingSync>, DbError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM pending_sync ORDER BY offline_recorded_at ASC, id ASC")?;
-        let rows = stmt.query_map([], |row| {
-            row_to_pending_sync(row).map_err(|e| match e {
-                DbError::Sqlite(e) => e,
-                other => rusqlite::Error::ToSqlConversionFailure(Box::new(other)),
-            })
-        })?;
-        let mut items = Vec::new();
-        for row in rows {
-            items.push(row?);
-        }
-        Ok(items)
+    pub fn list_pending_sync(&mut self) -> Result<Vec<PendingSync>, DbError> {
+        let rows = pending_sync::table
+            .order((
+                pending_sync::offline_recorded_at.asc(),
+                pending_sync::id.asc(),
+            ))
+            .select(PendingSyncRow::as_select())
+            .load::<PendingSyncRow>(self.conn)?;
+        Ok(rows.into_iter().map(PendingSync::from).collect())
     }
 
     /// Most recent pending report for a media item, if any (used to prefer an
     /// unsynced offline position over a stale source offset on resume).
     pub fn latest_pending_sync_for(
-        &self,
+        &mut self,
         media_item_id: &str,
     ) -> Result<Option<PendingSync>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT * FROM pending_sync WHERE media_item_id = ?1
-             ORDER BY offline_recorded_at DESC, id DESC LIMIT 1",
-        )?;
-        let mut rows = stmt.query(params![media_item_id])?;
-        match rows.next()? {
-            Some(row) => Ok(Some(row_to_pending_sync(row)?)),
-            None => Ok(None),
-        }
+        let row = pending_sync::table
+            .filter(pending_sync::media_item_id.eq(media_item_id))
+            .order((
+                pending_sync::offline_recorded_at.desc(),
+                pending_sync::id.desc(),
+            ))
+            .select(PendingSyncRow::as_select())
+            .first::<PendingSyncRow>(self.conn)
+            .optional()?;
+        Ok(row.map(PendingSync::from))
     }
 
     /// Delete a flushed pending-sync row by id.
-    pub fn delete_pending_sync(&self, id: i64) -> Result<(), DbError> {
-        self.conn
-            .execute("DELETE FROM pending_sync WHERE id = ?1", params![id])?;
+    pub fn delete_pending_sync(&mut self, id: i64) -> Result<(), DbError> {
+        diesel::delete(pending_sync::table.find(id)).execute(self.conn)?;
         Ok(())
     }
-}
-
-fn row_to_download(row: &Row) -> Result<Download, DbError> {
-    let source_type_str: String = row.get("source_type")?;
-    let state_str: String = row.get("state")?;
-    let media_type_str: String = row.get("media_type")?;
-    let fail_reason_str: Option<String> = row.get("fail_reason")?;
-    Ok(Download {
-        media_item_id: row.get("media_item_id")?,
-        part_key: row.get("part_key")?,
-        source_type: SourceType::from_str(&source_type_str).unwrap_or(SourceType::Plex),
-        source_id: row.get("source_id")?,
-        state: DownloadState::from_db_str(&state_str).unwrap_or(DownloadState::Failed),
-        fail_reason: fail_reason_str.as_deref().and_then(FailReason::from_db_str),
-        byte_count: row.get("byte_count")?,
-        total_size: row.get("total_size")?,
-        validator: row.get("validator")?,
-        file_path: row.get("file_path")?,
-        group_id: row.get("group_id")?,
-        queue_order: row.get("queue_order")?,
-        enqueued_at: row.get("enqueued_at")?,
-        completed_at: row.get("completed_at")?,
-        media_type: MediaType::from_str(&media_type_str).unwrap_or(MediaType::Movie),
-        title: row.get("title")?,
-        year: row.get("year")?,
-        parent_id: row.get("parent_id")?,
-        season_number: row.get("season_number")?,
-        episode_number: row.get("episode_number")?,
-        poster_path: row.get("poster_path")?,
-    })
-}
-
-fn row_to_group(row: &Row) -> Result<DownloadGroup, DbError> {
-    let scope_str: String = row.get("scope")?;
-    Ok(DownloadGroup {
-        id: row.get("id")?,
-        scope: GroupScope::from_db_str(&scope_str).unwrap_or(GroupScope::Show),
-        parent_media_id: row.get("parent_media_id")?,
-        title: row.get("title")?,
-        snapshot_at: row.get("snapshot_at")?,
-    })
-}
-
-fn row_to_pending_sync(row: &Row) -> Result<PendingSync, DbError> {
-    let kind_str: String = row.get("kind")?;
-    Ok(PendingSync {
-        id: row.get("id")?,
-        media_item_id: row.get("media_item_id")?,
-        rating_key: row.get("rating_key")?,
-        position_ms: row.get("position_ms")?,
-        duration_ms: row.get("duration_ms")?,
-        kind: SyncKind::from_db_str(&kind_str).unwrap_or(SyncKind::Timeline),
-        offline_recorded_at: row.get("offline_recorded_at")?,
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::init_db;
+    use crate::db::init::init_db;
 
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        init_db(&conn).unwrap();
+    fn test_db() -> SqliteConnection {
+        let mut conn = SqliteConnection::establish(":memory:").unwrap();
+        init_db(&mut conn).unwrap();
         conn
     }
 
@@ -419,8 +475,8 @@ mod tests {
 
     #[test]
     fn upsert_and_find_roundtrip() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         let d = sample_download("plex:src:1");
         repo.upsert(&d).unwrap();
         let found = repo.find("plex:src:1").unwrap().unwrap();
@@ -429,8 +485,8 @@ mod tests {
 
     #[test]
     fn upsert_is_idempotent_and_updates() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         repo.upsert(&sample_download("m1")).unwrap();
         let mut updated = sample_download("m1");
         updated.state = DownloadState::Downloading;
@@ -445,15 +501,15 @@ mod tests {
 
     #[test]
     fn find_returns_none_for_missing() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         assert!(repo.find("nope").unwrap().is_none());
     }
 
     #[test]
     fn list_by_state_filters() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         repo.upsert(&sample_download("q1")).unwrap();
         repo.upsert(&completed("c1", 100, "2026-05-28T11:00:00Z"))
             .unwrap();
@@ -465,8 +521,8 @@ mod tests {
 
     #[test]
     fn update_state_sets_fail_reason() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         repo.upsert(&sample_download("m1")).unwrap();
         repo.update_state("m1", DownloadState::Failed, Some(FailReason::DiskFull))
             .unwrap();
@@ -477,8 +533,8 @@ mod tests {
 
     #[test]
     fn group_membership_excludes_separately_enqueued_episode() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         repo.upsert_group(&DownloadGroup {
             id: "g1".to_string(),
             scope: GroupScope::Show,
@@ -488,7 +544,6 @@ mod tests {
         })
         .unwrap();
 
-        // Two episodes enqueued as part of the group.
         let mut ep1 = sample_download("ep1");
         ep1.group_id = Some("g1".to_string());
         ep1.media_type = MediaType::Episode;
@@ -503,7 +558,6 @@ mod tests {
         ep2.episode_number = Some(2);
         repo.upsert(&ep2).unwrap();
 
-        // A third episode of the same show enqueued on its own (no group_id).
         let mut solo = sample_download("ep3");
         solo.media_type = MediaType::Episode;
         solo.season_number = Some(1);
@@ -518,8 +572,8 @@ mod tests {
 
     #[test]
     fn group_upsert_find_roundtrip() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         let g = DownloadGroup {
             id: "g1".to_string(),
             scope: GroupScope::Season,
@@ -533,20 +587,20 @@ mod tests {
 
     #[test]
     fn total_completed_bytes_sums_only_completed() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         repo.upsert(&completed("c1", 100, "2026-05-28T11:00:00Z"))
             .unwrap();
         repo.upsert(&completed("c2", 250, "2026-05-28T12:00:00Z"))
             .unwrap();
-        repo.upsert(&sample_download("q1")).unwrap(); // queued, not counted
+        repo.upsert(&sample_download("q1")).unwrap();
         assert_eq!(repo.total_completed_bytes().unwrap(), 350);
     }
 
     #[test]
     fn list_completed_oldest_first_orders_by_completion() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         repo.upsert(&completed("late", 1, "2026-05-28T20:00:00Z"))
             .unwrap();
         repo.upsert(&completed("early", 1, "2026-05-28T08:00:00Z"))
@@ -558,8 +612,8 @@ mod tests {
 
     #[test]
     fn pending_sync_insert_and_list_oldest_first() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         let id1 = repo
             .insert_pending_sync(&PendingSync {
                 id: None,
@@ -584,7 +638,6 @@ mod tests {
 
         let pending = repo.list_pending_sync().unwrap();
         assert_eq!(pending.len(), 2);
-        // m2 recorded earlier -> first.
         assert_eq!(pending[0].media_item_id, "m2");
         assert_eq!(pending[1].media_item_id, "m1");
 
@@ -594,8 +647,8 @@ mod tests {
 
     #[test]
     fn latest_pending_sync_for_returns_most_recent() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         repo.insert_pending_sync(&PendingSync {
             id: None,
             media_item_id: "m1".to_string(),

@@ -180,7 +180,10 @@ pub struct VerifyReport {
 ///   file lives inside `base_dir` and its length matches the sidecar total.
 /// - A media file with neither row nor usable sidecar is reported as unmanaged.
 #[allow(dead_code)]
-pub fn verify_downloads(repo: &DownloadsRepo, base_dir: &Path) -> Result<VerifyReport, DbError> {
+pub fn verify_downloads(
+    repo: &mut DownloadsRepo,
+    base_dir: &Path,
+) -> Result<VerifyReport, DbError> {
     let mut report = VerifyReport::default();
 
     // 1. Validate existing Completed/Paused rows against disk.
@@ -269,12 +272,13 @@ pub fn verify_downloads(repo: &DownloadsRepo, base_dir: &Path) -> Result<VerifyR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::init_db;
-    use rusqlite::Connection;
+    use crate::db::init::init_db;
+    use diesel::SqliteConnection;
+    use diesel::prelude::*;
 
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        init_db(&conn).unwrap();
+    fn test_db() -> SqliteConnection {
+        let mut conn = SqliteConnection::establish(":memory:").unwrap();
+        init_db(&mut conn).unwrap();
         conn
     }
 
@@ -349,15 +353,15 @@ mod tests {
 
     #[test]
     fn verify_flags_completed_with_missing_file() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         let dir = tempfile::tempdir().unwrap();
         // Row points at a file that does not exist.
         let missing = dir.path().join("gone.mkv");
         repo.upsert(&completed_download("m1", missing.to_str().unwrap(), 100))
             .unwrap();
 
-        let report = verify_downloads(&repo, dir.path()).unwrap();
+        let report = verify_downloads(&mut repo, dir.path()).unwrap();
         assert_eq!(report.failed_missing, vec!["m1".to_string()]);
         let row = repo.find("m1").unwrap().unwrap();
         assert_eq!(row.state, DownloadState::Failed);
@@ -366,22 +370,22 @@ mod tests {
 
     #[test]
     fn verify_flags_completed_with_size_mismatch() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         let dir = tempfile::tempdir().unwrap();
         let media = dir.path().join("short.mkv");
         std::fs::write(&media, b"only4").unwrap(); // 5 bytes
         repo.upsert(&completed_download("m1", media.to_str().unwrap(), 999))
             .unwrap();
 
-        let report = verify_downloads(&repo, dir.path()).unwrap();
+        let report = verify_downloads(&mut repo, dir.path()).unwrap();
         assert_eq!(report.failed_missing, vec!["m1".to_string()]);
     }
 
     #[test]
     fn verify_readopts_orphan_sidecar() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         let dir = tempfile::tempdir().unwrap();
         let media = dir.path().join("m1.mkv");
         std::fs::write(&media, vec![0u8; 50]).unwrap();
@@ -389,7 +393,7 @@ mod tests {
         let d = completed_download("plex:srv:9", media.to_str().unwrap(), 50);
         write_sidecar(&media, &d).unwrap();
 
-        let report = verify_downloads(&repo, dir.path()).unwrap();
+        let report = verify_downloads(&mut repo, dir.path()).unwrap();
         assert_eq!(report.readopted, vec!["plex:srv:9".to_string()]);
         let row = repo.find("plex:srv:9").unwrap().unwrap();
         assert_eq!(row.state, DownloadState::Completed);
@@ -398,15 +402,15 @@ mod tests {
 
     #[test]
     fn verify_skips_readopt_when_size_mismatches_sidecar() {
-        let conn = test_db();
-        let repo = DownloadsRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = DownloadsRepo::new(&mut conn);
         let dir = tempfile::tempdir().unwrap();
         let media = dir.path().join("m1.mkv");
         std::fs::write(&media, vec![0u8; 10]).unwrap(); // 10 bytes on disk
         let d = completed_download("plex:srv:9", media.to_str().unwrap(), 999); // sidecar says 999
         write_sidecar(&media, &d).unwrap();
 
-        let report = verify_downloads(&repo, dir.path()).unwrap();
+        let report = verify_downloads(&mut repo, dir.path()).unwrap();
         assert!(report.readopted.is_empty());
         assert!(repo.find("plex:srv:9").unwrap().is_none());
         assert_eq!(report.unmanaged.len(), 1);

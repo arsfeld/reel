@@ -23,7 +23,11 @@ serde_json = "1"
 toml = "0.8"
 
 # Database
-rusqlite = { version = "0.32", features = ["bundled"] }
+diesel = { version = "2.3.9", features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
+diesel_migrations = "2.3"
+# Declared directly so the `bundled` feature compiles SQLite from source
+# (diesel doesn't enable bundling itself); no system libsqlite needed.
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 
 # Async
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

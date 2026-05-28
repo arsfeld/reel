@@ -83,7 +83,7 @@ pub fn handle_video_output(
                 .watch_tracker
                 .process_position(position_secs, Instant::now());
             dispatch_watch_events(
-                &app.db_conn,
+                &app.db,
                 events,
                 &app.active_source,
                 app.now_playing.as_ref().map(|i| i.id.as_str()),
@@ -104,7 +104,7 @@ pub fn handle_video_output(
                         Instant::now(),
                     );
                     dispatch_watch_events(
-                        &app.db_conn,
+                        &app.db,
                         events,
                         &app.active_source,
                         app.now_playing.as_ref().map(|i| i.id.as_str()),
@@ -119,7 +119,7 @@ pub fn handle_video_output(
                         Instant::now(),
                     );
                     dispatch_watch_events(
-                        &app.db_conn,
+                        &app.db,
                         events,
                         &app.active_source,
                         app.now_playing.as_ref().map(|i| i.id.as_str()),
@@ -135,14 +135,14 @@ pub fn handle_video_output(
             let _ = app.mpris.position_tx.send(0);
             let events = app.watch_tracker.stop(app.last_position);
             dispatch_watch_events(
-                &app.db_conn,
+                &app.db,
                 events,
                 &app.active_source,
                 app.now_playing.as_ref().map(|i| i.id.as_str()),
                 sender,
             );
             app.now_playing = None;
-            let watch_data = load_watch_data(&app.db_conn);
+            let watch_data = load_watch_data(&app.db);
             app.library_view
                 .emit(LibraryViewMsg::SetWatchData(watch_data));
             if app.current_view == CurrentView::Player {
@@ -195,8 +195,8 @@ pub fn local_playback_path(
 /// URL unchanged. The single Play choke point every path converges on (R12).
 fn local_redirect(app: &App, item: Option<&MediaItem>, stream_url: &str) -> String {
     if let Some(item) = item
-        && let Some(conn) = app.db_conn.as_ref()
-        && let Ok(Some(d)) = DownloadsRepo::new(conn).find(&item.id)
+        && let Some(db) = app.db.as_ref()
+        && let Ok(Some(d)) = db.with(|conn| DownloadsRepo::new(conn).find(&item.id))
     {
         let exists = d
             .file_path
@@ -228,8 +228,8 @@ pub fn handle_play_media(
     app.pending_resume = None;
     if let Some(ref item) = media_item {
         let source_offset = item.resume_position_secs();
-        let (offline_pending, local_tracked) = match app.db_conn.as_ref() {
-            Some(conn) => {
+        let (offline_pending, local_tracked) = match app.db.as_ref() {
+            Some(db) => db.with(|conn| {
                 let offline = DownloadsRepo::new(conn)
                     .latest_pending_sync_for(&item.id)
                     .ok()
@@ -242,7 +242,7 @@ pub fn handle_play_media(
                     .filter(|progress| progress.should_show_resume())
                     .map(|progress| progress.resume_position());
                 (offline, local)
-            }
+            }),
             None => (None, None),
         };
         app.pending_resume =
@@ -300,7 +300,7 @@ pub fn handle_connection_saved(
     app.connection_dialog = None;
 
     // Save to database
-    if let Some(ref conn) = app.db_conn {
+    if let Some(db) = &app.db {
         let source = Source {
             id: Source::make_id(&url),
             source_type: SourceType::Plex,
@@ -313,11 +313,13 @@ pub fn handle_connection_saved(
             last_synced_at: None,
         };
 
-        let repo = crate::db::source_repo::SourceRepo::new(conn);
-        let _ = repo.delete(&source.id);
-        if let Err(e) = repo.insert(&source) {
-            tracing::warn!("Failed to save source: {e}");
-        }
+        db.with(|conn| {
+            let mut repo = crate::db::source_repo::SourceRepo::new(conn);
+            let _ = repo.delete(&source.id);
+            if let Err(e) = repo.insert(&source) {
+                tracing::warn!("Failed to save source: {e}");
+            }
+        });
     }
 
     let client = PlexClient::new(&url, &token);
@@ -368,7 +370,7 @@ pub fn handle_connection_saved(
     );
 
     // Send watch data to library view
-    let watch_data = load_watch_data(&app.db_conn);
+    let watch_data = load_watch_data(&app.db);
     app.library_view
         .emit(LibraryViewMsg::SetWatchData(watch_data));
     // A library loads when picked from the sidebar; the default view is Home.

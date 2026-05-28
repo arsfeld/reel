@@ -1,122 +1,72 @@
-use rusqlite::{Connection, params};
+use diesel::prelude::*;
 
-use crate::models::{
-    media::SourceType,
-    source::{Source, SourceConfig},
-};
+use crate::db::rows::{NewSourceRow, SourceRow};
+use crate::models::source::Source;
+use crate::schema::sources;
 
 use super::DbError;
 
-/// Repository for media source CRUD operations.
+/// Repository for media source CRUD operations (diesel).
+#[allow(dead_code)]
 pub struct SourceRepo<'a> {
-    conn: &'a Connection,
+    conn: &'a mut SqliteConnection,
 }
 
 #[allow(dead_code)]
 impl<'a> SourceRepo<'a> {
-    pub fn new(conn: &'a Connection) -> Self {
+    pub fn new(conn: &'a mut SqliteConnection) -> Self {
         Self { conn }
     }
 
-    pub fn insert(&self, source: &Source) -> Result<(), DbError> {
-        let config_json = serde_json::to_string(&source.config)
-            .map_err(|e| DbError::Data(format!("Failed to serialize config: {e}")))?;
-
-        self.conn.execute(
-            "INSERT INTO sources (id, source_type, name, config, enabled, last_synced_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                source.id,
-                source.source_type.as_str(),
-                source.name,
-                config_json,
-                source.enabled,
-                source.last_synced_at,
-            ],
-        )?;
+    pub fn insert(&mut self, source: &Source) -> Result<(), DbError> {
+        let new = NewSourceRow::try_from(source)?;
+        diesel::insert_into(sources::table)
+            .values(&new)
+            .execute(self.conn)?;
         Ok(())
     }
 
-    pub fn find_by_id(&self, id: &str) -> Result<Option<Source>, DbError> {
-        let mut stmt = self.conn.prepare("SELECT * FROM sources WHERE id = ?1")?;
-        let mut rows = stmt.query(params![id])?;
-        match rows.next()? {
-            Some(row) => Ok(Some(row_to_source(row)?)),
-            None => Ok(None),
-        }
+    pub fn find_by_id(&mut self, id: &str) -> Result<Option<Source>, DbError> {
+        let row = sources::table
+            .find(id)
+            .select(SourceRow::as_select())
+            .first::<SourceRow>(self.conn)
+            .optional()?;
+        row.map(Source::try_from).transpose()
     }
 
-    pub fn list(&self) -> Result<Vec<Source>, DbError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM sources ORDER BY name ASC")?;
-        let rows = stmt.query_map([], |row| {
-            row_to_source(row).map_err(|e| match e {
-                DbError::Sqlite(e) => e,
-                other => rusqlite::Error::ToSqlConversionFailure(Box::new(other)),
-            })
-        })?;
-
-        let mut sources = Vec::new();
-        for row in rows {
-            sources.push(row?);
-        }
-        Ok(sources)
+    pub fn list(&mut self) -> Result<Vec<Source>, DbError> {
+        let rows = sources::table
+            .order(sources::name.asc())
+            .select(SourceRow::as_select())
+            .load::<SourceRow>(self.conn)?;
+        rows.into_iter().map(Source::try_from).collect()
     }
 
-    pub fn update(&self, source: &Source) -> Result<(), DbError> {
-        let config_json = serde_json::to_string(&source.config)
-            .map_err(|e| DbError::Data(format!("Failed to serialize config: {e}")))?;
-
-        self.conn.execute(
-            "UPDATE sources SET source_type = ?2, name = ?3, config = ?4, enabled = ?5, last_synced_at = ?6
-             WHERE id = ?1",
-            params![
-                source.id,
-                source.source_type.as_str(),
-                source.name,
-                config_json,
-                source.enabled,
-                source.last_synced_at,
-            ],
-        )?;
+    pub fn update(&mut self, source: &Source) -> Result<(), DbError> {
+        let changes = NewSourceRow::try_from(source)?;
+        diesel::update(sources::table.find(&source.id))
+            .set(&changes)
+            .execute(self.conn)?;
         Ok(())
     }
 
-    pub fn delete(&self, id: &str) -> Result<(), DbError> {
-        self.conn
-            .execute("DELETE FROM sources WHERE id = ?1", params![id])?;
+    pub fn delete(&mut self, id: &str) -> Result<(), DbError> {
+        diesel::delete(sources::table.find(id)).execute(self.conn)?;
         Ok(())
     }
-}
-
-fn row_to_source(row: &rusqlite::Row) -> Result<Source, DbError> {
-    let source_type_str: String = row.get("source_type")?;
-    let config_json: String = row.get("config")?;
-
-    let source_type = SourceType::from_str(&source_type_str)
-        .ok_or_else(|| DbError::Data(format!("Unknown source type: {source_type_str}")))?;
-    let config: SourceConfig = serde_json::from_str(&config_json)
-        .map_err(|e| DbError::Data(format!("Failed to parse config: {e}")))?;
-
-    Ok(Source {
-        id: row.get("id")?,
-        source_type,
-        name: row.get("name")?,
-        config,
-        enabled: row.get("enabled")?,
-        last_synced_at: row.get("last_synced_at")?,
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::init_db;
+    use crate::db::init::init_db;
+    use crate::models::media::SourceType;
+    use crate::models::source::SourceConfig;
 
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        init_db(&conn).unwrap();
+    fn test_db() -> SqliteConnection {
+        let mut conn = SqliteConnection::establish(":memory:").unwrap();
+        init_db(&mut conn).unwrap();
         conn
     }
 
@@ -136,8 +86,8 @@ mod tests {
 
     #[test]
     fn insert_and_find_roundtrip() {
-        let conn = test_db();
-        let repo = SourceRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = SourceRepo::new(&mut conn);
         let source = test_source();
 
         repo.insert(&source).unwrap();
@@ -152,20 +102,19 @@ mod tests {
 
     #[test]
     fn find_by_id_returns_none_for_missing() {
-        let conn = test_db();
-        let repo = SourceRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = SourceRepo::new(&mut conn);
         assert!(repo.find_by_id("nonexistent").unwrap().is_none());
     }
 
     #[test]
     fn list_returns_all_sources() {
-        let conn = test_db();
-        let repo = SourceRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = SourceRepo::new(&mut conn);
 
         let mut s1 = test_source();
         s1.id = "plex:server1".to_string();
         s1.name = "Server A".to_string();
-
         let mut s2 = test_source();
         s2.id = "plex:server2".to_string();
         s2.name = "Server B".to_string();
@@ -175,15 +124,14 @@ mod tests {
 
         let all = repo.list().unwrap();
         assert_eq!(all.len(), 2);
-        // Ordered by name
         assert_eq!(all[0].name, "Server A");
         assert_eq!(all[1].name, "Server B");
     }
 
     #[test]
     fn update_modifies_source() {
-        let conn = test_db();
-        let repo = SourceRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = SourceRepo::new(&mut conn);
 
         let mut source = test_source();
         repo.insert(&source).unwrap();
@@ -204,8 +152,8 @@ mod tests {
 
     #[test]
     fn delete_removes_source() {
-        let conn = test_db();
-        let repo = SourceRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = SourceRepo::new(&mut conn);
 
         let source = test_source();
         repo.insert(&source).unwrap();
@@ -217,23 +165,14 @@ mod tests {
 
     #[test]
     fn config_json_stored_correctly() {
-        let conn = test_db();
-        let repo = SourceRepo::new(&conn);
+        let mut conn = test_db();
+        let mut repo = SourceRepo::new(&mut conn);
 
         let source = test_source();
         repo.insert(&source).unwrap();
 
-        // Verify raw JSON
-        let raw: String = conn
-            .query_row(
-                "SELECT config FROM sources WHERE id = ?1",
-                params![source.id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        let parsed: SourceConfig = serde_json::from_str(&raw).unwrap();
-        assert_eq!(parsed.url, "http://localhost:32400");
-        assert_eq!(parsed.token, "test-token-123");
+        let found = repo.find_by_id(&source.id).unwrap().unwrap();
+        assert_eq!(found.config.url, "http://localhost:32400");
+        assert_eq!(found.config.token, "test-token-123");
     }
 }

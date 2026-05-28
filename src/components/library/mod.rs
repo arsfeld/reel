@@ -574,7 +574,7 @@ impl Component for LibraryView {
         let sender_alpha = sender.input_sender().clone();
         for letter in 'A'..='Z' {
             let btn = gtk::Button::builder()
-                .label(&letter.to_string())
+                .label(letter.to_string())
                 .css_classes(["flat"])
                 .build();
             let sender_l = sender_alpha.clone();
@@ -922,13 +922,7 @@ impl Component for LibraryView {
             }
             LibraryViewMsg::ContextMenuAt { x, y } => {
                 if let Some(position) = self.pick_grid_position_at(x, y) {
-                    show_watch_context_menu(
-                        &self.grid.view,
-                        &sender.input_sender(),
-                        position,
-                        x,
-                        y,
-                    );
+                    show_watch_context_menu(&self.grid.view, sender.input_sender(), position, x, y);
                 }
             }
             LibraryViewMsg::SetWatchData(data) => {
@@ -1107,7 +1101,7 @@ impl LibraryView {
             .collect();
 
             let meta = gtk::Label::builder()
-                .label(&meta_parts.join(" · "))
+                .label(meta_parts.join(" · "))
                 .halign(gtk::Align::Start)
                 .css_classes(["library-list-meta", "dim-label"])
                 .visible(!meta_parts.is_empty())
@@ -1386,10 +1380,10 @@ impl LibraryView {
                     return None;
                 }
                 for i in 0..self.grid.len() {
-                    if let Some(item) = self.grid.get(i) {
-                        if item.borrow().media_id == media_id {
-                            return Some(i);
-                        }
+                    if let Some(item) = self.grid.get(i)
+                        && item.borrow().media_id == media_id
+                    {
+                        return Some(i);
                     }
                 }
                 return None;
@@ -1435,16 +1429,16 @@ impl LibraryView {
         overlay.add_overlay(&scrim);
 
         // Progress bar (only for continue watching)
-        if let Some(pct) = progress {
-            if pct > 0.0 {
-                let progress_bar = gtk::ProgressBar::builder()
-                    .halign(gtk::Align::Fill)
-                    .valign(gtk::Align::End)
-                    .fraction(pct)
-                    .css_classes(["watch-progress"])
-                    .build();
-                overlay.add_overlay(&progress_bar);
-            }
+        if let Some(pct) = progress
+            && pct > 0.0
+        {
+            let progress_bar = gtk::ProgressBar::builder()
+                .halign(gtk::Align::Fill)
+                .valign(gtk::Align::End)
+                .fraction(pct)
+                .css_classes(["watch-progress"])
+                .build();
+            overlay.add_overlay(&progress_bar);
         }
 
         let frame = gtk::Frame::builder()

@@ -9,6 +9,7 @@ pub mod mpris;
 #[allow(dead_code)]
 pub mod plex;
 pub mod screensaver;
+pub mod stream_cache;
 pub mod visibility;
 #[allow(dead_code)]
 pub mod watch_state;
