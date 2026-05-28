@@ -113,6 +113,15 @@ impl App {
     /// visibility into the sidebar, and spawn an async libraries fetch. Called
     /// for EVERY validated source so all servers appear in the sidebar — this
     /// does NOT change the browsed source.
+    /// The full set of connected sources as (display label, source) pairs, for
+    /// Home's cross-source merged Continue Watching row.
+    fn home_sources(&self) -> Vec<(String, Arc<dyn MediaSource>)> {
+        self.sources
+            .iter()
+            .map(|entry| (entry.source.name().to_string(), entry.source.clone()))
+            .collect()
+    }
+
     fn feed_sidebar_source(
         &mut self,
         source_type: SourceType,
@@ -123,6 +132,10 @@ impl App {
     ) {
         self.sources
             .register(source_type, source_id.to_string(), source.clone());
+        // Home merges Continue Watching across all sources, so refresh its view
+        // of the registry whenever a source is added.
+        self.home_view
+            .emit(HomeViewMsg::SetSources(self.home_sources()));
         let hidden = self.settings.library_visibility.hidden.clone();
 
         self.sidebar.emit(SidebarMsg::SetSource {
@@ -220,6 +233,10 @@ impl App {
         // Drop from the live registry (the sidebar already removed its group
         // optimistically).
         self.sources.remove(st, source_id);
+        // Refresh Home's source set so the removed source leaves the merged
+        // Continue Watching row on the subsequent LoadHome.
+        self.home_view
+            .emit(HomeViewMsg::SetSources(self.home_sources()));
 
         // Persisted eviction: the saved source row, then its media items, then
         // any now-orphaned watch_progress rows (keyed by media_item_id, which
