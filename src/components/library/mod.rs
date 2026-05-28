@@ -1,3 +1,5 @@
+mod active_filters;
+mod filter_popover;
 mod media_card;
 
 use std::collections::HashMap;
@@ -12,9 +14,13 @@ use tracing::info;
 use crate::models::library::LibraryType;
 use crate::models::media::MediaItem;
 use crate::services::artwork::ArtworkCache;
-use crate::services::library_filter::{self, FilterState, GridDensity, SortOrder, ViewMode};
+use crate::services::library_filter::{
+    self, FilterState, FilterTag, GridDensity, SortOrder, ViewMode,
+};
 use crate::services::media_source::MediaSource;
 
+use active_filters::ActiveFiltersBar;
+use filter_popover::FilterPopover;
 use media_card::MediaCardData;
 
 #[allow(dead_code)]
@@ -36,18 +42,15 @@ pub struct LibraryView {
     search_entry: gtk::SearchEntry,
     // Filter/sort bar widgets
     filter_bar: gtk::Box,
-    genre_scroll: gtk::ScrolledWindow,
-    genre_box: gtk::Box,
     filter_button: gtk::MenuButton,
     filter_dot: gtk::Image,
     library_title: gtk::Label,
-    decade_dropdown: gtk::DropDown,
     sort_dropdown: gtk::DropDown,
-    clear_filters_btn: gtk::Button,
-    /// Track genre names currently in the FlowBox to avoid unnecessary rebuilds.
-    current_genres: Vec<String>,
-    /// Track decade values currently in the dropdown.
-    current_decades: Vec<i32>,
+    /// Adwaita filter popover (7 filter groups). Owns the popover the filter
+    /// button displays.
+    filter_popover: FilterPopover,
+    /// Active-filter pill row shown above the grid.
+    active_filters_bar: ActiveFiltersBar,
     // State retention for search/filter/sort
     all_items: Vec<MediaItem>,
     search_query: String,
@@ -62,10 +65,6 @@ pub struct LibraryView {
     continue_watching_section: gtk::Box,
     /// Horizontal box inside the Continue Watching scrolled window.
     continue_watching_box: gtk::Box,
-    /// Recently Added section container.
-    recently_added_section: gtk::Box,
-    /// Horizontal box inside the Recently Added scrolled window.
-    recently_added_box: gtk::Box,
     /// Tracks poster downloads for logging: (completed_count, total_to_fetch, batch_start_time).
     poster_load_tracker: Option<(usize, usize, std::time::Instant)>,
     /// True when an async library fetch is in flight; prevents redundant
@@ -100,8 +99,10 @@ pub enum LibraryViewMsg {
     LoadError(String),
     // Search/filter/sort messages
     SearchChanged(String),
-    GenreFilterChanged(Vec<String>),
-    DecadeFilterChanged(Option<i32>),
+    /// Full filter state changed (emitted by the filter popover).
+    FilterStateChanged(FilterState),
+    /// Remove a single active filter value (emitted by a pill's ✘).
+    RemoveActiveFilter(FilterTag),
     SortChanged(SortOrder),
     ClearFilters,
     FocusSearch,
@@ -131,8 +132,8 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::LibraryLoaded(items) => write!(f, "LibraryLoaded({} items)", items.len()),
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
             Self::SearchChanged(q) => write!(f, "SearchChanged({q:?})"),
-            Self::GenreFilterChanged(g) => write!(f, "GenreFilterChanged({g:?})"),
-            Self::DecadeFilterChanged(d) => write!(f, "DecadeFilterChanged({d:?})"),
+            Self::FilterStateChanged(_) => write!(f, "FilterStateChanged(..)"),
+            Self::RemoveActiveFilter(t) => write!(f, "RemoveActiveFilter({t:?})"),
             Self::SortChanged(s) => write!(f, "SortChanged({s:?})"),
             Self::ClearFilters => write!(f, "ClearFilters"),
             Self::FocusSearch => write!(f, "FocusSearch"),
@@ -287,7 +288,7 @@ impl Component for LibraryView {
             .build();
         search_bar.connect_entry(&search_entry);
 
-        // Filter bar: single horizontal row with genre scroll + filter popover button
+        // Filter / sort / view bar (header row under the search bar).
         let filter_bar = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(8)
@@ -298,56 +299,11 @@ impl Component for LibraryView {
             .css_classes(["library-filter-bar"])
             .build();
 
-        // Genre chips in a horizontally scrollable row
-        let genre_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Automatic)
-            .vscrollbar_policy(gtk::PolicyType::Never)
-            .hexpand(true)
-            .build();
-        let genre_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(4)
-            .build();
-        genre_scroll.set_child(Some(&genre_box));
-
-        // --- Filter popover (sort, density, decade, clear) ---
-        let filter_popover = gtk::Popover::builder().build();
-
-        let popover_content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(12)
-            .margin_bottom(12)
-            .width_request(220)
-            .build();
-
-        // Decade dropdown
-        let decade_dropdown = gtk::DropDown::from_strings(&["All Years"]);
-        decade_dropdown.set_selected(0);
-
-        let sender_decade = sender.input_sender().clone();
-        decade_dropdown.connect_selected_notify(move |dd| {
-            let selected = dd.selected();
-            if selected == 0 {
-                let _ = sender_decade.send(LibraryViewMsg::DecadeFilterChanged(None));
-            } else if let Some(item) = dd.model().and_then(|m| m.item(selected))
-                && let Ok(string_obj) = item.downcast::<gtk::StringObject>()
-            {
-                let text = string_obj.string();
-                if let Ok(decade) = text.trim_end_matches('s').parse::<i32>() {
-                    let _ = sender_decade.send(LibraryViewMsg::DecadeFilterChanged(Some(decade)));
-                }
-            }
-        });
-
-        let decade_row = labeled_row("Decade", &decade_dropdown);
-
-        // Sort dropdown
+        // Sort dropdown (visible in the header).
         let sort_labels: Vec<&str> = SortOrder::all().iter().map(|s| s.label()).collect();
         let sort_dropdown = gtk::DropDown::from_strings(&sort_labels);
         sort_dropdown.set_selected(0);
+        sort_dropdown.set_tooltip_text(Some("Sort order"));
 
         let sender_sort = sender.input_sender().clone();
         sort_dropdown.connect_selected_notify(move |dd| {
@@ -358,12 +314,11 @@ impl Component for LibraryView {
             }
         });
 
-        let sort_row = labeled_row("Sort by", &sort_dropdown);
-
-        // Density dropdown
+        // Density dropdown (thumbnail size).
         let density_labels: Vec<&str> = GridDensity::all().iter().map(|d| d.label()).collect();
         let density_dropdown = gtk::DropDown::from_strings(&density_labels);
         density_dropdown.set_selected(1); // Medium (default)
+        density_dropdown.set_tooltip_text(Some("Thumbnail size"));
 
         let sender_density = sender.input_sender().clone();
         density_dropdown.connect_selected_notify(move |dd| {
@@ -374,45 +329,24 @@ impl Component for LibraryView {
             }
         });
 
-        let density_row = labeled_row("Thumbnail size", &density_dropdown);
+        // Adwaita filter popover with the seven filter groups.
+        let filter_popover = FilterPopover::new(sender.input_sender().clone());
 
-        // Clear filters button inside popover
-        let clear_filters_btn = gtk::Button::builder()
-            .label("Clear Filters")
-            .css_classes(["flat"])
-            .halign(gtk::Align::Center)
-            .visible(false)
-            .build();
-        let popover_clear = filter_popover.clone();
-        let sender_clear_bar = sender.input_sender().clone();
-        clear_filters_btn.connect_clicked(move |_| {
-            let _ = sender_clear_bar.send(LibraryViewMsg::ClearFilters);
-            popover_clear.popdown();
-        });
-
-        popover_content.append(&decade_row);
-        popover_content.append(&sort_row);
-        popover_content.append(&density_row);
-        popover_content.append(&clear_filters_btn);
-
-        filter_popover.set_child(Some(&popover_content));
-
-        // Filter button that opens the popover
         let filter_button = gtk::MenuButton::builder()
-            .icon_name("view-sort-descending-symbolic")
-            .tooltip_text("Filter & Sort")
-            .popover(&filter_popover)
+            .icon_name("funnel-symbolic")
+            .tooltip_text("Filter")
+            .popover(&filter_popover.popover)
             .css_classes(["flat"])
             .build();
 
-        // Active filter indicator dot
+        // Active filter indicator dot.
         let filter_dot = gtk::Image::builder()
             .icon_name("media-record-symbolic")
             .css_classes(["accent"])
             .visible(false)
             .build();
 
-        // Active filter count badge (shows on filter button when filters active)
+        // Active filter count badge.
         let filter_count_badge = gtk::Label::builder()
             .css_classes(["filter-count-badge"])
             .visible(false)
@@ -424,6 +358,9 @@ impl Component for LibraryView {
             .build();
         filter_btn_box.append(&filter_button);
         filter_btn_box.append(&filter_count_badge);
+
+        // Active-filter pill row (its own container, placed below the bar).
+        let active_filters_bar = ActiveFiltersBar::new(sender.input_sender().clone());
 
         // --- View mode toggle (grid / list) ---
         let view_mode_toggle = gtk::Box::builder()
@@ -465,7 +402,10 @@ impl Component for LibraryView {
         view_mode_toggle.append(&grid_btn);
         view_mode_toggle.append(&list_btn);
 
-        filter_bar.append(&genre_scroll);
+        let bar_spacer = gtk::Box::builder().hexpand(true).build();
+        filter_bar.append(&sort_dropdown);
+        filter_bar.append(&density_dropdown);
+        filter_bar.append(&bar_spacer);
         filter_bar.append(&filter_dot);
         filter_bar.append(&filter_btn_box);
         filter_bar.append(&view_mode_toggle);
@@ -508,39 +448,6 @@ impl Component for LibraryView {
 
         continue_watching_section.append(&cw_label);
         continue_watching_section.append(&cw_scroll);
-
-        // Recently Added section (hidden initially)
-        let recently_added_section = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
-            .margin_start(16)
-            .margin_end(16)
-            .margin_top(8)
-            .margin_bottom(8)
-            .css_classes(["library-section"])
-            .visible(false)
-            .build();
-
-        let ra_label = gtk::Label::builder()
-            .label("Recently Added")
-            .halign(gtk::Align::Start)
-            .css_classes(["library-section-title"])
-            .build();
-
-        let recently_added_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
-            .build();
-
-        let ra_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Automatic)
-            .vscrollbar_policy(gtk::PolicyType::Never)
-            .max_content_height(240)
-            .child(&recently_added_box)
-            .build();
-
-        recently_added_section.append(&ra_label);
-        recently_added_section.append(&ra_scroll);
 
         // --- Library hero header (icon + title + subtitle) ---
         let library_hero = gtk::Box::builder()
@@ -649,9 +556,9 @@ impl Component for LibraryView {
 
         root.append(&search_bar);
         root.append(&filter_bar);
+        root.append(&active_filters_bar.container);
         root.append(&library_hero);
         root.append(&continue_watching_section);
-        root.append(&recently_added_section);
         root.append(&stack);
 
         // Apply .rich-list for spacious grid style
@@ -673,16 +580,12 @@ impl Component for LibraryView {
             search_bar,
             search_entry,
             filter_bar,
-            genre_scroll,
-            genre_box,
             filter_button,
             filter_dot,
             library_title,
-            decade_dropdown,
             sort_dropdown,
-            clear_filters_btn,
-            current_genres: Vec::new(),
-            current_decades: Vec::new(),
+            filter_popover,
+            active_filters_bar,
             all_items: Vec::new(),
             search_query: String::new(),
             filter_state: FilterState::default(),
@@ -692,8 +595,6 @@ impl Component for LibraryView {
             watch_data: HashMap::new(),
             continue_watching_section,
             continue_watching_box,
-            recently_added_section,
-            recently_added_box,
             poster_load_tracker: None,
             loading_in_progress: false,
             filter_count_badge,
@@ -825,13 +726,14 @@ impl Component for LibraryView {
                 let build_start = std::time::Instant::now();
                 self.all_items = items;
                 info!("Library loaded: {} items", self.all_items.len());
-                self.rebuild_genre_chips(&sender);
-                self.rebuild_decade_dropdown();
+                // Reconcile persisted filters against the freshly-loaded items,
+                // then refresh the popover's available values and the pill row.
+                self.filter_state = library_filter::reconcile(&self.filter_state, &self.all_items);
+                self.filter_popover.set_items(&self.all_items);
+                self.filter_popover.set_state(&self.filter_state);
+                self.active_filters_bar.update(&self.filter_state);
                 self.rebuild_grid(&sender);
-                info!(
-                    "Full UI build (chips + decades + grid): {:?}",
-                    build_start.elapsed()
-                );
+                info!("Full UI build: {:?}", build_start.elapsed());
             }
             LibraryViewMsg::LoadError(msg) => {
                 self.loading_in_progress = false;
@@ -842,25 +744,20 @@ impl Component for LibraryView {
                 self.search_query = query;
                 self.rebuild_grid(&sender);
             }
-            LibraryViewMsg::GenreFilterChanged(genres) => {
-                if genres.is_empty() {
-                    self.filter_state.genres = None;
-                } else {
-                    self.filter_state.genres = Some(library_filter::GenreFilter {
-                        selected_genres: genres,
-                    });
-                }
+            LibraryViewMsg::FilterStateChanged(state) => {
+                // Emitted by the filter popover. The popover already reflects
+                // this state, so don't echo it back — just refresh pills + grid.
+                self.filter_state = state;
+                self.active_filters_bar.update(&self.filter_state);
                 self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
             }
-            LibraryViewMsg::DecadeFilterChanged(decade) => {
-                // Bridge: the legacy decade dropdown maps onto the new year_range
-                // filter (decade D → years D..=D+9). Replaced by the year-range
-                // control in the filter popover (U4/U6).
-                self.filter_state.year_range = decade.map(|d| library_filter::YearRangeFilter {
-                    from: Some(d),
-                    to: Some(d + 9),
-                });
+            LibraryViewMsg::RemoveActiveFilter(tag) => {
+                // Emitted by a pill's ✘. Mutate state, then push it back into
+                // the popover so its controls reflect the removal.
+                self.filter_state.remove(&tag);
+                self.filter_popover.set_state(&self.filter_state);
+                self.active_filters_bar.update(&self.filter_state);
                 self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
             }
@@ -883,8 +780,8 @@ impl Component for LibraryView {
                 self.search_query.clear();
                 self.search_bar.set_search_mode(false);
                 self.search_entry.set_text("");
-                self.decade_dropdown.set_selected(0);
-                self.deselect_all_genre_chips();
+                self.filter_popover.set_state(&self.filter_state);
+                self.active_filters_bar.update(&self.filter_state);
                 self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
             }
@@ -952,9 +849,8 @@ impl Component for LibraryView {
                 if !self.all_items.is_empty() {
                     self.rebuild_grid(&sender);
                 }
-                // Rebuild shelf rows
+                // Rebuild the Continue Watching shelf (independent of filters).
                 self.rebuild_continue_watching(&sender);
-                self.rebuild_recently_added(&sender);
             }
             LibraryViewMsg::LoadCollectionItems(collection_key) => {
                 self.stack.set_visible_child(&self.loading_page);
@@ -1262,9 +1158,8 @@ impl LibraryView {
             ));
         }
 
-        // Show shelves when data exists
+        // Continue Watching shelf is independent of the active filters.
         self.rebuild_continue_watching(sender);
-        self.rebuild_recently_added(sender);
 
         // Show alphabet bar when sorting by title (most useful for letter jumping)
         let show_alpha = matches!(self.sort_order, SortOrder::TitleAsc | SortOrder::TitleDesc)
@@ -1342,101 +1237,14 @@ impl LibraryView {
         self.skeleton_grid.append(&flow);
     }
 
-    /// Rebuild genre toggle chips from current all_items.
-    fn rebuild_genre_chips(&mut self, sender: &ComponentSender<Self>) {
-        let genres = library_filter::extract_genres(&self.all_items);
-
-        if genres == self.current_genres {
-            return; // No change needed
-        }
-
-        // Remove all existing children from the horizontal genre box
-        while let Some(child) = self.genre_box.first_child() {
-            self.genre_box.remove(&child);
-        }
-
-        for genre in &genres {
-            let btn = gtk::ToggleButton::builder()
-                .label(genre)
-                .css_classes(["pill"])
-                .build();
-
-            let sender_genre = sender.input_sender().clone();
-            let box_ref = self.genre_box.clone();
-            btn.connect_toggled(move |_btn| {
-                let mut selected = Vec::new();
-                let mut child = box_ref.first_child();
-                while let Some(ref widget) = child {
-                    if let Ok(toggle) = widget.clone().downcast::<gtk::ToggleButton>()
-                        && toggle.is_active()
-                    {
-                        selected.push(toggle.label().map(|l| l.to_string()).unwrap_or_default());
-                    }
-                    child = widget.next_sibling();
-                }
-                let _ = sender_genre.send(LibraryViewMsg::GenreFilterChanged(selected));
-            });
-
-            self.genre_box.append(&btn);
-        }
-
-        self.current_genres = genres;
-    }
-
-    /// Rebuild decade dropdown from current all_items.
-    fn rebuild_decade_dropdown(&mut self) {
-        // Local decade extraction (the shared helper was removed in favour of
-        // year-range filtering; this bridge stays until U6 replaces the dropdown).
-        let mut decades: Vec<i32> = self
-            .all_items
-            .iter()
-            .filter_map(|item| item.year)
-            .map(|y| (y / 10) * 10)
-            .collect();
-        decades.sort_unstable();
-        decades.dedup();
-        decades.reverse();
-
-        if decades == self.current_decades {
-            return;
-        }
-
-        let mut labels: Vec<String> = vec!["All Years".to_string()];
-        for &d in &decades {
-            labels.push(format!("{d}s"));
-        }
-        let label_strs: Vec<&str> = labels.iter().map(String::as_str).collect();
-        let model = gtk::StringList::new(&label_strs);
-        self.decade_dropdown.set_model(Some(&model));
-        self.decade_dropdown.set_selected(0);
-        self.current_decades = decades;
-    }
-
-    /// Deselect all genre toggle buttons.
-    fn deselect_all_genre_chips(&self) {
-        let mut child = self.genre_box.first_child();
-        while let Some(ref widget) = child {
-            if let Ok(toggle) = widget.clone().downcast::<gtk::ToggleButton>() {
-                toggle.set_active(false);
-            }
-            child = widget.next_sibling();
-        }
-    }
-
-    /// Show/hide the clear filters button, filter-dot indicator, and filter count badge.
+    /// Update the filter-dot indicator and the filter-count badge on the
+    /// filter button. The count is the number of active filter values (one per
+    /// pill), so it matches what the pill row shows.
     fn update_clear_button_visibility(&self) {
         let has_active = self.filter_state.is_active() || !self.search_query.is_empty();
-        self.clear_filters_btn.set_visible(has_active);
         self.filter_dot.set_visible(has_active);
 
-        // Update filter count badge
-        let mut count = 0u32;
-        if let Some(ref gf) = self.filter_state.genres {
-            count += gf.selected_genres.len() as u32;
-        }
-        if self.filter_state.year_range.is_some() {
-            count += 1;
-        }
+        let count = library_filter::pill_labels(&self.filter_state).len() as u32;
         if count > 0 {
             self.filter_count_badge.set_label(&count.to_string());
             self.filter_count_badge.set_visible(true);
@@ -1616,62 +1424,6 @@ impl LibraryView {
             self.continue_watching_box.append(&card);
         }
     }
-
-    /// Rebuild the Recently Added horizontal row from all_items (most recent first).
-    fn rebuild_recently_added(&mut self, sender: &ComponentSender<Self>) {
-        while let Some(child) = self.recently_added_box.first_child() {
-            self.recently_added_box.remove(&child);
-        }
-
-        let recent: Vec<&MediaItem> = self
-            .all_items
-            .iter()
-            .filter(|item| !item.added_at.is_empty())
-            .take(20)
-            .collect();
-
-        if recent.is_empty() {
-            self.recently_added_section.set_visible(false);
-            return;
-        }
-
-        self.recently_added_section.set_visible(true);
-
-        let source = self.source.clone();
-        let artwork_cache = self.artwork_cache.clone();
-        let cmd_sender = sender.command_sender().clone();
-        let output_sender = sender.output_sender().clone();
-
-        for item in &recent {
-            let card = Self::build_shelf_card(
-                item,
-                None, // no progress for recently added
-                &source,
-                &artwork_cache,
-                &self.texture_cache,
-                &cmd_sender,
-                &output_sender,
-            );
-            self.recently_added_box.append(&card);
-        }
-    }
-}
-
-/// Build a simple "label: widget" row for the filter popover.
-fn labeled_row(label_text: &str, control: &impl gtk::prelude::IsA<gtk::Widget>) -> gtk::Box {
-    let row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .build();
-    let label = gtk::Label::builder()
-        .label(label_text)
-        .halign(gtk::Align::Start)
-        .hexpand(true)
-        .css_classes(["dim-label"])
-        .build();
-    row.append(&label);
-    row.append(control);
-    row
 }
 
 /// Show a context menu popover at the given position with Watch/Unwatch actions.
