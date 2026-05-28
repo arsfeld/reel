@@ -38,6 +38,15 @@ pub fn artwork_dir() -> PathBuf {
     cache_dir().join("artwork")
 }
 
+/// Default location for downloaded media: `data_dir()/downloads`.
+///
+/// Downloads live under `data_dir()` (persistent app data), not `cache_dir()`,
+/// because they are user-retained media, not a regenerable cache. The location
+/// is user-configurable via `DownloadSettings`; this is only the default.
+pub fn downloads_dir() -> PathBuf {
+    data_dir().join("downloads")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,6 +81,15 @@ mod tests {
         let p = artwork_dir();
         assert_eq!(p.file_name().unwrap(), "artwork");
         assert!(p.parent().unwrap().ends_with("reel"));
+    }
+
+    #[test]
+    fn downloads_dir_under_data_dir() {
+        let p = downloads_dir();
+        assert_eq!(p.file_name().unwrap(), "downloads");
+        // Parent is data_dir(), which ends with "reel".
+        assert!(p.parent().unwrap().ends_with("reel"));
+        assert_eq!(p.parent().unwrap(), data_dir());
     }
 
     #[test]

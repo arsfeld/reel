@@ -506,7 +506,9 @@ mod tests {
 
         init_db(&conn).unwrap();
 
-        assert_eq!(schema_version(&conn).unwrap(), 3);
+        // init_db migrates all the way to the current version; the v2->v3 step
+        // (asserted below via the hdr/video_resolution columns) runs en route.
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
 
         // Pre-existing row survives.
         let title: String = conn
