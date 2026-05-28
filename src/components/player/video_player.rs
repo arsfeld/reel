@@ -37,7 +37,8 @@ use relm4::prelude::*;
 
 use crate::components::player::status_plate;
 use crate::components::player::video_player_chrome::{
-    flash_center, format_us, is_player_shortcut, rebuild_track_popovers, volume_icon,
+    flash_center, format_us, rebuild_track_popovers, volume_icon, wire_keyboard_handlers,
+    wire_pointer_handlers, wire_popover_handlers, wire_slider_handlers,
 };
 use crate::player::PlayState;
 use crate::player::SkipMarkers;
@@ -106,6 +107,18 @@ pub(crate) enum VideoPlayerOutput {
     SeekReload {
         position_secs: f64,
     },
+    /// Audio-track change during a transcode (AE6): the parent re-resolves with
+    /// the chosen Plex `audioStreamID` + reload-at-position (not a live select).
+    SelectAudioTrack {
+        stream_id: i64,
+        position_secs: f64,
+    },
+    /// Subtitle-track change during a transcode (AE6). `None` turns subtitles
+    /// off (no `subtitleStreamID`).
+    SelectSubtitleTrack {
+        stream_id: Option<i64>,
+        position_secs: f64,
+    },
     VolumeChanged {
         volume: f64,
         muted: bool,
@@ -169,14 +182,22 @@ pub(crate) enum VideoPlayerMsg {
     },
     SelectAudio(String),
     SelectSubtitle(Option<String>),
+    /// Audio/subtitle track picked from the transcode-aware menu (AE6): carries
+    /// the Plex stream id, routed to a re-decision by the parent.
+    SelectAudioTrack(i64),
+    SelectSubtitleTrack(Option<i64>),
     SetTitle(Option<String>),
     /// Update the quality menu (U9): whether quality control applies to this
     /// source, the active selection (Auto / a manual rung), and the decision
-    /// indicator text ("Direct Play" / "Transcoding 1080p · 8 Mbps", R16).
+    /// indicator text ("Direct Play" / "Transcoding 1080p · 8 Mbps", R16). The
+    /// stream lists drive the transcode-aware track menus (AE6); empty for
+    /// direct-play (live GStreamer selection wins).
     SetDecisionInfo {
         available: bool,
         selection: crate::models::playback::QualitySelection,
         indicator: String,
+        audio_streams: Vec<crate::models::playback::DecisionStream>,
+        subtitle_streams: Vec<crate::models::playback::DecisionStream>,
     },
     PopoverVisibilityChanged(bool),
     ClosePopovers,
@@ -273,6 +294,11 @@ pub(crate) struct VideoPlayer {
     current_selection: crate::models::playback::QualitySelection,
     decision_indicator: String,
     quality_ui_signature: String,
+    /// Transcode-aware track menus (AE6): the Plex audio/subtitle stream lists
+    /// from the active decision. While transcoding these drive the track menus
+    /// (a change re-decides); empty for direct-play (live GStreamer selection).
+    transcode_audio: Vec<crate::models::playback::DecisionStream>,
+    transcode_subtitle: Vec<crate::models::playback::DecisionStream>,
 }
 
 #[relm4::component(pub(crate))]
@@ -754,10 +780,19 @@ impl Component for VideoPlayer {
         // Re-render derived widget state. We keep this manual because
         // many of these properties depend on multiple model fields and a
         // few need to skip our own value-changed handlers.
+        let transcode_tracks = if self.is_transcode {
+            Some((
+                self.transcode_audio.as_slice(),
+                self.transcode_subtitle.as_slice(),
+            ))
+        } else {
+            None
+        };
         rebuild_track_popovers(
             widgets,
             &self.tracks,
             self.media.as_ref(),
+            transcode_tracks,
             &sender,
             &mut self.track_ui_signature,
         );
@@ -964,10 +999,30 @@ impl VideoPlayer {
                 available,
                 selection,
                 indicator,
+                audio_streams,
+                subtitle_streams,
             } => {
                 self.quality_available = available;
                 self.current_selection = selection;
                 self.decision_indicator = indicator;
+                self.transcode_audio = audio_streams;
+                self.transcode_subtitle = subtitle_streams;
+            }
+            VideoPlayerMsg::SelectAudioTrack(stream_id) => {
+                let position_secs = self.display_position_us() as f64 / 1_000_000.0;
+                let _ = sender.output(VideoPlayerOutput::SelectAudioTrack {
+                    stream_id,
+                    position_secs,
+                });
+                sender.input(VideoPlayerMsg::PointerActive);
+            }
+            VideoPlayerMsg::SelectSubtitleTrack(stream_id) => {
+                let position_secs = self.display_position_us() as f64 / 1_000_000.0;
+                let _ = sender.output(VideoPlayerOutput::SelectSubtitleTrack {
+                    stream_id,
+                    position_secs,
+                });
+                sender.input(VideoPlayerMsg::PointerActive);
             }
             VideoPlayerMsg::PopoverVisibilityChanged(open) => {
                 self.osd.popover_open = open;
@@ -995,86 +1050,6 @@ impl VideoPlayer {
             _ => {}
         }
     }
-}
-
-/// Hook the seek + volume scales: anything that isn't our own programmatic
-/// write becomes a UserSeek/SetVolume; the seek slider also stamps an
-/// `Instant` so `refresh_widgets` doesn't yank the thumb back during a drag.
-fn wire_slider_handlers(
-    widgets: &VideoPlayerWidgets,
-    sender: &ComponentSender<VideoPlayer>,
-    suppress_scale: &Rc<Cell<bool>>,
-    suppress_volume: &Rc<Cell<bool>>,
-    last_user_seek: &Rc<Cell<Option<Instant>>>,
-) {
-    {
-        let sender = sender.clone();
-        let suppress = suppress_scale.clone();
-        let stamp = last_user_seek.clone();
-        widgets.seek_scale.connect_value_changed(move |s| {
-            if suppress.get() {
-                return;
-            }
-            stamp.set(Some(Instant::now()));
-            sender.input(VideoPlayerMsg::UserSeek(s.value() as i64));
-        });
-    }
-    let sender = sender.clone();
-    let suppress = suppress_volume.clone();
-    widgets.volume_scale.connect_value_changed(move |s| {
-        if suppress.get() {
-            return;
-        }
-        sender.input(VideoPlayerMsg::SetVolume(s.value()));
-    });
-}
-
-/// Pointer motion → wake controls. Single click anywhere on the surface
-/// toggles play/pause; double click toggles fullscreen. Both paths also
-/// keep the OSD visible (PointerActive).
-fn wire_pointer_handlers(widgets: &VideoPlayerWidgets, sender: &ComponentSender<VideoPlayer>) {
-    let motion = gtk::EventControllerMotion::new();
-    let sender_m = sender.clone();
-    motion.connect_motion(move |_, _, _| {
-        sender_m.input(VideoPlayerMsg::PointerActive);
-    });
-    widgets.stack_overlay.add_controller(motion);
-
-    let click = gtk::GestureClick::new();
-    click.set_button(gtk::gdk::BUTTON_PRIMARY);
-    let sender_c = sender.clone();
-    let root_for_focus = widgets.root_box.clone();
-    click.connect_pressed(move |_, n, _, _| {
-        root_for_focus.grab_focus();
-        if n == 1 {
-            sender_c.input(VideoPlayerMsg::TogglePlay);
-        } else if n == 2 {
-            sender_c.input(VideoPlayerMsg::ToggleFullscreen);
-        }
-        sender_c.input(VideoPlayerMsg::PointerActive);
-    });
-    // Attach to the picture (not the controls bar) so clicks on the OSD
-    // don't steal play/pause toggles.
-    widgets.picture.add_controller(click);
-}
-
-/// Keyboard shortcuts: capture phase so the slider (and any other focused
-/// descendant) doesn't eat arrow keys before we see them. Return `Stop`
-/// for keys we recognise so we don't double-handle (e.g. focused seek
-/// slider + our own seek-by-5s).
-fn wire_keyboard_handlers(widgets: &VideoPlayerWidgets, sender: &ComponentSender<VideoPlayer>) {
-    let key = gtk::EventControllerKey::new();
-    key.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let sender_k = sender.clone();
-    key.connect_key_pressed(move |_, keyval, _, mods| {
-        if is_player_shortcut(keyval) {
-            sender_k.input(VideoPlayerMsg::KeyPressed(keyval, mods));
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    widgets.root_box.add_controller(key);
 }
 
 impl VideoPlayer {
@@ -1125,6 +1100,8 @@ impl VideoPlayer {
             current_selection: crate::models::playback::QualitySelection::Auto,
             decision_indicator: String::new(),
             quality_ui_signature: String::new(),
+            transcode_audio: Vec::new(),
+            transcode_subtitle: Vec::new(),
         }
     }
 
@@ -1213,8 +1190,10 @@ impl VideoPlayer {
             widgets.title_label.set_label(title);
         }
 
-        let has_audio = self.tracks.iter().any(|t| t.kind == TrackKind::Audio);
-        let has_subs = self.tracks.iter().any(|t| t.kind == TrackKind::Subtitle);
+        let has_audio = self.tracks.iter().any(|t| t.kind == TrackKind::Audio)
+            || (self.is_transcode && !self.transcode_audio.is_empty());
+        let has_subs = self.tracks.iter().any(|t| t.kind == TrackKind::Subtitle)
+            || (self.is_transcode && !self.transcode_subtitle.is_empty());
         widgets.audio_menu.set_sensitive(has_audio);
         widgets
             .subtitle_menu
@@ -1444,6 +1423,8 @@ impl VideoPlayer {
             self.quality_available = false;
             self.current_selection = crate::models::playback::QualitySelection::Auto;
             self.decision_indicator.clear();
+            self.transcode_audio.clear();
+            self.transcode_subtitle.clear();
             let _ = sender.output(VideoPlayerOutput::StateChanged(PlayState::Stopped));
             return;
         };
@@ -1955,24 +1936,4 @@ struct TickSnapshot {
     volume: f64,
     muted: bool,
     error_msg: Option<String>,
-}
-
-fn wire_popover_handlers(widgets: &VideoPlayerWidgets, sender: &ComponentSender<VideoPlayer>) {
-    for menu in [
-        &widgets.audio_menu,
-        &widgets.subtitle_menu,
-        &widgets.quality_menu,
-    ] {
-        let Some(popover) = menu.popover() else {
-            continue;
-        };
-        let sender_show = sender.clone();
-        popover.connect_show(move |_| {
-            sender_show.input(VideoPlayerMsg::PopoverVisibilityChanged(true));
-        });
-        let sender_hide = sender.clone();
-        popover.connect_closed(move |_| {
-            sender_hide.input(VideoPlayerMsg::PopoverVisibilityChanged(false));
-        });
-    }
 }

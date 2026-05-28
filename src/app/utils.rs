@@ -111,6 +111,8 @@ mod tests {
             video_resolution: Some("720p".into()),
             video_bitrate_kbps: Some(1877),
             throttled: false,
+            audio_streams: Vec::new(),
+            subtitle_streams: Vec::new(),
         }
     }
 

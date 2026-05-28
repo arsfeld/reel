@@ -239,6 +239,13 @@ pub struct PlexStream {
     /// "direct").
     pub location: Option<String>,
     pub selected: Option<bool>,
+    /// Human-readable label, richest first: "English (EAC3 5.1)" etc. Used to
+    /// populate the transcode-aware track menus (AE6).
+    #[serde(rename = "extendedDisplayTitle")]
+    pub extended_display_title: Option<String>,
+    #[serde(rename = "displayTitle")]
+    pub display_title: Option<String>,
+    pub language: Option<String>,
 }
 
 /// A live server-side transcode session, as listed by `/transcode/sessions` or

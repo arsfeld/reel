@@ -147,6 +147,18 @@ pub fn redact_plex_token(s: &str) -> String {
     out
 }
 
+/// An audio or subtitle track available for a transcode re-decision (AE6).
+/// Sourced from the decision response's annotated source stream list, so it
+/// carries the Plex stream id (passed back as `audioStreamID`/`subtitleStreamID`)
+/// and a human-readable label, regardless of what the HLS output actually muxed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecisionStream {
+    pub id: i64,
+    pub label: String,
+    /// Whether the server currently has this stream selected.
+    pub selected: bool,
+}
+
 /// The resolved playback decision: the URL to hand to the pipeline plus the
 /// server-actual output metadata for the indicator (R16). Resolution/bitrate
 /// come from the server's selected `Media`, never echoed from the request.
@@ -168,6 +180,11 @@ pub struct PlaybackDecision {
     pub video_bitrate_kbps: Option<i64>,
     /// Whether the transcoder reported itself throttled at decision time.
     pub throttled: bool,
+    /// Audio tracks the server reported for this title, for the transcode-aware
+    /// audio menu (AE6). Empty for direct-play (live GStreamer selection wins).
+    pub audio_streams: Vec<DecisionStream>,
+    /// Subtitle tracks, same as `audio_streams` (AE6).
+    pub subtitle_streams: Vec<DecisionStream>,
 }
 
 impl PlaybackDecision {
@@ -227,6 +244,8 @@ impl std::fmt::Debug for PlaybackDecision {
             .field("video_resolution", &self.video_resolution)
             .field("video_bitrate_kbps", &self.video_bitrate_kbps)
             .field("throttled", &self.throttled)
+            .field("audio_streams", &self.audio_streams)
+            .field("subtitle_streams", &self.subtitle_streams)
             .finish()
     }
 }
@@ -338,6 +357,8 @@ mod tests {
             video_resolution: res.map(str::to_string),
             video_bitrate_kbps: kbps,
             throttled: false,
+            audio_streams: Vec::new(),
+            subtitle_streams: Vec::new(),
         }
     }
 
@@ -393,6 +414,8 @@ mod tests {
             video_resolution: Some("720p".into()),
             video_bitrate_kbps: Some(1877),
             throttled: false,
+            audio_streams: Vec::new(),
+            subtitle_streams: Vec::new(),
         };
         let dbg = format!("{d:?}");
         assert!(!dbg.contains("secret123"));

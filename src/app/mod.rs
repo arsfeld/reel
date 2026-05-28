@@ -122,6 +122,12 @@ pub struct App {
     /// Consecutive keepalive ping failures; a session is declared lost past a
     /// threshold (U10).
     keepalive_failures: u32,
+    /// Selected Plex audio/subtitle stream ids for the current title (AE6),
+    /// carried into every re-decision so a quality switch preserves the chosen
+    /// tracks. Synced from the server-selected streams on each resolve. Reset
+    /// per title.
+    current_audio_stream_id: Option<i64>,
+    current_subtitle_stream_id: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -453,6 +459,8 @@ impl Component for App {
             switch_state: crate::components::player::switch_state::SwitchState::new(),
             keepalive_source: None,
             keepalive_failures: 0,
+            current_audio_stream_id: None,
+            current_subtitle_stream_id: None,
         };
 
         // Reconcile downloads against disk and rebuild the queue (no transfers
