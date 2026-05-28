@@ -85,6 +85,13 @@
           cargo-watch
           mold
           clang
+          # Dev-time only: generate migrations + regenerate src/schema.rs.
+          # The app itself self-migrates via embed_migrations! (no runtime CLI).
+          (diesel-cli.override {
+            sqliteSupport = true;
+            postgresqlSupport = false;
+            mysqlSupport = false;
+          })
         ];
 
         shellHook = ''

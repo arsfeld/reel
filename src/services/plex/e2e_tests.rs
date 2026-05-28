@@ -1,4 +1,4 @@
-use crate::db::{init_db, media_repo::MediaRepo};
+use crate::db::{init::init_db, media_repo::MediaRepo};
 use crate::models::media::{MediaType, SourceType};
 use crate::services::media_source::MediaSource;
 use crate::services::plex::{
@@ -6,11 +6,11 @@ use crate::services::plex::{
     fake_server::{self, FakePlexServer},
     source::PlexSource,
 };
-use rusqlite::Connection;
+use diesel::{Connection, SqliteConnection};
 
-fn setup_db() -> Connection {
-    let conn = Connection::open_in_memory().unwrap();
-    init_db(&conn).unwrap();
+fn setup_db() -> SqliteConnection {
+    let mut conn = SqliteConnection::establish(":memory:").unwrap();
+    init_db(&mut conn).unwrap();
     conn
 }
 
@@ -52,8 +52,8 @@ async fn full_movie_sync_pipeline() {
     assert_eq!(items.len(), 2);
 
     // Store in database
-    let conn = setup_db();
-    let repo = MediaRepo::new(&conn);
+    let mut conn = setup_db();
+    let mut repo = MediaRepo::new(&mut conn);
     for item in &items {
         repo.upsert(item).unwrap();
     }
@@ -109,8 +109,8 @@ async fn full_tv_hierarchy_sync() {
     assert_eq!(episodes[0].episode_number, Some(1));
 
     // Store everything in DB
-    let conn = setup_db();
-    let repo = MediaRepo::new(&conn);
+    let mut conn = setup_db();
+    let mut repo = MediaRepo::new(&mut conn);
     for item in shows.iter().chain(seasons.iter()).chain(episodes.iter()) {
         repo.upsert(item).unwrap();
     }
@@ -160,8 +160,8 @@ async fn incremental_sync_picks_up_new_items() {
 
     let client = PlexClient::new(server.url(), server.token());
     let source = PlexSource::new(client, "Test".into());
-    let conn = setup_db();
-    let repo = MediaRepo::new(&conn);
+    let mut conn = setup_db();
+    let mut repo = MediaRepo::new(&mut conn);
 
     // Initial sync
     let items = source.library_items("1").await.unwrap();
@@ -290,8 +290,8 @@ async fn upsert_updates_existing_items_on_resync() {
 
     let client = PlexClient::new(server.url(), server.token());
     let source = PlexSource::new(client, "Test".into());
-    let conn = setup_db();
-    let repo = MediaRepo::new(&conn);
+    let mut conn = setup_db();
+    let mut repo = MediaRepo::new(&mut conn);
 
     // Initial sync
     let items = source.library_items("1").await.unwrap();

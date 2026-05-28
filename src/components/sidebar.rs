@@ -19,6 +19,8 @@ pub enum SidebarSelection {
     Library(String, String),
     /// `source_id` of the source whose Collections entry is selected.
     Collections(String),
+    /// The top-level offline Downloads destination.
+    Downloads,
 }
 
 /// One connected source and its (possibly not-yet-loaded) libraries. The
@@ -41,6 +43,9 @@ pub struct SourceGroup {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SidebarRow {
     Home,
+    /// Offline downloads — a top-level destination, independent of any source
+    /// (renders even with zero sources connected).
+    Downloads,
     /// The source node header. Carries the source identity for the edit/remove
     /// affordances.
     SourceHeader {
@@ -84,7 +89,7 @@ pub fn derive_rows(
     hidden: &HashSet<String>,
     edit_mode: bool,
 ) -> Vec<SidebarRow> {
-    let mut rows = vec![SidebarRow::Home];
+    let mut rows = vec![SidebarRow::Home, SidebarRow::Downloads];
 
     for group in sources {
         rows.push(SidebarRow::SourceHeader {
@@ -164,6 +169,7 @@ enum RowAction {
         source_type: String,
         source_id: String,
     },
+    Downloads,
 }
 
 pub struct Sidebar {
@@ -244,6 +250,8 @@ pub enum SidebarOutput {
         source_type: String,
         source_id: String,
     },
+    /// Show the top-level offline Downloads destination.
+    ShowDownloads,
     /// Persist a visibility change for a library (or Collections) entry. `key`
     /// is the **composite** `{source_type}:{source_id}:{section_key}`.
     SetLibraryVisible {
@@ -457,6 +465,10 @@ impl Sidebar {
                     source_id: source_id.clone(),
                 });
             }
+            Some(RowAction::Downloads) => {
+                self.selected = SidebarSelection::Downloads;
+                let _ = sender.output(SidebarOutput::ShowDownloads);
+            }
             Some(RowAction::None) | None => {}
         }
     }
@@ -493,6 +505,10 @@ impl Sidebar {
     ) -> (gtk::ListBoxRow, RowAction) {
         match row {
             SidebarRow::Home => (nav_row("go-home-symbolic", "Home", None), RowAction::Home),
+            SidebarRow::Downloads => (
+                nav_row("folder-download-symbolic", "Downloads", None),
+                RowAction::Downloads,
+            ),
             SidebarRow::SourceHeader {
                 name,
                 source_type,
@@ -681,6 +697,7 @@ impl Sidebar {
                 (SidebarSelection::Collections(sid), RowAction::Collections { source_id, .. }) => {
                     *sid == *source_id
                 }
+                (SidebarSelection::Downloads, RowAction::Downloads) => true,
                 _ => false,
             });
         if let Some(idx) = target {
@@ -782,9 +799,34 @@ mod tests {
     }
 
     #[test]
-    fn no_sources_shows_only_home() {
+    fn no_sources_shows_home_and_downloads() {
+        // Downloads is a top-level destination, present with zero sources (R1).
         let rows = derive_rows(&[], &HashSet::new(), false);
-        assert_eq!(rows, vec![SidebarRow::Home]);
+        assert_eq!(rows, vec![SidebarRow::Home, SidebarRow::Downloads]);
+    }
+
+    #[test]
+    fn downloads_row_precedes_source_header() {
+        let sources = vec![group(
+            "S",
+            "plex",
+            "srv",
+            vec![section("1", "Movies", LibraryType::Movie)],
+            true,
+        )];
+        let rows = derive_rows(&sources, &HashSet::new(), false);
+        let dl = rows
+            .iter()
+            .position(|r| matches!(r, SidebarRow::Downloads))
+            .unwrap();
+        let header = rows
+            .iter()
+            .position(|r| matches!(r, SidebarRow::SourceHeader { .. }))
+            .unwrap();
+        assert!(
+            dl < header,
+            "Downloads must render before the source header"
+        );
     }
 
     #[test]
@@ -795,6 +837,7 @@ mod tests {
             rows,
             vec![
                 SidebarRow::Home,
+                SidebarRow::Downloads,
                 SidebarRow::SourceHeader {
                     name: "My Plex".to_string(),
                     source_type: "plex".to_string(),
@@ -813,6 +856,7 @@ mod tests {
             rows,
             vec![
                 SidebarRow::Home,
+                SidebarRow::Downloads,
                 SidebarRow::SourceHeader {
                     name: "My Plex".to_string(),
                     source_type: "plex".to_string(),
@@ -831,11 +875,11 @@ mod tests {
         ];
         let sources = vec![group("S", "plex", "srv", libs, true)];
         let rows = derive_rows(&sources, &HashSet::new(), false);
-        // Home, header, 2 libraries, collections.
-        assert_eq!(rows.len(), 5);
-        assert!(matches!(rows[2], SidebarRow::Library { ref title, .. } if title == "Movies"));
+        // Home, Downloads, header, 2 libraries, collections.
+        assert_eq!(rows.len(), 6);
+        assert!(matches!(rows[3], SidebarRow::Library { ref title, .. } if title == "Movies"));
         assert!(matches!(
-            rows[4],
+            rows[5],
             SidebarRow::Collections { visible: true, .. }
         ));
     }
@@ -1018,6 +1062,7 @@ mod tests {
             rows,
             vec![
                 SidebarRow::Home,
+                SidebarRow::Downloads,
                 SidebarRow::SourceHeader {
                     name: "S".to_string(),
                     source_type: "plex".to_string(),
