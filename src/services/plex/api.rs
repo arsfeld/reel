@@ -66,6 +66,20 @@ impl PlexClient {
         self.is_remote
     }
 
+    /// The shared HTTP client (carries the default Plex headers, including the
+    /// `X-Plex-Token` and `X-Plex-Client-Identifier`). Used by the transcode
+    /// module (U5) to issue the decision/stop/ping calls.
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// The auth token, for embedding `X-Plex-Token` in playback URLs handed to
+    /// the pipeline (GStreamer fetches HLS segments from the URL, not via the
+    /// client's default headers, so the token must live in the query).
+    pub(crate) fn token(&self) -> &str {
+        &self.auth_token
+    }
+
     /// GET a URL, retrying transient connection/timeout errors with a short
     /// backoff. The first request after a cold start (uncached DNS for
     /// `*.plex.direct`, a LAN/VPN route still coming up, TLS session warm-up)
