@@ -292,4 +292,7 @@ pub fn handle_connection_saved(
     // A library loads when picked from the sidebar; the default view is Home.
 
     sender.input(AppMsg::ShowToast(format!("Connected to {name}")));
+
+    // The source is live — start any queued/recovered downloads.
+    super::download_handlers::start_pending(app);
 }
