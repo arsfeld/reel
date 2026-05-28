@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use tracing::info;
 
+use crate::models::media::SourceType;
+use crate::models::source::Source;
 use crate::services::plex::auth;
 
 use super::AppCmd;
@@ -16,76 +18,149 @@ const SAVED_URL_PROBE_WINDOW_SECS: u64 = 12;
 /// Delay between saved-URL probe attempts, to let the network warm up.
 const SAVED_URL_PROBE_BACKOFF_MS: u64 = 600;
 
-/// Test the saved URL; if unreachable, re-discover the server via plex.tv.
-pub async fn validate_or_rediscover_source(
-    url: String,
-    token: String,
-    name: String,
-    data_dir: PathBuf,
-) -> AppCmd {
-    info!("Validating saved Plex connection: {url}");
+/// Validate one saved source on startup, dispatching by source type. Each
+/// source validates independently — a failure surfaces for *that* source only
+/// (carrying its id) and never touches another source's registry entry or data.
+pub async fn validate_source(source: Source, data_dir: PathBuf) -> AppCmd {
+    match source.source_type {
+        SourceType::Plex => validate_or_rediscover_plex(source, data_dir).await,
+        // Jellyfin has no plex.tv-style broker: just probe the saved URL.
+        SourceType::Jellyfin => probe_saved_url(source).await,
+        SourceType::Local => AppCmd::SourceValidationFailed {
+            source_id: source.id.clone(),
+            message: "Local sources are not validated".into(),
+        },
+    }
+}
 
-    // Connectivity test on the saved URL. The timeout is generous enough to
-    // absorb a cold start (uncached DNS for *.plex.direct, a LAN/VPN route that
-    // is not up yet) so we don't fall back to slow rediscovery for a URL that is
-    // actually fine. We probe a few times with a short backoff because the
-    // first attempt right after launch often fails while the network warms up.
-    let Ok(http) = reqwest::Client::builder()
+/// Build a reqwest client for connectivity probing. Plex tolerates invalid
+/// certs (plex.direct wildcard / self-signed); Jellyfin uses strict validation.
+fn probe_client(accept_invalid_certs: bool) -> Option<reqwest::Client> {
+    reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(3))
         .timeout(std::time::Duration::from_secs(5))
-        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_certs(accept_invalid_certs)
         .build()
-    else {
-        return AppCmd::SourceValidationFailed("Failed to create HTTP client".into());
-    };
+        .ok()
+}
 
+/// Probe a source's saved URL across the warm-up window. `Some(())` once any
+/// HTTP response comes back (even 401 — the endpoint is reachable).
+async fn probe_reachable(http: &reqwest::Client, url: &str) -> bool {
     let probe = format!("{url}/");
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(SAVED_URL_PROBE_WINDOW_SECS);
     let mut attempt = 0;
     loop {
         attempt += 1;
-        // Any HTTP response (even 401) means the endpoint is reachable.
         if http.get(&probe).send().await.is_ok() {
-            info!("Saved URL is reachable: {url}");
-            return AppCmd::SourceValidated { url, token, name };
+            return true;
         }
         if std::time::Instant::now() >= deadline {
-            break;
+            return false;
         }
         info!("Saved URL probe {attempt} failed ({url}); retrying while the network warms up...");
         tokio::time::sleep(std::time::Duration::from_millis(SAVED_URL_PROBE_BACKOFF_MS)).await;
     }
+}
 
-    info!("Saved URL unreachable ({url}), re-discovering server...");
+/// Jellyfin (and any non-Plex networked source): probe the saved URL only.
+async fn probe_saved_url(source: Source) -> AppCmd {
+    info!(
+        "Validating saved {:?} connection: {}",
+        source.source_type, source.config.url
+    );
+    let Some(http) = probe_client(false) else {
+        return AppCmd::SourceValidationFailed {
+            source_id: source.id.clone(),
+            message: "Failed to create HTTP client".into(),
+        };
+    };
+    if probe_reachable(&http, &source.config.url).await {
+        info!("Saved URL is reachable: {}", source.config.url);
+        let original_id = source.id.clone();
+        AppCmd::SourceValidated {
+            source,
+            original_id,
+        }
+    } else {
+        AppCmd::SourceValidationFailed {
+            source_id: source.id.clone(),
+            message: format!("Server unreachable: {}", source.config.url),
+        }
+    }
+}
+
+/// Plex: test the saved URL; if unreachable, re-discover the server via plex.tv.
+/// A rediscovered URL produces a `Source` with the new url/id; `original_id`
+/// always carries the pre-validation id so the persistence upsert can clear the
+/// stale row if the URL changed.
+async fn validate_or_rediscover_plex(source: Source, data_dir: PathBuf) -> AppCmd {
+    let original_id = source.id.clone();
+    let token = source.config.token.clone();
+    let name = source.name.clone();
+    info!("Validating saved Plex connection: {}", source.config.url);
+
+    if let Some(http) = probe_client(true)
+        && probe_reachable(&http, &source.config.url).await
+    {
+        info!("Saved URL is reachable: {}", source.config.url);
+        return AppCmd::SourceValidated {
+            source,
+            original_id,
+        };
+    }
+
+    info!(
+        "Saved URL unreachable ({}), re-discovering server...",
+        source.config.url
+    );
 
     let client_id = auth::client_identifier(&data_dir);
     let servers = match auth::discover_servers(&client_id, &token).await {
         Ok(s) => s,
         Err(e) => {
-            return AppCmd::SourceValidationFailed(format!("Discovery failed: {e}"));
+            return AppCmd::SourceValidationFailed {
+                source_id: original_id,
+                message: format!("Discovery failed: {e}"),
+            };
         }
     };
 
-    // Find the server by name, or take the first one
     let server = servers.iter().find(|s| s.name == name).or(servers.first());
-
     let Some(server) = server else {
-        return AppCmd::SourceValidationFailed("No servers found on account".to_string());
+        return AppCmd::SourceValidationFailed {
+            source_id: original_id,
+            message: "No servers found on account".to_string(),
+        };
     };
 
     match auth::best_server_uri(server).await {
         Some(new_url) => {
             info!("Re-discovered server '{}' at {new_url}", server.name);
-            AppCmd::SourceValidated {
-                url: new_url,
-                token,
+            let rediscovered = Source {
+                id: Source::make_id(SourceType::Plex, &new_url),
+                source_type: SourceType::Plex,
                 name: server.name.clone(),
+                config: crate::models::source::SourceConfig {
+                    url: new_url,
+                    token,
+                    user_id: None,
+                },
+                enabled: true,
+                last_synced_at: source.last_synced_at,
+            };
+            AppCmd::SourceValidated {
+                source: rediscovered,
+                original_id,
             }
         }
-        None => AppCmd::SourceValidationFailed(format!(
-            "Server '{}' found but no connections reachable",
-            server.name
-        )),
+        None => AppCmd::SourceValidationFailed {
+            source_id: original_id,
+            message: format!(
+                "Server '{}' found but no connections reachable",
+                server.name
+            ),
+        },
     }
 }

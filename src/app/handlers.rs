@@ -159,19 +159,18 @@ pub fn handle_play_media(
 ) {
     info!("Playing media: {}...", &url[..url.len().min(80)]);
     // Resume where playback left off, preferring the source's own offset (e.g.
-    // Plex view offset) so it stays in sync across devices; fall back to locally
-    // tracked progress only when the source reports none.
+    // Plex view offset / Jellyfin resume) so it stays in sync across devices;
+    // fall back to locally tracked progress only when the source has no opinion.
+    // A server-watched item never resumes from a stale local offset (AE6).
     app.pending_resume = None;
     if let Some(ref item) = media_item {
-        app.pending_resume = item.resume_position_secs().or_else(|| {
-            let conn = app.db_conn.as_ref()?;
-            let repo = WatchProgressRepo::new(conn);
-            repo.find_by_media_id(&item.id)
+        let local = app.db_conn.as_ref().and_then(|conn| {
+            WatchProgressRepo::new(conn)
+                .find_by_media_id(&item.id)
                 .ok()
                 .flatten()
-                .filter(|progress| progress.should_show_resume())
-                .map(|progress| progress.resume_position())
         });
+        app.pending_resume = super::utils::resume_position_for(item, local.as_ref());
     }
     app.now_playing = media_item.clone();
     app.last_position = 0.0;
