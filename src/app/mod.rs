@@ -10,6 +10,7 @@ use tracing::info;
 use crate::components::connection::{ConnectionDialog, ConnectionDialogOutput};
 use crate::components::detail::movie_detail::{MovieDetail, MovieDetailMsg, MovieDetailOutput};
 use crate::components::detail::show_detail::{ShowDetail, ShowDetailMsg, ShowDetailOutput};
+use crate::components::downloads::{DownloadsView, DownloadsViewOutput};
 use crate::components::home::{HomeView, HomeViewMsg, HomeViewOutput};
 use crate::components::library::{LibraryView, LibraryViewMsg, LibraryViewOutput};
 
@@ -63,6 +64,7 @@ pub struct App {
     library_view: Controller<LibraryView>,
     movie_detail: Controller<MovieDetail>,
     show_detail: Controller<ShowDetail>,
+    downloads_view: Controller<DownloadsView>,
     connection_dialog: Option<Controller<ConnectionDialog>>,
     screensaver: ScreensaverInhibitor,
     toast_overlay: adw::ToastOverlay,
@@ -278,6 +280,19 @@ impl Component for App {
             },
         );
 
+        let downloads_view = DownloadsView::builder().launch(()).forward(
+            sender.input_sender(),
+            |output| match output {
+                DownloadsViewOutput::ItemAction {
+                    media_item_id,
+                    action,
+                } => AppMsg::DownloadAction {
+                    media_item_id,
+                    action,
+                },
+            },
+        );
+
         let widgets = view_output!();
 
         let built = build_widgets(
@@ -287,6 +302,7 @@ impl Component for App {
             &home_view,
             &library_view,
             &video_player,
+            &downloads_view,
         );
         let toast_overlay = built.toast_overlay;
         let stack = built.stack;
@@ -328,6 +344,7 @@ impl Component for App {
             library_view,
             movie_detail,
             show_detail,
+            downloads_view,
             connection_dialog: None,
             screensaver: ScreensaverInhibitor::new(),
             toast_overlay,
@@ -578,12 +595,12 @@ impl Component for App {
                 self.library_view.emit(LibraryViewMsg::LoadCollections);
             }
             AppMsg::ShowDownloads => {
-                // U12 wires navigation; the DownloadsView page is added in U13.
                 self.current_view = CurrentView::Downloads;
                 self.stack.set_visible_child_name("shell");
+                self.nav_view.replace_with_tags(&["downloads"]);
                 root.set_fullscreened(false);
                 root.set_title(Some("Reel"));
-                sender.input(AppMsg::ShowToast("Downloads".to_string()));
+                self.refresh_downloads_view();
             }
             AppMsg::ShowCollectionDetail(item) => {
                 self.current_view = CurrentView::CollectionDetail(item.id.clone());

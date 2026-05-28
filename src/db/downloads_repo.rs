@@ -215,6 +215,24 @@ impl<'a> DownloadsRepo<'a> {
         Ok(())
     }
 
+    /// All download groups, ordered by title for a stable Downloads view.
+    pub fn list_groups(&self) -> Result<Vec<DownloadGroup>, DbError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM download_groups ORDER BY title ASC, id ASC")?;
+        let rows = stmt.query_map([], |row| {
+            row_to_group(row).map_err(|e| match e {
+                DbError::Sqlite(e) => e,
+                other => rusqlite::Error::ToSqlConversionFailure(Box::new(other)),
+            })
+        })?;
+        let mut groups = Vec::new();
+        for row in rows {
+            groups.push(row?);
+        }
+        Ok(groups)
+    }
+
     /// Find a group by id.
     pub fn find_group(&self, id: &str) -> Result<Option<DownloadGroup>, DbError> {
         let mut stmt = self
