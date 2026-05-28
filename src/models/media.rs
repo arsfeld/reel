@@ -98,6 +98,13 @@ impl SourceType {
         }
     }
 
+    // `reports_watch_state` and `provides_server_hubs` share a body today
+    // (`!= Local`) but are kept distinct on purpose: they answer different
+    // questions (does this source accept progress/scrobble writes? vs. does it
+    // serve curated rows?). A future backend could support one without the
+    // other (e.g. a read-only catalog with hubs but no scrobble), so they must
+    // not be collapsed into one predicate.
+
     /// Whether this source reports watch state (progress, scrobble) and exposes
     /// skip markers to a remote server. True for every networked backend (Plex,
     /// Jellyfin); false only for the local filesystem source, which has nowhere

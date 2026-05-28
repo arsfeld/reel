@@ -164,3 +164,34 @@ async fn validate_or_rediscover_plex(source: Source, data_dir: PathBuf) -> AppCm
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::source::SourceConfig;
+
+    #[tokio::test]
+    async fn validate_local_source_is_unsupported() {
+        // The Local branch returns synchronously with no I/O, carrying the
+        // source's own id so a failure never affects another source.
+        let source = Source {
+            id: "local:/media".into(),
+            source_type: SourceType::Local,
+            name: "Local".into(),
+            config: SourceConfig {
+                url: "/media".into(),
+                token: String::new(),
+                user_id: None,
+            },
+            enabled: true,
+            last_synced_at: None,
+        };
+        let cmd = validate_source(source, std::path::PathBuf::from("/tmp")).await;
+        match cmd {
+            AppCmd::SourceValidationFailed { source_id, .. } => {
+                assert_eq!(source_id, "local:/media");
+            }
+            _ => panic!("expected SourceValidationFailed for a Local source"),
+        }
+    }
+}

@@ -806,7 +806,15 @@ impl Component for App {
                 source_type,
                 user_id,
             } => {
-                let st = SourceType::from_str(&source_type).unwrap_or(SourceType::Plex);
+                // Don't silently fall back to Plex on an unrecognized type — a
+                // Plex client built from Jellyfin credentials would fail opaquely.
+                let Some(st) = SourceType::from_str(&source_type) else {
+                    tracing::warn!("Ignoring connection with unknown source_type: {source_type}");
+                    sender.input(AppMsg::ShowToast(format!(
+                        "Unknown source type \u{201c}{source_type}\u{201d}"
+                    )));
+                    return;
+                };
                 handle_connection_saved(self, url, token, name, st, user_id, &sender);
             }
             AppMsg::ShowToast(message) => {

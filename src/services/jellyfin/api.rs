@@ -690,6 +690,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn report_playing_posts_to_sessions_playing() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Sessions/Playing"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let c = client(&server.uri());
+        let result = c.report_playing("item9", "session1", 0).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn report_stopped_posts_to_sessions_playing_stopped() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Sessions/Playing/Stopped"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let c = client(&server.uri());
+        let result = c.report_stopped("item9", "session1", 20_000_000).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
     async fn mark_played_posts() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
