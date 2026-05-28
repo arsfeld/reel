@@ -234,6 +234,21 @@ impl PlexClient {
         Ok(body.media_container.metadata)
     }
 
+    /// Get recently added items for a single library section, newest first.
+    pub async fn recently_added_in_library(
+        &self,
+        library_key: &str,
+    ) -> Result<Vec<PlexMetadata>, PlexError> {
+        let url = format!(
+            "{}/library/sections/{}/recentlyAdded",
+            self.base_url, library_key
+        );
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        let body: PlexMetadataResponse = resp.json().await?;
+        Ok(body.media_container.metadata)
+    }
+
     /// Get the server's home hubs — curated rows (Continue Watching, On Deck,
     /// Recently Added per library, Recommended, "Because you watched", genre
     /// rows) computed server-side.

@@ -85,7 +85,9 @@ pub enum HomeViewOutput {
 pub enum HomeViewCmd {
     HomeData {
         continue_watching: Vec<MediaItem>,
-        recently_added: Vec<MediaItem>,
+        /// (library title, items) for each non-empty library, in library order.
+        recently_added: Vec<(String, Vec<MediaItem>)>,
+        collections: Vec<MediaItem>,
     },
     PosterLoaded {
         generation: Generation,
@@ -268,22 +270,47 @@ impl Component for HomeView {
                         } else {
                             Vec::new()
                         };
-                        match src.libraries().await {
-                            Ok(libs) => {
-                                let mut all = Vec::new();
-                                for lib in &libs {
-                                    if let Ok(items) = src.library_items(&lib.key).await {
-                                        all.extend(items);
-                                    }
-                                }
-                                all.sort_by(|a, b| b.added_at.cmp(&a.added_at));
-                                all.truncate(20);
-                                HomeViewCmd::HomeData {
-                                    continue_watching,
-                                    recently_added: all,
-                                }
+
+                        let libs = match src.libraries().await {
+                            Ok(l) => l,
+                            Err(e) => return HomeViewCmd::Error(e.to_string()),
+                        };
+
+                        // Per-library Recently Added, fetched concurrently.
+                        let ra_futures = libs.iter().map(|lib| {
+                            let src = src.clone();
+                            let key = lib.key.clone();
+                            let title = lib.title.clone();
+                            async move {
+                                let mut items =
+                                    src.recently_added_in_library(&key).await.unwrap_or_default();
+                                items.truncate(20);
+                                (title, items)
                             }
-                            Err(e) => HomeViewCmd::Error(e.to_string()),
+                        });
+                        let recently_added: Vec<(String, Vec<MediaItem>)> =
+                            futures::future::join_all(ra_futures)
+                                .await
+                                .into_iter()
+                                .filter(|(_, items)| !items.is_empty())
+                                .collect();
+
+                        // Collections across all libraries.
+                        let col_futures = libs.iter().map(|lib| {
+                            let src = src.clone();
+                            let key = lib.key.clone();
+                            async move { src.collections(&key).await.unwrap_or_default() }
+                        });
+                        let collections: Vec<MediaItem> = futures::future::join_all(col_futures)
+                            .await
+                            .into_iter()
+                            .flatten()
+                            .collect();
+
+                        HomeViewCmd::HomeData {
+                            continue_watching,
+                            recently_added,
+                            collections,
                         }
                     });
                 } else {
@@ -328,6 +355,7 @@ impl Component for HomeView {
             HomeViewCmd::HomeData {
                 continue_watching,
                 recently_added,
+                collections,
             } => {
                 self.loading = false;
 
@@ -343,12 +371,22 @@ impl Component for HomeView {
                     self.populate_shelf(cw_id, cards, true, &sender);
                 }
 
-                if !recently_added.is_empty() {
-                    let ra_id = self.add_shelf("Recently Added");
+                // One Recently Added shelf per library (already filtered to
+                // non-empty libraries, in library order).
+                for (library_title, items) in recently_added {
+                    let ra_id = self.add_shelf(&format!("Recently Added — {library_title}"));
                     let cards: Vec<(MediaItem, Option<f64>)> =
-                        recently_added.into_iter().map(|item| (item, None)).collect();
+                        items.into_iter().map(|item| (item, None)).collect();
                     self.populate_shelf(ra_id, cards, false, &sender);
                 }
+
+                if !collections.is_empty() {
+                    let col_id = self.add_shelf("Collections");
+                    let cards: Vec<(MediaItem, Option<f64>)> =
+                        collections.into_iter().map(|item| (item, None)).collect();
+                    self.populate_shelf(col_id, cards, false, &sender);
+                }
+
                 self.refresh_visible_page();
             }
             HomeViewCmd::Error(msg) => {

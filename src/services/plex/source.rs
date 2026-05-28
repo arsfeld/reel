@@ -137,6 +137,18 @@ impl MediaSource for PlexSource {
             .collect())
     }
 
+    async fn recently_added_in_library(
+        &self,
+        library_key: &str,
+    ) -> Result<Vec<MediaItem>, SourceError> {
+        let plex_items = self.client.recently_added_in_library(library_key).await?;
+        let base_url = self.client.base_url();
+        Ok(plex_items
+            .iter()
+            .filter_map(|m| plex_metadata_to_media_item(m, base_url))
+            .collect())
+    }
+
     async fn continue_watching(&self) -> Result<Vec<MediaItem>, SourceError> {
         let plex_items = self.client.on_deck().await?;
         let base_url = self.client.base_url();
@@ -361,6 +373,29 @@ mod tests {
         // Mixed movie + show both convert.
         assert_eq!(hubs[0].items.len(), 2);
         assert_eq!(hubs[0].items[0].title, "Dune");
+    }
+
+    #[tokio::test]
+    async fn plex_source_recently_added_in_library_converts() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/library/sections/1/recentlyAdded"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                r#"{"MediaContainer":{"size":2,"Metadata":[
+                    {"ratingKey":"1","title":"Newest","type":"movie","year":2025},
+                    {"ratingKey":"2","title":"Older","type":"movie","year":2024}
+                ]}}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token");
+        let source = PlexSource::new(client, "Test".into());
+
+        let items = source.recently_added_in_library("1").await.unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, "Newest");
     }
 
     #[tokio::test]
