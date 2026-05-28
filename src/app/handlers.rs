@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 
 use adw::prelude::*;
@@ -6,21 +5,14 @@ use adw::prelude::*;
 use relm4::prelude::*;
 use tracing::{debug, info};
 
-use crate::components::home::HomeViewMsg;
 use crate::components::library::LibraryViewMsg;
 use crate::components::player::video_player::{VideoPlayerMsg, VideoPlayerOutput};
-use crate::components::sidebar::SidebarMsg;
-use crate::config;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::media::{MediaItem, SourceType};
 use crate::models::source::{Source, SourceConfig};
 use crate::navigation::CurrentView;
 use crate::player::PlayState;
-use crate::services::artwork::ArtworkCache;
-use crate::services::media_source::MediaSource;
 use crate::services::mpris;
-use crate::services::plex::api::PlexClient;
-use crate::services::plex::source::PlexSource;
 use crate::services::watch_state::PlaybackState;
 
 use super::App;
@@ -79,7 +71,10 @@ pub fn handle_video_output(
             let events = app
                 .watch_tracker
                 .process_position(position_secs, Instant::now());
-            dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+            {
+                let src = app.now_playing_source();
+                dispatch_watch_events(&app.db_conn, events, &src, sender);
+            }
         }
         VideoPlayerOutput::StateChanged(state) => {
             let _ = app.mpris.status_tx.send(state);
@@ -94,7 +89,10 @@ pub fn handle_video_output(
                         app.last_position,
                         Instant::now(),
                     );
-                    dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+                    {
+                        let src = app.now_playing_source();
+                        dispatch_watch_events(&app.db_conn, events, &src, sender);
+                    }
                 }
                 PlayState::Paused | PlayState::Stopped => {
                     app.screensaver.uninhibit(root);
@@ -103,7 +101,10 @@ pub fn handle_video_output(
                         app.last_position,
                         Instant::now(),
                     );
-                    dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+                    {
+                        let src = app.now_playing_source();
+                        dispatch_watch_events(&app.db_conn, events, &src, sender);
+                    }
                 }
             }
         }
@@ -113,7 +114,10 @@ pub fn handle_video_output(
             let _ = app.mpris.metadata_tx.send(mpris::MprisMetadata::default());
             let _ = app.mpris.position_tx.send(0);
             let events = app.watch_tracker.stop(app.last_position);
-            dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+            {
+                let src = app.now_playing_source();
+                dispatch_watch_events(&app.db_conn, events, &src, sender);
+            }
             app.now_playing = None;
             let watch_data = load_watch_data(&app.db_conn);
             app.library_view
@@ -191,7 +195,7 @@ pub fn handle_play_media(
     // skip_markers degrades to NotSupported for sources without them.
     if let Some(ref item) = media_item
         && item.source_type.reports_watch_state()
-        && let Some(source) = app.active_source.clone()
+        && let Some(source) = app.sources.for_item(item)
     {
         let rating_key = item.external_id.clone();
         let duration_secs = item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0);
@@ -240,57 +244,22 @@ pub fn handle_connection_saved(
         }
     }
 
-    let client = PlexClient::new(&url, &token);
-    let source = Arc::new(PlexSource::new(client, name.clone()));
-    let artwork_cache = Arc::new(ArtworkCache::new(config::artwork_dir()));
-
-    app.active_source = Some(source.clone() as Arc<dyn MediaSource>);
-    app.source_url = Some(url.clone());
-
-    // Feed the sidebar tree: source identity, current visibility, and (async)
-    // the source's libraries.
-    app.sidebar.emit(SidebarMsg::SetSource {
+    // Build the source via the factory and wire it into every view.
+    let source = Source {
+        id: Source::make_id(SourceType::Plex, &url),
+        source_type: SourceType::Plex,
         name: name.clone(),
-        source_type: "plex".to_string(),
-        source_id: url.clone(),
-    });
-    app.sidebar.emit(SidebarMsg::SetVisibility(
-        app.settings.library_visibility.hidden.clone(),
-    ));
-    {
-        // The PlexClient absorbs cold-start connection retries, so a single
-        // fetch here is enough once the connection is established.
-        let src = source.clone();
-        sender.oneshot_command(async move {
-            AppCmd::LibrariesLoaded(src.libraries().await.unwrap_or_default())
-        });
+        config: SourceConfig {
+            url: url.clone(),
+            token,
+            user_id: None,
+        },
+        enabled: true,
+        last_synced_at: None,
+    };
+    if let Some(built) = super::source_factory::build_source(&source) {
+        app.wire_active_source(SourceType::Plex, url, built, sender);
     }
-
-    app.home_view.emit(HomeViewMsg::SetSource(
-        source.clone(),
-        artwork_cache.clone(),
-    ));
-    app.library_view.emit(LibraryViewMsg::SetSource(
-        source.clone(),
-        artwork_cache.clone(),
-    ));
-    app.library_view.emit(LibraryViewMsg::SetSavedUiState(
-        app.settings.library.clone(),
-    ));
-    app.movie_detail.emit(
-        crate::components::detail::movie_detail::MovieDetailMsg::SetSource(
-            source.clone(),
-            artwork_cache.clone(),
-        ),
-    );
-    app.show_detail.emit(
-        crate::components::detail::show_detail::ShowDetailMsg::SetSource(source, artwork_cache),
-    );
-
-    // Send watch data to library view
-    let watch_data = load_watch_data(&app.db_conn);
-    app.library_view
-        .emit(LibraryViewMsg::SetWatchData(watch_data));
     // A library loads when picked from the sidebar; the default view is Home.
 
     sender.input(AppMsg::ShowToast(format!("Connected to {name}")));
