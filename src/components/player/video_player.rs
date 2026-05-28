@@ -91,6 +91,17 @@ pub(crate) enum VideoPlayerOutput {
     },
     StateChanged(PlayState),
     EndOfFile,
+    /// User picked a quality selection (U8): re-resolve at this selection +
+    /// position.
+    SelectQuality {
+        selection: crate::models::playback::QualitySelection,
+        position_secs: f64,
+    },
+    /// A seek during an active transcode (U8/KTD2): the parent re-resolves at the
+    /// new offset rather than seeking in-pipeline.
+    SeekReload {
+        position_secs: f64,
+    },
     VolumeChanged {
         volume: f64,
         muted: bool,
@@ -110,7 +121,16 @@ pub(crate) enum VideoPlayerMsg {
     SetUrl {
         url: Option<String>,
         resume_secs: Option<f64>,
+        /// Content-time offset the (transcode) stream was built at; added back to
+        /// playbin3's 0-based position for display (U8). 0 for direct-play.
+        base_offset_secs: f64,
+        /// Whether this is a server transcode — seeks reload at a new offset.
+        is_transcode: bool,
     },
+    /// Switch quality mid-playback (U8): emitted by the quality menu (U9). The
+    /// player captures its current content position and asks the parent to
+    /// re-resolve at the chosen selection (Auto or a manual rung).
+    SelectQuality(crate::models::playback::QualitySelection),
     Clear,
     SetAutoplay(bool),
     /// 4 Hz timer poll: refresh slider + labels from the media stream.
@@ -212,6 +232,14 @@ pub(crate) struct VideoPlayer {
     /// keyframe in between drag updates.
     last_user_seek: Rc<Cell<Option<Instant>>>,
     resume_pending: Option<f64>,
+    /// Content-time offset of the current transcode stream (U8). playbin3
+    /// reports a 0-based position on an offset-built transcode while reporting
+    /// the full duration, so this is added back for the displayed position /
+    /// seek bar / scrobble. 0 for direct-play.
+    transcode_base_offset_us: i64,
+    /// Whether the current stream is a server transcode: seeks reload at a new
+    /// offset (via the parent) rather than seeking in-pipeline (KTD2).
+    is_transcode: bool,
     preferred_subtitle_lang: Option<String>,
     tracks: Vec<MediaTrack>,
     title: Option<String>,
@@ -633,12 +661,17 @@ impl Component for VideoPlayer {
             sender.input(VideoPlayerMsg::SetUrl {
                 url: Some(url),
                 resume_secs: init.resume_secs,
+                base_offset_secs: 0.0,
+                is_transcode: false,
             });
         }
 
         ComponentParts { model, widgets }
     }
 
+    // Message dispatcher; one arm per VideoPlayerMsg (same allow as the App's
+    // init / update_cmd / handle_video_output dispatchers).
+    #[allow(clippy::too_many_lines)]
     fn update_with_view(
         &mut self,
         widgets: &mut Self::Widgets,
@@ -649,15 +682,29 @@ impl Component for VideoPlayer {
         match msg {
             VideoPlayerMsg::LoadFile(path) => {
                 let url = format!("file://{}", path);
-                self.handle_set_url(widgets, &sender, Some(url), None, Some(path));
+                self.handle_set_url(widgets, &sender, Some(url), None, 0.0, false, Some(path));
             }
-            VideoPlayerMsg::SetUrl { url, resume_secs } => {
-                self.handle_set_url(widgets, &sender, url, resume_secs, None);
+            VideoPlayerMsg::SetUrl {
+                url,
+                resume_secs,
+                base_offset_secs,
+                is_transcode,
+            } => {
+                self.handle_set_url(
+                    widgets,
+                    &sender,
+                    url,
+                    resume_secs,
+                    base_offset_secs,
+                    is_transcode,
+                    None,
+                );
             }
+            VideoPlayerMsg::SelectQuality(preset) => self.handle_select_quality(&sender, preset),
             VideoPlayerMsg::Clear => {
                 self.tracks.clear();
                 self.track_ui_signature.clear();
-                self.handle_set_url(widgets, &sender, None, None, None);
+                self.handle_set_url(widgets, &sender, None, None, 0.0, false, None);
             }
             VideoPlayerMsg::SetAutoplay(on) => self.playback.autoplay = on,
             VideoPlayerMsg::Tick => self.handle_tick(widgets, &sender),
@@ -724,7 +771,15 @@ impl Component for VideoPlayer {
                 } else {
                     format!("file://{}", uri)
                 };
-                self.handle_set_url(widgets, &sender, Some(url), None, Some(path.to_string()));
+                self.handle_set_url(
+                    widgets,
+                    &sender,
+                    Some(url),
+                    None,
+                    0.0,
+                    false,
+                    Some(path.to_string()),
+                );
             }
             VideoPlayerMsg::StreamCollection(collection) => {
                 if let Some(media) = self.media.as_ref() {
@@ -950,12 +1005,20 @@ impl VideoPlayer {
             suppress_volume,
             last_user_seek,
             resume_pending: None,
+            transcode_base_offset_us: 0,
+            is_transcode: false,
             preferred_subtitle_lang: init.preferred_subtitle_lang.clone(),
             tracks: Vec::new(),
             title: None,
             track_ui_signature: String::new(),
             skip_markers: None,
         }
+    }
+
+    /// The content position to display/report: playbin3's 0-based position plus
+    /// the transcode base offset (U8). Identity for direct-play (offset 0).
+    fn display_position_us(&self) -> i64 {
+        self.position_us + self.transcode_base_offset_us
     }
 
     fn refresh_widgets(
@@ -980,7 +1043,7 @@ impl VideoPlayer {
         let max = (self.duration_us.max(1)) as f64;
         widgets.seek_scale.set_range(0.0, max);
         if !media_seeking && !user_holding {
-            let pos = (self.position_us.clamp(0, self.duration_us.max(0))) as f64;
+            let pos = (self.display_position_us().clamp(0, self.duration_us.max(0))) as f64;
             self.suppress_scale.set(true);
             widgets.seek_scale.set_value(pos);
             self.suppress_scale.set(false);
@@ -989,7 +1052,7 @@ impl VideoPlayer {
 
         widgets
             .position_label
-            .set_label(&format_us(self.position_us));
+            .set_label(&format_us(self.display_position_us()));
         let duration_text = if self.duration_us > 0 {
             format_us(self.duration_us)
         } else {
@@ -1229,17 +1292,22 @@ impl VideoPlayer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_set_url(
         &mut self,
         widgets: &mut <Self as Component>::Widgets,
         sender: &ComponentSender<Self>,
         url: Option<String>,
         resume_secs: Option<f64>,
+        base_offset_secs: f64,
+        is_transcode: bool,
         local_path: Option<String>,
     ) {
         self.url = url.clone();
         self.duration_us = 0;
         self.position_us = 0;
+        self.transcode_base_offset_us = (base_offset_secs * 1_000_000.0) as i64;
+        self.is_transcode = is_transcode;
         self.playback.playing = false;
         self.playback.eos_reached = false;
         self.resume_pending = resume_secs.filter(|s| *s > 0.0);
@@ -1355,8 +1423,10 @@ impl VideoPlayer {
         let prev_position = self.position_us;
         self.update_position_from_poll(snapshot.position_us, status.media_seeking);
         if self.position_us != prev_position {
+            // Report the content position (raw + transcode base offset, U8) so
+            // watch-progress/scrobble and MPRIS see absolute content time.
             let _ = sender.output(VideoPlayerOutput::PositionChanged {
-                position_secs: self.position_us as f64 / 1_000_000.0,
+                position_secs: self.display_position_us() as f64 / 1_000_000.0,
                 duration_secs: self.duration_us as f64 / 1_000_000.0,
             });
         }
@@ -1453,6 +1523,35 @@ impl VideoPlayer {
         sender.input(VideoPlayerMsg::PointerActive);
     }
 
+    /// User picked a quality preset (U8): capture the current content position
+    /// and ask the parent to re-resolve. The existing `!is_prepared` status
+    /// plate provides the "switching" spinner once the reload starts (R13).
+    fn handle_select_quality(
+        &self,
+        sender: &ComponentSender<Self>,
+        selection: crate::models::playback::QualitySelection,
+    ) {
+        let position_secs = self.display_position_us() as f64 / 1_000_000.0;
+        let _ = sender.output(VideoPlayerOutput::SelectQuality {
+            selection,
+            position_secs,
+        });
+    }
+
+    /// During an active transcode, route a seek to an absolute content position
+    /// through a reload at the new offset (KTD2) and return `true`; otherwise the
+    /// caller seeks in-pipeline. `target_content_us` is absolute content time.
+    fn maybe_reload_seek(&self, sender: &ComponentSender<Self>, target_content_us: i64) -> bool {
+        if !self.is_transcode {
+            return false;
+        }
+        let target = target_content_us.clamp(0, self.duration_us.max(0));
+        let _ = sender.output(VideoPlayerOutput::SeekReload {
+            position_secs: target as f64 / 1_000_000.0,
+        });
+        true
+    }
+
     fn handle_seek_relative(&mut self, sender: &ComponentSender<Self>, secs: i64) {
         let Some(media) = self.media.as_ref() else {
             return;
@@ -1461,6 +1560,11 @@ impl VideoPlayer {
             return;
         }
         let delta = secs.saturating_mul(1_000_000);
+        // Transcode: reload at the new absolute content offset (KTD2).
+        if self.maybe_reload_seek(sender, self.display_position_us().saturating_add(delta)) {
+            sender.input(VideoPlayerMsg::PointerActive);
+            return;
+        }
         // Anchor on our local position and our cached duration, not the
         // live `media.*()` queries. While a seek is in flight playbin3
         // reports the pre-seek (or 0) position and a 0 duration, so two
@@ -1494,6 +1598,12 @@ impl VideoPlayer {
         }
         let dur = self.duration_us.max(0);
         let target = ((dur as f64) * fraction.clamp(0.0, 1.0)) as i64;
+        // Transcode: the slider spans absolute content time, so the target is
+        // already content time — reload at it (KTD2).
+        if self.maybe_reload_seek(sender, target) {
+            sender.input(VideoPlayerMsg::PointerActive);
+            return;
+        }
         tracing::debug!(
             fraction,
             cached_dur_us = dur,
@@ -1506,11 +1616,16 @@ impl VideoPlayer {
         sender.input(VideoPlayerMsg::PointerActive);
     }
 
-    fn handle_user_seek(&mut self, _sender: &ComponentSender<Self>, us: i64) {
+    fn handle_user_seek(&mut self, sender: &ComponentSender<Self>, us: i64) {
         let Some(media) = self.media.as_ref() else {
             return;
         };
         if !media.is_prepared() {
+            return;
+        }
+        // The slider spans absolute content time, so `us` is content time.
+        // Transcode: reload at the new offset rather than seeking in-pipeline.
+        if self.maybe_reload_seek(sender, us) {
             return;
         }
         let target = us.clamp(0, self.duration_us.max(0));

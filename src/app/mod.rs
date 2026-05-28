@@ -105,6 +105,9 @@ pub struct App {
     transcode_base_offset: f64,
     /// The current resolved decision, for the indicator (R16) and switching.
     current_decision: Option<crate::models::playback::PlaybackDecision>,
+    /// Epoch guard for overlapping quality/seek switches (U8): a resolve result
+    /// from a superseded switch is discarded and its session stopped.
+    switch_state: crate::components::player::switch_state::SwitchState,
 }
 
 #[derive(Debug)]
@@ -174,10 +177,12 @@ pub enum AppCmd {
     /// Skip markers fetched from the media source after playback starts.
     SkipMarkersLoaded(SkipMarkers),
     /// A playback decision resolved (U7): hand the URL to the player using the
-    /// decision-kind-specific resume policy.
+    /// decision-kind-specific resume policy. `epoch` tags the switch this result
+    /// belongs to; a superseded epoch is discarded (U8).
     PlaybackResolved {
         decision: Box<crate::models::playback::PlaybackDecision>,
         resume_secs: Option<f64>,
+        epoch: u64,
     },
     /// The playback decision failed to resolve. Surfaces a notice and falls back
     /// to a last-resort direct-play of `fallback_url` (not silent — R-guarded).
@@ -185,6 +190,7 @@ pub enum AppCmd {
         message: String,
         fallback_url: String,
         resume_secs: Option<f64>,
+        epoch: u64,
     },
 }
 
@@ -361,6 +367,7 @@ impl Component for App {
             active_transcode_session: None,
             transcode_base_offset: 0.0,
             current_decision: None,
+            switch_state: crate::components::player::switch_state::SwitchState::new(),
         };
 
         // Show a loading page on the home view while async validation runs.
@@ -836,12 +843,21 @@ impl Component for App {
             AppCmd::PlaybackResolved {
                 decision,
                 resume_secs,
-            } => handle_playback_resolved(self, decision, resume_secs),
+                epoch,
+            } => handle_playback_resolved(self, decision, resume_secs, epoch, &sender),
             AppCmd::PlaybackResolveFailed {
                 message,
                 fallback_url,
                 resume_secs,
-            } => handle_playback_resolve_failed(self, message, fallback_url, resume_secs, &sender),
+                epoch,
+            } => handle_playback_resolve_failed(
+                self,
+                message,
+                fallback_url,
+                resume_secs,
+                epoch,
+                &sender,
+            ),
             AppCmd::Noop => {}
         }
     }
