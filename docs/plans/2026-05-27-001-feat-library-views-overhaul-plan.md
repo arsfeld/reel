@@ -1,6 +1,6 @@
 ---
 title: "feat: Adwaita library views overhaul with filters and sort"
-status: active
+status: completed
 date: 2026-05-27
 type: feat
 origin: docs/brainstorms/2026-05-27-library-views-overhaul-requirements.md
