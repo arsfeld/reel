@@ -212,6 +212,7 @@ pub fn handle_connection_saved(
     url: String,
     token: String,
     name: String,
+    is_remote: bool,
     sender: &ComponentSender<App>,
 ) {
     info!("Plex connection saved: {} ({})", name, url);
@@ -238,7 +239,7 @@ pub fn handle_connection_saved(
         }
     }
 
-    let client = PlexClient::new(&url, &token);
+    let client = PlexClient::new(&url, &token).with_remote(is_remote);
     let source = Arc::new(PlexSource::new(client, name.clone()));
     let artwork_cache = Arc::new(ArtworkCache::new(config::artwork_dir()));
 

@@ -48,6 +48,8 @@ pub enum ConnectionDialogOutput {
         url: String,
         token: String,
         name: String,
+        /// Whether the selected connection is remote/relay (R5/U2).
+        is_remote: bool,
     },
     Cancelled,
 }
@@ -56,8 +58,9 @@ pub enum ConnectionDialogOutput {
 pub enum ConnectionDialogCmd {
     TokenReceived(Result<String, String>),
     ServersReady(Result<(String, Vec<auth::PlexResource>), String>),
-    /// Resolved the best URI for a server: (uri, token, server_name)
-    UriResolved(Option<String>, String, String),
+    /// Resolved the best connection for a server: (selected, token, server_name).
+    /// `selected` is `None` when no connection was reachable.
+    UriResolved(Option<auth::SelectedConnection>, String, String),
 }
 
 #[relm4::component(pub)]
@@ -304,8 +307,8 @@ impl Component for ConnectionDialog {
                     let server = server.clone();
                     let token = token.clone();
                     sender.oneshot_command(async move {
-                        let uri = auth::best_server_uri(&server).await;
-                        ConnectionDialogCmd::UriResolved(uri, token, server.name.clone())
+                        let selected = auth::best_server_uri(&server).await;
+                        ConnectionDialogCmd::UriResolved(selected, token, server.name.clone())
                     });
                 }
             }
@@ -335,16 +338,17 @@ impl Component for ConnectionDialog {
                 }
                 Err(e) => sender.input(ConnectionDialogMsg::ServerDiscoveryFailed(e)),
             },
-            ConnectionDialogCmd::UriResolved(uri, token, name) => {
+            ConnectionDialogCmd::UriResolved(selected, token, name) => {
                 self.spinner.set_visible(false);
                 self.spinner.set_spinning(false);
 
-                if let Some(uri) = uri {
-                    info!("Connecting to server: {} at {}", name, uri);
+                if let Some(selected) = selected {
+                    info!("Connecting to server: {} at {}", name, selected.uri);
                     let _ = sender.output(ConnectionDialogOutput::ConnectionSaved {
-                        url: uri,
+                        url: selected.uri,
                         token,
                         name,
+                        is_remote: selected.is_remote,
                     });
                     root.close();
                 } else {

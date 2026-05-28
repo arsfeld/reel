@@ -223,6 +223,22 @@ fn is_preferred(conn: &PlexConnection) -> bool {
     conn.local && !conn.relay
 }
 
+/// Whether a connection should be treated as remote for bandwidth purposes:
+/// anything that is a relay, or simply not local. Playback uses this to decide
+/// whether to apply the default transcode bitrate cap (R5/R6).
+pub(crate) fn connection_is_remote(conn: &PlexConnection) -> bool {
+    conn.relay || !conn.local
+}
+
+/// The connection chosen by [`best_server_uri`], carrying both the URI and the
+/// local/relay classification so playback can apply a remote bitrate cap. The
+/// classification is session-only and never persisted (KTD6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedConnection {
+    pub uri: String,
+    pub is_remote: bool,
+}
+
 /// Pick the best reachable connection from a round of probe results.
 /// Prefers local non-relay, then any non-relay, then relay. Returns the index
 /// into `connections`, or `None` if nothing responded.
@@ -249,7 +265,7 @@ fn pick_best(connections: &[PlexConnection], reachable: &[bool]) -> Option<usize
 /// one that responded (preferring local, non-relay). If only a relay/remote
 /// connection responds while local candidates exist, the probe is retried —
 /// local connections often just need a moment to warm up after launch.
-pub async fn best_server_uri(server: &PlexResource) -> Option<String> {
+pub async fn best_server_uri(server: &PlexResource) -> Option<SelectedConnection> {
     use futures::future::join_all;
 
     if server.connections.is_empty() {
@@ -316,7 +332,10 @@ pub async fn best_server_uri(server: &PlexResource) -> Option<String> {
                         conn.local,
                         conn.relay
                     );
-                    return Some(conn.uri.clone());
+                    return Some(SelectedConnection {
+                        uri: conn.uri.clone(),
+                        is_remote: connection_is_remote(conn),
+                    });
                 }
                 tracing::info!(
                     "Only a relay/remote connection responded ({}); retrying to catch a cold local connection",
@@ -405,6 +424,26 @@ mod tests {
         assert!(!is_preferred(&conn("a", false, true))); // relay
     }
 
+    #[test]
+    fn connection_is_remote_local_non_relay_is_not_remote() {
+        // Covers R5: a selected local, non-relay connection is not remote.
+        assert!(!connection_is_remote(&conn("a", true, false)));
+    }
+
+    #[test]
+    fn connection_is_remote_relay_is_remote() {
+        // Covers R5: a relay connection is remote (gets the bandwidth cap).
+        assert!(connection_is_remote(&conn("a", false, true)));
+        // A (nominally) local relay is still remote — relay dominates.
+        assert!(connection_is_remote(&conn("a", true, true)));
+    }
+
+    #[test]
+    fn connection_is_remote_non_relay_remote_is_remote() {
+        // A direct but non-local connection is remote.
+        assert!(connection_is_remote(&conn("a", false, false)));
+    }
+
     #[tokio::test]
     async fn best_server_uri_picks_reachable_server() {
         let mock = wiremock::MockServer::start().await;
@@ -430,7 +469,50 @@ mod tests {
                 },
             ],
         };
-        assert_eq!(best_server_uri(&server).await, Some(mock.uri()));
+        assert_eq!(
+            best_server_uri(&server).await,
+            Some(SelectedConnection {
+                uri: mock.uri(),
+                is_remote: false,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn best_server_uri_classifies_relay_fallback_as_remote() {
+        // Covers R5/R7: when the only reachable connection is a relay (e.g. the
+        // local endpoint times out on a cold start), the selected connection is
+        // classified remote so playback applies the bandwidth cap.
+        let relay = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&relay)
+            .await;
+
+        let server = PlexResource {
+            name: "My Server".to_string(),
+            provides: "server".to_string(),
+            connections: vec![
+                PlexConnection {
+                    uri: "http://192.0.2.1:32400".to_string(), // unreachable local (TEST-NET)
+                    local: true,
+                    relay: false,
+                },
+                PlexConnection {
+                    uri: relay.uri(), // reachable relay
+                    local: false,
+                    relay: true,
+                },
+            ],
+        };
+        assert_eq!(
+            best_server_uri(&server).await,
+            Some(SelectedConnection {
+                uri: relay.uri(),
+                is_remote: true,
+            })
+        );
     }
 
     #[tokio::test]

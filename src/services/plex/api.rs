@@ -8,6 +8,10 @@ pub struct PlexClient {
     http: reqwest::Client,
     base_url: String,
     auth_token: String,
+    /// Whether the selected server connection is remote/relay (vs local). Drives
+    /// the default transcode bitrate cap at playback time (R5/R6). Session-only,
+    /// never persisted (KTD6). Defaults to `false`; set via [`Self::with_remote`].
+    is_remote: bool,
 }
 
 impl PlexClient {
@@ -44,7 +48,22 @@ impl PlexClient {
             http,
             base_url,
             auth_token: auth_token.to_string(),
+            is_remote: false,
         }
+    }
+
+    /// Record whether the selected server connection is remote/relay. Builder
+    /// style so existing `PlexClient::new` call sites are unaffected (KTD6:
+    /// session-only, set at construction from the chosen connection in U2).
+    pub fn with_remote(mut self, is_remote: bool) -> Self {
+        self.is_remote = is_remote;
+        self
+    }
+
+    /// Whether the active connection is remote/relay (R5). Playback reads this
+    /// to decide whether to apply the default transcode bitrate cap (R6).
+    pub fn is_remote(&self) -> bool {
+        self.is_remote
     }
 
     /// GET a URL, retrying transient connection/timeout errors with a short
@@ -302,6 +321,20 @@ impl PlexClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_remote_defaults_to_false() {
+        let client = PlexClient::new("http://localhost:32400", "token");
+        assert!(!client.is_remote());
+    }
+
+    #[test]
+    fn with_remote_sets_flag() {
+        let client = PlexClient::new("http://localhost:32400", "token").with_remote(true);
+        assert!(client.is_remote());
+        let local = PlexClient::new("http://localhost:32400", "token").with_remote(false);
+        assert!(!local.is_remote());
+    }
 
     #[test]
     fn playback_url_format() {
