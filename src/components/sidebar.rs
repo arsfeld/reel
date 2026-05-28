@@ -174,7 +174,13 @@ pub enum SidebarMsg {
 #[derive(Debug)]
 pub enum SidebarOutput {
     NavigateHome,
-    Navigate(LibrarySection),
+    /// Navigate to a library, carrying the owning source's identity so the app
+    /// can scope the LibraryView list to the right source.
+    Navigate {
+        section: LibrarySection,
+        source_type: String,
+        source_id: String,
+    },
     ShowCollections,
     /// Persist a visibility change for a library (or Collections) entry.
     SetLibraryVisible {
@@ -305,7 +311,11 @@ impl SimpleComponent for Sidebar {
                     }
                     Some(RowAction::Library(section)) => {
                         self.selected = SidebarSelection::Library(section.key.clone());
-                        let _ = sender.output(SidebarOutput::Navigate(section.clone()));
+                        let _ = sender.output(SidebarOutput::Navigate {
+                            section: section.clone(),
+                            source_type: self.source_type.clone(),
+                            source_id: self.source_id.clone(),
+                        });
                     }
                     Some(RowAction::Collections) => {
                         self.selected = SidebarSelection::Collections;
