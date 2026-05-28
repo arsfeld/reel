@@ -72,9 +72,10 @@ fn is_foreign_schema(conn: &mut SqliteConnection) -> Result<bool, DbError> {
 /// Best-effort: the caller logs and continues on failure.
 #[allow(dead_code)]
 fn backup_foreign_db(conn: &mut SqliteConnection) -> Result<(), DbError> {
-    let main_file = diesel::sql_query("SELECT file AS value FROM pragma_database_list WHERE name = 'main'")
-        .get_result::<TextRow>(conn)?
-        .value;
+    let main_file =
+        diesel::sql_query("SELECT file AS value FROM pragma_database_list WHERE name = 'main'")
+            .get_result::<TextRow>(conn)?
+            .value;
     if main_file.is_empty() {
         return Ok(()); // in-memory database
     }
@@ -119,8 +120,7 @@ mod tests {
         .bind::<Text, _>(name)
         .get_result::<CountRow>(conn)
         .unwrap()
-        .n
-            == 1
+        .n == 1
     }
 
     fn column_present(conn: &mut SqliteConnection, table: &str, column: &str) -> bool {
@@ -132,8 +132,7 @@ mod tests {
         .bind::<Text, _>(column)
         .get_result::<CountRow>(conn)
         .unwrap()
-        .n
-            == 1
+        .n == 1
     }
 
     fn row_count(conn: &mut SqliteConnection, table: &str) -> i64 {

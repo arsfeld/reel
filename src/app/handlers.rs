@@ -79,7 +79,7 @@ pub fn handle_video_output(
             let events = app
                 .watch_tracker
                 .process_position(position_secs, Instant::now());
-            dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+            dispatch_watch_events(&mut app.db_conn, events, &app.active_source, sender);
         }
         VideoPlayerOutput::StateChanged(state) => {
             let _ = app.mpris.status_tx.send(state);
@@ -94,7 +94,7 @@ pub fn handle_video_output(
                         app.last_position,
                         Instant::now(),
                     );
-                    dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+                    dispatch_watch_events(&mut app.db_conn, events, &app.active_source, sender);
                 }
                 PlayState::Paused | PlayState::Stopped => {
                     app.screensaver.uninhibit(root);
@@ -103,7 +103,7 @@ pub fn handle_video_output(
                         app.last_position,
                         Instant::now(),
                     );
-                    dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+                    dispatch_watch_events(&mut app.db_conn, events, &app.active_source, sender);
                 }
             }
         }
@@ -113,9 +113,9 @@ pub fn handle_video_output(
             let _ = app.mpris.metadata_tx.send(mpris::MprisMetadata::default());
             let _ = app.mpris.position_tx.send(0);
             let events = app.watch_tracker.stop(app.last_position);
-            dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+            dispatch_watch_events(&mut app.db_conn, events, &app.active_source, sender);
             app.now_playing = None;
-            let watch_data = load_watch_data(&app.db_conn);
+            let watch_data = load_watch_data(&mut app.db_conn);
             app.library_view
                 .emit(LibraryViewMsg::SetWatchData(watch_data));
             if app.current_view == CurrentView::Player {
@@ -160,8 +160,8 @@ pub fn handle_play_media(
     app.pending_resume = None;
     if let Some(ref item) = media_item {
         app.pending_resume = item.resume_position_secs().or_else(|| {
-            let conn = app.db_conn.as_ref()?;
-            let repo = WatchProgressRepo::new(conn);
+            let conn = app.db_conn.as_mut()?;
+            let mut repo = WatchProgressRepo::new(conn);
             repo.find_by_media_id(&item.id)
                 .ok()
                 .flatten()
@@ -218,7 +218,7 @@ pub fn handle_connection_saved(
     app.connection_dialog = None;
 
     // Save to database
-    if let Some(ref conn) = app.db_conn {
+    if let Some(conn) = app.db_conn.as_mut() {
         let source = Source {
             id: Source::make_id(&url),
             source_type: SourceType::Plex,
@@ -231,7 +231,7 @@ pub fn handle_connection_saved(
             last_synced_at: None,
         };
 
-        let repo = crate::db::source_repo::SourceRepo::new(conn);
+        let mut repo = crate::db::source_repo::SourceRepo::new(conn);
         let _ = repo.delete(&source.id);
         if let Err(e) = repo.insert(&source) {
             tracing::warn!("Failed to save source: {e}");
@@ -286,7 +286,7 @@ pub fn handle_connection_saved(
     );
 
     // Send watch data to library view
-    let watch_data = load_watch_data(&app.db_conn);
+    let watch_data = load_watch_data(&mut app.db_conn);
     app.library_view
         .emit(LibraryViewMsg::SetWatchData(watch_data));
     // A library loads when picked from the sidebar; the default view is Home.
