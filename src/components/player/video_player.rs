@@ -646,6 +646,66 @@ impl Component for VideoPlayer {
         sender: ComponentSender<Self>,
         root: &Self::Root,
     ) {
+        if self.dispatch_msg(widgets, sender.clone(), msg) {
+            return;
+        }
+
+        // Notify the parent on reveal-state edges so it can fade the
+        // floating header bar together with the OSD. Computed here (not
+        // in `refresh_widgets`) because we need `&mut self` to latch the
+        // last value, and emitting only on changes avoids spamming the
+        // parent on every tick.
+        let force_visible = self.media.is_none() || self.duration_us == 0;
+        let revealed = self.osd.show_controls || force_visible || self.osd.popover_open;
+        if revealed != self.osd.controls_revealed {
+            self.osd.controls_revealed = revealed;
+            let _ = sender.output(VideoPlayerOutput::ControlsRevealedChanged(revealed));
+        }
+
+        // Re-render derived widget state. We keep this manual because
+        // many of these properties depend on multiple model fields and a
+        // few need to skip our own value-changed handlers.
+        rebuild_track_popovers(
+            widgets,
+            &self.tracks,
+            self.media.as_ref(),
+            &sender,
+            &mut self.track_ui_signature,
+        );
+        self.refresh_widgets(widgets, root);
+        let _ = root;
+    }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        if let Some(id) = self.tick_source.take() {
+            id.remove();
+        }
+        if let Some(id) = self.hide_source.take() {
+            id.remove();
+        }
+        if let Some(media) = &self.media {
+            media.pause();
+        }
+        // Drop the pipeline so its bus watch and any audio output are
+        // torn down before the widget tree is finalized.
+        self.media = None;
+        if let Some(fs_window) = self.fs_window.take() {
+            fs_window.set_child(gtk::Widget::NONE);
+            fs_window.destroy();
+        }
+    }
+}
+
+impl VideoPlayer {
+    /// Dispatch a single input message to its handler. Returns `true` if the
+    /// caller should return early without running the post-dispatch widget
+    /// refresh (used by messages that bail out, e.g. dropped subtitle files).
+    fn dispatch_msg(
+        &mut self,
+        widgets: &mut <Self as relm4::Component>::Widgets,
+        sender: ComponentSender<Self>,
+        msg: VideoPlayerMsg,
+    ) -> bool {
         match msg {
             VideoPlayerMsg::LoadFile(path) => {
                 let url = format!("file://{}", path);
@@ -717,7 +777,7 @@ impl Component for VideoPlayer {
                         };
                         sender.input(VideoPlayerMsg::LoadExternalSubtitle(sub_uri));
                     }
-                    return;
+                    return true;
                 }
                 let url = if uri.starts_with("file://") {
                     uri.clone()
@@ -726,6 +786,21 @@ impl Component for VideoPlayer {
                 };
                 self.handle_set_url(widgets, &sender, Some(url), None, Some(path.to_string()));
             }
+            other => self.dispatch_track_msg(widgets, &sender, other),
+        }
+
+        false
+    }
+
+    /// Handles the track-selection, subtitle, popover, and skip-marker messages.
+    /// Split out of `dispatch_msg` to keep each handler under the line cap.
+    fn dispatch_track_msg(
+        &mut self,
+        widgets: &mut <Self as relm4::Component>::Widgets,
+        sender: &ComponentSender<Self>,
+        msg: VideoPlayerMsg,
+    ) {
+        match msg {
             VideoPlayerMsg::StreamCollection(collection) => {
                 if let Some(media) = self.media.as_ref() {
                     media.handle_stream_collection(&collection);
@@ -778,58 +853,15 @@ impl Component for VideoPlayer {
                 self.skip_markers = Some(markers);
             }
             VideoPlayerMsg::SkipIntro => {
-                self.handle_skip_intro(&sender);
+                self.handle_skip_intro(sender);
             }
             VideoPlayerMsg::SkipCredits => {
-                self.handle_skip_credits(&sender);
+                self.handle_skip_credits(sender);
             }
             VideoPlayerMsg::SkipCurrent => {
-                self.handle_skip_current(&sender);
+                self.handle_skip_current(sender);
             }
-        }
-
-        // Notify the parent on reveal-state edges so it can fade the
-        // floating header bar together with the OSD. Computed here (not
-        // in `refresh_widgets`) because we need `&mut self` to latch the
-        // last value, and emitting only on changes avoids spamming the
-        // parent on every tick.
-        let force_visible = self.media.is_none() || self.duration_us == 0;
-        let revealed = self.osd.show_controls || force_visible || self.osd.popover_open;
-        if revealed != self.osd.controls_revealed {
-            self.osd.controls_revealed = revealed;
-            let _ = sender.output(VideoPlayerOutput::ControlsRevealedChanged(revealed));
-        }
-
-        // Re-render derived widget state. We keep this manual because
-        // many of these properties depend on multiple model fields and a
-        // few need to skip our own value-changed handlers.
-        rebuild_track_popovers(
-            widgets,
-            &self.tracks,
-            self.media.as_ref(),
-            &sender,
-            &mut self.track_ui_signature,
-        );
-        self.refresh_widgets(widgets, root);
-        let _ = root;
-    }
-
-    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
-        if let Some(id) = self.tick_source.take() {
-            id.remove();
-        }
-        if let Some(id) = self.hide_source.take() {
-            id.remove();
-        }
-        if let Some(media) = &self.media {
-            media.pause();
-        }
-        // Drop the pipeline so its bus watch and any audio output are
-        // torn down before the widget tree is finalized.
-        self.media = None;
-        if let Some(fs_window) = self.fs_window.take() {
-            fs_window.set_child(gtk::Widget::NONE);
-            fs_window.destroy();
+            _ => {}
         }
     }
 }

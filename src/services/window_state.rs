@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(state.width, 1600);
         assert_eq!(state.height, 900);
         // Remaining fields get defaults
-        assert_eq!(state.maximized, false);
+        assert!(!state.maximized);
         assert_eq!(state.volume, 100.0);
         assert_eq!(state.view_mode, "grid");
         assert_eq!(state.grid_density, "medium");
