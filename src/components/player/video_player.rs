@@ -1255,6 +1255,11 @@ impl VideoPlayer {
         self.tracks.clear();
         self.track_ui_signature.clear();
         self.skip_markers = None;
+        // Clear any in-flight buffering state from the previous media, else a
+        // stale percent both shows a phantom "Buffering…" plate on the new
+        // stream and suppresses its play/pause state edges in handle_tick —
+        // permanently for a local file that emits no buffering messages.
+        self.buffering_percent = None;
 
         self.media = None;
 
@@ -1313,7 +1318,14 @@ impl VideoPlayer {
     /// clears the buffering state (filled). The pause/resume side effects are
     /// handled pipeline-side (mode-aware) before this message is emitted.
     fn handle_buffering(&mut self, widgets: &mut <Self as Component>::Widgets, percent: i32) {
-        self.buffering_percent = if percent < 100 { Some(percent) } else { None };
+        let new_percent = if percent < 100 { Some(percent) } else { None };
+        // downloadbuffer emits a buffering message roughly per percent (~100
+        // per stream) and can repeat the same value; skip the redundant
+        // allocation + widget writes when nothing the plate cares about moved.
+        if new_percent == self.buffering_percent {
+            return;
+        }
+        self.buffering_percent = new_percent;
         let (error_msg, is_prepared) = self
             .media
             .as_ref()
@@ -1350,7 +1362,11 @@ impl VideoPlayer {
         };
         let status = snapshot.status;
 
-        let eos = !status.now_playing
+        // A buffering-induced pause near the end of a queue2 stream looks
+        // exactly like EOS (not playing, was playing, position within 500ms of
+        // the end). Gate on buffering so a rebuffer doesn't fire a false EOF.
+        let eos = self.buffering_percent.is_none()
+            && !status.now_playing
             && was_playing
             && snapshot.duration_us > 0
             && snapshot.position_us >= snapshot.duration_us - 500_000;
