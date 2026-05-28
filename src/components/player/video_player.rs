@@ -1362,6 +1362,15 @@ impl VideoPlayer {
         };
         let status = snapshot.status;
 
+        // A pipeline error means buffering can never reach 100% to clear
+        // itself, so drop the buffering state — otherwise it would suppress
+        // state edges for the rest of the session (e.g. a connection that dies
+        // mid-fill). The error then surfaces on the plate (error outranks
+        // buffering), and play/pause edges flow again.
+        if snapshot.error_msg.is_some() {
+            self.buffering_percent = None;
+        }
+
         // A buffering-induced pause near the end of a queue2 stream looks
         // exactly like EOS (not playing, was playing, position within 500ms of
         // the end). Gate on buffering so a rebuffer doesn't fire a false EOF.
@@ -1492,7 +1501,11 @@ impl VideoPlayer {
         widgets: &mut <Self as Component>::Widgets,
         sender: &ComponentSender<Self>,
     ) {
-        let was_playing = self.media.as_ref().is_some_and(|m| m.is_playing());
+        // Decide from the user's intent, not the actual pipeline state: a
+        // queue2 buffering stall may have auto-paused the pipeline while the
+        // user still intends to play, and reading is_playing() there would
+        // invert the toggle (a pause press would resume).
+        let was_playing = self.media.as_ref().is_some_and(|m| m.wants_play());
         let Some(media) = self.media.as_ref() else {
             return;
         };
