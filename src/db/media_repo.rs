@@ -211,6 +211,7 @@ fn row_to_media_item(row: &rusqlite::Row) -> Result<MediaItem, DbError> {
         added_at: row.get("added_at")?,
         updated_at: row.get("updated_at")?,
         playback_position_ms: None,
+        watched: false,
         // Transient field, not stored in media_items.
         library_section_id: None,
     })
@@ -254,6 +255,7 @@ mod tests {
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
             playback_position_ms: None,
+            watched: false,
             library_section_id: None,
         }
     }
@@ -285,6 +287,7 @@ mod tests {
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
             playback_position_ms: None,
+            watched: false,
             library_section_id: None,
         }
     }

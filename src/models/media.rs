@@ -139,6 +139,9 @@ pub struct MediaItem {
     /// Saved playback position in milliseconds (e.g. a Plex On Deck view
     /// offset). `None` when the source reports no resume position.
     pub playback_position_ms: Option<i64>,
+    /// Whether the source considers this item fully watched (e.g. Plex
+    /// `viewCount > 0`). Defaults to `false` for sources that don't report it.
+    pub watched: bool,
     /// The Plex library section key this item belongs to, when known. Transient
     /// (never persisted to the DB) — used to filter aggregate views (Home,
     /// Continue Watching) by the user's hidden-library set. `None` for sources
@@ -204,6 +207,35 @@ impl MediaItem {
         }
         Some((pos / total).clamp(0.0, 1.0))
     }
+
+    /// The watch state the source reports directly, as `(progress_fraction,
+    /// watched)`. `None` when the source has no opinion (no watched flag and no
+    /// resume offset), in which case locally tracked progress should be used.
+    /// Lets Plex's own state take precedence over local tracking.
+    pub fn source_watch_state(&self) -> Option<(f64, bool)> {
+        if self.watched {
+            return Some((1.0, true));
+        }
+        self.resume_fraction().map(|frac| (frac, false))
+    }
+
+    /// Position (seconds) to resume playback from, derived from the source's own
+    /// saved offset (e.g. Plex view offset). `None` when the item is watched,
+    /// has no offset, is within the first 30s, or is past 90% complete. Backs up
+    /// 10s for context, mirroring [`crate::models::watch::WatchProgress`].
+    pub fn resume_position_secs(&self) -> Option<f64> {
+        if self.watched {
+            return None;
+        }
+        let pos = self.playback_position_ms? as f64 / 1000.0;
+        if pos <= 30.0 {
+            return None;
+        }
+        if self.resume_fraction().is_some_and(|frac| frac >= 0.90) {
+            return None;
+        }
+        Some((pos - 10.0).max(0.0))
+    }
 }
 
 #[cfg(test)]
@@ -237,6 +269,7 @@ mod tests {
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
             playback_position_ms: None,
+            watched: false,
             library_section_id: None,
         }
     }
@@ -336,6 +369,68 @@ mod tests {
         movie.runtime_minutes = Some(0);
         movie.playback_position_ms = Some(1000);
         assert_eq!(movie.resume_fraction(), None);
+    }
+
+    #[test]
+    fn source_watch_state_watched_wins_over_offset() {
+        let mut movie = test_movie();
+        movie.watched = true;
+        movie.playback_position_ms = Some(60 * 60_000);
+        assert_eq!(movie.source_watch_state(), Some((1.0, true)));
+    }
+
+    #[test]
+    fn source_watch_state_in_progress_from_offset() {
+        let mut movie = test_movie();
+        movie.runtime_minutes = Some(100);
+        movie.playback_position_ms = Some(40 * 60_000);
+        assert_eq!(movie.source_watch_state(), Some((0.4, false)));
+    }
+
+    #[test]
+    fn source_watch_state_none_when_source_silent() {
+        let mut movie = test_movie();
+        movie.watched = false;
+        movie.playback_position_ms = None;
+        assert_eq!(movie.source_watch_state(), None);
+    }
+
+    #[test]
+    fn resume_position_secs_backs_up_ten_seconds() {
+        let mut movie = test_movie();
+        movie.runtime_minutes = Some(100);
+        movie.playback_position_ms = Some(40 * 60_000);
+        assert_eq!(movie.resume_position_secs(), Some(40.0 * 60.0 - 10.0));
+    }
+
+    #[test]
+    fn resume_position_secs_none_when_watched() {
+        let mut movie = test_movie();
+        movie.watched = true;
+        movie.playback_position_ms = Some(40 * 60_000);
+        assert_eq!(movie.resume_position_secs(), None);
+    }
+
+    #[test]
+    fn resume_position_secs_none_within_first_30s() {
+        let mut movie = test_movie();
+        movie.playback_position_ms = Some(20_000);
+        assert_eq!(movie.resume_position_secs(), None);
+    }
+
+    #[test]
+    fn resume_position_secs_none_past_90_percent() {
+        let mut movie = test_movie();
+        movie.runtime_minutes = Some(100);
+        movie.playback_position_ms = Some(95 * 60_000);
+        assert_eq!(movie.resume_position_secs(), None);
+    }
+
+    #[test]
+    fn resume_position_secs_none_without_offset() {
+        let mut movie = test_movie();
+        movie.playback_position_ms = None;
+        assert_eq!(movie.resume_position_secs(), None);
     }
 
     #[test]

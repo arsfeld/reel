@@ -154,17 +154,20 @@ pub fn handle_play_media(
     root: &adw::ApplicationWindow,
 ) {
     info!("Playing media: {}...", &url[..url.len().min(80)]);
-    // Check for saved watch progress to auto-resume
+    // Resume where playback left off, preferring the source's own offset (e.g.
+    // Plex view offset) so it stays in sync across devices; fall back to locally
+    // tracked progress only when the source reports none.
     app.pending_resume = None;
-    if let Some(ref item) = media_item
-        && let Some(ref conn) = app.db_conn
-    {
-        let repo = WatchProgressRepo::new(conn);
-        if let Ok(Some(progress)) = repo.find_by_media_id(&item.id)
-            && progress.should_show_resume()
-        {
-            app.pending_resume = Some(progress.resume_position());
-        }
+    if let Some(ref item) = media_item {
+        app.pending_resume = item.resume_position_secs().or_else(|| {
+            let conn = app.db_conn.as_ref()?;
+            let repo = WatchProgressRepo::new(conn);
+            repo.find_by_media_id(&item.id)
+                .ok()
+                .flatten()
+                .filter(|progress| progress.should_show_resume())
+                .map(|progress| progress.resume_position())
+        });
     }
     app.now_playing = media_item.clone();
     app.last_position = 0.0;

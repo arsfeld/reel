@@ -162,6 +162,7 @@ mod tests {
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
             playback_position_ms: None,
+            watched: false,
             library_section_id: None,
         }
     }

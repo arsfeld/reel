@@ -109,6 +109,7 @@ pub fn plex_metadata_to_media_item(metadata: &PlexMetadata, source_id: &str) -> 
         added_at,
         updated_at,
         playback_position_ms: metadata.view_offset,
+        watched: metadata.view_count.unwrap_or(0) > 0,
         library_section_id: metadata.library_section_id.clone(),
     })
 }
