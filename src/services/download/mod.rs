@@ -5,6 +5,8 @@
 //! built on top of them — group-status derivation here, the queue scheduler in
 //! [`queue`], snapshot/top-up in [`snapshot`], and prune selection in [`prune`].
 
+pub mod queue;
+
 use crate::models::download::DownloadState;
 
 pub use crate::models::download::FailReason;
