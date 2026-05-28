@@ -35,6 +35,7 @@ impl MediaType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceType {
     Plex,
+    Jellyfin,
     Local,
 }
 
@@ -82,6 +83,7 @@ impl SourceType {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Plex => "plex",
+            Self::Jellyfin => "jellyfin",
             Self::Local => "local",
         }
     }
@@ -90,6 +92,7 @@ impl SourceType {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "plex" => Some(Self::Plex),
+            "jellyfin" => Some(Self::Jellyfin),
             "local" => Some(Self::Local),
             _ => None,
         }
@@ -452,14 +455,27 @@ mod tests {
 
     #[test]
     fn source_type_roundtrip() {
-        for st in [SourceType::Plex, SourceType::Local] {
+        for st in [SourceType::Plex, SourceType::Jellyfin, SourceType::Local] {
             assert_eq!(SourceType::from_str(st.as_str()), Some(st));
         }
     }
 
     #[test]
+    fn source_type_jellyfin_round_trips() {
+        assert_eq!(
+            SourceType::from_str(SourceType::Jellyfin.as_str()),
+            Some(SourceType::Jellyfin)
+        );
+    }
+
+    #[test]
+    fn from_str_jellyfin_returns_some() {
+        assert_eq!(SourceType::from_str("jellyfin"), Some(SourceType::Jellyfin));
+    }
+
+    #[test]
     fn source_type_unknown_returns_none() {
-        assert_eq!(SourceType::from_str("jellyfin"), None);
+        assert_eq!(SourceType::from_str("emby"), None);
     }
 
     #[test]

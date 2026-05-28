@@ -682,12 +682,13 @@ impl Component for App {
                         }
                     }
                     let source = Source {
-                        id: Source::make_id(&url),
+                        id: Source::make_id(SourceType::Plex, &url),
                         source_type: SourceType::Plex,
                         name: name.clone(),
                         config: SourceConfig {
                             url: url.clone(),
                             token: token.clone(),
+                            user_id: None,
                         },
                         enabled: true,
                         last_synced_at: None,
