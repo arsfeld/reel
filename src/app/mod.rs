@@ -147,6 +147,12 @@ pub enum AppMsg {
     MprisInput(MprisCommand),
     /// Enqueue a single library item (movie or episode) for download.
     EnqueueDownload(MediaItem),
+    /// Enqueue a show/season download: snapshot its current episodes as a group.
+    EnqueueDownloadGroup {
+        parent: MediaItem,
+        episodes: Vec<MediaItem>,
+        scope: crate::models::download::GroupScope,
+    },
     /// A per-item download action from the Downloads UI.
     DownloadAction {
         media_item_id: String,
@@ -269,6 +275,7 @@ impl Component for App {
                     url,
                     media_item: *media_item,
                 },
+                MovieDetailOutput::DownloadMedia(item) => AppMsg::EnqueueDownload(*item),
                 MovieDetailOutput::Error(msg) => AppMsg::ShowToast(msg),
             },
         );
@@ -279,6 +286,15 @@ impl Component for App {
                 ShowDetailOutput::PlayMedia { url, media_item } => AppMsg::PlayMedia {
                     url,
                     media_item: *media_item,
+                },
+                ShowDetailOutput::DownloadGroup {
+                    parent,
+                    episodes,
+                    scope,
+                } => AppMsg::EnqueueDownloadGroup {
+                    parent: *parent,
+                    episodes,
+                    scope,
                 },
                 ShowDetailOutput::Error(msg) => AppMsg::ShowToast(msg),
             },
@@ -478,8 +494,11 @@ impl Component for App {
             }
             AppMsg::ShowMovieDetail(item) => {
                 self.current_view = CurrentView::MovieDetail(item.id.clone());
+                let downloaded = self.is_downloaded(&item.id);
                 self.movie_detail
                     .emit(MovieDetailMsg::LoadMovie(item.clone()));
+                self.movie_detail
+                    .emit(MovieDetailMsg::SetDownloaded(downloaded));
                 let page = adw::NavigationPage::builder()
                     .title(&item.title)
                     .child(self.movie_detail.widget())
@@ -730,6 +749,13 @@ impl Component for App {
             },
             AppMsg::EnqueueDownload(item) => {
                 download_handlers::enqueue_download(self, &item);
+            }
+            AppMsg::EnqueueDownloadGroup {
+                parent,
+                episodes,
+                scope,
+            } => {
+                download_handlers::enqueue_group(self, &parent, &episodes, scope);
             }
             AppMsg::DownloadAction {
                 media_item_id,

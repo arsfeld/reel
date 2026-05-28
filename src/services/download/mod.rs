@@ -12,8 +12,18 @@ pub mod snapshot;
 pub mod transfer;
 
 use crate::models::download::DownloadState;
+use crate::models::media::SourceType;
 
 pub use crate::models::download::FailReason;
+
+/// Whether an item is eligible for download: a remote source (not the
+/// local-filesystem source, whose media is already on disk — R22) that exposes a
+/// downloadable file / part key. Pure predicate applied at every Download-action
+/// site to gate the affordance.
+#[allow(dead_code)]
+pub fn download_eligible(source_type: SourceType, file_path: Option<&str>) -> bool {
+    source_type != SourceType::Local && file_path.is_some_and(|p| !p.is_empty())
+}
 
 /// Runtime error returned by the transfer client and queue runner. Maps onto a
 /// persisted [`FailReason`] so the queue can record why an item failed.
@@ -217,6 +227,24 @@ mod tests {
     fn group_progress_excludes_removed() {
         // 2 complete + 1 removed -> total counts only the 2 outstanding.
         assert_eq!(group_progress(&[Completed, Completed, Removed]), (2, 2));
+    }
+
+    #[test]
+    fn download_eligible_excludes_local_and_fileless() {
+        use crate::models::media::SourceType;
+        // Plex item with a part key is eligible.
+        assert!(download_eligible(
+            SourceType::Plex,
+            Some("/library/parts/1/file.mkv")
+        ));
+        // Local-source item is never eligible (its media is already on disk).
+        assert!(!download_eligible(
+            SourceType::Local,
+            Some("/home/u/movie.mkv")
+        ));
+        // No part key / empty -> not eligible (unaired / metadata-only).
+        assert!(!download_eligible(SourceType::Plex, None));
+        assert!(!download_eligible(SourceType::Plex, Some("")));
     }
 
     #[test]

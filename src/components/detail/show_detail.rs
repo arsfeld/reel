@@ -67,6 +67,8 @@ pub enum ShowDetailMsg {
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
     SelectSeason(u32),
     PlayEpisode(usize),
+    /// Download the currently-loaded season's episodes as a group.
+    DownloadSeason,
     SeasonsLoaded(Vec<MediaItem>),
     EpisodesLoaded(Vec<MediaItem>),
     LoadError(String),
@@ -79,6 +81,7 @@ impl std::fmt::Debug for ShowDetailMsg {
             Self::SetSource(..) => write!(f, "SetSource(..)"),
             Self::SelectSeason(idx) => write!(f, "SelectSeason({idx})"),
             Self::PlayEpisode(idx) => write!(f, "PlayEpisode({idx})"),
+            Self::DownloadSeason => write!(f, "DownloadSeason"),
             Self::SeasonsLoaded(s) => write!(f, "SeasonsLoaded({} seasons)", s.len()),
             Self::EpisodesLoaded(e) => write!(f, "EpisodesLoaded({} episodes)", e.len()),
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
@@ -91,6 +94,12 @@ pub enum ShowDetailOutput {
     PlayMedia {
         url: String,
         media_item: Box<Option<crate::models::media::MediaItem>>,
+    },
+    /// Enqueue a show/season download: snapshot the current episode set.
+    DownloadGroup {
+        parent: Box<MediaItem>,
+        episodes: Vec<MediaItem>,
+        scope: crate::models::download::GroupScope,
     },
     Error(String),
 }
@@ -273,7 +282,18 @@ impl Component for ShowDetail {
             let _ = sender_play.send(ShowDetailMsg::PlayEpisode(0));
         });
 
+        let download_button = gtk::Button::builder()
+            .label("⤓  Download Season")
+            .css_classes(["pill"])
+            .halign(gtk::Align::Start)
+            .build();
+        let sender_dl = sender.input_sender().clone();
+        download_button.connect_clicked(move |_| {
+            let _ = sender_dl.send(ShowDetailMsg::DownloadSeason);
+        });
+
         actions_row.append(&play_button);
+        actions_row.append(&download_button);
 
         text_column.append(&title_label);
         text_column.append(&meta_box);
@@ -703,6 +723,25 @@ impl Component for ShowDetail {
                         url,
                         media_item: Box::new(Some(ep.clone())),
                     });
+                }
+            }
+            ShowDetailMsg::DownloadSeason => {
+                if let Some(ref show) = self.show {
+                    if self.episodes.is_empty() {
+                        let _ = sender
+                            .output(ShowDetailOutput::Error("No episodes to download".into()));
+                    } else {
+                        info!(
+                            "Queuing season download for {}: {} episodes",
+                            show.title,
+                            self.episodes.len()
+                        );
+                        let _ = sender.output(ShowDetailOutput::DownloadGroup {
+                            parent: Box::new(show.clone()),
+                            episodes: self.episodes.clone(),
+                            scope: crate::models::download::GroupScope::Season,
+                        });
+                    }
                 }
             }
             ShowDetailMsg::LoadError(msg) => {

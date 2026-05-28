@@ -239,6 +239,16 @@ impl App {
         self.toast_overlay.add_toast(toast);
     }
 
+    /// Whether a completed local download exists for an item (badge predicate,
+    /// R14). Only a `Completed` download is offline-ready.
+    pub(super) fn is_downloaded(&self, media_item_id: &str) -> bool {
+        self.db_conn
+            .as_ref()
+            .and_then(|conn| DownloadsRepo::new(conn).find(media_item_id).ok().flatten())
+            .map(|d| crate::services::download::sidecar::shows_downloaded_badge(d.state))
+            .unwrap_or(false)
+    }
+
     /// Push the current download state and banner flags to the Downloads view.
     pub(super) fn refresh_downloads_view(&self) {
         use crate::components::downloads::DownloadsViewMsg;
@@ -381,6 +391,44 @@ pub fn enqueue_item(app: &mut App, item: &MediaItem, group_id: Option<String>) {
     let events = app.downloads.queue.enqueue(&item.id, &descriptor.part_key);
     apply_events(app, events);
     app.refresh_downloads_view();
+}
+
+/// Enqueue a show/season download: snapshot the currently-downloadable episodes
+/// (R5), record the group, and enqueue the missing ones as group members. A
+/// re-trigger tops up only episodes not already present (R6) — `enqueue_item`'s
+/// idempotency and the pure queue handle the skip.
+pub fn enqueue_group(
+    app: &mut App,
+    parent: &MediaItem,
+    episodes: &[MediaItem],
+    scope: crate::models::download::GroupScope,
+) {
+    use crate::services::download::snapshot;
+    let set: Vec<MediaItem> = snapshot::snapshot_set(episodes)
+        .into_iter()
+        .cloned()
+        .collect();
+    if set.is_empty() {
+        app.toast("No downloadable episodes");
+        return;
+    }
+    let group_id = format!("group:{}", parent.id);
+    let group = crate::models::download::DownloadGroup {
+        id: group_id.clone(),
+        scope,
+        parent_media_id: parent.id.clone(),
+        title: parent.title.clone(),
+        snapshot_at: iso_now(),
+    };
+    if let Some(conn) = app.db_conn.as_ref()
+        && let Err(e) = DownloadsRepo::new(conn).upsert_group(&group)
+    {
+        warn!("Failed to persist download group: {e}");
+    }
+    for ep in &set {
+        enqueue_item(app, ep, Some(group_id.clone()));
+    }
+    app.toast(&format!("Downloading {}", parent.title));
 }
 
 /// Apply a per-item action from the UI (pause/resume/cancel/delete/retry).
