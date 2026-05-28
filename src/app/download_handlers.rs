@@ -28,7 +28,6 @@ use crate::services::download::transfer::{
     DownloadClient, TransferResult, confined_media_path, part_path,
 };
 use crate::services::download::{DownloadError, prune};
-use crate::services::media_source::MediaSource;
 
 use super::App;
 use super::utils::iso_now;
@@ -326,7 +325,16 @@ fn persist_state(
 
 /// Resolve the transfer arguments for a queued item from its repo row.
 fn resolve_transfer(app: &App, media_item_id: &str, part_key: &str) -> Option<TransferParams> {
-    let source = app.active_source.clone()?;
+    // Resolve the owning source from the item (the multi-source registry keys on
+    // each item's own source_type/source_id), so the transfer URL points at the
+    // server that actually holds this media.
+    let item = app.db.as_ref()?.with(|conn| {
+        crate::db::media_repo::MediaRepo::new(conn)
+            .find_by_id(media_item_id)
+            .ok()
+            .flatten()
+    })?;
+    let source = app.sources.for_item(&item)?;
     let folder = app.settings.downloads.effective_folder();
     let media_path = confined_media_path(&folder, media_item_id, part_key)
         .map_err(|e| warn!("Refusing unsafe download path: {e}"))
@@ -385,7 +393,7 @@ pub fn enqueue_download(app: &mut App, item: &MediaItem) {
 /// Enqueue an item, optionally as a member of a group. Upserts the self-contained
 /// row, then drives the pure queue and performs the resulting effects.
 pub fn enqueue_item(app: &mut App, item: &MediaItem, group_id: Option<String>) {
-    let Some(source) = app.active_source.clone() else {
+    let Some(source) = app.sources.for_item(item) else {
         app.toast("Connect a source before downloading");
         return;
     };
@@ -797,7 +805,7 @@ pub fn recover_on_startup(app: &mut App) {
 /// source is validated at startup and after a reconnect. No-op without a source
 /// (you can't download while offline) or while the queue is disk-full paused.
 pub fn start_pending(app: &mut App) {
-    if app.active_source.is_none() || app.downloads.disk_full {
+    if app.sources.is_empty() || app.downloads.disk_full {
         return;
     }
     let events = app.downloads.queue.schedule();
