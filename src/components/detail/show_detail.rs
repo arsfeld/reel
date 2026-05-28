@@ -6,7 +6,7 @@ use adw::prelude::*;
 use relm4::prelude::*;
 use tracing::info;
 
-use crate::config;
+use crate::db::database::Database;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::detail::MediaDetail;
 use crate::models::media::{MediaItem, MediaType};
@@ -22,6 +22,7 @@ pub struct ShowDetail {
     selected_season: u32,
     source: Option<Arc<dyn MediaSource>>,
     artwork_cache: Option<Arc<ArtworkCache>>,
+    db: Option<Database>,
     watch_progress: HashMap<String, WatchProgress>,
     // Widgets
     title_label: gtk::Label,
@@ -65,6 +66,7 @@ pub struct ShowDetail {
 pub enum ShowDetailMsg {
     LoadShow(MediaItem),
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
+    SetDb(Database),
     SelectSeason(u32),
     PlayEpisode(usize),
     SeasonsLoaded(Vec<MediaItem>),
@@ -77,6 +79,7 @@ impl std::fmt::Debug for ShowDetailMsg {
         match self {
             Self::LoadShow(item) => write!(f, "LoadShow({})", item.title),
             Self::SetSource(..) => write!(f, "SetSource(..)"),
+            Self::SetDb(..) => write!(f, "SetDb(..)"),
             Self::SelectSeason(idx) => write!(f, "SelectSeason({idx})"),
             Self::PlayEpisode(idx) => write!(f, "PlayEpisode({idx})"),
             Self::SeasonsLoaded(s) => write!(f, "SeasonsLoaded({} seasons)", s.len()),
@@ -467,6 +470,7 @@ impl Component for ShowDetail {
             selected_season: 0,
             source: None,
             artwork_cache: None,
+            db: None,
             watch_progress: HashMap::new(),
             title_label,
             meta_box,
@@ -506,6 +510,9 @@ impl Component for ShowDetail {
             ShowDetailMsg::SetSource(source, artwork_cache) => {
                 self.source = Some(source);
                 self.artwork_cache = Some(artwork_cache);
+            }
+            ShowDetailMsg::SetDb(db) => {
+                self.db = Some(db);
             }
             ShowDetailMsg::LoadShow(show) => {
                 info!("Loading show detail: {}", show.title);
@@ -678,17 +685,23 @@ impl Component for ShowDetail {
                 }
             }
             ShowDetailMsg::EpisodesLoaded(episodes) => {
-                use diesel::Connection as _;
-                // Load watch progress for each episode
+                // Load watch progress for each episode from the shared connection.
                 self.watch_progress.clear();
-                if let Ok(mut conn) =
-                    diesel::SqliteConnection::establish(&config::db_path().to_string_lossy())
-                {
-                    let mut repo = WatchProgressRepo::new(&mut conn);
-                    for ep in &episodes {
-                        if let Ok(Some(progress)) = repo.find_by_media_id(&ep.id) {
-                            self.watch_progress.insert(ep.id.clone(), progress);
-                        }
+                if let Some(db) = &self.db {
+                    let loaded: Vec<(String, WatchProgress)> = db.with(|conn| {
+                        let mut repo = WatchProgressRepo::new(conn);
+                        episodes
+                            .iter()
+                            .filter_map(|ep| {
+                                repo.find_by_media_id(&ep.id)
+                                    .ok()
+                                    .flatten()
+                                    .map(|p| (ep.id.clone(), p))
+                            })
+                            .collect()
+                    });
+                    for (id, progress) in loaded {
+                        self.watch_progress.insert(id, progress);
                     }
                 }
 
