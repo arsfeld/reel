@@ -209,12 +209,53 @@ pub fn open_browser(url: &str) {
         .spawn();
 }
 
+/// Number of probe rounds when only a relay/remote connection responds.
+/// A cold start (DNS not cached, LAN/VPN route not yet up) can make local
+/// connections time out on the first round even though they are fine moments
+/// later, so we re-probe before committing to a slow relay.
+const PROBE_ROUNDS: usize = 2;
+/// Delay between probe rounds, giving the network time to warm up.
+const PROBE_RETRY_DELAY_MS: u64 = 600;
+
+/// A reachable connection worth stopping for: a local, non-relay endpoint.
+/// These are the fast path; relay/remote are acceptable only as a fallback.
+fn is_preferred(conn: &PlexConnection) -> bool {
+    conn.local && !conn.relay
+}
+
+/// Pick the best reachable connection from a round of probe results.
+/// Prefers local non-relay, then any non-relay, then relay. Returns the index
+/// into `connections`, or `None` if nothing responded.
+fn pick_best(connections: &[PlexConnection], reachable: &[bool]) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    for (i, conn) in connections.iter().enumerate() {
+        if reachable.get(i) != Some(&true) {
+            continue;
+        }
+        let dominated = best.is_some_and(|b| {
+            let b = &connections[b];
+            !conn.relay && (b.relay || (conn.local && !b.local))
+        });
+        if best.is_none() || dominated {
+            best = Some(i);
+        }
+    }
+    best
+}
+
 /// Pick the best reachable connection URI for a server.
 ///
-/// Tests all connections in parallel with a short timeout, then picks the
-/// best one that responded (preferring local, non-relay).
+/// Tests all connections in parallel with a short timeout, then picks the best
+/// one that responded (preferring local, non-relay). If only a relay/remote
+/// connection responds while local candidates exist, the probe is retried —
+/// local connections often just need a moment to warm up after launch.
 pub async fn best_server_uri(server: &PlexResource) -> Option<String> {
     use futures::future::join_all;
+
+    if server.connections.is_empty() {
+        tracing::warn!("No connections listed for server '{}'", server.name);
+        return None;
+    }
 
     tracing::info!(
         "Testing {} connections for server '{}'",
@@ -237,46 +278,56 @@ pub async fn best_server_uri(server: &PlexResource) -> Option<String> {
         .build()
         .ok()?;
 
-    // Test all connections in parallel
-    let results = join_all(server.connections.iter().map(|conn| {
-        let http = http.clone();
-        let uri = conn.uri.clone();
-        async move {
-            let url = format!("{uri}/");
-            match http.get(&url).send().await {
-                Ok(resp) => {
-                    tracing::info!("  reachable: {uri} (status={})", resp.status());
-                    true
-                }
-                Err(e) => {
-                    tracing::info!("  unreachable: {uri} ({e})");
-                    false
+    let has_local = server.connections.iter().any(is_preferred);
+
+    for round in 0..PROBE_ROUNDS {
+        let last_round = round + 1 == PROBE_ROUNDS;
+
+        // Test all connections in parallel.
+        let results: Vec<bool> = join_all(server.connections.iter().map(|conn| {
+            let http = http.clone();
+            let uri = conn.uri.clone();
+            async move {
+                let url = format!("{uri}/");
+                match http.get(&url).send().await {
+                    Ok(resp) => {
+                        tracing::info!("  reachable: {uri} (status={})", resp.status());
+                        true
+                    }
+                    Err(e) => {
+                        tracing::info!("  unreachable: {uri} ({e})");
+                        false
+                    }
                 }
             }
-        }
-    }))
-    .await;
+        }))
+        .await;
 
-    // Pick the best reachable connection: prefer local non-relay
-    let mut best: Option<&PlexConnection> = None;
-    for (conn, reachable) in server.connections.iter().zip(results.iter()) {
-        if *reachable {
-            let dominated =
-                best.is_some_and(|b| !conn.relay && (b.relay || (conn.local && !b.local)));
-            if best.is_none() || dominated {
-                best = Some(conn);
+        match pick_best(&server.connections, &results) {
+            Some(idx) => {
+                let conn = &server.connections[idx];
+                // Accept immediately for a preferred local connection, or when
+                // there is nothing better to wait for (no local candidates, or
+                // this was the final round).
+                if is_preferred(conn) || !has_local || last_round {
+                    tracing::info!(
+                        "Selected connection: {} (local={}, relay={})",
+                        conn.uri,
+                        conn.local,
+                        conn.relay
+                    );
+                    return Some(conn.uri.clone());
+                }
+                tracing::info!(
+                    "Only a relay/remote connection responded ({}); retrying to catch a cold local connection",
+                    conn.uri
+                );
             }
+            None if last_round => break,
+            None => tracing::info!("No connection responded; retrying..."),
         }
-    }
 
-    if let Some(conn) = best {
-        tracing::info!(
-            "Selected connection: {} (local={}, relay={})",
-            conn.uri,
-            conn.local,
-            conn.relay
-        );
-        return Some(conn.uri.clone());
+        tokio::time::sleep(std::time::Duration::from_millis(PROBE_RETRY_DELAY_MS)).await;
     }
 
     tracing::warn!("No connections responded for server '{}'", server.name);
@@ -304,6 +355,54 @@ mod tests {
         assert!(id.len() > 20);
         // Should contain hyphens like a UUID
         assert!(id.matches('-').count() >= 4);
+    }
+
+    fn conn(uri: &str, local: bool, relay: bool) -> PlexConnection {
+        PlexConnection {
+            uri: uri.to_string(),
+            local,
+            relay,
+        }
+    }
+
+    #[test]
+    fn pick_best_prefers_local_non_relay() {
+        let conns = vec![
+            conn("relay", false, true),
+            conn("remote", false, false),
+            conn("local", true, false),
+        ];
+        let reachable = vec![true, true, true];
+        assert_eq!(pick_best(&conns, &reachable), Some(2));
+    }
+
+    #[test]
+    fn pick_best_prefers_remote_over_relay() {
+        let conns = vec![conn("relay", false, true), conn("remote", false, false)];
+        let reachable = vec![true, true];
+        assert_eq!(pick_best(&conns, &reachable), Some(1));
+    }
+
+    #[test]
+    fn pick_best_falls_back_to_relay_when_only_one_reachable() {
+        let conns = vec![conn("local", true, false), conn("relay", false, true)];
+        let reachable = vec![false, true];
+        assert_eq!(pick_best(&conns, &reachable), Some(1));
+    }
+
+    #[test]
+    fn pick_best_none_when_nothing_reachable() {
+        let conns = vec![conn("local", true, false), conn("relay", false, true)];
+        let reachable = vec![false, false];
+        assert_eq!(pick_best(&conns, &reachable), None);
+    }
+
+    #[test]
+    fn is_preferred_only_local_non_relay() {
+        assert!(is_preferred(&conn("a", true, false)));
+        assert!(!is_preferred(&conn("a", true, true))); // local relay (shouldn't happen, but guard)
+        assert!(!is_preferred(&conn("a", false, false))); // remote direct
+        assert!(!is_preferred(&conn("a", false, true))); // relay
     }
 
     #[tokio::test]
