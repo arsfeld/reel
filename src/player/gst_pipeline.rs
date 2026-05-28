@@ -144,6 +144,14 @@ impl PlaybackPipeline {
         self.playing.get()
     }
 
+    /// The user's intended play state, which survives a buffering-induced
+    /// auto-pause (unlike `is_playing`, which reflects the actual pipeline
+    /// state). Use this to decide play/pause toggles so a user press during a
+    /// buffering stall isn't inverted.
+    pub(crate) fn wants_play(&self) -> bool {
+        self.wants_play.get()
+    }
+
     pub(crate) fn is_prepared(&self) -> bool {
         self.prepared.get()
     }
