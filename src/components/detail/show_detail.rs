@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use adw;
@@ -5,7 +6,11 @@ use adw::prelude::*;
 use relm4::prelude::*;
 use tracing::info;
 
+use crate::config;
+use crate::db::watch_progress_repo::WatchProgressRepo;
+use crate::models::detail::MediaDetail;
 use crate::models::media::{MediaItem, MediaType};
+use crate::models::watch::WatchProgress;
 use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
 
@@ -17,6 +22,7 @@ pub struct ShowDetail {
     selected_season: u32,
     source: Option<Arc<dyn MediaSource>>,
     artwork_cache: Option<Arc<ArtworkCache>>,
+    watch_progress: HashMap<String, WatchProgress>,
     // Widgets
     title_label: gtk::Label,
     meta_box: gtk::Box,
@@ -27,6 +33,15 @@ pub struct ShowDetail {
     backdrop: gtk::Picture,
     poster: gtk::Picture,
     poster_spacer: gtk::Box,
+    // Genre chips + actions
+    genres_box: gtk::FlowBox,
+    play_button: gtk::Button,
+    // Director and writer credits
+    director_label: gtk::Label,
+    writer_label: gtk::Label,
+    // Show info panel
+    show_info_panel: gtk::Box,
+    show_info_label: gtk::Label,
     // Season cards
     season_scroll: gtk::ScrolledWindow,
     season_cards_box: gtk::Box,
@@ -35,6 +50,16 @@ pub struct ShowDetail {
     episode_section: gtk::Box,
     episode_scroll: gtk::ScrolledWindow,
     episode_cards_box: gtk::Box,
+    // Cast section
+    cast_section: gtk::Box,
+    cast_scroll: gtk::ScrolledWindow,
+    cast_box: gtk::Box,
+    // Tech info panel
+    tech_label: gtk::Label,
+    tech_panel: gtk::Box,
+    // Collections panel
+    collections_box: gtk::Box,
+    collections_panel: gtk::Box,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -71,6 +96,7 @@ pub enum ShowDetailOutput {
     Error(String),
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ShowDetailCmd {
     SeasonsReady(Vec<MediaItem>),
     EpisodesReady(Vec<MediaItem>),
@@ -78,6 +104,8 @@ pub enum ShowDetailCmd {
     PosterReady(gtk::gdk::Texture),
     SeasonArtworkReady(usize, gtk::gdk::Texture),
     EpisodeThumbReady(usize, gtk::gdk::Texture),
+    DetailLoaded(MediaDetail),
+    CastPhotoReady(usize, gtk::gdk::Texture),
     Error(String),
     Noop,
 }
@@ -108,7 +136,7 @@ impl Component for ShowDetail {
     fn init(
         _init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let widgets = view_output!();
 
@@ -128,7 +156,7 @@ impl Component for ShowDetail {
         // ═══ HERO: backdrop + gradient overlay + floating poster ═══
 
         let hero_overlay = gtk::Overlay::builder()
-            .height_request(400)
+            .height_request(420)
             .hexpand(true)
             .build();
 
@@ -158,6 +186,7 @@ impl Component for ShowDetail {
             .halign(gtk::Align::Start)
             .valign(gtk::Align::End)
             .margin_start(28)
+            .margin_bottom(0)
             .visible(false)
             .build();
         poster_clamp.set_child(Some(&poster));
@@ -167,6 +196,15 @@ impl Component for ShowDetail {
         hero_overlay.add_overlay(&poster_clamp);
 
         main_box.append(&hero_overlay);
+
+        // ═══ Hero-to-content blend bar ═══
+
+        let hero_blend = gtk::Box::builder()
+            .css_classes(["detail-hero-blend"])
+            .height_request(48)
+            .hexpand(true)
+            .build();
+        main_box.append(&hero_blend);
 
         // ═══ Clamped content below hero ═══
 
@@ -227,12 +265,63 @@ impl Component for ShowDetail {
         meta_box.append(&rating_label);
         meta_box.append(&content_rating_label);
 
+        // Credits (populated when MediaDetail arrives)
+        let director_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["dim-label"])
+            .visible(false)
+            .margin_top(2)
+            .build();
+        let writer_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["dim-label"])
+            .visible(false)
+            .build();
+
         title_meta_content.append(&title_label);
         title_meta_content.append(&meta_box);
+        title_meta_content.append(&director_label);
+        title_meta_content.append(&writer_label);
 
         title_meta_row.append(&poster_spacer);
         title_meta_row.append(&title_meta_content);
         content_box.append(&title_meta_row);
+
+        // ═══ Genre chips ═══
+
+        let genres_box = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .halign(gtk::Align::Start)
+            .max_children_per_line(10)
+            .row_spacing(6)
+            .column_spacing(6)
+            .build();
+        content_box.append(&genres_box);
+
+        // ═══ Action buttons ═══
+
+        let actions_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(10)
+            .halign(gtk::Align::Start)
+            .css_classes(["detail-actions"])
+            .build();
+
+        let play_button = gtk::Button::builder()
+            .label("▶  Play")
+            .css_classes(["suggested-action", "pill"])
+            .halign(gtk::Align::Start)
+            .build();
+
+        let sender_play = sender.input_sender().clone();
+        play_button.connect_clicked(move |_| {
+            let _ = sender_play.send(ShowDetailMsg::PlayEpisode(0));
+        });
+
+        actions_row.append(&play_button);
+        content_box.append(&actions_row);
 
         // ═══ Overview ═══
 
@@ -242,6 +331,21 @@ impl Component for ShowDetail {
             .visible(false)
             .build();
         content_box.append(&overview_label);
+
+        // ═══ Show info panel (frosted glass) ═══
+
+        let show_info_panel = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(["detail-panel"])
+            .visible(false)
+            .build();
+        let show_info_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["dim-label"])
+            .build();
+        show_info_panel.append(&show_info_label);
+        content_box.append(&show_info_panel);
 
         // ═══ Season cards (horizontal scrolling row) ═══
 
@@ -260,7 +364,7 @@ impl Component for ShowDetail {
         let season_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Never)
-            .height_request(190)
+            .height_request(215)
             .build();
 
         let season_cards_box = gtk::Box::builder()
@@ -290,7 +394,7 @@ impl Component for ShowDetail {
         let episode_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Never)
-            .height_request(210)
+            .height_request(310)
             .build();
 
         let episode_cards_box = gtk::Box::builder()
@@ -302,6 +406,62 @@ impl Component for ShowDetail {
         episode_section.append(&episode_heading);
         episode_section.append(&episode_scroll);
         content_box.append(&episode_section);
+
+        // ═══ Cast section ═══
+
+        let cast_section = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(8)
+            .visible(false)
+            .build();
+        let cast_heading = gtk::Label::builder()
+            .label("Cast")
+            .halign(gtk::Align::Start)
+            .css_classes(["detail-section-title"])
+            .build();
+        let cast_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .height_request(140)
+            .build();
+        let cast_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(10)
+            .build();
+        cast_scroll.set_child(Some(&cast_box));
+        cast_section.append(&cast_heading);
+        cast_section.append(&cast_scroll);
+        content_box.append(&cast_section);
+
+        // ═══ Technical info panel ═══
+
+        let tech_panel = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(["detail-panel"])
+            .visible(false)
+            .build();
+        let tech_label = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["dim-label"])
+            .build();
+        tech_panel.append(&tech_label);
+        content_box.append(&tech_panel);
+
+        // ═══ Collections panel ═══
+
+        let collections_panel = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(["detail-panel"])
+            .visible(false)
+            .build();
+        let collections_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .halign(gtk::Align::Start)
+            .build();
+        collections_panel.append(&collections_box);
+        content_box.append(&collections_panel);
 
         clamp.set_child(Some(&content_box));
         main_box.append(&clamp);
@@ -316,6 +476,7 @@ impl Component for ShowDetail {
             selected_season: 0,
             source: None,
             artwork_cache: None,
+            watch_progress: HashMap::new(),
             title_label,
             meta_box,
             year_label,
@@ -325,12 +486,25 @@ impl Component for ShowDetail {
             backdrop,
             poster,
             poster_spacer,
+            genres_box,
+            play_button,
+            director_label,
+            writer_label,
+            show_info_panel,
+            show_info_label,
             season_scroll,
             season_cards_box,
             season_section,
             episode_section,
             episode_scroll,
             episode_cards_box,
+            cast_section,
+            cast_scroll,
+            cast_box,
+            tech_label,
+            tech_panel,
+            collections_box,
+            collections_panel,
         };
 
         ComponentParts { model, widgets }
@@ -369,12 +543,34 @@ impl Component for ShowDetail {
                     self.content_rating_label.set_visible(false);
                 }
 
+                // Genre chips
+                while let Some(child) = self.genres_box.first_child() {
+                    self.genres_box.remove(&child);
+                }
+                for genre in &show.genres {
+                    let label = gtk::Label::builder()
+                        .label(genre)
+                        .css_classes(["genre-chip"])
+                        .build();
+                    self.genres_box.insert(&label, -1);
+                }
+
                 if let Some(ref overview) = show.overview {
                     self.overview_label.set_label(overview);
                     self.overview_label.set_visible(true);
                 } else {
                     self.overview_label.set_visible(false);
                 }
+
+                self.play_button.set_sensitive(show.file_path.is_some());
+
+                // Reset enriched sections while loading
+                self.director_label.set_visible(false);
+                self.writer_label.set_visible(false);
+                self.show_info_panel.set_visible(false);
+                self.cast_section.set_visible(false);
+                self.tech_panel.set_visible(false);
+                self.collections_panel.set_visible(false);
 
                 self.poster.set_visible(false);
                 self.poster_spacer.set_visible(false);
@@ -411,6 +607,17 @@ impl Component for ShowDetail {
                     }
                 }
 
+                // Fetch enriched metadata (cast, crew, technical info, collections)
+                if let Some(source) = self.source.clone() {
+                    let external_id = show.external_id.clone();
+                    sender.oneshot_command(async move {
+                        match source.metadata(&external_id).await {
+                            Ok(detail) => ShowDetailCmd::DetailLoaded(detail),
+                            Err(_) => ShowDetailCmd::Noop,
+                        }
+                    });
+                }
+
                 let external_id = show.external_id.clone();
                 self.show = Some(show);
 
@@ -433,9 +640,16 @@ impl Component for ShowDetail {
                 self.seasons = seasons.clone();
                 self.rebuild_season_cards(&sender);
 
+                // Update show info panel with season count
                 if !seasons.is_empty() {
+                    self.show_info_label
+                        .set_label(&format!("{} Seasons", seasons.len()));
+                    self.show_info_panel.set_visible(true);
+
                     self.selected_season = 0;
                     sender.input(ShowDetailMsg::SelectSeason(0));
+                } else {
+                    self.show_info_panel.set_visible(false);
                 }
             }
             ShowDetailMsg::SelectSeason(index) => {
@@ -466,6 +680,17 @@ impl Component for ShowDetail {
                 }
             }
             ShowDetailMsg::EpisodesLoaded(episodes) => {
+                // Load watch progress for each episode
+                self.watch_progress.clear();
+                if let Ok(conn) = rusqlite::Connection::open(config::db_path()) {
+                    let repo = WatchProgressRepo::new(&conn);
+                    for ep in &episodes {
+                        if let Ok(Some(progress)) = repo.find_by_media_id(&ep.id) {
+                            self.watch_progress.insert(ep.id.clone(), progress);
+                        }
+                    }
+                }
+
                 self.rebuild_episode_cards(&episodes, &sender);
                 self.episodes = episodes;
             }
@@ -509,8 +734,20 @@ impl Component for ShowDetail {
                 self.poster.set_visible(true);
                 self.poster_spacer.set_visible(true);
             }
+            ShowDetailCmd::DetailLoaded(detail) => {
+                self.populate_enrichment(&detail, &sender);
+            }
+            ShowDetailCmd::CastPhotoReady(idx, texture) => {
+                if let Some(child) = self.cast_box.observe_children().item(idx as u32)
+                    && let Ok(card) = child.downcast::<gtk::Box>()
+                    && let Some(picture) = card.first_child()
+                    && let Some(inner) = picture.first_child()
+                    && let Ok(picture) = inner.downcast::<gtk::Picture>()
+                {
+                    picture.set_paintable(Some(&texture));
+                }
+            }
             ShowDetailCmd::SeasonArtworkReady(idx, texture) => {
-                // Fix: picture is the direct first child of the card box
                 if let Some(card) = self.season_cards_box.observe_children().item(idx as u32)
                     && let Ok(card) = card.downcast::<gtk::Box>()
                     && let Some(picture) = card.first_child()
@@ -520,18 +757,14 @@ impl Component for ShowDetail {
                 }
             }
             ShowDetailCmd::EpisodeThumbReady(idx, texture) => {
-                // Find the episode card at index and set its overlay thumbnail
                 if let Some(card) = self.episode_cards_box.observe_children().item(idx as u32)
                     && let Ok(card) = card.downcast::<gtk::Box>()
+                    && let Some(overlay) = card.first_child()
+                    && let Ok(overlay) = overlay.downcast::<gtk::Overlay>()
+                    && let Some(picture) = overlay.first_child()
+                    && let Ok(picture) = picture.downcast::<gtk::Picture>()
                 {
-                    // Card structure: overlay → picture (first overlay child)
-                    if let Some(overlay) = card.first_child()
-                        && let Ok(overlay) = overlay.downcast::<gtk::Overlay>()
-                        && let Some(picture) = overlay.first_child()
-                        && let Ok(picture) = picture.downcast::<gtk::Picture>()
-                    {
-                        picture.set_paintable(Some(&texture));
-                    }
+                    picture.set_paintable(Some(&texture));
                 }
             }
             ShowDetailCmd::Error(msg) => {
@@ -557,14 +790,14 @@ impl ShowDetail {
         for (i, season) in self.seasons.iter().enumerate() {
             let card = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
-                .width_request(100)
+                .width_request(130)
                 .css_classes(["season-card"])
                 .build();
 
             let poster_pic = gtk::Picture::builder()
                 .content_fit(gtk::ContentFit::Cover)
-                .width_request(100)
-                .height_request(150)
+                .width_request(130)
+                .height_request(195)
                 .css_classes(["season-card-poster"])
                 .build();
 
@@ -578,18 +811,26 @@ impl ShowDetail {
                 .label(&name)
                 .halign(gtk::Align::Center)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
-                .max_width_chars(12)
+                .max_width_chars(14)
                 .css_classes(["season-card-label"])
+                .build();
+
+            // Episode count hint (will be populated after season select)
+            let ep_count_label = gtk::Label::builder()
+                .label("")
+                .halign(gtk::Align::Center)
+                .css_classes(["season-card-ep-count"])
                 .build();
 
             card.append(&poster_pic);
             card.append(&name_label);
+            card.append(&ep_count_label);
 
             // Load season poster
             if let (Some(poster_path), Some(source), Some(cache)) =
                 (&season.poster_path, &self.source, &self.artwork_cache)
             {
-                let url = source.artwork_url(poster_path, 200, 300);
+                let url = source.artwork_url(poster_path, 260, 390);
                 let cache = Arc::clone(cache);
                 sender.oneshot_command(async move {
                     match cache.get_or_download(&url).await {
@@ -632,7 +873,8 @@ impl ShowDetail {
         }
     }
 
-    /// Build horizontal scrollable episode cards — Infuse-style wide thumbnails.
+    /// Build enhanced horizontal episode cards with overview, air date, and watch progress.
+    #[allow(clippy::too_many_lines)]
     fn rebuild_episode_cards(&self, episodes: &[MediaItem], sender: &ComponentSender<Self>) {
         while let Some(child) = self.episode_cards_box.first_child() {
             self.episode_cards_box.remove(&child);
@@ -644,23 +886,44 @@ impl ShowDetail {
         }
         self.episode_section.set_visible(true);
 
+        // Update season card episode counts
+        let season_children = self.season_cards_box.observe_children();
+        for i in 0..season_children.n_items() {
+            if i == self.selected_season
+                && let Some(card) = season_children.item(i)
+                && let Ok(card) = card.downcast::<gtk::Box>()
+            {
+                // The ep count label is the 3rd child (poster, name, count)
+                if let Some(count_label) = card.observe_children().item(2)
+                    && let Ok(count_label) = count_label.downcast::<gtk::Label>()
+                {
+                    let label = if episodes.len() == 1 {
+                        "1 episode".to_string()
+                    } else {
+                        format!("{} episodes", episodes.len())
+                    };
+                    count_label.set_label(&label);
+                }
+            }
+        }
+
         for (i, ep) in episodes.iter().enumerate() {
             let ep_num = ep.episode_number.unwrap_or(0);
 
-            // Card: vertical box containing thumbnail overlay + text
+            // Card: vertical box containing thumbnail overlay + text + progress
             let card = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
-                .width_request(240)
+                .width_request(290)
                 .css_classes(["episode-card"])
                 .build();
 
-            // Thumbnail overlay: picture + episode number badge
+            // Thumbnail overlay: picture + episode number badge (top-left)
             let thumb_overlay = gtk::Overlay::new();
 
             let thumb_picture = gtk::Picture::builder()
                 .content_fit(gtk::ContentFit::Cover)
-                .width_request(240)
-                .height_request(135)
+                .width_request(290)
+                .height_request(163)
                 .css_classes(["episode-card-thumb"])
                 .build();
 
@@ -668,7 +931,9 @@ impl ShowDetail {
                 .label(format!("{ep_num}"))
                 .css_classes(["episode-number-badge"])
                 .halign(gtk::Align::Start)
-                .valign(gtk::Align::End)
+                .valign(gtk::Align::Start)
+                .margin_start(6)
+                .margin_top(6)
                 .build();
 
             thumb_overlay.add_overlay(&thumb_picture);
@@ -681,28 +946,67 @@ impl ShowDetail {
                 .halign(gtk::Align::Start)
                 .wrap(true)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
-                .max_width_chars(28)
+                .max_width_chars(30)
                 .css_classes(["episode-card-title"])
                 .build();
             card.append(&title_label);
 
-            // Episode number + runtime
-            let mut meta_str = format!("Episode {ep_num}");
-            if let Some(ref runtime) = ep.format_runtime() {
-                meta_str.push_str(&format!(" · {runtime}"));
+            // Episode number + air date + runtime
+            let mut meta_parts = Vec::new();
+            meta_parts.push(format!("Episode {ep_num}"));
+            if let Some(ref air_date) = ep.air_date {
+                meta_parts.push(air_date.clone());
             }
+            if let Some(ref runtime) = ep.format_runtime() {
+                meta_parts.push(runtime.clone());
+            }
+            let meta_text = meta_parts.join(" · ");
             let meta_label = gtk::Label::builder()
-                .label(&meta_str)
+                .label(&meta_text)
                 .halign(gtk::Align::Start)
-                .css_classes(["dim-label", "caption"])
+                .css_classes(["episode-card-meta"])
                 .build();
             card.append(&meta_label);
+
+            // Overview snippet
+            if let Some(ref overview) = ep.overview {
+                let overview_label = gtk::Label::builder()
+                    .label(overview)
+                    .halign(gtk::Align::Start)
+                    .wrap(true)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .max_width_chars(38)
+                    .lines(3)
+                    .css_classes(["episode-card-overview"])
+                    .build();
+                card.append(&overview_label);
+            }
+
+            // Watch progress indicator
+            if let Some(progress) = self.watch_progress.get(&ep.id) {
+                if progress.watched {
+                    let watched_label = gtk::Label::builder()
+                        .label("✓ Watched")
+                        .halign(gtk::Align::Start)
+                        .css_classes(["episode-card-watched"])
+                        .build();
+                    card.append(&watched_label);
+                } else if progress.position_seconds > 0.0 {
+                    let fraction = progress.progress_fraction();
+                    let progress_bar = gtk::ProgressBar::builder()
+                        .fraction(fraction)
+                        .show_text(false)
+                        .css_classes(["episode-card-progress-bar"])
+                        .build();
+                    card.append(&progress_bar);
+                }
+            }
 
             // Load thumbnail
             if let (Some(thumb_path), Some(source), Some(cache)) =
                 (&ep.poster_path, &self.source, &self.artwork_cache)
             {
-                let url = source.artwork_url(thumb_path, 480, 270);
+                let url = source.artwork_url(thumb_path, 580, 326);
                 let cache = Arc::clone(cache);
                 let idx = i;
                 sender.oneshot_command(async move {
@@ -730,6 +1034,148 @@ impl ShowDetail {
             }
 
             self.episode_cards_box.append(&card);
+        }
+    }
+
+    /// Populate enriched detail sections from a MediaDetail response.
+    #[allow(clippy::too_many_lines)]
+    fn populate_enrichment(&self, detail: &MediaDetail, sender: &ComponentSender<Self>) {
+        // Directors
+        if !detail.directors.is_empty() {
+            let text = format!("Created by {}", detail.directors.join(", "));
+            self.director_label.set_label(&text);
+            self.director_label.set_visible(true);
+        }
+
+        // Writers
+        if !detail.writers.is_empty() {
+            let text = format!("Written by {}", detail.writers.join(", "));
+            self.writer_label.set_label(&text);
+            self.writer_label.set_visible(true);
+        }
+
+        // Cast
+        if !detail.cast.is_empty() {
+            while let Some(child) = self.cast_box.first_child() {
+                self.cast_box.remove(&child);
+            }
+
+            for (idx, member) in detail.cast.iter().enumerate() {
+                let card = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Vertical)
+                    .css_classes(["cast-card"])
+                    .build();
+
+                let inner = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Vertical)
+                    .spacing(4)
+                    .width_request(80)
+                    .build();
+
+                let picture = gtk::Picture::builder()
+                    .content_fit(gtk::ContentFit::Cover)
+                    .width_request(72)
+                    .height_request(72)
+                    .css_classes(["cast-photo"])
+                    .build();
+
+                let name_label = gtk::Label::builder()
+                    .label(&member.name)
+                    .halign(gtk::Align::Center)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .max_width_chars(12)
+                    .css_classes(["caption"])
+                    .build();
+
+                inner.append(&picture);
+                inner.append(&name_label);
+
+                if let Some(ref character) = member.character {
+                    let char_label = gtk::Label::builder()
+                        .label(character)
+                        .halign(gtk::Align::Center)
+                        .ellipsize(gtk::pango::EllipsizeMode::End)
+                        .max_width_chars(12)
+                        .css_classes(["caption", "dim-label"])
+                        .build();
+                    inner.append(&char_label);
+                }
+
+                card.append(&inner);
+                self.cast_box.append(&card);
+
+                if let (Some(photo_path), Some(source), Some(cache)) =
+                    (&member.photo_path, &self.source, &self.artwork_cache)
+                {
+                    let url = source.artwork_url(photo_path, 80, 80);
+                    let cache = Arc::clone(cache);
+                    sender.oneshot_command(async move {
+                        match cache.get_or_download(&url).await {
+                            Ok(path) => match gtk::gdk::Texture::from_filename(&path) {
+                                Ok(tex) => ShowDetailCmd::CastPhotoReady(idx, tex),
+                                Err(_) => ShowDetailCmd::Noop,
+                            },
+                            Err(_) => ShowDetailCmd::Noop,
+                        }
+                    });
+                }
+            }
+
+            self.cast_section.set_visible(true);
+        }
+
+        // Technical info (frosted panel)
+        if let Some(ref tech) = detail.technical {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(res) = tech.display_resolution() {
+                parts.push(res);
+            }
+            if let Some(ref codec) = tech.video_codec {
+                parts.push(codec.to_uppercase());
+            }
+            if let Some(ref audio) = tech.audio_codec {
+                let channels = tech
+                    .display_audio_channels()
+                    .map(|ch| format!(" {ch}"))
+                    .unwrap_or_default();
+                parts.push(format!("{}{channels}", audio.to_uppercase()));
+            }
+            if let Some(ref container) = tech.container {
+                parts.push(container.to_uppercase());
+            }
+            if let Some(size) = tech.display_file_size() {
+                parts.push(size);
+            }
+
+            if !parts.is_empty() {
+                self.tech_label
+                    .set_label(&format!("Technical Details\n{}", parts.join(" · ")));
+                self.tech_panel.set_visible(true);
+            }
+        }
+
+        // Collections (frosted panel)
+        if !detail.collections.is_empty() {
+            while let Some(child) = self.collections_box.first_child() {
+                self.collections_box.remove(&child);
+            }
+
+            let prefix = gtk::Label::builder()
+                .label("Part of:")
+                .css_classes(["dim-label"])
+                .margin_end(6)
+                .build();
+            self.collections_box.append(&prefix);
+
+            for col in &detail.collections {
+                let label = gtk::Label::builder()
+                    .label(&col.name)
+                    .css_classes(["caption"])
+                    .build();
+                self.collections_box.append(&label);
+            }
+
+            self.collections_panel.set_visible(true);
         }
     }
 }

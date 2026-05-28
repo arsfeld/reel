@@ -340,7 +340,6 @@ gridview > child:selected .media-card-frame {
 /* ── Hero Section ──────────────────────────────────────────────────── */
 
 .detail-hero {
-    overflow: hidden;
     background-color: alpha(@card_bg_color, 0.25);
 }
 
@@ -535,6 +534,50 @@ gridview > child:selected .media-card-frame {
     padding: 3px 8px;
     border-radius: 6px;
     margin: 6px;
+}
+
+/* ── Episode card metadata row (air date, runtime) ─────────────────── */
+
+.episode-card-meta {
+    font-size: 11px;
+    padding: 2px 8px;
+    color: alpha(@window_fg_color, 0.60);
+}
+
+/* ── Episode card overview snippet ──────────────────────────────────── */
+
+.episode-card-overview {
+    font-size: 12px;
+    padding: 2px 8px 6px 8px;
+    color: alpha(@window_fg_color, 0.52);
+    line-height: 1.4;
+}
+
+/* ── Episode card watch progress bar ────────────────────────────────── */
+
+.episode-card-progress-bar {
+    margin: 2px 8px 8px 8px;
+}
+
+.episode-card-progress-bar trough {
+    min-height: 3px;
+    border-radius: 999px;
+    background-color: alpha(@card_bg_color, 0.35);
+}
+
+.episode-card-progress-bar progress {
+    min-height: 3px;
+    border-radius: 999px;
+    background-color: @accent_color;
+}
+
+/* ── Episode card watched indicator ─────────────────────────────────── */
+
+.episode-card-watched {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px 8px 8px;
+    color: @accent_color;
 }
 
 /* ── Media backdrop (fallback for missing art) ─────────────────────── */

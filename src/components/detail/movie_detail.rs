@@ -28,7 +28,7 @@ pub struct MovieDetail {
     play_button: gtk::Button,
     backdrop: gtk::Picture,
     poster: gtk::Picture,
-    poster_spacer: gtk::Box,
+    poster_column: gtk::Box,
     // Enriched sections
     cast_section: gtk::Box,
     cast_scroll: gtk::ScrolledWindow,
@@ -142,7 +142,7 @@ impl Component for MovieDetail {
 
         // Poster art — clamped to match content width, floats at bottom-left overlapping hero edge
         let poster_clamp = adw::Clamp::builder()
-            .maximum_size(960)
+            .maximum_size(1400)
             .valign(gtk::Align::End)
             .build();
         let poster = gtk::Picture::builder()
@@ -165,7 +165,7 @@ impl Component for MovieDetail {
 
         // ═══ Clamped content below hero ═══
 
-        let clamp = adw::Clamp::builder().maximum_size(960).build();
+        let clamp = adw::Clamp::builder().maximum_size(1400).build();
         let content_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(18)
@@ -175,22 +175,23 @@ impl Component for MovieDetail {
             .margin_bottom(32)
             .build();
 
-        // ═══ Title + metadata area (indented to account for poster) ═══
+        // ═══ Two-column header: poster column on left, metadata on right ═══
 
-        let title_meta_row = gtk::Box::builder()
+        let detail_header_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(0)
+            .spacing(28)
             .build();
 
-        // Spacer matching poster width + margins
-        let poster_spacer = gtk::Box::builder()
-            .width_request(198) // 170 poster + 28 margin
+        // Spacer matching poster dimensions to create left column
+        let poster_column = gtk::Box::builder()
+            .width_request(170)
+            .valign(gtk::Align::Start)
             .visible(false)
             .build();
 
-        let title_meta_content = gtk::Box::builder()
+        let detail_content = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
+            .spacing(12)
             .hexpand(true)
             .build();
 
@@ -234,7 +235,6 @@ impl Component for MovieDetail {
             .wrap(true)
             .css_classes(["dim-label"])
             .visible(false)
-            .margin_top(2)
             .build();
         let writer_label = gtk::Label::builder()
             .halign(gtk::Align::Start)
@@ -243,14 +243,10 @@ impl Component for MovieDetail {
             .visible(false)
             .build();
 
-        title_meta_content.append(&title_label);
-        title_meta_content.append(&meta_box);
-        title_meta_content.append(&director_label);
-        title_meta_content.append(&writer_label);
-
-        title_meta_row.append(&poster_spacer);
-        title_meta_row.append(&title_meta_content);
-        content_box.append(&title_meta_row);
+        detail_content.append(&title_label);
+        detail_content.append(&meta_box);
+        detail_content.append(&director_label);
+        detail_content.append(&writer_label);
 
         // ═══ Genre chips ═══
 
@@ -261,7 +257,7 @@ impl Component for MovieDetail {
             .row_spacing(6)
             .column_spacing(6)
             .build();
-        content_box.append(&genres_box);
+        detail_content.append(&genres_box);
 
         // ═══ Action buttons ═══
 
@@ -284,7 +280,7 @@ impl Component for MovieDetail {
         });
 
         actions_row.append(&play_button);
-        content_box.append(&actions_row);
+        detail_content.append(&actions_row);
 
         // ═══ Overview ═══
 
@@ -293,7 +289,11 @@ impl Component for MovieDetail {
             .wrap(true)
             .visible(false)
             .build();
-        content_box.append(&overview_label);
+        detail_content.append(&overview_label);
+
+        detail_header_row.append(&poster_column);
+        detail_header_row.append(&detail_content);
+        content_box.append(&detail_header_row);
 
         // ═══ Cast section ═══
 
@@ -374,7 +374,7 @@ impl Component for MovieDetail {
             play_button,
             backdrop,
             poster,
-            poster_spacer,
+            poster_column,
             cast_section,
             cast_scroll,
             cast_box,
@@ -460,7 +460,7 @@ impl Component for MovieDetail {
 
                 // Reset poster
                 self.poster.set_visible(false);
-                self.poster_spacer.set_visible(false);
+                self.poster_column.set_visible(false);
 
                 // Load backdrop (prefer backdrop, fall back to poster for hero)
                 if let (Some(source), Some(cache)) = (&self.source, &self.artwork_cache) {
@@ -552,7 +552,7 @@ impl Component for MovieDetail {
             MovieDetailCmd::PosterReady(texture) => {
                 self.poster.set_paintable(Some(&texture));
                 self.poster.set_visible(true);
-                self.poster_spacer.set_visible(true);
+                self.poster_column.set_visible(true);
             }
             MovieDetailCmd::DetailLoaded(detail) => {
                 self.populate_enrichment(&detail, &sender);
