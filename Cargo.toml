@@ -24,6 +24,11 @@ toml = "0.8"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
+diesel = { version = "2.3.9", features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
+diesel_migrations = "2.3"
+# Pinned to match rusqlite's libsqlite3-sys so Cargo unifies the single
+# `links = "sqlite3"` native lib across both crates during the migration.
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 
 # Async
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
