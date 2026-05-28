@@ -26,6 +26,8 @@ pub struct MediaCardData {
     pub watch_progress: Option<f64>,
     /// Whether the item has been fully watched.
     pub watched: bool,
+    /// Whether a completed offline download exists for this item (R14 badge).
+    pub downloaded: bool,
     /// Direct reference to the GTK Picture widget for lazy poster updates.
     #[allow(clippy::type_complexity)]
     pub picture_widget: Option<gtk::Picture>,
@@ -50,6 +52,7 @@ impl MediaCardData {
             card_height: 270,
             watch_progress: None,
             watched: false,
+            downloaded: false,
             picture_widget: None,
             placeholder_widget: None,
         }
@@ -75,6 +78,21 @@ pub struct MediaCardWidgets {
     content_rating_badge: gtk::Label,
     progress_bar: gtk::ProgressBar,
     watched_icon: gtk::Image,
+    downloaded_icon: gtk::Image,
+}
+
+/// The "downloaded" overlay badge (top-left of a poster).
+fn downloaded_indicator() -> gtk::Image {
+    gtk::Image::builder()
+        .icon_name("folder-download-symbolic")
+        .pixel_size(18)
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::Start)
+        .margin_top(8)
+        .margin_start(8)
+        .css_classes(["downloaded-indicator", "media-badge"])
+        .visible(false)
+        .build()
 }
 
 impl RelmGridItem for MediaCardData {
@@ -158,6 +176,10 @@ impl RelmGridItem for MediaCardData {
             .visible(false)
             .build();
 
+        // Downloaded indicator (top-left of poster) — distinct from the
+        // bottom-right watched checkmark.
+        let downloaded_icon = downloaded_indicator();
+
         // Bottom gradient scrim for progress/badges readability
         let scrim = gtk::Box::builder()
             .halign(gtk::Align::Fill)
@@ -176,6 +198,7 @@ impl RelmGridItem for MediaCardData {
         overlay.add_overlay(&content_rating_badge);
         overlay.add_overlay(&progress_bar);
         overlay.add_overlay(&watched_icon);
+        overlay.add_overlay(&downloaded_icon);
 
         // Wrap overlay in a frame for rounded corners + hover effects
         let frame = gtk::Frame::builder()
@@ -214,6 +237,7 @@ impl RelmGridItem for MediaCardData {
             content_rating_badge,
             progress_bar,
             watched_icon,
+            downloaded_icon,
         };
 
         (container, widgets)
@@ -308,5 +332,8 @@ impl RelmGridItem for MediaCardData {
             widgets.progress_bar.set_visible(false);
             widgets.watched_icon.set_visible(false);
         }
+
+        // Downloaded indicator (independent of watch state).
+        widgets.downloaded_icon.set_visible(self.downloaded);
     }
 }
