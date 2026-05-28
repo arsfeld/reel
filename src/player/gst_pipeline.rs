@@ -6,7 +6,7 @@ use std::rc::Rc;
 use gst::prelude::*;
 use gtk::glib;
 
-use crate::player::pipeline_msgs::PipelineBusMsg;
+use crate::player::pipeline_msgs::{BufferingAction, PipelineBusMsg, buffering_action};
 use crate::player::subtitles::{best_matching_subtitle, find_matching_subtitles};
 use crate::player::tracks::{
     MediaTrack, TrackKind, build_stream_selection, pick_preferred_subtitle, tracks_from_collection,
@@ -21,6 +21,12 @@ pub(crate) struct PlaybackPipeline {
     prepared: Rc<Cell<bool>>,
     seeking: Rc<Cell<bool>>,
     playing: Rc<Cell<bool>>,
+    /// The user's *intended* play state, distinct from the actual pipeline
+    /// state in `playing`. A buffering-induced pause flips `playing` to false
+    /// but leaves this true, so the stream/queue2 buffering protocol knows to
+    /// resume at 100% — while a real user pause clears it and is never
+    /// overridden.
+    wants_play: Rc<Cell<bool>>,
     error: Rc<RefCell<Option<String>>>,
     tracks: RefCell<Vec<MediaTrack>>,
     active_stream_ids: RefCell<Vec<String>>,
@@ -76,6 +82,8 @@ impl PlaybackPipeline {
         let prepared = Rc::new(Cell::new(false));
         let seeking = Rc::new(Cell::new(false));
         let playing = Rc::new(Cell::new(false));
+        // Initial intent mirrors the requested target state.
+        let wants_play = Rc::new(Cell::new(autoplay));
         let error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
         let bus_watch = install_bus_watch(
@@ -85,6 +93,7 @@ impl PlaybackPipeline {
                 prepared: prepared.clone(),
                 seeking: seeking.clone(),
                 playing: playing.clone(),
+                wants_play: wants_play.clone(),
                 error: error.clone(),
             },
         );
@@ -106,6 +115,7 @@ impl PlaybackPipeline {
             prepared,
             seeking,
             playing,
+            wants_play,
             error,
             tracks: RefCell::new(Vec::new()),
             active_stream_ids: RefCell::new(Vec::new()),
@@ -121,10 +131,12 @@ impl PlaybackPipeline {
     }
 
     pub(crate) fn play(&self) {
+        self.wants_play.set(true);
         let _ = self.pipeline.set_state(gst::State::Playing);
     }
 
     pub(crate) fn pause(&self) {
+        self.wants_play.set(false);
         let _ = self.pipeline.set_state(gst::State::Paused);
     }
 
@@ -382,6 +394,7 @@ struct BusFlags {
     prepared: Rc<Cell<bool>>,
     seeking: Rc<Cell<bool>>,
     playing: Rc<Cell<bool>>,
+    wants_play: Rc<Cell<bool>>,
     error: Rc<RefCell<Option<String>>>,
 }
 
@@ -438,8 +451,39 @@ fn handle_bus_message(
                 streams,
             });
         }
+        MessageView::Buffering(b) => handle_buffering(b, flags, pipeline_weak, sender),
         MessageView::DurationChanged(_) | MessageView::Eos(_) => {}
         _ => {}
+    }
+}
+
+/// Mode-aware buffering handling (KTD5). The pure `buffering_action` decides
+/// the response; this only emits the indicator percent and performs the
+/// stream/queue2 pause/resume `set_state` calls. Download mode never pauses —
+/// `downloadbuffer` reads ahead while playback continues.
+fn handle_buffering(
+    b: &gst::message::Buffering,
+    flags: &BusFlags,
+    pipeline_weak: &glib::WeakRef<gst::Pipeline>,
+    sender: &Rc<dyn Fn(PipelineBusMsg)>,
+) {
+    let percent = b.percent();
+    let (mode, ..) = b.buffering_stats();
+    let action = buffering_action(mode, percent, flags.wants_play.get());
+
+    if action != BufferingAction::Ignore {
+        sender(PipelineBusMsg::Buffering { percent });
+    }
+
+    let new_state = match action {
+        BufferingAction::ReportAndPause => Some(gst::State::Paused),
+        BufferingAction::ReportAndResume => Some(gst::State::Playing),
+        BufferingAction::Ignore | BufferingAction::Report => None,
+    };
+    if let Some(state) = new_state
+        && let Some(pipe) = pipeline_weak.upgrade()
+    {
+        let _ = pipe.set_state(state);
     }
 }
 
