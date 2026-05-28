@@ -158,6 +158,9 @@ pub(crate) enum VideoPlayerMsg {
     /// credits range, no-op otherwise. Used by the overlay button
     /// and the `s` keyboard shortcut.
     SkipCurrent,
+    /// Buffering progress (0-100) from the pipeline bus, for the status-plate
+    /// indicator.
+    Buffering(i32),
 }
 
 /// Independent playback flags grouped to keep `VideoPlayer`'s top-level
@@ -219,6 +222,10 @@ pub(crate) struct VideoPlayer {
     /// Skip intro / credits markers for the current media. `None` until
     /// set by the parent (e.g. from Plex metadata).
     skip_markers: Option<SkipMarkers>,
+    /// Buffering percent (0-100) while a network rebuffer/fill is active;
+    /// `None` once filled (>= 100) or never buffering. Drives the status
+    /// plate and suppresses poll-derived state flicker during buffering.
+    buffering_percent: Option<i32>,
 }
 
 #[relm4::component(pub(crate))]
@@ -661,6 +668,7 @@ impl Component for VideoPlayer {
             }
             VideoPlayerMsg::SetAutoplay(on) => self.playback.autoplay = on,
             VideoPlayerMsg::Tick => self.handle_tick(widgets, &sender),
+            VideoPlayerMsg::Buffering(percent) => self.handle_buffering(widgets, percent),
             VideoPlayerMsg::TogglePlay => self.handle_toggle_play(widgets, &sender),
             VideoPlayerMsg::SeekRelative(secs) => self.handle_seek_relative(&sender, secs),
             VideoPlayerMsg::SeekFraction(f) => self.handle_seek_fraction(&sender, f),
@@ -955,6 +963,7 @@ impl VideoPlayer {
             title: None,
             track_ui_signature: String::new(),
             skip_markers: None,
+            buffering_percent: None,
         }
     }
 
@@ -1269,6 +1278,9 @@ impl VideoPlayer {
                     streams,
                 });
             }
+            PipelineBusMsg::Buffering { percent } => {
+                sender_bus.input(VideoPlayerMsg::Buffering(percent));
+            }
         });
 
         let local_path_ref = local_path
@@ -1294,6 +1306,25 @@ impl VideoPlayer {
             self.playback.playing = true;
         }
         self.media = Some(pipeline);
+    }
+
+    /// Store buffering progress and refresh the status plate immediately so
+    /// the indicator doesn't wait for the next 4 Hz tick. `percent >= 100`
+    /// clears the buffering state (filled). The pause/resume side effects are
+    /// handled pipeline-side (mode-aware) before this message is emitted.
+    fn handle_buffering(&mut self, widgets: &mut <Self as Component>::Widgets, percent: i32) {
+        self.buffering_percent = if percent < 100 { Some(percent) } else { None };
+        let (error_msg, is_prepared) = self
+            .media
+            .as_ref()
+            .map(|m| (m.error_message(), m.is_prepared()))
+            .unwrap_or((None, false));
+        update_status_plate(
+            widgets,
+            error_msg.as_deref(),
+            is_prepared,
+            self.buffering_percent,
+        );
     }
 
     fn handle_tick(
@@ -1329,7 +1360,12 @@ impl VideoPlayer {
             self.playback.playing = false;
             let _ = sender.output(VideoPlayerOutput::EndOfFile);
             let _ = sender.output(VideoPlayerOutput::StateChanged(PlayState::Stopped));
-            update_status_plate(widgets, snapshot.error_msg.as_deref(), status.is_prepared);
+            update_status_plate(
+                widgets,
+                snapshot.error_msg.as_deref(),
+                status.is_prepared,
+                self.buffering_percent,
+            );
             return;
         }
 
@@ -1361,7 +1397,14 @@ impl VideoPlayer {
             });
         }
 
-        if was_playing != status.now_playing {
+        // While buffering is active the pipeline may dip into Paused on a
+        // queue2 underrun. Suppress the poll-derived state transition so that
+        // automatic pause never leaks into `playback.playing` ownership or
+        // flickers the window title / MPRIS state — the pipeline resumes on
+        // its own once the buffer refills.
+        if self.buffering_percent.is_some() {
+            // Leave `playback.playing` untouched; it reflects user intent.
+        } else if was_playing != status.now_playing {
             self.playback.playing = status.now_playing;
             let state = if status.now_playing {
                 PlayState::Playing
@@ -1375,7 +1418,12 @@ impl VideoPlayer {
         }
 
         self.apply_pending_resume(status.is_prepared);
-        update_status_plate(widgets, snapshot.error_msg.as_deref(), status.is_prepared);
+        update_status_plate(
+            widgets,
+            snapshot.error_msg.as_deref(),
+            status.is_prepared,
+            self.buffering_percent,
+        );
     }
 
     /// Trust the polled position only when there isn't a user-initiated
@@ -1655,27 +1703,53 @@ struct TickSnapshot {
     error_msg: Option<String>,
 }
 
-/// Drive the central status plate. We only show it for initial loading
-/// and for terminal errors — seeking intentionally doesn't trigger it.
-fn update_status_plate(widgets: &VideoPlayerWidgets, error_msg: Option<&str>, is_prepared: bool) {
-    if let Some(msg) = error_msg {
-        widgets.status_spinner.set_spinning(false);
-        widgets.status_spinner.set_visible(false);
-        widgets.status_icon.set_visible(true);
-        widgets.status_title.set_label("Couldn't play video");
-        widgets.status_detail.set_label(msg);
-        widgets.status_detail.set_visible(true);
-        widgets.status_plate.set_visible(true);
-    } else if !is_prepared {
-        widgets.status_icon.set_visible(false);
-        widgets.status_spinner.set_visible(true);
-        widgets.status_spinner.set_spinning(true);
-        widgets.status_title.set_label("Loading video…");
-        widgets.status_detail.set_visible(false);
-        widgets.status_plate.set_visible(true);
-    } else {
-        widgets.status_plate.set_visible(false);
-        widgets.status_spinner.set_spinning(false);
+/// Drive the central status plate from the pure `status_plate` decision.
+/// Shown for initial loading, network buffering, and terminal errors —
+/// seeking intentionally doesn't trigger it.
+///
+/// Note (v1 limitation): on a fast connection the buffering percent can jump
+/// 0 → 100 in well under a frame, so the "Buffering… N%" plate may flicker
+/// briefly. Accepted for v1 rather than adding a debounce timer.
+fn update_status_plate(
+    widgets: &VideoPlayerWidgets,
+    error_msg: Option<&str>,
+    is_prepared: bool,
+    buffering: Option<i32>,
+) {
+    use crate::components::player::status_plate::{StatusPlate, status_plate};
+
+    match status_plate(error_msg, is_prepared, buffering) {
+        StatusPlate::Error(msg) => {
+            widgets.status_spinner.set_spinning(false);
+            widgets.status_spinner.set_visible(false);
+            widgets.status_icon.set_visible(true);
+            widgets.status_title.set_label("Couldn't play video");
+            widgets.status_detail.set_label(&msg);
+            widgets.status_detail.set_visible(true);
+            widgets.status_plate.set_visible(true);
+        }
+        StatusPlate::Buffering(pct) => {
+            widgets.status_icon.set_visible(false);
+            widgets.status_spinner.set_visible(true);
+            widgets.status_spinner.set_spinning(true);
+            widgets
+                .status_title
+                .set_label(&format!("Buffering… {pct}%"));
+            widgets.status_detail.set_visible(false);
+            widgets.status_plate.set_visible(true);
+        }
+        StatusPlate::Loading => {
+            widgets.status_icon.set_visible(false);
+            widgets.status_spinner.set_visible(true);
+            widgets.status_spinner.set_spinning(true);
+            widgets.status_title.set_label("Loading video…");
+            widgets.status_detail.set_visible(false);
+            widgets.status_plate.set_visible(true);
+        }
+        StatusPlate::Hidden => {
+            widgets.status_plate.set_visible(false);
+            widgets.status_spinner.set_spinning(false);
+        }
     }
 }
 
