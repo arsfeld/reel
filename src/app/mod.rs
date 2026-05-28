@@ -9,7 +9,7 @@ use tracing::info;
 use crate::components::connection::{ConnectionDialog, ConnectionDialogOutput};
 use crate::components::detail::movie_detail::{MovieDetail, MovieDetailMsg, MovieDetailOutput};
 use crate::components::detail::show_detail::{ShowDetail, ShowDetailMsg, ShowDetailOutput};
-use crate::components::downloads::{DownloadsView, DownloadsViewOutput};
+use crate::components::downloads::{DownloadsView, DownloadsViewMsg, DownloadsViewOutput};
 use crate::components::home::{HomeView, HomeViewMsg, HomeViewOutput};
 use crate::components::library::{LibraryView, LibraryViewMsg, LibraryViewOutput};
 
@@ -800,6 +800,7 @@ impl Component for App {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn update_cmd(
         &mut self,
         cmd: Self::CommandOutput,
@@ -889,6 +890,10 @@ impl Component for App {
                     self.settings.library.clone(),
                 ));
                 self.movie_detail.emit(MovieDetailMsg::SetSource(
+                    plex_source.clone(),
+                    artwork_cache.clone(),
+                ));
+                self.downloads_view.emit(DownloadsViewMsg::SetSource(
                     plex_source.clone(),
                     artwork_cache.clone(),
                 ));
