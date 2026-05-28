@@ -168,6 +168,24 @@ impl HomeCard {
         }
     }
 
+    /// Like `set_media`, but badges the subtitle with the item's source label
+    /// (used by the cross-source Continue Watching row). The label is always
+    /// shown even when the base subtitle is absent.
+    pub fn set_media_with_source(&self, item: &MediaItem, progress: Option<f64>, label: &str) {
+        self.title_label.set_label(&item.title);
+
+        self.subtitle_label
+            .set_label(&card_subtitle_with_source(item, label));
+        self.subtitle_label.set_visible(true);
+
+        if show_progress_bar(progress) {
+            self.progress_bar.set_fraction(progress.unwrap());
+            self.progress_bar.set_visible(true);
+        } else {
+            self.progress_bar.set_visible(false);
+        }
+    }
+
     pub fn set_poster(&self, texture: &gtk::gdk::Texture) {
         self.picture.set_paintable(Some(texture));
         self.picture.remove_css_class("loading");
@@ -191,6 +209,17 @@ pub fn card_subtitle(item: &MediaItem) -> Option<String> {
             _ => item.parent_id.clone(),
         },
         _ => item.year.map(|y| y.to_string()),
+    }
+}
+
+/// Subtitle for a badged Continue Watching card: the base `card_subtitle`
+/// (season/episode or year) with the source label appended as " · {label}".
+/// When the base subtitle is absent, the label stands alone so every merged
+/// card shows which server it came from.
+pub fn card_subtitle_with_source(item: &MediaItem, label: &str) -> String {
+    match card_subtitle(item) {
+        Some(base) => format!("{base} · {label}"),
+        None => label.to_string(),
     }
 }
 
@@ -288,6 +317,22 @@ mod tests {
         let mut m = item(MediaType::Episode);
         m.parent_id = Some("plex:srv:show-7".into());
         assert_eq!(card_subtitle(&m), Some("plex:srv:show-7".to_string()));
+    }
+
+    #[test]
+    fn subtitle_with_source_appends_label() {
+        let mut m = item(MediaType::Movie);
+        m.year = Some(2021);
+        assert_eq!(
+            card_subtitle_with_source(&m, "Living Room"),
+            "2021 · Living Room"
+        );
+    }
+
+    #[test]
+    fn subtitle_with_source_uses_label_alone_when_no_base() {
+        let m = item(MediaType::Movie);
+        assert_eq!(card_subtitle_with_source(&m, "Basement"), "Basement");
     }
 
     #[test]

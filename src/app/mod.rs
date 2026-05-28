@@ -22,7 +22,7 @@ use crate::db::database::Database;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::library::LibrarySection;
 use crate::models::media::{MediaItem, MediaType, SourceType};
-use crate::models::source::{Source, SourceConfig};
+use crate::models::source::Source;
 use crate::models::watch::WatchProgress;
 use crate::navigation::CurrentView;
 use crate::player::SkipMarkers;
@@ -30,8 +30,6 @@ use crate::player::SkipMarkers;
 use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
 use crate::services::mpris::{self, MprisBridge, MprisCommand};
-use crate::services::plex::api::PlexClient;
-use crate::services::plex::source::PlexSource;
 use crate::services::screensaver::ScreensaverInhibitor;
 use crate::services::watch_state::WatchStateTracker;
 use crate::settings::Settings;
@@ -41,6 +39,7 @@ mod dialogs;
 mod download_handlers;
 mod handlers;
 mod player_ui;
+mod source_factory;
 mod source_validation;
 mod utils;
 mod watch_events;
@@ -51,7 +50,8 @@ use dialogs::show_file_chooser;
 use download_handlers::{DownloadItemAction, DownloadManager, DownloadRunnerMsg};
 use handlers::{handle_connection_saved, handle_play_media, handle_video_output};
 use player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
-use source_validation::validate_or_rediscover_source;
+use source_factory::SourceRegistry;
+use source_validation::validate_source;
 use utils::iso_now;
 use watch_events::dispatch_watch_events;
 use widget_builder::build_widgets;
@@ -81,11 +81,16 @@ pub struct App {
     last_position: f64,
     /// Resume position to seek to after file loads. Set from saved watch progress.
     pending_resume: Option<f64>,
-    /// Active media source for scrobble/timeline reporting.
-    active_source: Option<Arc<PlexSource>>,
-    /// Base URL of the active source, used as the `source_id` when building
-    /// per-library visibility keys.
-    source_url: Option<String>,
+    /// Live source registry, keyed by `{source_type}:{source_id}` in insertion
+    /// order. Detail/play/scrobble/skip resolve the owning source per item;
+    /// Home fans out across all of them.
+    sources: SourceRegistry,
+    /// The browsed source `(source_type, source_id)`: feeds the LibraryView
+    /// *list* and the per-library visibility key. Detail/play never use this —
+    /// they resolve the owning source from the item itself.
+    browsed_source: Option<(SourceType, String)>,
+    /// Shared artwork cache handed to every view; built once.
+    artwork_cache: Arc<ArtworkCache>,
     /// True while async startup validation of a saved source is in flight.
     source_connecting: bool,
     /// Application settings.
@@ -99,11 +104,215 @@ pub struct App {
     downloads: DownloadManager,
 }
 
+impl App {
+    /// The source that owns the now-playing item, resolved per-item from the
+    /// registry — never the browsed pointer. `None` if nothing is playing or
+    /// the item's source isn't registered.
+    fn now_playing_source(&self) -> Option<Arc<dyn MediaSource>> {
+        self.now_playing
+            .as_ref()
+            .and_then(|item| self.sources.for_item(item))
+    }
+
+    /// The full set of connected sources as `(source_type, source_id, source)`,
+    /// for Home's cross-source merged Continue Watching row — Home resolves each
+    /// merged item's owning source by matching type + id.
+    fn home_sources(&self) -> Vec<(SourceType, String, Arc<dyn MediaSource>)> {
+        self.sources
+            .iter()
+            .map(|entry| {
+                (
+                    entry.source_type,
+                    entry.source_id.clone(),
+                    entry.source.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Register a freshly-built source and add it to the sidebar as its own
+    /// group: register in the live registry (idempotent), push its identity +
+    /// visibility into the sidebar, and spawn an async libraries fetch. Called
+    /// for EVERY validated source so all servers appear in the sidebar — this
+    /// does NOT change the browsed source.
+    fn feed_sidebar_source(
+        &mut self,
+        source_type: SourceType,
+        source_id: &str,
+        name: &str,
+        source: Arc<dyn MediaSource>,
+        sender: &ComponentSender<Self>,
+    ) {
+        // Normalize to the same trailing-slash-trimmed form the API clients use
+        // for base_url(), so the registry key and sidebar source_id match the
+        // source_id every MediaItem carries (else per-item resolution misses).
+        let source_id = source_id.trim_end_matches('/');
+        self.sources
+            .register(source_type, source_id.to_string(), source.clone());
+        // Home merges Continue Watching across all sources, so refresh its view
+        // of the registry whenever a source is added.
+        self.home_view
+            .emit(HomeViewMsg::SetSources(self.home_sources()));
+        let hidden = self.settings.library_visibility.hidden.clone();
+
+        self.sidebar.emit(SidebarMsg::SetSource {
+            name: name.to_string(),
+            source_type: source_type.as_str().to_string(),
+            source_id: source_id.to_string(),
+        });
+        self.sidebar.emit(SidebarMsg::SetVisibility(hidden));
+
+        // The client absorbs cold-start retries, so a single fetch suffices.
+        let src = source;
+        let id = source_id.to_string();
+        sender.oneshot_command(async move {
+            AppCmd::LibrariesLoaded {
+                source_id: id,
+                libraries: src.libraries().await.unwrap_or_default(),
+            }
+        });
+    }
+
+    /// Make `source` the browsed source and point every browse-oriented view at
+    /// it (Home, LibraryView, detail views). Per-item paths still resolve their
+    /// own source; this only drives the *browsed* list + Home shelves.
+    fn set_browsed_views(
+        &mut self,
+        source_type: SourceType,
+        source_id: &str,
+        source: Arc<dyn MediaSource>,
+    ) {
+        // Match the trimmed form the clients/items use (see feed_sidebar_source).
+        let source_id = source_id.trim_end_matches('/');
+        self.browsed_source = Some((source_type, source_id.to_string()));
+        let cache = self.artwork_cache.clone();
+        let hidden = self.settings.library_visibility.hidden.clone();
+
+        self.home_view
+            .emit(HomeViewMsg::SetSource(source.clone(), cache.clone()));
+        self.home_view.emit(HomeViewMsg::SetVisibility(hidden));
+        // NavigateHome may have fired before the source was ready, so re-trigger.
+        let in_progress = load_in_progress(&self.db);
+        self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
+        self.library_view
+            .emit(LibraryViewMsg::SetSource(source.clone(), cache.clone()));
+        self.library_view.emit(LibraryViewMsg::SetSavedUiState(
+            self.settings.library.clone(),
+        ));
+        self.movie_detail
+            .emit(MovieDetailMsg::SetSource(source.clone(), cache.clone()));
+        self.show_detail
+            .emit(ShowDetailMsg::SetSource(source, cache));
+
+        let watch_data = load_watch_data(&self.db);
+        self.library_view
+            .emit(LibraryViewMsg::SetWatchData(watch_data));
+    }
+
+    /// Feed a source into the sidebar AND make it the browsed source. Used by
+    /// the connection-saved path, where a newly-added server should become the
+    /// active one.
+    fn wire_active_source(
+        &mut self,
+        source_type: SourceType,
+        source_id: String,
+        source: Arc<dyn MediaSource>,
+        sender: &ComponentSender<Self>,
+    ) {
+        self.feed_sidebar_source(
+            source_type,
+            &source_id,
+            source.name(),
+            source.clone(),
+            sender,
+        );
+        self.set_browsed_views(source_type, &source_id, source);
+    }
+
+    /// Remove a connected source and evict everything it owns. This is the ONLY
+    /// media/watch eviction path (R5 / DATA-PROTECTION) — it runs solely from
+    /// the explicit user-initiated remove-source action.
+    fn remove_source(
+        &mut self,
+        source_type: &str,
+        source_id: &str,
+        sender: &ComponentSender<Self>,
+    ) {
+        let Some(st) = SourceType::from_str(source_type) else {
+            return;
+        };
+
+        // Capture the display name before dropping the live source.
+        let name = self
+            .sources
+            .get(st, source_id)
+            .map(|s| s.name().to_string())
+            .unwrap_or_else(|| source_id.to_string());
+
+        // Drop from the live registry (the caller drops the sidebar group via
+        // SidebarMsg::DropSource after this confirmed removal).
+        self.sources.remove(st, source_id);
+        // Refresh Home's source set so the removed source leaves the merged
+        // Continue Watching row on the subsequent LoadHome.
+        self.home_view
+            .emit(HomeViewMsg::SetSources(self.home_sources()));
+
+        // Persisted eviction: the saved source row, then its media items, then
+        // any now-orphaned watch_progress rows (keyed by media_item_id, which
+        // embeds the source). Done in this order so orphan cleanup is accurate.
+        if let Some(ref db) = self.db {
+            let source_key = Source::make_id(st, source_id);
+            db.with(|conn| {
+                let _ = crate::db::source_repo::SourceRepo::new(conn).delete(&source_key);
+                if let Err(e) =
+                    crate::db::media_repo::MediaRepo::new(conn).delete_by_source(&st, source_id)
+                {
+                    tracing::warn!("Failed to delete media for removed source: {e}");
+                }
+                if let Err(e) = WatchProgressRepo::new(conn).cleanup_orphans() {
+                    tracing::warn!("Failed to clean up watch progress for removed source: {e}");
+                }
+            });
+        }
+
+        // If the removed source was the browsed one, pick another registered
+        // source as browsed (or none) and navigate Home.
+        if self.browsed_source.as_ref().map(|(t, i)| (*t, i.as_str())) == Some((st, source_id)) {
+            self.browsed_source = None;
+            let next = self
+                .sources
+                .iter()
+                .next()
+                .map(|n| (n.source_type, n.source_id.clone(), n.source.clone()));
+            if let Some((next_type, next_id, next_src)) = next {
+                self.set_browsed_views(next_type, &next_id, next_src);
+            }
+            sender.input(AppMsg::NavigateHome);
+        } else {
+            // Removing a non-browsed source still changes Home (it fans out over
+            // all sources) and the library watch data.
+            let in_progress = load_in_progress(&self.db);
+            self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
+            let watch_data = load_watch_data(&self.db);
+            self.library_view
+                .emit(LibraryViewMsg::SetWatchData(watch_data));
+        }
+
+        sender.input(AppMsg::ShowToast(format!("Removed {name}")));
+    }
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum AppMsg {
     NavigateHome,
-    Navigate(LibrarySection),
+    Navigate {
+        section: LibrarySection,
+        /// The owning source's type/id, so the App can scope the LibraryView
+        /// list to the right source (sidebar carries this per row).
+        source_type: String,
+        source_id: String,
+    },
     /// Persist a library/Collections visibility change (composite key + visible).
     SetLibraryVisible {
         key: String,
@@ -130,11 +339,29 @@ pub enum AppMsg {
         url: String,
         token: String,
         name: String,
+        source_type: String,
+        user_id: Option<String>,
     },
     ShowToast(String),
     FocusSearch,
-    ShowCollections,
+    /// Show the Collections of a specific source (per-source, from the sidebar).
+    ShowCollections {
+        source_type: String,
+        source_id: String,
+    },
     ShowDownloads,
+    /// A source's remove button was clicked: show a destructive confirmation
+    /// dialog before evicting anything.
+    RemoveSource {
+        source_type: String,
+        source_id: String,
+    },
+    /// The user confirmed removal: evict the source's media/watch rows + saved
+    /// config and drop its sidebar group.
+    ConfirmRemoveSource {
+        source_type: String,
+        source_id: String,
+    },
     ShowCollectionDetail(MediaItem),
     MarkWatched(MediaItem),
     MarkUnwatched(MediaItem),
@@ -169,15 +396,20 @@ pub enum AppMsg {
 
 #[derive(Debug)]
 pub enum AppCmd {
-    /// Validated (or re-discovered) server URL on startup.
-    SourceValidated {
-        url: String,
-        token: String,
-        name: String,
+    /// A saved source validated (or was re-discovered) on startup. `source`
+    /// carries the final, possibly-rediscovered config; `original_id` is the
+    /// pre-validation id so the persistence upsert can clear a stale row when a
+    /// Plex URL changed.
+    SourceValidated { source: Source, original_id: String },
+    /// Validation failed for a single source — identified by id so it never
+    /// affects another source's data.
+    SourceValidationFailed { source_id: String, message: String },
+    /// A source's libraries, fetched after validation, routed to its sidebar
+    /// group by `source_id`.
+    LibrariesLoaded {
+        source_id: String,
+        libraries: Vec<LibrarySection>,
     },
-    SourceValidationFailed(String),
-    /// The active source's libraries, fetched after validation, for the sidebar.
-    LibrariesLoaded(Vec<LibrarySection>),
     /// No-op for fire-and-forget async commands (scrobble, timeline).
     Noop,
     /// Skip markers fetched from the media source after playback starts.
@@ -228,13 +460,34 @@ impl Component for App {
             .launch(())
             .forward(sender.input_sender(), |output| match output {
                 SidebarOutput::NavigateHome => AppMsg::NavigateHome,
-                SidebarOutput::Navigate(section) => AppMsg::Navigate(section),
-                SidebarOutput::ShowCollections => AppMsg::ShowCollections,
+                SidebarOutput::Navigate {
+                    section,
+                    source_type,
+                    source_id,
+                } => AppMsg::Navigate {
+                    section,
+                    source_type,
+                    source_id,
+                },
+                SidebarOutput::ShowCollections {
+                    source_type,
+                    source_id,
+                } => AppMsg::ShowCollections {
+                    source_type,
+                    source_id,
+                },
                 SidebarOutput::ShowDownloads => AppMsg::ShowDownloads,
                 SidebarOutput::SetLibraryVisible { key, visible } => {
                     AppMsg::SetLibraryVisible { key, visible }
                 }
                 SidebarOutput::EditModeExited => AppMsg::SidebarEditModeExited,
+                SidebarOutput::RemoveSource {
+                    source_type,
+                    source_id,
+                } => AppMsg::RemoveSource {
+                    source_type,
+                    source_id,
+                },
             });
 
         let home_view = HomeView::builder()
@@ -342,28 +595,23 @@ impl Component for App {
             show_detail.emit(ShowDetailMsg::SetDb(db.clone()));
         }
 
-        // Load and validate saved source (async — tests connection, re-discovers if stale)
+        // Load and validate *all* enabled saved sources (async — each validates
+        // independently so one unreachable server never blocks or evicts another).
         let mut has_sources = false;
         if let Some(db) = &db {
-            let saved = db.with(|conn| {
+            let sources = db.with(|conn| {
                 crate::db::source_repo::SourceRepo::new(conn)
                     .list()
-                    .ok()
-                    .and_then(|sources| sources.into_iter().find(|s| s.enabled))
+                    .unwrap_or_default()
             });
-            if let Some(source) = saved {
+            for source in sources.into_iter().filter(|s| s.enabled) {
                 has_sources = true;
                 info!(
-                    "Loaded saved Plex source: {} (url={})",
-                    source.name, source.config.url
+                    "Loaded saved {:?} source: {} (url={})",
+                    source.source_type, source.name, source.config.url
                 );
-                let url = source.config.url.clone();
-                let token = source.config.token.clone();
-                let name = source.name.clone();
                 let data_dir = crate::config::data_dir();
-                sender.oneshot_command(async move {
-                    validate_or_rediscover_source(url, token, name, data_dir).await
-                });
+                sender.oneshot_command(async move { validate_source(source, data_dir).await });
             }
         }
 
@@ -385,11 +633,12 @@ impl Component for App {
             current_view: CurrentView::default(),
             db,
             now_playing: None,
-            source_url: None,
+            sources: SourceRegistry::default(),
+            browsed_source: None,
+            artwork_cache: Arc::new(ArtworkCache::new(crate::config::artwork_dir())),
             watch_tracker: WatchStateTracker::new(),
             last_position: 0.0,
             pending_resume: None,
-            active_source: None,
             source_connecting: false,
             settings,
             mpris: mpris::spawn_mpris_server(),
@@ -463,13 +712,27 @@ impl Component for App {
                 let in_progress = load_in_progress(&self.db);
                 self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
             }
-            AppMsg::Navigate(section) => {
+            AppMsg::Navigate {
+                section,
+                source_type,
+                source_id,
+            } => {
                 self.current_view = CurrentView::Library(section.key.clone());
                 self.stack.set_visible_child_name("shell");
                 self.nav_view.replace_with_tags(&["library"]);
                 root.set_fullscreened(false);
                 root.set_title(Some("Reel"));
                 self.library_title.set_label(&section.title);
+                // Point the browsed source at the navigated library's owner and
+                // feed that source to the LibraryView list (per-item paths still
+                // resolve their own source).
+                if let Some(st) = SourceType::from_str(&source_type) {
+                    self.browsed_source = Some((st, source_id.clone()));
+                    if let Some(src) = self.sources.get(st, &source_id) {
+                        self.library_view
+                            .emit(LibraryViewMsg::SetSource(src, self.artwork_cache.clone()));
+                    }
+                }
                 self.library_view.emit(LibraryViewMsg::LoadLibrary(section));
             }
             AppMsg::SetLibraryVisible { key, visible } => {
@@ -488,10 +751,12 @@ impl Component for App {
                 self.home_view
                     .emit(HomeViewMsg::SetVisibility(hidden.clone()));
                 // If the library being viewed was just hidden, drop to Home.
-                let redirect = match (&self.current_view, &self.source_url) {
-                    (CurrentView::Library(key), Some(url)) => {
-                        hidden.contains(&LibrarySection::visibility_key_for("plex", url, key))
-                    }
+                // Key by the browsed source's own type + id (not a hardcoded
+                // "plex") so per-source visibility resolves for any backend.
+                let redirect = match (&self.current_view, &self.browsed_source) {
+                    (CurrentView::Library(key), Some((source_type, source_id))) => hidden.contains(
+                        &LibrarySection::visibility_key_for(source_type.as_str(), source_id, key),
+                    ),
                     _ => false,
                 };
                 if redirect {
@@ -504,6 +769,12 @@ impl Component for App {
             }
             AppMsg::ShowMovieDetail(item) => {
                 self.current_view = CurrentView::MovieDetail(item.id.clone());
+                // Resolve the item's OWNING source (not the browsed one) so a
+                // merged-Home item from another server opens correctly.
+                if let Some(src) = self.sources.for_item(&item) {
+                    self.movie_detail
+                        .emit(MovieDetailMsg::SetSource(src, self.artwork_cache.clone()));
+                }
                 let downloaded = self.is_downloaded(&item.id);
                 self.movie_detail
                     .emit(MovieDetailMsg::LoadMovie(item.clone()));
@@ -517,6 +788,10 @@ impl Component for App {
             }
             AppMsg::ShowShowDetail(item) => {
                 self.current_view = CurrentView::ShowDetail(item.id.clone());
+                if let Some(src) = self.sources.for_item(&item) {
+                    self.show_detail
+                        .emit(ShowDetailMsg::SetSource(src, self.artwork_cache.clone()));
+                }
                 self.show_detail.emit(ShowDetailMsg::LoadShow(item.clone()));
                 let page = adw::NavigationPage::builder()
                     .title(&item.title)
@@ -528,10 +803,11 @@ impl Component for App {
                 if self.stack.visible_child_name().as_deref() == Some("player") {
                     // Stop watch tracking when leaving player
                     let events = self.watch_tracker.stop(self.last_position);
+                    let src = self.now_playing_source();
                     dispatch_watch_events(
                         &self.db,
                         events,
-                        &self.active_source,
+                        &src,
                         self.now_playing.as_ref().map(|i| i.id.as_str()),
                         &sender,
                     );
@@ -592,15 +868,23 @@ impl Component for App {
                 handle_video_output(self, output, &sender, root);
             }
             AppMsg::ShowConnectionDialog => {
-                let client_id =
-                    crate::services::plex::auth::client_identifier(&crate::config::data_dir());
                 let dialog = ConnectionDialog::builder()
                     .transient_for(root)
-                    .launch(client_id)
+                    .launch(crate::config::data_dir())
                     .forward(sender.input_sender(), |output| match output {
-                        ConnectionDialogOutput::ConnectionSaved { url, token, name } => {
-                            AppMsg::ConnectionSaved { url, token, name }
-                        }
+                        ConnectionDialogOutput::ConnectionSaved {
+                            url,
+                            token,
+                            name,
+                            source_type,
+                            user_id,
+                        } => AppMsg::ConnectionSaved {
+                            url,
+                            token,
+                            name,
+                            source_type,
+                            user_id,
+                        },
                         ConnectionDialogOutput::Cancelled => {
                             AppMsg::ShowToast("Connection cancelled".to_string())
                         }
@@ -608,8 +892,23 @@ impl Component for App {
                 dialog.widget().present();
                 self.connection_dialog = Some(dialog);
             }
-            AppMsg::ConnectionSaved { url, token, name } => {
-                handle_connection_saved(self, url, token, name, &sender);
+            AppMsg::ConnectionSaved {
+                url,
+                token,
+                name,
+                source_type,
+                user_id,
+            } => {
+                // Don't silently fall back to Plex on an unrecognized type — a
+                // Plex client built from Jellyfin credentials would fail opaquely.
+                let Some(st) = SourceType::from_str(&source_type) else {
+                    tracing::warn!("Ignoring connection with unknown source_type: {source_type}");
+                    sender.input(AppMsg::ShowToast(format!(
+                        "Unknown source type \u{201c}{source_type}\u{201d}"
+                    )));
+                    return;
+                };
+                handle_connection_saved(self, url, token, name, st, user_id, &sender);
             }
             AppMsg::ShowToast(message) => {
                 if !message.is_empty() {
@@ -624,14 +923,70 @@ impl Component for App {
             AppMsg::FocusSearch => {
                 self.library_view.emit(LibraryViewMsg::FocusSearch);
             }
-            AppMsg::ShowCollections => {
+            AppMsg::ShowCollections {
+                source_type,
+                source_id,
+            } => {
                 self.current_view = CurrentView::Collections;
                 self.stack.set_visible_child_name("shell");
                 self.nav_view.replace_with_tags(&["library"]);
                 root.set_fullscreened(false);
                 root.set_title(Some("Reel"));
                 self.library_title.set_label("Collections");
+                // Collections are per-source: point the browsed source + the
+                // LibraryView list at the owning source before loading.
+                if let Some(st) = SourceType::from_str(&source_type) {
+                    self.browsed_source = Some((st, source_id.clone()));
+                    if let Some(src) = self.sources.get(st, &source_id) {
+                        self.library_view
+                            .emit(LibraryViewMsg::SetSource(src, self.artwork_cache.clone()));
+                    }
+                }
                 self.library_view.emit(LibraryViewMsg::LoadCollections);
+            }
+            AppMsg::RemoveSource {
+                source_type,
+                source_id,
+            } => {
+                // Destructive: confirm before evicting media + watch history
+                // (DATA-PROTECTION — never delete user data without explicit
+                // confirmation).
+                let name = SourceType::from_str(&source_type)
+                    .and_then(|st| self.sources.get(st, &source_id))
+                    .map_or_else(|| source_id.clone(), |s| s.name().to_string());
+                let dialog = adw::AlertDialog::new(
+                    Some("Remove server?"),
+                    Some(&format!(
+                        "Removing \u{201c}{name}\u{201d} deletes its synced media and watch \
+                         history from this device. This can't be undone."
+                    )),
+                );
+                dialog.add_response("cancel", "Cancel");
+                dialog.add_response("remove", "Remove");
+                dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+                dialog.set_default_response(Some("cancel"));
+                dialog.set_close_response("cancel");
+                let input = sender.input_sender().clone();
+                dialog.connect_response(None, move |_, response| {
+                    if response == "remove" {
+                        let _ = input.send(AppMsg::ConfirmRemoveSource {
+                            source_type: source_type.clone(),
+                            source_id: source_id.clone(),
+                        });
+                    }
+                });
+                dialog.present(Some(root));
+            }
+            AppMsg::ConfirmRemoveSource {
+                source_type,
+                source_id,
+            } => {
+                self.remove_source(&source_type, &source_id, &sender);
+                // Drop the now-evicted source's sidebar group.
+                self.sidebar.emit(SidebarMsg::DropSource {
+                    source_type,
+                    source_id,
+                });
             }
             AppMsg::ShowDownloads => {
                 self.current_view = CurrentView::Downloads;
@@ -670,14 +1025,14 @@ impl Component for App {
                         let _ = repo.upsert(&progress);
                     });
                 }
-                // Fire-and-forget Plex scrobble
-                if item.source_type == SourceType::Plex
-                    && let Some(source) = self.active_source.clone()
+                // Fire-and-forget scrobble to the item's owning server.
+                if item.source_type.reports_watch_state()
+                    && let Some(source) = self.sources.for_item(&item)
                 {
                     let key = item.external_id.clone();
                     sender.oneshot_command(async move {
                         if let Err(e) = source.scrobble(&key).await {
-                            tracing::warn!("Plex scrobble failed: {e}");
+                            tracing::warn!("Scrobble failed: {e}");
                         }
                         AppCmd::Noop
                     });
@@ -699,14 +1054,14 @@ impl Component for App {
                         let _ = repo.mark_unwatched(&item.id);
                     });
                 }
-                // Fire-and-forget Plex unscrobble
-                if item.source_type == SourceType::Plex
-                    && let Some(source) = self.active_source.clone()
+                // Fire-and-forget unscrobble to the item's owning server.
+                if item.source_type.reports_watch_state()
+                    && let Some(source) = self.sources.for_item(&item)
                 {
                     let key = item.external_id.clone();
                     sender.oneshot_command(async move {
                         if let Err(e) = source.unscrobble(&key).await {
-                            tracing::warn!("Plex unscrobble failed: {e}");
+                            tracing::warn!("Unscrobble failed: {e}");
                         }
                         AppCmd::Noop
                     });
@@ -808,102 +1163,66 @@ impl Component for App {
         _root: &Self::Root,
     ) {
         match cmd {
-            AppCmd::SourceValidated { url, token, name } => {
+            AppCmd::SourceValidated {
+                source,
+                original_id,
+            } => {
                 let source_start = Instant::now();
-                info!("Plex source validated: {} (url={})", name, url);
+                info!(
+                    "{:?} source validated: {} (url={})",
+                    source.source_type, source.name, source.config.url
+                );
 
                 self.source_connecting = false;
 
-                // Update saved URL in DB (clear old entries — URL may have changed)
+                // Id-scoped upsert: clear only THIS source's row(s) — the new id
+                // and the pre-validation id (in case a Plex URL changed) — then
+                // insert. Never delete-all: another source's saved config (and so
+                // its ability to reconnect) must survive this revalidation.
+                // Media / watch rows are NEVER touched here — eviction happens
+                // only via the explicit remove-source path (R5 / U8).
                 if let Some(db) = &self.db {
                     db.with(|conn| {
                         let mut repo = crate::db::source_repo::SourceRepo::new(conn);
-                        if let Ok(old_sources) = repo.list() {
-                            for s in &old_sources {
-                                let _ = repo.delete(&s.id);
-                            }
+                        let _ = repo.delete(&source.id);
+                        if original_id != source.id {
+                            let _ = repo.delete(&original_id);
                         }
-                        let source = Source {
-                            id: Source::make_id(&url),
-                            source_type: SourceType::Plex,
-                            name: name.clone(),
-                            config: SourceConfig {
-                                url: url.clone(),
-                                token: token.clone(),
-                            },
-                            enabled: true,
-                            last_synced_at: None,
-                        };
                         if let Err(e) = repo.insert(&source) {
                             tracing::warn!("Failed to update source: {e}");
                         }
                     });
                 }
 
-                let client = PlexClient::new(&url, &token);
-                let plex_source = Arc::new(PlexSource::new(client, name));
-                let artwork_cache = Arc::new(ArtworkCache::new(crate::config::artwork_dir()));
-
-                self.active_source = Some(plex_source.clone());
-                self.source_url = Some(url.clone());
+                // Build via the factory and register. The first validated source
+                // becomes the browsed one and is wired into the views; additional
+                // sources are registered so per-item resolution and (U8/U9) the
+                // multi-source UI can reach them.
+                if let Some(built) = source_factory::build_source(&source) {
+                    let source_id = source.config.url.clone();
+                    // Every validated source becomes its own sidebar group so
+                    // all servers appear; only the first one also becomes the
+                    // browsed source that drives Home + the LibraryView list.
+                    let make_browsed = self.browsed_source.is_none();
+                    self.feed_sidebar_source(
+                        source.source_type,
+                        &source_id,
+                        &source.name,
+                        built.clone(),
+                        &sender,
+                    );
+                    if make_browsed {
+                        self.downloads_view.emit(DownloadsViewMsg::SetSource(
+                            built.clone(),
+                            self.artwork_cache.clone(),
+                        ));
+                        self.set_browsed_views(source.source_type, &source_id, built);
+                    }
+                }
 
                 // Reconnect: flush any progress recorded offline back to the
                 // source before any inbound browse can surface a stale offset.
                 watch_events::flush_pending_sync(self, &sender);
-
-                // Feed the sidebar tree: source identity, current visibility, and
-                // (async) the source's libraries.
-                self.sidebar.emit(SidebarMsg::SetSource {
-                    name: plex_source.name().to_string(),
-                    source_type: "plex".to_string(),
-                    source_id: url.clone(),
-                });
-                self.sidebar.emit(SidebarMsg::SetVisibility(
-                    self.settings.library_visibility.hidden.clone(),
-                ));
-                {
-                    // The PlexClient absorbs cold-start connection retries, so a
-                    // single fetch here is enough once the source is validated.
-                    let src = plex_source.clone();
-                    sender.oneshot_command(async move {
-                        AppCmd::LibrariesLoaded(src.libraries().await.unwrap_or_default())
-                    });
-                }
-
-                self.home_view.emit(HomeViewMsg::SetSource(
-                    plex_source.clone(),
-                    artwork_cache.clone(),
-                ));
-                self.home_view.emit(HomeViewMsg::SetVisibility(
-                    self.settings.library_visibility.hidden.clone(),
-                ));
-                // Re-trigger home data load now that the source is available.
-                // NavigateHome fires before validation completes, so LoadHome
-                // was skipped — retry it here.
-                let in_progress = load_in_progress(&self.db);
-                self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
-                self.library_view.emit(LibraryViewMsg::SetSource(
-                    plex_source.clone(),
-                    artwork_cache.clone(),
-                ));
-                self.library_view.emit(LibraryViewMsg::SetSavedUiState(
-                    self.settings.library.clone(),
-                ));
-                self.movie_detail.emit(MovieDetailMsg::SetSource(
-                    plex_source.clone(),
-                    artwork_cache.clone(),
-                ));
-                self.downloads_view.emit(DownloadsViewMsg::SetSource(
-                    plex_source.clone(),
-                    artwork_cache.clone(),
-                ));
-                self.show_detail
-                    .emit(ShowDetailMsg::SetSource(plex_source, artwork_cache));
-
-                // Send watch data to library view
-                let watch_data = load_watch_data(&self.db);
-                self.library_view
-                    .emit(LibraryViewMsg::SetWatchData(watch_data));
 
                 info!(
                     "Source setup took {:?} (DB save + watch data)",
@@ -918,14 +1237,22 @@ impl Component for App {
                 // The source is live — start any queued/recovered downloads.
                 download_handlers::start_pending(self);
             }
-            AppCmd::LibrariesLoaded(libraries) => {
-                self.sidebar.emit(SidebarMsg::SetLibraries(libraries));
+            AppCmd::LibrariesLoaded {
+                source_id,
+                libraries,
+            } => {
+                self.sidebar.emit(SidebarMsg::SetLibraries {
+                    source_id,
+                    libraries,
+                });
             }
-            AppCmd::SourceValidationFailed(msg) => {
-                tracing::warn!("Saved Plex source not reachable: {msg}");
+            AppCmd::SourceValidationFailed { source_id, message } => {
+                // One source failing must not disturb others: log + toast, leave
+                // its saved row and all media/watch data intact.
+                tracing::warn!("Saved source {source_id} not reachable: {message}");
                 self.source_connecting = false;
                 self.home_view.emit(HomeViewMsg::SetConnecting(false));
-                sender.input(AppMsg::ShowToast(format!("Plex server unreachable: {msg}")));
+                sender.input(AppMsg::ShowToast(format!("Server unreachable: {message}")));
             }
             AppCmd::SkipMarkersLoaded(markers) => {
                 self.video_player

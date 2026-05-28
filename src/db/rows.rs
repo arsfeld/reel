@@ -470,6 +470,7 @@ mod tests {
             config: SourceConfig {
                 url: "http://s:32400".into(),
                 token: "tok".into(),
+                user_id: None,
             },
             enabled: true,
             last_synced_at: Some("2024-03-14T10:00:00Z".into()),
