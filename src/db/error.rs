@@ -1,8 +1,11 @@
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)]
 pub enum DbError {
-    #[error("SQLite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
+    #[error("Diesel error: {0}")]
+    Diesel(#[from] diesel::result::Error),
+
+    #[error("Connection error: {0}")]
+    Connection(#[from] diesel::ConnectionError),
 
     #[error("Migration error: {0}")]
     Migration(String),

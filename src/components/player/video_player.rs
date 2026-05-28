@@ -35,6 +35,7 @@ use gtk::prelude::*;
 use relm4::gtk;
 use relm4::prelude::*;
 
+use crate::components::player::status_plate;
 use crate::player::PlayState;
 use crate::player::SkipMarkers;
 use crate::player::gst_pipeline::PlaybackPipeline;
@@ -178,6 +179,9 @@ pub(crate) enum VideoPlayerMsg {
     /// credits range, no-op otherwise. Used by the overlay button
     /// and the `s` keyboard shortcut.
     SkipCurrent,
+    /// Buffering progress (0-100) from the pipeline bus, for the status-plate
+    /// indicator.
+    Buffering(i32),
 }
 
 /// Independent playback flags grouped to keep `VideoPlayer`'s top-level
@@ -247,6 +251,10 @@ pub(crate) struct VideoPlayer {
     /// Skip intro / credits markers for the current media. `None` until
     /// set by the parent (e.g. from Plex metadata).
     skip_markers: Option<SkipMarkers>,
+    /// Buffering percent (0-100) while a network rebuffer/fill is active;
+    /// `None` once filled (>= 100) or never buffering. Drives the status
+    /// plate and suppresses poll-derived state flicker during buffering.
+    buffering_percent: Option<i32>,
 }
 
 #[relm4::component(pub(crate))]
@@ -679,6 +687,66 @@ impl Component for VideoPlayer {
         sender: ComponentSender<Self>,
         root: &Self::Root,
     ) {
+        if self.dispatch_msg(widgets, sender.clone(), msg) {
+            return;
+        }
+
+        // Notify the parent on reveal-state edges so it can fade the
+        // floating header bar together with the OSD. Computed here (not
+        // in `refresh_widgets`) because we need `&mut self` to latch the
+        // last value, and emitting only on changes avoids spamming the
+        // parent on every tick.
+        let force_visible = self.media.is_none() || self.duration_us == 0;
+        let revealed = self.osd.show_controls || force_visible || self.osd.popover_open;
+        if revealed != self.osd.controls_revealed {
+            self.osd.controls_revealed = revealed;
+            let _ = sender.output(VideoPlayerOutput::ControlsRevealedChanged(revealed));
+        }
+
+        // Re-render derived widget state. We keep this manual because
+        // many of these properties depend on multiple model fields and a
+        // few need to skip our own value-changed handlers.
+        rebuild_track_popovers(
+            widgets,
+            &self.tracks,
+            self.media.as_ref(),
+            &sender,
+            &mut self.track_ui_signature,
+        );
+        self.refresh_widgets(widgets, root);
+        let _ = root;
+    }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        if let Some(id) = self.tick_source.take() {
+            id.remove();
+        }
+        if let Some(id) = self.hide_source.take() {
+            id.remove();
+        }
+        if let Some(media) = &self.media {
+            media.pause();
+        }
+        // Drop the pipeline so its bus watch and any audio output are
+        // torn down before the widget tree is finalized.
+        self.media = None;
+        if let Some(fs_window) = self.fs_window.take() {
+            fs_window.set_child(gtk::Widget::NONE);
+            fs_window.destroy();
+        }
+    }
+}
+
+impl VideoPlayer {
+    /// Dispatch a single input message to its handler. Returns `true` if the
+    /// caller should return early without running the post-dispatch widget
+    /// refresh (used by messages that bail out, e.g. dropped subtitle files).
+    fn dispatch_msg(
+        &mut self,
+        widgets: &mut <Self as relm4::Component>::Widgets,
+        sender: ComponentSender<Self>,
+        msg: VideoPlayerMsg,
+    ) -> bool {
         match msg {
             VideoPlayerMsg::LoadFile(path) => {
                 let url = format!("file://{}", path);
@@ -708,6 +776,7 @@ impl Component for VideoPlayer {
             }
             VideoPlayerMsg::SetAutoplay(on) => self.playback.autoplay = on,
             VideoPlayerMsg::Tick => self.handle_tick(widgets, &sender),
+            VideoPlayerMsg::Buffering(percent) => self.handle_buffering(widgets, percent),
             VideoPlayerMsg::TogglePlay => self.handle_toggle_play(widgets, &sender),
             VideoPlayerMsg::SeekRelative(secs) => self.handle_seek_relative(&sender, secs),
             VideoPlayerMsg::SeekFraction(f) => self.handle_seek_fraction(&sender, f),
@@ -764,7 +833,7 @@ impl Component for VideoPlayer {
                         };
                         sender.input(VideoPlayerMsg::LoadExternalSubtitle(sub_uri));
                     }
-                    return;
+                    return true;
                 }
                 let url = if uri.starts_with("file://") {
                     uri.clone()
@@ -781,6 +850,21 @@ impl Component for VideoPlayer {
                     Some(path.to_string()),
                 );
             }
+            other => self.dispatch_track_msg(widgets, &sender, other),
+        }
+
+        false
+    }
+
+    /// Handles the track-selection, subtitle, popover, and skip-marker messages.
+    /// Split out of `dispatch_msg` to keep each handler under the line cap.
+    fn dispatch_track_msg(
+        &mut self,
+        widgets: &mut <Self as relm4::Component>::Widgets,
+        sender: &ComponentSender<Self>,
+        msg: VideoPlayerMsg,
+    ) {
+        match msg {
             VideoPlayerMsg::StreamCollection(collection) => {
                 if let Some(media) = self.media.as_ref() {
                     media.handle_stream_collection(&collection);
@@ -833,58 +917,15 @@ impl Component for VideoPlayer {
                 self.skip_markers = Some(markers);
             }
             VideoPlayerMsg::SkipIntro => {
-                self.handle_skip_intro(&sender);
+                self.handle_skip_intro(sender);
             }
             VideoPlayerMsg::SkipCredits => {
-                self.handle_skip_credits(&sender);
+                self.handle_skip_credits(sender);
             }
             VideoPlayerMsg::SkipCurrent => {
-                self.handle_skip_current(&sender);
+                self.handle_skip_current(sender);
             }
-        }
-
-        // Notify the parent on reveal-state edges so it can fade the
-        // floating header bar together with the OSD. Computed here (not
-        // in `refresh_widgets`) because we need `&mut self` to latch the
-        // last value, and emitting only on changes avoids spamming the
-        // parent on every tick.
-        let force_visible = self.media.is_none() || self.duration_us == 0;
-        let revealed = self.osd.show_controls || force_visible || self.osd.popover_open;
-        if revealed != self.osd.controls_revealed {
-            self.osd.controls_revealed = revealed;
-            let _ = sender.output(VideoPlayerOutput::ControlsRevealedChanged(revealed));
-        }
-
-        // Re-render derived widget state. We keep this manual because
-        // many of these properties depend on multiple model fields and a
-        // few need to skip our own value-changed handlers.
-        rebuild_track_popovers(
-            widgets,
-            &self.tracks,
-            self.media.as_ref(),
-            &sender,
-            &mut self.track_ui_signature,
-        );
-        self.refresh_widgets(widgets, root);
-        let _ = root;
-    }
-
-    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
-        if let Some(id) = self.tick_source.take() {
-            id.remove();
-        }
-        if let Some(id) = self.hide_source.take() {
-            id.remove();
-        }
-        if let Some(media) = &self.media {
-            media.pause();
-        }
-        // Drop the pipeline so its bus watch and any audio output are
-        // torn down before the widget tree is finalized.
-        self.media = None;
-        if let Some(fs_window) = self.fs_window.take() {
-            fs_window.set_child(gtk::Widget::NONE);
-            fs_window.destroy();
+            _ => {}
         }
     }
 }
@@ -1012,6 +1053,7 @@ impl VideoPlayer {
             title: None,
             track_ui_signature: String::new(),
             skip_markers: None,
+            buffering_percent: None,
         }
     }
 
@@ -1314,6 +1356,11 @@ impl VideoPlayer {
         self.tracks.clear();
         self.track_ui_signature.clear();
         self.skip_markers = None;
+        // Clear any in-flight buffering state from the previous media, else a
+        // stale percent both shows a phantom "Buffering…" plate on the new
+        // stream and suppresses its play/pause state edges in handle_tick —
+        // permanently for a local file that emits no buffering messages.
+        self.buffering_percent = None;
 
         self.media = None;
 
@@ -1336,6 +1383,9 @@ impl VideoPlayer {
                     collection,
                     streams,
                 });
+            }
+            PipelineBusMsg::Buffering { percent } => {
+                sender_bus.input(VideoPlayerMsg::Buffering(percent));
             }
         });
 
@@ -1364,6 +1414,32 @@ impl VideoPlayer {
         self.media = Some(pipeline);
     }
 
+    /// Store buffering progress and refresh the status plate immediately so
+    /// the indicator doesn't wait for the next 4 Hz tick. `percent >= 100`
+    /// clears the buffering state (filled). The pause/resume side effects are
+    /// handled pipeline-side (mode-aware) before this message is emitted.
+    fn handle_buffering(&mut self, widgets: &mut <Self as Component>::Widgets, percent: i32) {
+        let new_percent = if percent < 100 { Some(percent) } else { None };
+        // downloadbuffer emits a buffering message roughly per percent (~100
+        // per stream) and can repeat the same value; skip the redundant
+        // allocation + widget writes when nothing the plate cares about moved.
+        if new_percent == self.buffering_percent {
+            return;
+        }
+        self.buffering_percent = new_percent;
+        let (error_msg, is_prepared) = self
+            .media
+            .as_ref()
+            .map(|m| (m.error_message(), m.is_prepared()))
+            .unwrap_or((None, false));
+        status_plate::render(
+            widgets,
+            error_msg.as_deref(),
+            is_prepared,
+            self.buffering_percent,
+        );
+    }
+
     fn handle_tick(
         &mut self,
         widgets: &mut <Self as Component>::Widgets,
@@ -1387,7 +1463,20 @@ impl VideoPlayer {
         };
         let status = snapshot.status;
 
-        let eos = !status.now_playing
+        // A pipeline error means buffering can never reach 100% to clear
+        // itself, so drop the buffering state — otherwise it would suppress
+        // state edges for the rest of the session (e.g. a connection that dies
+        // mid-fill). The error then surfaces on the plate (error outranks
+        // buffering), and play/pause edges flow again.
+        if snapshot.error_msg.is_some() {
+            self.buffering_percent = None;
+        }
+
+        // A buffering-induced pause near the end of a queue2 stream looks
+        // exactly like EOS (not playing, was playing, position within 500ms of
+        // the end). Gate on buffering so a rebuffer doesn't fire a false EOF.
+        let eos = self.buffering_percent.is_none()
+            && !status.now_playing
             && was_playing
             && snapshot.duration_us > 0
             && snapshot.position_us >= snapshot.duration_us - 500_000;
@@ -1397,7 +1486,12 @@ impl VideoPlayer {
             self.playback.playing = false;
             let _ = sender.output(VideoPlayerOutput::EndOfFile);
             let _ = sender.output(VideoPlayerOutput::StateChanged(PlayState::Stopped));
-            update_status_plate(widgets, snapshot.error_msg.as_deref(), status.is_prepared);
+            status_plate::render(
+                widgets,
+                snapshot.error_msg.as_deref(),
+                status.is_prepared,
+                self.buffering_percent,
+            );
             return;
         }
 
@@ -1431,7 +1525,15 @@ impl VideoPlayer {
             });
         }
 
-        if was_playing != status.now_playing {
+        // Emit a state transition only on a genuine play/pause edge while not
+        // buffering. While buffering is active the pipeline may dip into Paused
+        // on a queue2 underrun; suppressing the poll-derived transition keeps
+        // that automatic pause from leaking into `playback.playing` ownership
+        // or flickering the window title / MPRIS state — the pipeline resumes
+        // on its own once the buffer refills. (When there is no edge,
+        // `playback.playing` already equals `now_playing`, so no update is
+        // needed.)
+        if self.buffering_percent.is_none() && was_playing != status.now_playing {
             self.playback.playing = status.now_playing;
             let state = if status.now_playing {
                 PlayState::Playing
@@ -1440,12 +1542,15 @@ impl VideoPlayer {
             };
             let _ = sender.output(VideoPlayerOutput::StateChanged(state));
             flash_center(&widgets.center_indicator, status.now_playing);
-        } else {
-            self.playback.playing = status.now_playing;
         }
 
         self.apply_pending_resume(status.is_prepared);
-        update_status_plate(widgets, snapshot.error_msg.as_deref(), status.is_prepared);
+        status_plate::render(
+            widgets,
+            snapshot.error_msg.as_deref(),
+            status.is_prepared,
+            self.buffering_percent,
+        );
     }
 
     /// Trust the polled position only when there isn't a user-initiated
@@ -1499,7 +1604,11 @@ impl VideoPlayer {
         widgets: &mut <Self as Component>::Widgets,
         sender: &ComponentSender<Self>,
     ) {
-        let was_playing = self.media.as_ref().is_some_and(|m| m.is_playing());
+        // Decide from the user's intent, not the actual pipeline state: a
+        // queue2 buffering stall may have auto-paused the pipeline while the
+        // user still intends to play, and reading is_playing() there would
+        // invert the toggle (a pause press would resume).
+        let was_playing = self.media.as_ref().is_some_and(|m| m.wants_play());
         let Some(media) = self.media.as_ref() else {
             return;
         };
@@ -1768,30 +1877,6 @@ struct TickSnapshot {
     volume: f64,
     muted: bool,
     error_msg: Option<String>,
-}
-
-/// Drive the central status plate. We only show it for initial loading
-/// and for terminal errors — seeking intentionally doesn't trigger it.
-fn update_status_plate(widgets: &VideoPlayerWidgets, error_msg: Option<&str>, is_prepared: bool) {
-    if let Some(msg) = error_msg {
-        widgets.status_spinner.set_spinning(false);
-        widgets.status_spinner.set_visible(false);
-        widgets.status_icon.set_visible(true);
-        widgets.status_title.set_label("Couldn't play video");
-        widgets.status_detail.set_label(msg);
-        widgets.status_detail.set_visible(true);
-        widgets.status_plate.set_visible(true);
-    } else if !is_prepared {
-        widgets.status_icon.set_visible(false);
-        widgets.status_spinner.set_visible(true);
-        widgets.status_spinner.set_spinning(true);
-        widgets.status_title.set_label("Loading video…");
-        widgets.status_detail.set_visible(false);
-        widgets.status_plate.set_visible(true);
-    } else {
-        widgets.status_plate.set_visible(false);
-        widgets.status_spinner.set_spinning(false);
-    }
 }
 
 fn is_player_shortcut(key: gtk::gdk::Key) -> bool {

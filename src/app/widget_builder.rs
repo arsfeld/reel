@@ -4,6 +4,7 @@ use relm4::prelude::*;
 
 use super::App;
 use super::AppMsg;
+use crate::components::downloads::DownloadsView;
 use crate::components::home::HomeView;
 use crate::components::library::LibraryView;
 use crate::components::player::video_player::VideoPlayer;
@@ -32,6 +33,7 @@ pub fn build_widgets(
     home_view: &Controller<HomeView>,
     library_view: &Controller<LibraryView>,
     video_player: &Controller<VideoPlayer>,
+    downloads_view: &Controller<DownloadsView>,
 ) -> BuiltWidgets {
     let toast_overlay = adw::ToastOverlay::new();
     let stack = gtk::Stack::builder()
@@ -132,6 +134,32 @@ pub fn build_widgets(
         .child(&home_toolbar)
         .build();
     nav_view.add(&home_nav_page);
+
+    // Downloads page — its own top-level destination (source-independent).
+    let downloads_toolbar = adw::ToolbarView::new();
+    let downloads_header = adw::HeaderBar::new();
+    downloads_header.set_title_widget(Some(
+        &gtk::Label::builder()
+            .label("Downloads")
+            .css_classes(["title"])
+            .build(),
+    ));
+    let downloads_menu_button = gtk::MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .tooltip_text("Menu")
+        .menu_model(&menu)
+        .primary(true)
+        .build();
+    downloads_header.pack_end(&downloads_menu_button);
+    downloads_toolbar.add_top_bar(&downloads_header);
+    downloads_toolbar.set_content(Some(downloads_view.widget()));
+
+    let downloads_nav_page = adw::NavigationPage::builder()
+        .title("Downloads")
+        .tag("downloads")
+        .child(&downloads_toolbar)
+        .build();
+    nav_view.add(&downloads_nav_page);
 
     let content_nav_page = adw::NavigationPage::builder()
         .title("Content")

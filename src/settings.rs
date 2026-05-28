@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +23,50 @@ pub struct Settings {
     pub subtitles: SubtitleSettings,
     pub library: LibrarySettings,
     pub library_visibility: LibraryVisibility,
+    pub downloads: DownloadSettings,
+}
+
+/// Settings for offline downloads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DownloadSettings {
+    /// Folder where downloaded media is stored. When `None`, the effective
+    /// location is `config::downloads_dir()`.
+    pub folder: Option<PathBuf>,
+    /// Optional maximum total size (bytes) for downloads. When set and
+    /// exceeded, the oldest *watched* downloads are auto-pruned. `None` means
+    /// no budget (the user manages space manually).
+    pub max_bytes: Option<u64>,
+    /// Number of downloads that may transfer concurrently.
+    pub concurrency: usize,
+}
+
+impl Default for DownloadSettings {
+    fn default() -> Self {
+        Self {
+            folder: None,
+            max_bytes: None,
+            concurrency: 2,
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl DownloadSettings {
+    /// Resolve the effective downloads folder: the configured folder, or the
+    /// default `config::downloads_dir()` when unset.
+    pub fn effective_folder(&self) -> PathBuf {
+        self.folder.clone().unwrap_or_else(config::downloads_dir)
+    }
+
+    /// Clamp concurrency to the supported range (1-4), defaulting an
+    /// out-of-range or zero value to the sensible default of 2.
+    pub fn effective_concurrency(&self) -> usize {
+        match self.concurrency {
+            1..=4 => self.concurrency,
+            _ => 2,
+        }
+    }
 }
 
 /// Per-(source, library) visibility. Opt-out: a library is visible unless its
@@ -230,6 +275,7 @@ mod tests {
             },
             library: LibrarySettings::default(),
             library_visibility: LibraryVisibility::default(),
+            downloads: DownloadSettings::default(),
         };
         let toml_str = toml::to_string_pretty(&s).unwrap();
         let parsed: Settings = toml::from_str(&toml_str).unwrap();
@@ -424,6 +470,85 @@ sort = "YearNewest"
         let toml_str = "[playback]\ndefault_volume = 80.0\n";
         let s: Settings = toml::from_str(toml_str).unwrap();
         assert!(s.library_visibility.hidden.is_empty());
+    }
+
+    // --- Download settings ---
+
+    #[test]
+    fn download_settings_defaults() {
+        let d = DownloadSettings::default();
+        assert_eq!(d.concurrency, 2);
+        assert_eq!(d.max_bytes, None);
+        assert_eq!(d.folder, None);
+    }
+
+    #[test]
+    fn download_effective_folder_falls_back_to_default() {
+        let d = DownloadSettings::default();
+        assert_eq!(d.effective_folder(), config::downloads_dir());
+    }
+
+    #[test]
+    fn download_effective_folder_uses_configured_path() {
+        let d = DownloadSettings {
+            folder: Some(PathBuf::from("/media/downloads")),
+            ..Default::default()
+        };
+        assert_eq!(d.effective_folder(), PathBuf::from("/media/downloads"));
+    }
+
+    #[test]
+    fn download_effective_concurrency_clamps() {
+        assert_eq!(
+            DownloadSettings {
+                concurrency: 0,
+                ..Default::default()
+            }
+            .effective_concurrency(),
+            2
+        );
+        assert_eq!(
+            DownloadSettings {
+                concurrency: 9,
+                ..Default::default()
+            }
+            .effective_concurrency(),
+            2
+        );
+        assert_eq!(
+            DownloadSettings {
+                concurrency: 3,
+                ..Default::default()
+            }
+            .effective_concurrency(),
+            3
+        );
+    }
+
+    #[test]
+    fn download_settings_absent_section_fills_defaults() {
+        // A settings file written before downloads existed must still load.
+        let toml_str = "[playback]\ndefault_volume = 80.0\n";
+        let s: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(s.downloads.concurrency, 2);
+        assert_eq!(s.downloads.max_bytes, None);
+    }
+
+    #[test]
+    fn download_settings_toml_roundtrip() {
+        let s = Settings {
+            downloads: DownloadSettings {
+                folder: Some(PathBuf::from("/media/dl")),
+                max_bytes: Some(50_000_000_000),
+                concurrency: 4,
+            },
+            ..Default::default()
+        };
+        let toml_str = toml::to_string_pretty(&s).unwrap();
+        let parsed: Settings = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.downloads.folder, Some(PathBuf::from("/media/dl")));
+        assert_eq!(parsed.downloads.max_bytes, Some(50_000_000_000));
+        assert_eq!(parsed.downloads.concurrency, 4);
     }
 
     // --- Validation functions ---

@@ -4,12 +4,12 @@ use std::time::Instant;
 use adw::prelude::*;
 use gtk::glib;
 use relm4::prelude::*;
-use rusqlite::Connection;
 use tracing::info;
 
 use crate::components::connection::{ConnectionDialog, ConnectionDialogOutput};
 use crate::components::detail::movie_detail::{MovieDetail, MovieDetailMsg, MovieDetailOutput};
 use crate::components::detail::show_detail::{ShowDetail, ShowDetailMsg, ShowDetailOutput};
+use crate::components::downloads::{DownloadsView, DownloadsViewOutput};
 use crate::components::home::{HomeView, HomeViewMsg, HomeViewOutput};
 use crate::components::library::{LibraryView, LibraryViewMsg, LibraryViewOutput};
 
@@ -18,6 +18,7 @@ use crate::components::player::video_player::{
 };
 use crate::components::settings_dialog;
 use crate::components::sidebar::{Sidebar, SidebarMsg, SidebarOutput};
+use crate::db::database::Database;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::library::LibrarySection;
 use crate::models::media::{MediaItem, MediaType, SourceType};
@@ -37,6 +38,7 @@ use crate::settings::Settings;
 
 mod db_helpers;
 mod dialogs;
+mod download_handlers;
 mod handlers;
 mod player_ui;
 mod source_validation;
@@ -44,8 +46,9 @@ mod utils;
 mod watch_events;
 mod widget_builder;
 
-use db_helpers::{init_database, load_in_progress, load_watch_data};
+use db_helpers::{load_in_progress, load_watch_data, reclaim_stream_cache};
 use dialogs::show_file_chooser;
+use download_handlers::{DownloadItemAction, DownloadManager, DownloadRunnerMsg};
 use handlers::{
     handle_connection_saved, handle_play_media, handle_playback_resolve_failed,
     handle_playback_resolved, handle_video_output,
@@ -64,6 +67,7 @@ pub struct App {
     library_view: Controller<LibraryView>,
     movie_detail: Controller<MovieDetail>,
     show_detail: Controller<ShowDetail>,
+    downloads_view: Controller<DownloadsView>,
     connection_dialog: Option<Controller<ConnectionDialog>>,
     screensaver: ScreensaverInhibitor,
     toast_overlay: adw::ToastOverlay,
@@ -73,7 +77,7 @@ pub struct App {
     /// Library header title label — updated when sidebar navigation changes.
     library_title: gtk::Label,
     current_view: CurrentView,
-    db_conn: Option<Connection>,
+    db: Option<Database>,
     now_playing: Option<MediaItem>,
     watch_tracker: WatchStateTracker,
     /// Cached current position for save-on-exit.
@@ -94,6 +98,8 @@ pub struct App {
     /// Windowed player chrome (back + title) overlaid on the video page.
     player_chrome_revealer: gtk::Revealer,
     player_window_title: adw::WindowTitle,
+    /// Offline-download manager: pure queue + in-flight transfer tasks.
+    downloads: DownloadManager,
 
     // --- Session-only playback-quality state (R11; never persisted) ---
     /// The current title's quality selection. Reset to Auto on each new title.
@@ -147,6 +153,7 @@ pub enum AppMsg {
     ShowToast(String),
     FocusSearch,
     ShowCollections,
+    ShowDownloads,
     ShowCollectionDetail(MediaItem),
     MarkWatched(MediaItem),
     MarkUnwatched(MediaItem),
@@ -157,6 +164,26 @@ pub enum AppMsg {
     OpenPreferences,
     OpenAbout,
     MprisInput(MprisCommand),
+    /// Enqueue a single library item (movie or episode) for download.
+    EnqueueDownload(MediaItem),
+    /// Enqueue a show/season download: snapshot its current episodes as a group.
+    EnqueueDownloadGroup {
+        parent: MediaItem,
+        episodes: Vec<MediaItem>,
+        scope: crate::models::download::GroupScope,
+    },
+    /// A per-item download action from the Downloads UI.
+    DownloadAction {
+        media_item_id: String,
+        action: DownloadItemAction,
+    },
+    /// Reorder a queued download to a new position.
+    ReorderDownload {
+        media_item_id: String,
+        new_index: usize,
+    },
+    /// Progress / completion streamed from a background transfer task.
+    DownloadRunner(DownloadRunnerMsg),
 }
 
 #[derive(Debug)]
@@ -192,6 +219,10 @@ pub enum AppCmd {
         resume_secs: Option<f64>,
         epoch: u64,
     },
+    /// A timeline/scrobble report failed offline — queue it for later sync.
+    QueueOfflineSync(crate::models::download::PendingSync),
+    /// Pending-sync rows successfully flushed to the source on reconnect.
+    FlushedPending(Vec<i64>),
 }
 
 #[relm4::component(pub)]
@@ -216,7 +247,13 @@ impl Component for App {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        // Reclaim streaming-cache temp files orphaned by a previous crash
+        // before any playback pipeline can begin writing a new one.
+        reclaim_stream_cache();
+
         let settings = Settings::load();
+        let (downloads, download_rx) =
+            DownloadManager::new(settings.downloads.effective_concurrency());
         let video_player = VideoPlayer::builder()
             .launch(VideoPlayerInit {
                 preferred_subtitle_lang: settings.subtitles.preferred_language.clone(),
@@ -230,6 +267,7 @@ impl Component for App {
                 SidebarOutput::NavigateHome => AppMsg::NavigateHome,
                 SidebarOutput::Navigate(section) => AppMsg::Navigate(section),
                 SidebarOutput::ShowCollections => AppMsg::ShowCollections,
+                SidebarOutput::ShowDownloads => AppMsg::ShowDownloads,
                 SidebarOutput::SetLibraryVisible { key, visible } => {
                     AppMsg::SetLibraryVisible { key, visible }
                 }
@@ -278,6 +316,7 @@ impl Component for App {
                     url,
                     media_item: *media_item,
                 },
+                MovieDetailOutput::DownloadMedia(item) => AppMsg::EnqueueDownload(*item),
                 MovieDetailOutput::Error(msg) => AppMsg::ShowToast(msg),
             },
         );
@@ -289,7 +328,29 @@ impl Component for App {
                     url,
                     media_item: *media_item,
                 },
+                ShowDetailOutput::DownloadGroup {
+                    parent,
+                    episodes,
+                    scope,
+                } => AppMsg::EnqueueDownloadGroup {
+                    parent: *parent,
+                    episodes,
+                    scope,
+                },
                 ShowDetailOutput::Error(msg) => AppMsg::ShowToast(msg),
+            },
+        );
+
+        let downloads_view = DownloadsView::builder().launch(()).forward(
+            sender.input_sender(),
+            |output| match output {
+                DownloadsViewOutput::ItemAction {
+                    media_item_id,
+                    action,
+                } => AppMsg::DownloadAction {
+                    media_item_id,
+                    action,
+                },
             },
         );
 
@@ -302,6 +363,7 @@ impl Component for App {
             &home_view,
             &library_view,
             &video_player,
+            &downloads_view,
         );
         let toast_overlay = built.toast_overlay;
         let stack = built.stack;
@@ -311,16 +373,22 @@ impl Component for App {
         let player_chrome_revealer = built.player_chrome_revealer;
         let player_window_title = built.player_window_title;
 
-        // Initialize database
-        let db_conn = init_database();
+        // Initialize database (shared, single connection for the whole app)
+        let db = Database::open();
+        if let Some(db) = &db {
+            show_detail.emit(ShowDetailMsg::SetDb(db.clone()));
+        }
 
         // Load and validate saved source (async — tests connection, re-discovers if stale)
         let mut has_sources = false;
-        if let Some(ref conn) = db_conn {
-            let repo = crate::db::source_repo::SourceRepo::new(conn);
-            if let Ok(sources) = repo.list()
-                && let Some(source) = sources.into_iter().find(|s| s.enabled)
-            {
+        if let Some(db) = &db {
+            let saved = db.with(|conn| {
+                crate::db::source_repo::SourceRepo::new(conn)
+                    .list()
+                    .ok()
+                    .and_then(|sources| sources.into_iter().find(|s| s.enabled))
+            });
+            if let Some(source) = saved {
                 has_sources = true;
                 info!(
                     "Loaded saved Plex source: {} (url={})",
@@ -343,6 +411,7 @@ impl Component for App {
             library_view,
             movie_detail,
             show_detail,
+            downloads_view,
             connection_dialog: None,
             screensaver: ScreensaverInhibitor::new(),
             toast_overlay,
@@ -351,7 +420,7 @@ impl Component for App {
             split_view,
             library_title,
             current_view: CurrentView::default(),
-            db_conn,
+            db,
             now_playing: None,
             source_url: None,
             watch_tracker: WatchStateTracker::new(),
@@ -363,12 +432,26 @@ impl Component for App {
             mpris: mpris::spawn_mpris_server(),
             player_chrome_revealer,
             player_window_title,
+            downloads,
             current_quality: crate::models::playback::QualitySelection::Auto,
             active_transcode_session: None,
             transcode_base_offset: 0.0,
             current_decision: None,
             switch_state: crate::components::player::switch_state::SwitchState::new(),
         };
+
+        // Reconcile downloads against disk and rebuild the queue (no transfers
+        // start until the source validates — see download_handlers::start_pending).
+        download_handlers::recover_on_startup(&mut model);
+
+        // Relay transfer-task progress from tokio to the GTK main loop.
+        let sender_dl = sender.input_sender().clone();
+        let mut download_rx = download_rx;
+        glib::spawn_future_local(async move {
+            while let Some(msg) = download_rx.recv().await {
+                let _ = sender_dl.send(AppMsg::DownloadRunner(msg));
+            }
+        });
 
         // Show a loading page on the home view while async validation runs.
         if has_sources {
@@ -419,7 +502,7 @@ impl Component for App {
                 self.home_view.emit(HomeViewMsg::SetVisibility(
                     self.settings.library_visibility.hidden.clone(),
                 ));
-                let in_progress = load_in_progress(&self.db_conn);
+                let in_progress = load_in_progress(&self.db);
                 self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
             }
             AppMsg::Navigate(section) => {
@@ -457,14 +540,17 @@ impl Component for App {
                     sender.input(AppMsg::NavigateHome);
                 } else if matches!(self.current_view, CurrentView::Home) {
                     // Refresh Home in place so it reflects the new visibility.
-                    let in_progress = load_in_progress(&self.db_conn);
+                    let in_progress = load_in_progress(&self.db);
                     self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
                 }
             }
             AppMsg::ShowMovieDetail(item) => {
                 self.current_view = CurrentView::MovieDetail(item.id.clone());
+                let downloaded = self.is_downloaded(&item.id);
                 self.movie_detail
                     .emit(MovieDetailMsg::LoadMovie(item.clone()));
+                self.movie_detail
+                    .emit(MovieDetailMsg::SetDownloaded(downloaded));
                 let page = adw::NavigationPage::builder()
                     .title(&item.title)
                     .child(self.movie_detail.widget())
@@ -484,7 +570,13 @@ impl Component for App {
                 if self.stack.visible_child_name().as_deref() == Some("player") {
                     // Stop watch tracking when leaving player
                     let events = self.watch_tracker.stop(self.last_position);
-                    dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
+                    dispatch_watch_events(
+                        &self.db,
+                        events,
+                        &self.active_source,
+                        self.now_playing.as_ref().map(|i| i.id.as_str()),
+                        &sender,
+                    );
                     self.now_playing = None;
                     self.video_player.emit(VideoPlayerMsg::Clear);
                     leave_player_mode(root, &mut self.player_chrome_revealer);
@@ -596,6 +688,14 @@ impl Component for App {
                 self.library_title.set_label("Collections");
                 self.library_view.emit(LibraryViewMsg::LoadCollections);
             }
+            AppMsg::ShowDownloads => {
+                self.current_view = CurrentView::Downloads;
+                self.stack.set_visible_child_name("shell");
+                self.nav_view.replace_with_tags(&["downloads"]);
+                root.set_fullscreened(false);
+                root.set_title(Some("Reel"));
+                self.refresh_downloads_view();
+            }
             AppMsg::ShowCollectionDetail(item) => {
                 self.current_view = CurrentView::CollectionDetail(item.id.clone());
                 self.library_view.emit(LibraryViewMsg::LoadCollectionItems(
@@ -609,19 +709,21 @@ impl Component for App {
             }
             AppMsg::MarkWatched(item) => {
                 info!("Marking as watched: {}", item.title);
-                if let Some(ref conn) = self.db_conn {
-                    let repo = WatchProgressRepo::new(conn);
-                    let progress = WatchProgress {
-                        media_item_id: item.id.clone(),
-                        position_seconds: 0.0,
-                        duration_seconds: item
-                            .runtime_minutes
-                            .map(|m| m as f64 * 60.0)
-                            .unwrap_or(0.0),
-                        watched: true,
-                        last_watched_at: iso_now(),
-                    };
-                    let _ = repo.upsert(&progress);
+                if let Some(db) = &self.db {
+                    db.with(|conn| {
+                        let mut repo = WatchProgressRepo::new(conn);
+                        let progress = WatchProgress {
+                            media_item_id: item.id.clone(),
+                            position_seconds: 0.0,
+                            duration_seconds: item
+                                .runtime_minutes
+                                .map(|m| m as f64 * 60.0)
+                                .unwrap_or(0.0),
+                            watched: true,
+                            last_watched_at: iso_now(),
+                        };
+                        let _ = repo.upsert(&progress);
+                    });
                 }
                 // Fire-and-forget Plex scrobble
                 if item.source_type == SourceType::Plex
@@ -636,7 +738,7 @@ impl Component for App {
                     });
                 }
                 // Refresh watch data
-                let watch_data = load_watch_data(&self.db_conn);
+                let watch_data = load_watch_data(&self.db);
                 self.library_view
                     .emit(LibraryViewMsg::SetWatchData(watch_data));
                 sender.input(AppMsg::ShowToast(format!(
@@ -646,9 +748,11 @@ impl Component for App {
             }
             AppMsg::MarkUnwatched(item) => {
                 info!("Marking as unwatched: {}", item.title);
-                if let Some(ref conn) = self.db_conn {
-                    let repo = WatchProgressRepo::new(conn);
-                    let _ = repo.mark_unwatched(&item.id);
+                if let Some(db) = &self.db {
+                    db.with(|conn| {
+                        let mut repo = WatchProgressRepo::new(conn);
+                        let _ = repo.mark_unwatched(&item.id);
+                    });
                 }
                 // Fire-and-forget Plex unscrobble
                 if item.source_type == SourceType::Plex
@@ -663,7 +767,7 @@ impl Component for App {
                     });
                 }
                 // Refresh watch data
-                let watch_data = load_watch_data(&self.db_conn);
+                let watch_data = load_watch_data(&self.db);
                 self.library_view
                     .emit(LibraryViewMsg::SetWatchData(watch_data));
                 sender.input(AppMsg::ShowToast(format!(
@@ -678,7 +782,18 @@ impl Component for App {
                 }
             }
             AppMsg::OpenPreferences => {
-                self.settings = settings_dialog::show_preferences(root, &self.settings);
+                let usage = self
+                    .db
+                    .as_ref()
+                    .and_then(|db| {
+                        db.with(|conn| {
+                            crate::db::downloads_repo::DownloadsRepo::new(conn)
+                                .total_completed_bytes()
+                                .ok()
+                        })
+                    })
+                    .unwrap_or(0);
+                self.settings = settings_dialog::show_preferences(root, &self.settings, usage);
             }
             AppMsg::OpenAbout => {
                 settings_dialog::show_about(root);
@@ -712,6 +827,31 @@ impl Component for App {
                     root.close();
                 }
             },
+            AppMsg::EnqueueDownload(item) => {
+                download_handlers::enqueue_download(self, &item);
+            }
+            AppMsg::EnqueueDownloadGroup {
+                parent,
+                episodes,
+                scope,
+            } => {
+                download_handlers::enqueue_group(self, &parent, &episodes, scope);
+            }
+            AppMsg::DownloadAction {
+                media_item_id,
+                action,
+            } => {
+                download_handlers::item_action(self, &media_item_id, action);
+            }
+            AppMsg::ReorderDownload {
+                media_item_id,
+                new_index,
+            } => {
+                download_handlers::reorder_download(self, &media_item_id, new_index);
+            }
+            AppMsg::DownloadRunner(msg) => {
+                download_handlers::handle_runner_msg(self, msg);
+            }
         }
     }
 
@@ -737,27 +877,29 @@ impl Component for App {
                 self.source_connecting = false;
 
                 // Update saved URL in DB (clear old entries — URL may have changed)
-                if let Some(ref conn) = self.db_conn {
-                    let repo = crate::db::source_repo::SourceRepo::new(conn);
-                    if let Ok(old_sources) = repo.list() {
-                        for s in &old_sources {
-                            let _ = repo.delete(&s.id);
+                if let Some(db) = &self.db {
+                    db.with(|conn| {
+                        let mut repo = crate::db::source_repo::SourceRepo::new(conn);
+                        if let Ok(old_sources) = repo.list() {
+                            for s in &old_sources {
+                                let _ = repo.delete(&s.id);
+                            }
                         }
-                    }
-                    let source = Source {
-                        id: Source::make_id(&url),
-                        source_type: SourceType::Plex,
-                        name: name.clone(),
-                        config: SourceConfig {
-                            url: url.clone(),
-                            token: token.clone(),
-                        },
-                        enabled: true,
-                        last_synced_at: None,
-                    };
-                    if let Err(e) = repo.insert(&source) {
-                        tracing::warn!("Failed to update source: {e}");
-                    }
+                        let source = Source {
+                            id: Source::make_id(&url),
+                            source_type: SourceType::Plex,
+                            name: name.clone(),
+                            config: SourceConfig {
+                                url: url.clone(),
+                                token: token.clone(),
+                            },
+                            enabled: true,
+                            last_synced_at: None,
+                        };
+                        if let Err(e) = repo.insert(&source) {
+                            tracing::warn!("Failed to update source: {e}");
+                        }
+                    });
                 }
 
                 let client = PlexClient::new(&url, &token).with_remote(is_remote);
@@ -766,6 +908,10 @@ impl Component for App {
 
                 self.active_source = Some(plex_source.clone());
                 self.source_url = Some(url.clone());
+
+                // Reconnect: flush any progress recorded offline back to the
+                // source before any inbound browse can surface a stale offset.
+                watch_events::flush_pending_sync(self, &sender);
 
                 // Feed the sidebar tree: source identity, current visibility, and
                 // (async) the source's libraries.
@@ -796,7 +942,7 @@ impl Component for App {
                 // Re-trigger home data load now that the source is available.
                 // NavigateHome fires before validation completes, so LoadHome
                 // was skipped — retry it here.
-                let in_progress = load_in_progress(&self.db_conn);
+                let in_progress = load_in_progress(&self.db);
                 self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
                 self.library_view.emit(LibraryViewMsg::SetSource(
                     plex_source.clone(),
@@ -813,7 +959,7 @@ impl Component for App {
                     .emit(ShowDetailMsg::SetSource(plex_source, artwork_cache));
 
                 // Send watch data to library view
-                let watch_data = load_watch_data(&self.db_conn);
+                let watch_data = load_watch_data(&self.db);
                 self.library_view
                     .emit(LibraryViewMsg::SetWatchData(watch_data));
 
@@ -826,6 +972,9 @@ impl Component for App {
                 self.home_view.emit(HomeViewMsg::SetConnecting(false));
                 // A specific library loads when the user picks it from the
                 // sidebar; the default view is Home, so no eager load here.
+
+                // The source is live — start any queued/recovered downloads.
+                download_handlers::start_pending(self);
             }
             AppCmd::LibrariesLoaded(libraries) => {
                 self.sidebar.emit(SidebarMsg::SetLibraries(libraries));
@@ -858,6 +1007,10 @@ impl Component for App {
                 epoch,
                 &sender,
             ),
+            AppCmd::QueueOfflineSync(pending) => {
+                watch_events::queue_offline_sync(&self.db, &pending)
+            }
+            AppCmd::FlushedPending(ids) => watch_events::delete_flushed_pending(&self.db, &ids),
             AppCmd::Noop => {}
         }
     }
