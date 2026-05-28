@@ -10,8 +10,10 @@ use crate::models::watch::WatchProgress;
 use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
 
+mod hero;
 mod shelf;
 
+use hero::{Hero, hero_candidates, next_index, prev_index};
 use shelf::{Generation, HomeCard, Shelf, ShelfId, hub_duplicates_core, poster_result_is_current};
 
 pub struct HomeView {
@@ -25,6 +27,13 @@ pub struct HomeView {
     next_shelf_id: ShelfId,
     /// Incremented on every clear so stale in-flight poster loads are dropped.
     build_generation: Generation,
+    /// The featured hero region (persists across shelf rebuilds).
+    hero: Hero,
+    /// Current hero rotation candidates and the index being shown.
+    hero_items: Vec<MediaItem>,
+    hero_index: usize,
+    /// Guards async backdrop loads so rotation can't paint a stale backdrop.
+    hero_token: u64,
     /// The scrolled shelves view (the populated home).
     scroll: gtk::ScrolledWindow,
     /// Empty state page (shown when no source / no content).
@@ -55,6 +64,12 @@ pub enum HomeViewMsg {
     /// A card was activated. `resume` is set for Continue Watching cards, which
     /// resume playback rather than opening a detail page.
     CardActivated { item: MediaItem, resume: bool },
+    /// Hero rotation (auto via timer, or manual via arrow keys).
+    HeroAdvance,
+    HeroBack,
+    /// Hero Play / info act on the currently shown hero item.
+    HeroPlay,
+    HeroInfo,
 }
 
 impl std::fmt::Debug for HomeViewMsg {
@@ -69,6 +84,10 @@ impl std::fmt::Debug for HomeViewMsg {
             Self::CardActivated { item, resume } => {
                 write!(f, "CardActivated({}, resume={resume})", item.title)
             }
+            Self::HeroAdvance => write!(f, "HeroAdvance"),
+            Self::HeroBack => write!(f, "HeroBack"),
+            Self::HeroPlay => write!(f, "HeroPlay"),
+            Self::HeroInfo => write!(f, "HeroInfo"),
         }
     }
 }
@@ -97,6 +116,10 @@ pub enum HomeViewCmd {
         generation: Generation,
         shelf_id: ShelfId,
         index: usize,
+        texture: gtk::gdk::Texture,
+    },
+    HeroBackdropLoaded {
+        token: u64,
         texture: gtk::gdk::Texture,
     },
     Error(String),
@@ -179,12 +202,15 @@ impl Component for HomeView {
             .child(&connecting_spinner)
             .build();
 
-        // Shelves container
+        // Shelves container, with the hero pinned above the shelves so it
+        // scrolls together with the content.
         let scroll = gtk::ScrolledWindow::builder()
             .hexpand(true)
             .vexpand(true)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .build();
+
+        let hero = Hero::new(sender.input_sender());
 
         let shelves_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -195,7 +221,21 @@ impl Component for HomeView {
             .margin_bottom(16)
             .build();
 
-        scroll.set_child(Some(&shelves_box));
+        let content_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(16)
+            .build();
+        content_box.append(&hero.root);
+        content_box.append(&shelves_box);
+        scroll.set_child(Some(&content_box));
+
+        // Auto-advance the hero rotation every 8s. The timer lives for the
+        // component's lifetime; HeroAdvance is a no-op without candidates.
+        let rotate_sender = sender.input_sender().clone();
+        gtk::glib::timeout_add_local(std::time::Duration::from_secs(8), move || {
+            let _ = rotate_sender.send(HomeViewMsg::HeroAdvance);
+            gtk::glib::ControlFlow::Continue
+        });
 
         stack.add_child(&empty_page);
         stack.add_child(&connecting_page);
@@ -213,6 +253,10 @@ impl Component for HomeView {
             shelves: Vec::new(),
             next_shelf_id: 0,
             build_generation: 0,
+            hero,
+            hero_items: Vec::new(),
+            hero_index: 0,
+            hero_token: 0,
             scroll,
             empty_page,
             loading_page,
@@ -352,6 +396,39 @@ impl Component for HomeView {
                 }
                 let _ = sender.output(HomeViewOutput::ShowDetail(item));
             }
+            HomeViewMsg::HeroAdvance => {
+                if !self.hero_items.is_empty() {
+                    let idx = next_index(self.hero_index, self.hero_items.len());
+                    self.show_hero_item(idx, &sender);
+                }
+            }
+            HomeViewMsg::HeroBack => {
+                if !self.hero_items.is_empty() {
+                    let idx = prev_index(self.hero_index, self.hero_items.len());
+                    self.show_hero_item(idx, &sender);
+                }
+            }
+            HomeViewMsg::HeroPlay => {
+                if let Some(item) = self.hero_items.get(self.hero_index).cloned() {
+                    if let (Some(source), Some(part)) =
+                        (self.source.as_ref(), item.file_path.as_ref())
+                    {
+                        let url = source.playback_url(part);
+                        let _ = sender.output(HomeViewOutput::PlayMedia {
+                            url,
+                            media_item: item,
+                        });
+                    } else {
+                        // Shows carry no directly-playable file; open detail.
+                        let _ = sender.output(HomeViewOutput::ShowDetail(item));
+                    }
+                }
+            }
+            HomeViewMsg::HeroInfo => {
+                if let Some(item) = self.hero_items.get(self.hero_index).cloned() {
+                    let _ = sender.output(HomeViewOutput::ShowDetail(item));
+                }
+            }
         }
     }
 
@@ -369,6 +446,14 @@ impl Component for HomeView {
                 hubs,
             } => {
                 self.loading = false;
+
+                // Featured hero: drawn from recently-added items that have a
+                // backdrop. Computed before the shelves consume the lists.
+                let hero_pool: Vec<MediaItem> = recently_added
+                    .iter()
+                    .flat_map(|(_, items)| items.iter().cloned())
+                    .collect();
+                self.set_hero(hero_candidates(&hero_pool, 6), &sender);
 
                 if !continue_watching.is_empty() {
                     let cw_id = self.add_shelf("Continue Watching");
@@ -428,6 +513,11 @@ impl Component for HomeView {
                     if let Some((card, _)) = shelf.cards.get(index) {
                         card.set_poster(&texture);
                     }
+                }
+            }
+            HomeViewCmd::HeroBackdropLoaded { token, texture } => {
+                if token == self.hero_token {
+                    self.hero.set_backdrop(&texture);
                 }
             }
         }
@@ -529,6 +619,51 @@ impl HomeView {
                 }
             });
         }
+    }
+
+    /// Replace the hero rotation set and show the first item (or hide the hero
+    /// when there are no backdrop-bearing candidates).
+    fn set_hero(&mut self, items: Vec<MediaItem>, sender: &ComponentSender<Self>) {
+        self.hero_items = items;
+        self.hero_index = 0;
+        if self.hero_items.is_empty() {
+            self.hero.set_revealed(false);
+        } else {
+            self.hero.set_revealed(true);
+            self.show_hero_item(0, sender);
+        }
+    }
+
+    /// Show the hero item at `index`: update its labels/dots and kick off the
+    /// backdrop download, guarded by a token so rotation can't be overtaken by
+    /// a slow load of a previously-shown item.
+    fn show_hero_item(&mut self, index: usize, sender: &ComponentSender<Self>) {
+        let Some(item) = self.hero_items.get(index).cloned() else {
+            return;
+        };
+        self.hero_index = index;
+        let total = self.hero_items.len();
+        self.hero.set_item(&item, index, total);
+
+        self.hero_token += 1;
+        let token = self.hero_token;
+        let (Some(cache), Some(source), Some(backdrop_path)) = (
+            self.artwork_cache.as_ref(),
+            self.source.as_ref(),
+            item.backdrop_path.as_ref(),
+        ) else {
+            return;
+        };
+        let url = source.artwork_url(backdrop_path, 1280, 420);
+        let cache = cache.clone();
+        let cmd_sender = sender.command_sender().clone();
+        gtk::glib::spawn_future_local(async move {
+            if let Ok(path) = cache.get_or_download(&url).await {
+                if let Ok(texture) = gtk::gdk::Texture::from_filename(&path) {
+                    let _ = cmd_sender.send(HomeViewCmd::HeroBackdropLoaded { token, texture });
+                }
+            }
+        });
     }
 
     fn has_any_cards(&self) -> bool {

@@ -331,6 +331,47 @@ gridview > child:selected .media-card-frame {
     -gtk-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
+/* --- Home featured hero --- */
+
+/* border-radius lives on the Picture itself: GTK4 does not clip a child to the
+   parent's rounded corners. */
+.home-hero-backdrop {
+    background-color: rgb(20, 20, 24);
+    border-radius: 12px;
+}
+
+/* Scrim darkest at the bottom where the title/actions sit, clear at the top so
+   the backdrop stays visible. Keeps white text legible over bright art. */
+.home-hero-scrim {
+    border-radius: 12px;
+    background: linear-gradient(
+        to top,
+        alpha(black, 0.82) 0%,
+        alpha(black, 0.5) 30%,
+        alpha(black, 0.1) 65%,
+        transparent 100%
+    );
+}
+
+.home-hero-title {
+    color: #ffffff;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
+}
+
+.home-hero-meta {
+    color: alpha(white, 0.85);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}
+
+.home-hero-dot {
+    background-color: alpha(white, 0.4);
+    border-radius: 4px;
+}
+
+.home-hero-dot.active {
+    background-color: #ffffff;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
    Detail Pages — Infuse-inspired "Liquid Glass" design
    ═══════════════════════════════════════════════════════════════════════ */
