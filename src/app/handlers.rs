@@ -337,72 +337,14 @@ pub fn handle_play_media(
     app.stack.set_visible_child_name("player");
     app.video_player.emit(VideoPlayerMsg::SetAutoplay(true));
     let resume_secs = app.pending_resume.take();
-
-    // A complete local download plays directly — no transcode decision needed.
-    if let Some(local_url) = local_url {
-        app.video_player.emit(VideoPlayerMsg::SetUrl {
-            url: Some(local_url),
-            resume_secs,
-            base_offset_secs: 0.0,
-            is_transcode: false,
-        });
-        // (skip-markers fetch below still runs)
-    } else {
-        // For a streamed Plex item, route through the transcode decision (R1)
-        // instead of the eager direct-play URL the component passed. The
-        // decision is async, so SetUrl is deferred to PlaybackResolved. Non-Plex
-        // sources (local files) keep the direct URL.
-        let resolve_via_plex = media_item
-            .as_ref()
-            .map(|i| i.source_type == SourceType::Plex && i.file_path.is_some())
-            .unwrap_or(false);
-
-        if let (true, Some(item), Some(source)) = (
-            resolve_via_plex,
-            media_item.as_ref(),
-            app.active_source.clone(),
-        ) {
-            let req = crate::models::playback::PlaybackRequest {
-                rating_key: item.external_id.clone(),
-                part_key: item.file_path.clone().unwrap_or_default(),
-                media_index: 0,
-                part_index: 0,
-                quality: crate::models::playback::QualitySelection::Auto,
-                force_transcode: false,
-                audio_stream_id: None,
-                subtitle_stream_id: None,
-                offset_secs: resume_secs.unwrap_or(0.0),
-            };
-            // `url` is kept as the last-resort direct-play fallback if the
-            // decision cannot be reached (surfaced, not silent — U7).
-            let fallback_url = url.clone();
-            // Tag with a fresh switch epoch so a later switch can supersede the
-            // initial play if the user picks quality immediately (U8).
-            let epoch = app.switch_state.begin();
-            sender.oneshot_command(async move {
-                match source.resolve_playback(&req).await {
-                    Ok(decision) => AppCmd::PlaybackResolved {
-                        decision: Box::new(decision),
-                        resume_secs,
-                        epoch,
-                    },
-                    Err(e) => AppCmd::PlaybackResolveFailed {
-                        message: format!("Couldn't reach the server's transcoder: {e}"),
-                        fallback_url,
-                        resume_secs,
-                        epoch,
-                    },
-                }
-            });
-        } else {
-            app.video_player.emit(VideoPlayerMsg::SetUrl {
-                url: Some(url),
-                resume_secs,
-                base_offset_secs: 0.0,
-                is_transcode: false,
-            });
-        }
-    }
+    begin_initial_playback(
+        app,
+        media_item.as_ref(),
+        url,
+        local_url,
+        resume_secs,
+        sender,
+    );
 
     // Fetch skip-intro / skip-credits markers from Plex.
     if let Some(ref item) = media_item
@@ -421,6 +363,77 @@ pub fn handle_play_media(
             }
         });
     }
+}
+
+/// Hand the initial stream to the player: a complete local download plays
+/// directly; a streamed Plex item routes through the async transcode decision
+/// (R1); any other source uses the direct URL the component supplied.
+fn begin_initial_playback(
+    app: &mut App,
+    media_item: Option<&MediaItem>,
+    url: String,
+    local_url: Option<String>,
+    resume_secs: Option<f64>,
+    sender: &ComponentSender<App>,
+) {
+    // A complete local download plays directly — no transcode decision needed.
+    if let Some(local_url) = local_url {
+        app.video_player.emit(VideoPlayerMsg::SetUrl {
+            url: Some(local_url),
+            resume_secs,
+            base_offset_secs: 0.0,
+            is_transcode: false,
+        });
+        return;
+    }
+
+    // For a streamed Plex item, route through the transcode decision instead of
+    // the eager direct-play URL. The decision is async, so SetUrl is deferred to
+    // PlaybackResolved. Non-Plex sources keep the direct URL.
+    let plex_item =
+        media_item.filter(|i| i.source_type == SourceType::Plex && i.file_path.is_some());
+    let (Some(item), Some(source)) = (plex_item, app.active_source.clone()) else {
+        app.video_player.emit(VideoPlayerMsg::SetUrl {
+            url: Some(url),
+            resume_secs,
+            base_offset_secs: 0.0,
+            is_transcode: false,
+        });
+        return;
+    };
+
+    let req = crate::models::playback::PlaybackRequest {
+        rating_key: item.external_id.clone(),
+        part_key: item.file_path.clone().unwrap_or_default(),
+        media_index: 0,
+        part_index: 0,
+        quality: crate::models::playback::QualitySelection::Auto,
+        force_transcode: false,
+        audio_stream_id: None,
+        subtitle_stream_id: None,
+        offset_secs: resume_secs.unwrap_or(0.0),
+    };
+    // `url` is kept as the last-resort direct-play fallback if the decision
+    // cannot be reached (surfaced, not silent — U7).
+    let fallback_url = url;
+    // Tag with a fresh switch epoch so a later switch can supersede the initial
+    // play if the user picks quality immediately (U8).
+    let epoch = app.switch_state.begin();
+    sender.oneshot_command(async move {
+        match source.resolve_playback(&req).await {
+            Ok(decision) => AppCmd::PlaybackResolved {
+                decision: Box::new(decision),
+                resume_secs,
+                epoch,
+            },
+            Err(e) => AppCmd::PlaybackResolveFailed {
+                message: format!("Couldn't reach the server's transcoder: {e}"),
+                fallback_url,
+                resume_secs,
+                epoch,
+            },
+        }
+    });
 }
 
 /// Stop a transcode session in the background (fire-and-forget, bounded retry in
