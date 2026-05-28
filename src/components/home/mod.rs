@@ -9,150 +9,35 @@ use crate::models::watch::WatchProgress;
 use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
 
-/// A shelf card on the home screen. Smaller than grid cards (~160×240).
-struct HomeCard {
-    container: gtk::Box,
-    picture: gtk::Picture,
-    title_label: gtk::Label,
-    subtitle_label: gtk::Label,
-    progress_bar: gtk::ProgressBar,
-    /// Click gesture controller for this card.
-    gesture: gtk::GestureClick,
-}
+mod shelf;
 
-impl HomeCard {
-    fn new() -> Self {
-        let container = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(4)
-            .width_request(160)
-            .css_classes(["home-card"])
-            .build();
-
-        let picture = gtk::Picture::builder()
-            .content_fit(gtk::ContentFit::Cover)
-            .width_request(160)
-            .height_request(240)
-            .css_classes(["home-card-poster", "loading"])
-            .build();
-
-        let progress_bar = gtk::ProgressBar::builder()
-            .halign(gtk::Align::Fill)
-            .valign(gtk::Align::End)
-            .css_classes(["watch-progress"])
-            .visible(false)
-            .build();
-
-        let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&picture));
-        overlay.add_overlay(&progress_bar);
-
-        let title_label = gtk::Label::builder()
-            .halign(gtk::Align::Start)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .max_width_chars(18)
-            .lines(2)
-            .wrap(true)
-            .wrap_mode(gtk::pango::WrapMode::WordChar)
-            .css_classes(["home-card-title"])
-            .build();
-
-        let subtitle_label = gtk::Label::builder()
-            .halign(gtk::Align::Start)
-            .css_classes(["home-card-subtitle", "dim-label"])
-            .visible(false)
-            .build();
-
-        container.append(&overlay);
-        container.append(&title_label);
-        container.append(&subtitle_label);
-
-        let gesture = gtk::GestureClick::new();
-        container.add_controller(gesture.clone());
-
-        Self {
-            container,
-            picture,
-            title_label,
-            subtitle_label,
-            progress_bar,
-            gesture,
-        }
-    }
-
-    fn set_media(&self, item: &MediaItem, progress: Option<f64>) {
-        self.title_label.set_label(&item.title);
-
-        // Subtitle: year for movies, "S1 E5" for episodes
-        match item.media_type {
-            crate::models::media::MediaType::Episode => {
-                let sub = match (item.season_number, item.episode_number) {
-                    (Some(s), Some(e)) => format!("S{} E{}", s, e),
-                    _ => {
-                        if let Some(ref parent) = item.parent_id {
-                            parent.clone()
-                        } else {
-                            String::new()
-                        }
-                    }
-                };
-                if sub.is_empty() {
-                    self.subtitle_label.set_visible(false);
-                } else {
-                    self.subtitle_label.set_label(&sub);
-                    self.subtitle_label.set_visible(true);
-                }
-            }
-            _ => {
-                if let Some(year) = item.year {
-                    self.subtitle_label.set_label(&year.to_string());
-                    self.subtitle_label.set_visible(true);
-                } else {
-                    self.subtitle_label.set_visible(false);
-                }
-            }
-        }
-
-        // Progress bar for continue watching
-        if let Some(frac) = progress {
-            if frac > 0.0 && frac < 1.0 {
-                self.progress_bar.set_fraction(frac);
-                self.progress_bar.set_visible(true);
-            } else {
-                self.progress_bar.set_visible(false);
-            }
-        } else {
-            self.progress_bar.set_visible(false);
-        }
-    }
-
-    fn set_poster(&self, texture: &gtk::gdk::Texture) {
-        self.picture.set_paintable(Some(texture));
-        self.picture.remove_css_class("loading");
-        self.picture.set_opacity(1.0);
-    }
-}
+use shelf::{Generation, HomeCard, Shelf, ShelfId, poster_result_is_current};
 
 pub struct HomeView {
     source: Option<Arc<dyn MediaSource>>,
     artwork_cache: Option<Arc<ArtworkCache>>,
     /// The vertical container holding all shelf sections.
-    #[allow(dead_code)]
     shelves_box: gtk::Box,
-    /// Continue Watching shelf.
-    cw_section: gtk::Box,
-    cw_row: gtk::Box,
-    cw_cards: Vec<(HomeCard, MediaItem)>,
-    /// Recently Added shelf.
-    ra_section: gtk::Box,
-    ra_row: gtk::Box,
-    ra_cards: Vec<(HomeCard, MediaItem)>,
-    /// Empty state page (shown when no source configured).
+    /// All shelves currently rendered, in display order.
+    shelves: Vec<Shelf>,
+    /// Monotonic id handed to the next shelf created.
+    next_shelf_id: ShelfId,
+    /// Incremented on every clear so stale in-flight poster loads are dropped.
+    build_generation: Generation,
+    /// The scrolled shelves view (the populated home).
+    scroll: gtk::ScrolledWindow,
+    /// Empty state page (shown when no source / no content).
     empty_page: adw::StatusPage,
-    /// Loading page (shown while validating a saved source on startup).
+    /// Loading page (shown while a load is in flight with nothing to show yet).
+    loading_page: adw::StatusPage,
+    /// Error page (shown when a load fails and there is nothing else to show).
+    error_page: adw::StatusPage,
+    /// Connecting page (shown while validating a saved source on startup).
     connecting_page: adw::StatusPage,
-    /// Stack switches between shelves, connecting page, and empty page.
+    /// Stack switches between shelves and the status pages.
     stack: gtk::Stack,
+    /// Last load error, used to decide between the empty and error pages.
+    last_error: Option<String>,
     /// Prevent concurrent loads.
     loading: bool,
 }
@@ -202,18 +87,12 @@ pub enum HomeViewOutput {
 pub enum HomeViewCmd {
     Fetched(Vec<MediaItem>),
     PosterLoaded {
+        generation: Generation,
+        shelf_id: ShelfId,
         index: usize,
-        row: PosterRow,
         texture: gtk::gdk::Texture,
     },
     Error(String),
-}
-
-/// Which shelf row a poster belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PosterRow {
-    ContinueWatching,
-    RecentlyAdded,
 }
 
 #[relm4::component(pub)]
@@ -242,14 +121,13 @@ impl Component for HomeView {
 
         let stack = gtk::Stack::new();
 
-        // Empty state (no source configured)
+        // Empty state (no source configured / nothing to show)
         let empty_page = adw::StatusPage::builder()
             .title("Welcome to Reel")
             .description("Connect a Plex server to see your Continue Watching and Recently Added")
             .icon_name("folder-videos-symbolic")
             .build();
 
-        // "Connect to Plex" button on the empty page
         let connect_btn = gtk::Button::builder()
             .label("Connect to Plex")
             .halign(gtk::Align::Center)
@@ -260,6 +138,25 @@ impl Component for HomeView {
             let _ = sender_btn.send(HomeViewOutput::ShowConnectionDialog);
         });
         empty_page.set_child(Some(&connect_btn));
+
+        // Loading state (a load is in flight and nothing is rendered yet)
+        let loading_spinner = gtk::Spinner::builder()
+            .spinning(true)
+            .halign(gtk::Align::Center)
+            .width_request(32)
+            .height_request(32)
+            .build();
+        let loading_page = adw::StatusPage::builder()
+            .title("Loading your library…")
+            .icon_name("folder-videos-symbolic")
+            .child(&loading_spinner)
+            .build();
+
+        // Error state (load failed, nothing else to show)
+        let error_page = adw::StatusPage::builder()
+            .title("Couldn't load your home")
+            .icon_name("dialog-error-symbolic")
+            .build();
 
         // Connecting page (validating saved source on startup)
         let connecting_spinner = gtk::Spinner::builder()
@@ -291,68 +188,12 @@ impl Component for HomeView {
             .margin_bottom(16)
             .build();
 
-        // --- Continue Watching shelf ---
-        let cw_section = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
-            .visible(false)
-            .build();
-
-        let cw_label = gtk::Label::builder()
-            .label("Continue Watching")
-            .halign(gtk::Align::Start)
-            .css_classes(["title-2"])
-            .build();
-
-        let cw_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
-            .build();
-
-        let cw_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Automatic)
-            .vscrollbar_policy(gtk::PolicyType::Never)
-            .max_content_height(300)
-            .child(&cw_row)
-            .build();
-
-        cw_section.append(&cw_label);
-        cw_section.append(&cw_scroll);
-
-        // --- Recently Added shelf ---
-        let ra_section = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
-            .visible(false)
-            .build();
-
-        let ra_label = gtk::Label::builder()
-            .label("Recently Added")
-            .halign(gtk::Align::Start)
-            .css_classes(["title-2"])
-            .build();
-
-        let ra_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
-            .build();
-
-        let ra_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Automatic)
-            .vscrollbar_policy(gtk::PolicyType::Never)
-            .max_content_height(300)
-            .child(&ra_row)
-            .build();
-
-        ra_section.append(&ra_label);
-        ra_section.append(&ra_scroll);
-
-        shelves_box.append(&cw_section);
-        shelves_box.append(&ra_section);
         scroll.set_child(Some(&shelves_box));
 
         stack.add_child(&empty_page);
         stack.add_child(&connecting_page);
+        stack.add_child(&loading_page);
+        stack.add_child(&error_page);
         stack.add_child(&scroll);
         stack.set_visible_child(&empty_page);
 
@@ -362,15 +203,16 @@ impl Component for HomeView {
             source: None,
             artwork_cache: None,
             shelves_box,
-            cw_section,
-            cw_row,
-            cw_cards: Vec::new(),
-            ra_section,
-            ra_row,
-            ra_cards: Vec::new(),
+            shelves: Vec::new(),
+            next_shelf_id: 0,
+            build_generation: 0,
+            scroll,
             empty_page,
+            loading_page,
+            error_page,
             connecting_page,
             stack,
+            last_error: None,
             loading: false,
         };
 
@@ -387,7 +229,7 @@ impl Component for HomeView {
                 if connecting {
                     self.stack.set_visible_child(&self.connecting_page);
                 } else {
-                    self.update_visibility();
+                    self.refresh_visible_page();
                 }
             }
             HomeViewMsg::LoadHome { in_progress } => {
@@ -395,18 +237,24 @@ impl Component for HomeView {
                     return;
                 }
                 self.loading = true;
+                self.last_error = None;
+                self.clear_shelves();
 
-                // Clear existing cards
-                self.clear_cards();
+                // Build Continue Watching shelf from local DB data.
+                if !in_progress.is_empty() {
+                    let cw_id = self.add_shelf("Continue Watching");
+                    let cards: Vec<(MediaItem, Option<f64>)> = in_progress
+                        .iter()
+                        .map(|(item, progress)| (item.clone(), Some(progress.progress_fraction())))
+                        .collect();
+                    self.populate_shelf(cw_id, cards, &sender);
+                }
 
-                // Build Continue Watching row from local DB data
-                self.build_cw_row(&in_progress, &sender);
-
-                // Fetch Recently Added from source (async) — use library items sorted by date
+                // Fetch Recently Added from source (async).
                 if let Some(ref source) = self.source {
+                    self.refresh_visible_page();
                     let src = source.clone();
                     sender.oneshot_command(async move {
-                        // Fetch all movie + show libraries then take most recent
                         match src.libraries().await {
                             Ok(libs) => {
                                 let mut all = Vec::new();
@@ -415,7 +263,6 @@ impl Component for HomeView {
                                         all.extend(items);
                                     }
                                 }
-                                // Sort by added_at descending, take top 20
                                 all.sort_by(|a, b| b.added_at.cmp(&a.added_at));
                                 all.truncate(20);
                                 HomeViewCmd::Fetched(all)
@@ -425,22 +272,28 @@ impl Component for HomeView {
                     });
                 } else {
                     self.loading = false;
+                    self.refresh_visible_page();
                 }
             }
             HomeViewMsg::HomeLoaded { recently_added } => {
                 self.loading = false;
 
-                // Build Recently Added row
-                self.build_ra_row(&recently_added, &sender);
-                self.update_visibility();
+                if !recently_added.is_empty() {
+                    let ra_id = self.add_shelf("Recently Added");
+                    let cards: Vec<(MediaItem, Option<f64>)> =
+                        recently_added.into_iter().map(|item| (item, None)).collect();
+                    self.populate_shelf(ra_id, cards, &sender);
+                }
+                self.refresh_visible_page();
             }
             HomeViewMsg::LoadError(msg) => {
                 self.loading = false;
                 tracing::warn!("HomeView load error: {msg}");
-                self.update_visibility();
+                self.error_page.set_description(Some(&msg));
+                self.last_error = Some(msg);
+                self.refresh_visible_page();
             }
             HomeViewMsg::CardActivated(item) => {
-                // For now, navigate to detail page (same as library grid click)
                 let _ = sender.output(HomeViewOutput::ShowDetail(item));
             }
         }
@@ -462,16 +315,18 @@ impl Component for HomeView {
                 sender.input(HomeViewMsg::LoadError(msg));
             }
             HomeViewCmd::PosterLoaded {
+                generation,
+                shelf_id,
                 index,
-                row,
                 texture,
             } => {
-                let cards = match row {
-                    PosterRow::ContinueWatching => &self.cw_cards,
-                    PosterRow::RecentlyAdded => &self.ra_cards,
-                };
-                if index < cards.len() {
-                    cards[index].0.set_poster(&texture);
+                if !poster_result_is_current(generation, self.build_generation) {
+                    return;
+                }
+                if let Some(shelf) = self.shelves.iter().find(|s| s.id == shelf_id) {
+                    if let Some((card, _)) = shelf.cards.get(index) {
+                        card.set_poster(&texture);
+                    }
                 }
             }
         }
@@ -479,129 +334,111 @@ impl Component for HomeView {
 }
 
 impl HomeView {
-    fn clear_cards(&mut self) {
-        // Remove all card widgets from rows
-        while let Some(child) = self.cw_row.first_child() {
-            self.cw_row.remove(&child);
+    /// Drop all shelves and bump the build generation so any in-flight poster
+    /// loads from the previous build are ignored when they arrive.
+    fn clear_shelves(&mut self) {
+        self.build_generation += 1;
+        while let Some(child) = self.shelves_box.first_child() {
+            self.shelves_box.remove(&child);
         }
-        while let Some(child) = self.ra_row.first_child() {
-            self.ra_row.remove(&child);
-        }
-        self.cw_cards.clear();
-        self.ra_cards.clear();
+        self.shelves.clear();
     }
 
-    fn build_cw_row(
+    /// Create an empty titled shelf, append it to the shelves box, and return
+    /// its id for population.
+    fn add_shelf(&mut self, title: &str) -> ShelfId {
+        let id = self.next_shelf_id;
+        self.next_shelf_id += 1;
+        let shelf = Shelf::new(id, title);
+        self.shelves_box.append(&shelf.section);
+        self.shelves.push(shelf);
+        id
+    }
+
+    /// Fill a shelf with cards, wire activation, reveal it, and kick off poster
+    /// downloads. Each card carries an optional progress fraction.
+    fn populate_shelf(
         &mut self,
-        in_progress: &[(MediaItem, WatchProgress)],
+        shelf_id: ShelfId,
+        cards: Vec<(MediaItem, Option<f64>)>,
         sender: &ComponentSender<Self>,
     ) {
-        if in_progress.is_empty() {
-            self.cw_section.set_visible(false);
+        if cards.is_empty() {
             return;
         }
+        if let Some(shelf) = self.shelves.iter_mut().find(|s| s.id == shelf_id) {
+            for (item, progress) in cards {
+                let card = HomeCard::new();
+                card.set_media(&item, progress);
 
-        for (item, progress) in in_progress {
-            let card = HomeCard::new();
-            let frac = progress.progress_fraction();
-            card.set_media(item, Some(frac));
+                let sender_card = sender.input_sender().clone();
+                let item_click = item.clone();
+                card.gesture.connect_released(move |_, _, _, _| {
+                    let _ = sender_card.send(HomeViewMsg::CardActivated(item_click.clone()));
+                });
 
-            // Wire click
-            let sender_card = sender.input_sender().clone();
-            let item_clone = item.clone();
-            card.gesture.connect_released(move |_, _, _, _| {
-                let _ = sender_card.send(HomeViewMsg::CardActivated(item_clone.clone()));
-            });
-
-            self.cw_row.append(&card.container);
-            self.cw_cards.push((card, item.clone()));
+                shelf.row.append(&card.container);
+                shelf.cards.push((card, item));
+            }
+            shelf.section.set_visible(true);
         }
 
-        self.cw_section.set_visible(true);
-
-        // Kick off poster downloads
-        self.fetch_posters(PosterRow::ContinueWatching, sender);
+        self.fetch_posters(shelf_id, sender);
     }
 
-    fn build_ra_row(&mut self, items: &[MediaItem], sender: &ComponentSender<Self>) {
-        if items.is_empty() {
-            self.ra_section.set_visible(false);
-            return;
-        }
-
-        for item in items {
-            let card = HomeCard::new();
-            card.set_media(item, None);
-
-            // Wire click
-            let sender_card = sender.input_sender().clone();
-            let item_clone = item.clone();
-            card.gesture.connect_released(move |_, _, _, _| {
-                let _ = sender_card.send(HomeViewMsg::CardActivated(item_clone.clone()));
-            });
-
-            self.ra_row.append(&card.container);
-            self.ra_cards.push((card, item.clone()));
-        }
-
-        self.ra_section.set_visible(true);
-
-        // Kick off poster downloads
-        self.fetch_posters(PosterRow::RecentlyAdded, sender);
-    }
-
-    fn fetch_posters(&self, row: PosterRow, sender: &ComponentSender<Self>) {
+    fn fetch_posters(&self, shelf_id: ShelfId, sender: &ComponentSender<Self>) {
         let Some(ref cache) = self.artwork_cache else {
             return;
         };
-
-        let cards = match row {
-            PosterRow::ContinueWatching => &self.cw_cards,
-            PosterRow::RecentlyAdded => &self.ra_cards,
+        let Some(ref source) = self.source else {
+            return;
         };
+        let Some(shelf) = self.shelves.iter().find(|s| s.id == shelf_id) else {
+            return;
+        };
+        let generation = self.build_generation;
 
-        for (idx, (_, item)) in cards.iter().enumerate() {
-            let poster_path = match &item.poster_path {
-                Some(p) => p.clone(),
-                None => continue,
+        for (idx, (_, item)) in shelf.cards.iter().enumerate() {
+            let Some(poster_path) = item.poster_path.clone() else {
+                continue;
             };
-            let artwork_url = match &self.source {
-                Some(s) => s.artwork_url(&poster_path, 320, 480),
-                None => continue,
-            };
-
+            let artwork_url = source.artwork_url(&poster_path, 320, 480);
             let cache_clone = cache.clone();
-            let url_clone = artwork_url.clone();
             let sender_clone = sender.command_sender().clone();
 
             gtk::glib::spawn_future_local(async move {
-                match cache_clone.get_or_download(&url_clone).await {
+                match cache_clone.get_or_download(&artwork_url).await {
                     Ok(path) => {
                         if let Ok(texture) = gtk::gdk::Texture::from_filename(&path) {
                             let _ = sender_clone.send(HomeViewCmd::PosterLoaded {
+                                generation,
+                                shelf_id,
                                 index: idx,
-                                row,
                                 texture,
                             });
                         }
                     }
                     Err(e) => {
-                        tracing::debug!("Poster load failed for {}: {e}", url_clone);
+                        tracing::debug!("Poster load failed for {}: {e}", artwork_url);
                     }
                 }
             });
         }
     }
 
-    fn update_visibility(&mut self) {
-        let has_cw = !self.cw_cards.is_empty();
-        let has_ra = !self.ra_cards.is_empty();
+    fn has_any_cards(&self) -> bool {
+        self.shelves.iter().any(|s| !s.cards.is_empty())
+    }
 
-        if has_cw || has_ra {
-            // Switch to the scroll (shelves) page
-            if let Some(scroll) = self.stack.last_child() {
-                self.stack.set_visible_child(&scroll);
-            }
+    /// Pick the stack page that matches current state: shelves when there is
+    /// content, otherwise the loading / error / empty page in that priority.
+    fn refresh_visible_page(&self) {
+        if self.has_any_cards() {
+            self.stack.set_visible_child(&self.scroll);
+        } else if self.loading {
+            self.stack.set_visible_child(&self.loading_page);
+        } else if self.last_error.is_some() {
+            self.stack.set_visible_child(&self.error_page);
         } else {
             self.stack.set_visible_child(&self.empty_page);
         }
