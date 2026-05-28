@@ -270,11 +270,12 @@ impl App {
             over_budget_warning: self.downloads.over_budget_warning,
             disk_full: self.downloads.disk_full,
         });
-        self.push_downloaded_ids();
     }
 
     /// Push the set of completed-download ids to the library grid so it can show
-    /// the "downloaded" badge on cards (R14).
+    /// the "downloaded" badge on cards (R14). Called only when the completed set
+    /// can change (completion, delete, prune, startup reconcile) — never on a
+    /// progress tick, so it doesn't trigger needless grid rebuilds.
     pub(super) fn push_downloaded_ids(&self) {
         use crate::components::library::LibraryViewMsg;
         let ids: std::collections::HashSet<String> = self
@@ -480,6 +481,8 @@ pub fn item_action(app: &mut App, media_item_id: &str, action: DownloadItemActio
     };
     apply_events(app, events);
     app.refresh_downloads_view();
+    // Delete/cancel can drop a completed download — refresh library badges.
+    app.push_downloaded_ids();
 }
 
 /// Reorder a queued item (queued items only — see [`DownloadQueue::reorder`]).
@@ -600,6 +603,9 @@ fn handle_transfer_finished(
         }
     }
     app.refresh_downloads_view();
+    // The completed set may have changed (completion or budget prune) — refresh
+    // the library "downloaded" badges.
+    app.push_downloaded_ids();
 }
 
 /// Mark a download complete: record total size + validator + final path, set
@@ -768,6 +774,8 @@ pub fn recover_on_startup(app: &mut App) {
         persist_state(&app.db, &id, DownloadState::Queued, None);
     }
     app.refresh_downloads_view();
+    // Reconcile may have re-adopted or invalidated completed downloads.
+    app.push_downloaded_ids();
 }
 
 /// Schedule any queued downloads now that a source is available. Called when the

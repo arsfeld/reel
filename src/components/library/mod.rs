@@ -936,9 +936,14 @@ impl Component for LibraryView {
                 self.rebuild_continue_watching(&sender);
             }
             LibraryViewMsg::SetDownloadedIds(ids) => {
-                self.downloaded_ids = ids;
-                if !self.all_items.is_empty() {
-                    self.rebuild_grid(&sender);
+                // Only rebuild when the set actually changed — the app pushes
+                // this on download state changes, which can recur rapidly, and a
+                // full grid rebuild per push would jam the UI.
+                if ids != self.downloaded_ids {
+                    self.downloaded_ids = ids;
+                    if !self.all_items.is_empty() {
+                        self.rebuild_grid(&sender);
+                    }
                 }
             }
             LibraryViewMsg::LoadCollectionItems(collection_key) => {
