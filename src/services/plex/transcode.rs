@@ -20,11 +20,36 @@ use std::time::Duration;
 use reqwest::Url;
 
 use super::api::PlexClient;
-use super::models::PlexDecisionResponse;
+use super::models::{PlexDecisionResponse, PlexStream};
 use crate::models::playback::{
-    PlaybackDecision, PlaybackDecisionKind, PlaybackRequest, QualityPreset, QualitySelection,
-    redact_plex_token,
+    DecisionStream, PlaybackDecision, PlaybackDecisionKind, PlaybackRequest, QualityPreset,
+    QualitySelection, redact_plex_token,
 };
+
+/// Build the [`DecisionStream`] list for one stream type (2 = audio, 3 =
+/// subtitle) from a decision response's annotated source streams (AE6). Streams
+/// without an id are skipped — they can't be re-requested by `audioStreamID`.
+fn decision_streams(streams: &[PlexStream], stream_type: i32) -> Vec<DecisionStream> {
+    streams
+        .iter()
+        .filter(|s| s.stream_type == Some(stream_type))
+        .filter_map(|s| {
+            let id = s.id?;
+            let label = s
+                .extended_display_title
+                .clone()
+                .or_else(|| s.display_title.clone())
+                .or_else(|| s.language.clone())
+                .or_else(|| s.codec.clone())
+                .unwrap_or_else(|| format!("Track {id}"));
+            Some(DecisionStream {
+                id,
+                label,
+                selected: s.selected.unwrap_or(false),
+            })
+        })
+        .collect()
+}
 
 /// Transcode decision/lifecycle errors. All variants are loud and typed so the
 /// play path (U7) can surface an actionable notice rather than silently
@@ -284,6 +309,12 @@ impl PlexClient {
             ),
         };
 
+        // Available audio/subtitle tracks for the transcode-aware track menu
+        // (AE6) — the annotated source stream list, with Plex stream ids.
+        let streams = part.map(|p| p.streams.as_slice()).unwrap_or(&[]);
+        let audio_streams = decision_streams(streams, 2);
+        let subtitle_streams = decision_streams(streams, 3);
+
         Ok(PlaybackDecision {
             kind,
             url,
@@ -291,6 +322,8 @@ impl PlexClient {
             video_resolution,
             video_bitrate_kbps,
             throttled,
+            audio_streams,
+            subtitle_streams,
         })
     }
 
@@ -556,6 +589,53 @@ mod tests {
         let pd = c.decision_to_playback(&req(), "sess1", decision).unwrap();
         assert_eq!(pd.kind, PlaybackDecisionKind::DirectStream);
         assert!(pd.url.contains("start.m3u8"));
+    }
+
+    #[test]
+    fn decision_exposes_audio_and_subtitle_tracks() {
+        // AE6: the decision carries the annotated source streams with Plex ids
+        // and selection, for the transcode-aware track menus.
+        let c = PlexClient::new("http://h:32400", "tok");
+        let json = include_str!("../../../tests/fixtures/plex/decision_transcode.json");
+        let decision: PlexDecisionResponse = serde_json::from_str(json).unwrap();
+        let pd = c.decision_to_playback(&req(), "sess1", decision).unwrap();
+        assert_eq!(pd.audio_streams.len(), 1);
+        assert_eq!(pd.audio_streams[0].id, 3799553);
+        assert!(pd.audio_streams[0].selected);
+        assert_eq!(pd.audio_streams[0].label, "English (EAC3 5.1)");
+        assert_eq!(pd.subtitle_streams.len(), 1);
+        assert_eq!(pd.subtitle_streams[0].id, 3799555);
+        assert_eq!(pd.subtitle_streams[0].label, "English (SRT)");
+        // Video streams (type 1) are not offered as audio/subtitle tracks.
+        assert!(pd.audio_streams.iter().all(|s| s.id != 3799552));
+    }
+
+    #[test]
+    fn decision_streams_skips_idless_and_filters_by_type() {
+        let streams = vec![
+            PlexStream {
+                id: Some(10),
+                stream_type: Some(2),
+                extended_display_title: Some("English (AAC)".into()),
+                selected: Some(true),
+                ..Default::default()
+            },
+            PlexStream {
+                id: None, // no id → cannot be re-requested → skipped
+                stream_type: Some(2),
+                extended_display_title: Some("French".into()),
+                ..Default::default()
+            },
+            PlexStream {
+                id: Some(20),
+                stream_type: Some(3), // subtitle, not audio
+                ..Default::default()
+            },
+        ];
+        let audio = decision_streams(&streams, 2);
+        assert_eq!(audio.len(), 1);
+        assert_eq!(audio[0].id, 10);
+        assert!(audio[0].selected);
     }
 
     #[test]

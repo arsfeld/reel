@@ -190,7 +190,37 @@ pub fn handle_video_output(
             let quality = app.current_quality;
             resolve_playback_at(app, quality, position_secs, false, sender);
         }
+        VideoPlayerOutput::SelectAudioTrack {
+            stream_id,
+            position_secs,
+        } => {
+            // AE6: track change during a transcode → re-decide with the chosen
+            // Plex audioStreamID + reload-at-position, preserving quality.
+            app.current_audio_stream_id = Some(stream_id);
+            let (quality, force) = quality_and_force(app);
+            resolve_playback_at(app, quality, position_secs, force, sender);
+        }
+        VideoPlayerOutput::SelectSubtitleTrack {
+            stream_id,
+            position_secs,
+        } => {
+            app.current_subtitle_stream_id = stream_id;
+            let (quality, force) = quality_and_force(app);
+            resolve_playback_at(app, quality, position_secs, force, sender);
+        }
     }
+}
+
+/// The current quality selection plus whether it forces a transcode (R10/KTD11):
+/// a manual capped rung forces; Auto and Original let the server decide.
+fn quality_and_force(app: &App) -> (crate::models::playback::QualitySelection, bool) {
+    let quality = app.current_quality;
+    let force = matches!(
+        quality,
+        crate::models::playback::QualitySelection::Manual(p)
+            if p != crate::models::playback::QualityPreset::Original
+    );
+    (quality, force)
 }
 
 /// Re-resolve the current title at a new quality/offset (U8 switch + seek-reload,
@@ -216,8 +246,9 @@ fn resolve_playback_at(
         part_index: 0,
         quality,
         force_transcode,
-        audio_stream_id: None,
-        subtitle_stream_id: None,
+        // Carry the chosen tracks (AE6) so a quality switch preserves them.
+        audio_stream_id: app.current_audio_stream_id,
+        subtitle_stream_id: app.current_subtitle_stream_id,
         offset_secs,
     };
     let fallback_url = source.playback_url(&req.part_key);
@@ -326,6 +357,8 @@ pub fn handle_play_media(
     // session + keepalive first so switching titles never orphans one (U10/R14).
     stop_active_session(app, sender);
     app.current_quality = crate::models::playback::QualitySelection::Auto;
+    app.current_audio_stream_id = None;
+    app.current_subtitle_stream_id = None;
     let title = player_title_for_item(media_item.as_ref(), &url);
     enter_player_mode(
         root,
@@ -388,6 +421,8 @@ fn begin_initial_playback(
             available: false,
             selection: crate::models::playback::QualitySelection::Auto,
             indicator: String::new(),
+            audio_streams: Vec::new(),
+            subtitle_streams: Vec::new(),
         });
         return;
     }
@@ -408,6 +443,8 @@ fn begin_initial_playback(
             available: false,
             selection: crate::models::playback::QualitySelection::Auto,
             indicator: String::new(),
+            audio_streams: Vec::new(),
+            subtitle_streams: Vec::new(),
         });
         return;
     };
@@ -432,6 +469,8 @@ fn begin_initial_playback(
         available: true,
         selection: crate::models::playback::QualitySelection::Auto,
         indicator: String::new(),
+        audio_streams: Vec::new(),
+        subtitle_streams: Vec::new(),
     });
     // Tag with a fresh switch epoch so a later switch can supersede the initial
     // play if the user picks quality immediately (U8).
@@ -513,6 +552,15 @@ pub fn handle_playback_resolved(
     );
     app.active_transcode_session = decision.session.clone();
     app.transcode_base_offset = base_offset;
+    // Sync the selected track ids from what the server actually chose (AE6) so a
+    // later quality switch carries them; only when the decision lists tracks
+    // (transcode) — direct-play keeps live GStreamer selection.
+    let audio_streams = decision.audio_streams.clone();
+    let subtitle_streams = decision.subtitle_streams.clone();
+    if let Some(sel) = audio_streams.iter().find(|s| s.selected) {
+        app.current_audio_stream_id = Some(sel.id);
+    }
+    app.current_subtitle_stream_id = subtitle_streams.iter().find(|s| s.selected).map(|s| s.id);
     app.current_decision = Some(*decision);
     app.video_player.emit(VideoPlayerMsg::SetUrl {
         url: Some(url),
@@ -520,11 +568,14 @@ pub fn handle_playback_resolved(
         base_offset_secs: base_offset,
         is_transcode,
     });
-    // Update the quality menu indicator (R16) from the server-actual decision.
+    // Update the quality menu indicator (R16) + transcode-aware track menus (AE6)
+    // from the server-actual decision.
     app.video_player.emit(VideoPlayerMsg::SetDecisionInfo {
         available: true,
         selection: app.current_quality,
         indicator,
+        audio_streams,
+        subtitle_streams,
     });
     // Restart the keepalive timer for the newly active session (U10/R15).
     super::transcode_keepalive::restart(app, sender);
@@ -576,6 +627,8 @@ pub fn handle_playback_resolve_failed(
         available: true,
         selection: crate::models::playback::QualitySelection::Auto,
         indicator: String::new(),
+        audio_streams: Vec::new(),
+        subtitle_streams: Vec::new(),
     });
     // No live transcode after a fallback — stop any keepalive, stop the old
     // session that the fallback superseded (U10/R14).
