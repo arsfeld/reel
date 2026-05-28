@@ -718,6 +718,9 @@ impl Component for LibraryView {
 
                 let Some(source) = self.source.clone() else {
                     self.loading_in_progress = false;
+                    self.empty_page.set_title("No Media");
+                    self.empty_page
+                        .set_description(Some("Connect a Plex server to browse your library"));
                     self.stack.set_visible_child(&self.empty_page);
                     return;
                 };
@@ -751,6 +754,11 @@ impl Component for LibraryView {
                 if items.is_empty() {
                     self.all_items.clear();
                     self.grid.clear();
+                    // A connected, visible library that happens to have no items
+                    // — distinct from the "no source" empty state above.
+                    self.empty_page.set_title("Empty Library");
+                    self.empty_page
+                        .set_description(Some("This library has no items yet."));
                     self.stack.set_visible_child(&self.empty_page);
                     return;
                 }
