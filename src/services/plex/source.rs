@@ -48,6 +48,21 @@ impl From<PlexError> for SourceError {
     }
 }
 
+impl From<super::transcode::TranscodeError> for SourceError {
+    fn from(e: super::transcode::TranscodeError) -> Self {
+        use super::transcode::TranscodeError::*;
+        let msg = e.to_string();
+        match e {
+            // Connection-ish failures the play path can retry / fall back from.
+            Timeout | Request(_) => SourceError::Connection(msg),
+            // Server errors and a missing/garbled decision are loud: the play
+            // path surfaces an actionable notice rather than silently
+            // direct-playing an incompatible file (U7).
+            Server { .. } | Parse(_) | NoDecision | Url => SourceError::Other(msg),
+        }
+    }
+}
+
 #[async_trait]
 impl MediaSource for PlexSource {
     fn name(&self) -> &str {
@@ -110,6 +125,15 @@ impl MediaSource for PlexSource {
 
     fn playback_url(&self, part_key: &str) -> String {
         self.client.playback_url(part_key)
+    }
+
+    async fn resolve_playback(
+        &self,
+        req: &crate::models::playback::PlaybackRequest,
+    ) -> Result<crate::models::playback::PlaybackDecision, SourceError> {
+        // Delegates to the transcode client (U5), which reads `is_remote` from
+        // the PlexClient (U2) to apply the default cap on Auto/remote.
+        Ok(self.client.resolve_decision(req).await?)
     }
 
     fn artwork_url(&self, path: &str, width: u32, height: u32) -> String {
@@ -432,6 +456,70 @@ mod tests {
 
         let hubs = source.hubs().await.unwrap();
         assert!(hubs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn plex_source_resolve_playback_returns_transcode_decision() {
+        use crate::models::playback::{PlaybackDecisionKind, PlaybackRequest, QualitySelection};
+        let server = wiremock::MockServer::start().await;
+        let body = include_str!("../../../tests/fixtures/plex/decision_transcode.json");
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(
+                "/video/:/transcode/universal/decision",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token").with_remote(true);
+        let source = PlexSource::new(client, "Test".into());
+        let req = PlaybackRequest {
+            rating_key: "136798".into(),
+            part_key: "/library/parts/950874/file.mkv".into(),
+            media_index: 0,
+            part_index: 0,
+            quality: QualitySelection::Auto,
+            force_transcode: false,
+            audio_stream_id: None,
+            subtitle_stream_id: None,
+            offset_secs: 0.0,
+        };
+        let decision = source.resolve_playback(&req).await.unwrap();
+        assert_eq!(decision.kind, PlaybackDecisionKind::Transcode);
+        assert!(decision.session.is_some());
+        assert!(decision.url.contains("start.m3u8"));
+        // Remote Auto applied the default cap in the (transcode) URL.
+        assert!(decision.url.contains("maxVideoBitrate=8000"));
+        // Output metadata comes from the server's selected Media.
+        assert_eq!(decision.video_resolution.as_deref(), Some("720p"));
+    }
+
+    #[tokio::test]
+    async fn plex_source_resolve_playback_decision_error_surfaces() {
+        // A 500 from the decision endpoint surfaces as a loud SourceError, not a
+        // silent direct-play (U7 relies on this).
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(
+                "/video/:/transcode/universal/decision",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let client = PlexClient::new(&server.uri(), "token");
+        let source = PlexSource::new(client, "Test".into());
+        let req = crate::models::playback::PlaybackRequest {
+            rating_key: "1".into(),
+            part_key: "/p/1".into(),
+            media_index: 0,
+            part_index: 0,
+            quality: crate::models::playback::QualitySelection::Auto,
+            force_transcode: false,
+            audio_stream_id: None,
+            subtitle_stream_id: None,
+            offset_secs: 0.0,
+        };
+        assert!(source.resolve_playback(&req).await.is_err());
     }
 
     #[tokio::test]
