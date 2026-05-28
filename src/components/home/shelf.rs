@@ -239,6 +239,7 @@ mod tests {
             added_at: String::new(),
             updated_at: String::new(),
             playback_position_ms: None,
+            library_section_id: None,
         }
     }
 

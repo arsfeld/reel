@@ -1,5 +1,25 @@
 use serde::Deserialize;
 
+/// Deserialize Plex's `librarySectionID`, which arrives as a JSON number on most
+/// endpoints but occasionally as a string. Normalizes to `Option<String>` so it
+/// matches the string section keys returned by `/library/sections`.
+fn de_opt_section_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrInt {
+        Str(String),
+        Int(i64),
+    }
+    let opt = Option::<StringOrInt>::deserialize(deserializer)?;
+    Ok(opt.map(|v| match v {
+        StringOrInt::Str(s) => s,
+        StringOrInt::Int(i) => i.to_string(),
+    }))
+}
+
 // --- Library listing response ---
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +95,17 @@ pub struct PlexMetadata {
     // Parent artwork (season art on episodes, show art on seasons)
     #[serde(rename = "parentThumb")]
     pub parent_thumb: Option<String>,
+
+    /// The library section this item belongs to. Plex sends `librarySectionID`
+    /// as a JSON number on On Deck / recently-added payloads; absent on some
+    /// endpoints (e.g. items fetched via a `/library/sections/{key}/all` URL,
+    /// where the section is implied). Normalized to a string section key.
+    #[serde(
+        rename = "librarySectionID",
+        default,
+        deserialize_with = "de_opt_section_id"
+    )]
+    pub library_section_id: Option<String>,
 
     // Watch state fields
     /// Resume position in milliseconds. Present only if partially watched.
@@ -566,6 +597,62 @@ mod tests {
         assert_eq!(m.view_offset, Some(2700000));
         assert_eq!(m.view_count, Some(3));
         assert_eq!(m.last_viewed_at, Some(1710000000));
+    }
+
+    #[test]
+    fn deserialize_library_section_id_as_number() {
+        // Plex sends librarySectionID as a JSON number on On Deck / recently-added.
+        let json = r#"{
+            "MediaContainer": {
+                "size": 1,
+                "Metadata": [{
+                    "ratingKey": "123",
+                    "title": "Dune",
+                    "type": "movie",
+                    "librarySectionID": 4
+                }]
+            }
+        }"#;
+
+        let resp: PlexMetadataResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            resp.media_container.metadata[0].library_section_id,
+            Some("4".to_string())
+        );
+    }
+
+    #[test]
+    fn deserialize_library_section_id_as_string() {
+        let json = r#"{
+            "MediaContainer": {
+                "size": 1,
+                "Metadata": [{
+                    "ratingKey": "123",
+                    "title": "Dune",
+                    "type": "movie",
+                    "librarySectionID": "4"
+                }]
+            }
+        }"#;
+
+        let resp: PlexMetadataResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            resp.media_container.metadata[0].library_section_id,
+            Some("4".to_string())
+        );
+    }
+
+    #[test]
+    fn deserialize_library_section_id_absent_is_none() {
+        let json = r#"{
+            "MediaContainer": {
+                "size": 1,
+                "Metadata": [{"ratingKey": "1", "title": "X", "type": "movie"}]
+            }
+        }"#;
+
+        let resp: PlexMetadataResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.media_container.metadata[0].library_section_id, None);
     }
 
     #[test]

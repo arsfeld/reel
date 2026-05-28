@@ -80,9 +80,15 @@ impl MediaSource for PlexSource {
     async fn library_items(&self, library_key: &str) -> Result<Vec<MediaItem>, SourceError> {
         let metadata = self.client.library_items(library_key).await?;
         let base_url = self.client.base_url();
+        // The URL is authoritative for the section, and per-item payloads here
+        // omit librarySectionID, so tag each item with the requested key.
         Ok(metadata
             .iter()
             .filter_map(|m| plex_metadata_to_media_item(m, base_url))
+            .map(|mut item| {
+                item.library_section_id = Some(library_key.to_string());
+                item
+            })
             .collect())
     }
 
@@ -116,6 +122,10 @@ impl MediaSource for PlexSource {
         Ok(plex_collections
             .iter()
             .filter_map(|m| plex_metadata_to_media_item(m, base_url))
+            .map(|mut item| {
+                item.library_section_id = Some(library_key.to_string());
+                item
+            })
             .collect())
     }
 
@@ -146,6 +156,10 @@ impl MediaSource for PlexSource {
         Ok(plex_items
             .iter()
             .filter_map(|m| plex_metadata_to_media_item(m, base_url))
+            .map(|mut item| {
+                item.library_section_id = Some(library_key.to_string());
+                item
+            })
             .collect())
     }
 

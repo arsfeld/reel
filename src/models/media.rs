@@ -135,6 +135,11 @@ pub struct MediaItem {
     /// Saved playback position in milliseconds (e.g. a Plex On Deck view
     /// offset). `None` when the source reports no resume position.
     pub playback_position_ms: Option<i64>,
+    /// The Plex library section key this item belongs to, when known. Transient
+    /// (never persisted to the DB) — used to filter aggregate views (Home,
+    /// Continue Watching) by the user's hidden-library set. `None` for sources
+    /// or endpoints that do not report a section.
+    pub library_section_id: Option<String>,
 }
 
 impl MediaItem {
@@ -218,6 +223,7 @@ mod tests {
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
             playback_position_ms: None,
+            library_section_id: None,
         }
     }
 

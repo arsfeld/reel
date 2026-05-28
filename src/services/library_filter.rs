@@ -701,6 +701,7 @@ mod tests {
             added_at: "1700000000".to_string(),
             updated_at: "1700000000".to_string(),
             playback_position_ms: None,
+            library_section_id: None,
         }
     }
 

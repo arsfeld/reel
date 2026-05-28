@@ -108,6 +108,7 @@ pub fn plex_metadata_to_media_item(metadata: &PlexMetadata, source_id: &str) -> 
         added_at,
         updated_at,
         playback_position_ms: metadata.view_offset,
+        library_section_id: metadata.library_section_id.clone(),
     })
 }
 
@@ -280,6 +281,7 @@ mod tests {
             index: None,
             originally_available_at: None,
             parent_thumb: None,
+            library_section_id: None,
             view_offset: None,
             view_count: None,
             last_viewed_at: None,
@@ -334,6 +336,7 @@ mod tests {
             index: Some(1),
             originally_available_at: Some("2024-03-01".to_string()),
             parent_thumb: None,
+            library_section_id: None,
             view_offset: None,
             view_count: None,
             last_viewed_at: None,
@@ -452,6 +455,21 @@ mod tests {
         let plex = test_plex_movie();
         let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
         assert_eq!(item.parent_id, None);
+    }
+
+    #[test]
+    fn convert_carries_library_section_id_from_payload() {
+        let mut plex = test_plex_movie();
+        plex.library_section_id = Some("3".to_string());
+        let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(item.library_section_id, Some("3".to_string()));
+    }
+
+    #[test]
+    fn convert_missing_library_section_id_gives_none() {
+        let plex = test_plex_movie(); // builder leaves library_section_id None
+        let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(item.library_section_id, None);
     }
 
     #[test]
