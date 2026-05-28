@@ -3,7 +3,7 @@
 //! Owns a `gtk::Popover` whose content is rebuilt from the current item set
 //! plus the active `FilterState`. Each control mutates a shared `FilterState`
 //! and emits `LibraryViewMsg::FilterStateChanged`. Programmatic updates
-//! (`set_items` / `set_state`) set a suppress flag so they don't echo change
+//! (`set_state` / `reset`) set a suppress flag so they don't echo change
 //! events back to the parent.
 
 use std::cell::{Cell, RefCell};
@@ -22,8 +22,9 @@ use crate::services::library_filter::{
 use super::LibraryViewMsg;
 
 /// Year spin-row sentinel bounds. A "from" at the floor or "to" at the ceiling
-/// is treated as "no bound".
-const YEAR_MIN: f64 = 1900.0;
+/// is treated as "no bound". The floor sits below the earliest film year
+/// (~1888) so every real year, including 1900, is selectable as a real bound.
+const YEAR_MIN: f64 = 1880.0;
 const YEAR_MAX: f64 = 2100.0;
 /// Runtime ceiling in minutes; "to" at this value means "no upper bound".
 const RUNTIME_MAX: f64 = 600.0;
@@ -73,16 +74,17 @@ impl FilterPopover {
         me
     }
 
-    /// Refresh the available genres / content ratings / resolution buckets from
-    /// a new item set. Preserves the current filter selections.
-    pub fn set_items(&mut self, items: &[MediaItem]) {
-        self.items = items.to_vec();
-        self.rebuild();
-    }
-
     /// Replace the active filter state (e.g. restoring persisted filters) and
     /// reflect it in the controls without emitting change events.
     pub fn set_state(&mut self, state: &FilterState) {
+        *self.state.borrow_mut() = state.clone();
+        self.rebuild();
+    }
+
+    /// Set both the item set and the filter state, rebuilding the popover only
+    /// once. Used on library load to avoid two back-to-back reconstructions.
+    pub fn reset(&mut self, items: &[MediaItem], state: &FilterState) {
+        self.items = items.to_vec();
         *self.state.borrow_mut() = state.clone();
         self.rebuild();
     }

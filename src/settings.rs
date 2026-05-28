@@ -52,7 +52,8 @@ pub struct SubtitleSettings {
 }
 
 /// Per-library UI state (filters + sort), persisted across sessions and keyed
-/// by `LibrarySection::library_id`.
+/// by a composite `"{source_type}:{source_id}:{library_type}"` id (built in
+/// the library view when items load).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LibraryUiState {

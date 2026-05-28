@@ -97,18 +97,32 @@ pub fn init_db(conn: &Connection) -> Result<(), DbError> {
 /// never persisted, so the columns are nullable with no default backfill —
 /// existing rows get the values on next Plex sync.
 fn migrate_to_v3(conn: &Connection) -> Result<(), DbError> {
-    // ADD COLUMN is tolerant if the column already exists in a freshly-created
-    // schema (the v3 CREATE TABLE above includes both columns). Catch and
-    // ignore the duplicate-column error in that case.
-    let _ = conn.execute(
-        "ALTER TABLE media_items ADD COLUMN video_resolution TEXT",
-        [],
-    );
-    let _ = conn.execute("ALTER TABLE media_items ADD COLUMN hdr TEXT", []);
+    // Only runs for genuine v2 databases (the version gate in init_db skips it
+    // for fresh v3 schemas), so the columns never already exist here. A
+    // duplicate-column error is tolerated defensively; any other error (locked
+    // DB, disk full, I/O) propagates so we don't bump the version past a
+    // failed migration.
+    add_column_if_missing(conn, "video_resolution")?;
+    add_column_if_missing(conn, "hdr")?;
 
     conn.execute("UPDATE schema_version SET version = ?1", [3])?;
 
     Ok(())
+}
+
+/// Add a nullable TEXT column to `media_items`, treating a duplicate-column
+/// error as success and propagating everything else.
+fn add_column_if_missing(conn: &Connection, column: &str) -> Result<(), DbError> {
+    let sql = format!("ALTER TABLE media_items ADD COLUMN {column} TEXT");
+    match conn.execute(&sql, []) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
+            if msg.contains("duplicate column name") =>
+        {
+            Ok(())
+        }
+        Err(e) => Err(DbError::from(e)),
+    }
 }
 
 /// Migrate schema from v1 to v2: add watch_progress table.

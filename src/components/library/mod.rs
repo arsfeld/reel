@@ -47,6 +47,9 @@ pub struct LibraryView {
     filter_dot: gtk::Image,
     library_title: gtk::Label,
     sort_dropdown: gtk::DropDown,
+    /// Signal handler for the sort dropdown, blocked during programmatic
+    /// restore so it doesn't re-emit SortChanged (and re-persist) on load.
+    sort_handler: gtk::glib::SignalHandlerId,
     /// Adwaita filter popover (7 filter groups). Owns the popover the filter
     /// button displays.
     filter_popover: FilterPopover,
@@ -321,7 +324,7 @@ impl Component for LibraryView {
         sort_dropdown.set_tooltip_text(Some("Sort order"));
 
         let sender_sort = sender.input_sender().clone();
-        sort_dropdown.connect_selected_notify(move |dd| {
+        let sort_handler = sort_dropdown.connect_selected_notify(move |dd| {
             let all = SortOrder::all();
             let idx = dd.selected() as usize;
             if idx < all.len() {
@@ -599,6 +602,7 @@ impl Component for LibraryView {
             filter_dot,
             library_title,
             sort_dropdown,
+            sort_handler,
             filter_popover,
             active_filters_bar,
             all_items: Vec::new(),
@@ -761,11 +765,14 @@ impl Component for LibraryView {
                 self.filter_state = library_filter::reconcile(&saved.filters, &self.all_items);
                 self.sort_order = saved.sort;
                 if let Some(idx) = SortOrder::all().iter().position(|s| *s == self.sort_order) {
+                    // Block the change handler so restoring the selection
+                    // doesn't re-emit SortChanged and re-persist on load.
+                    self.sort_dropdown.block_signal(&self.sort_handler);
                     self.sort_dropdown.set_selected(idx as u32);
+                    self.sort_dropdown.unblock_signal(&self.sort_handler);
                 }
 
-                self.filter_popover.set_items(&self.all_items);
-                self.filter_popover.set_state(&self.filter_state);
+                self.filter_popover.reset(&self.all_items, &self.filter_state);
                 self.active_filters_bar.update(&self.filter_state);
                 self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
