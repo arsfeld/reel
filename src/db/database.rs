@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use diesel::connection::SimpleConnection;
 use diesel::{Connection, SqliteConnection};
 use tracing::{info, warn};
 
@@ -35,6 +36,15 @@ impl Database {
         let path = db_path.to_string_lossy();
         match SqliteConnection::establish(&path) {
             Ok(mut conn) => {
+                // Tune the connection before migrating: WAL for better
+                // read/write concurrency, and a busy timeout so a transient
+                // lock waits rather than erroring immediately. (diesel already
+                // enables `foreign_keys = ON` per connection.)
+                if let Err(e) =
+                    conn.batch_execute("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")
+                {
+                    warn!("Failed to apply SQLite pragmas: {e}");
+                }
                 if let Err(e) = init_db(&mut conn) {
                     warn!("Failed to initialize database: {e}");
                     return None;
