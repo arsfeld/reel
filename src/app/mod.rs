@@ -176,6 +176,10 @@ pub enum AppCmd {
     Noop,
     /// Skip markers fetched from the media source after playback starts.
     SkipMarkersLoaded(SkipMarkers),
+    /// A timeline/scrobble report failed offline — queue it for later sync.
+    QueueOfflineSync(crate::models::download::PendingSync),
+    /// Pending-sync rows successfully flushed to the source on reconnect.
+    FlushedPending(Vec<i64>),
 }
 
 #[relm4::component(pub)]
@@ -495,7 +499,13 @@ impl Component for App {
                 if self.stack.visible_child_name().as_deref() == Some("player") {
                     // Stop watch tracking when leaving player
                     let events = self.watch_tracker.stop(self.last_position);
-                    dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
+                    dispatch_watch_events(
+                        &self.db_conn,
+                        events,
+                        &self.active_source,
+                        self.now_playing.as_ref().map(|i| i.id.as_str()),
+                        &sender,
+                    );
                     self.now_playing = None;
                     self.video_player.emit(VideoPlayerMsg::Clear);
                     leave_player_mode(root, &mut self.player_chrome_revealer);
@@ -783,6 +793,10 @@ impl Component for App {
                 self.active_source = Some(plex_source.clone());
                 self.source_url = Some(url.clone());
 
+                // Reconnect: flush any progress recorded offline back to the
+                // source before any inbound browse can surface a stale offset.
+                watch_events::flush_pending_sync(self, &sender);
+
                 // Feed the sidebar tree: source identity, current visibility, and
                 // (async) the source's libraries.
                 self.sidebar.emit(SidebarMsg::SetSource {
@@ -858,6 +872,12 @@ impl Component for App {
             AppCmd::SkipMarkersLoaded(markers) => {
                 self.video_player
                     .emit(VideoPlayerMsg::SetSkipMarkers(markers));
+            }
+            AppCmd::QueueOfflineSync(pending) => {
+                watch_events::queue_offline_sync(&self.db_conn, &pending);
+            }
+            AppCmd::FlushedPending(ids) => {
+                watch_events::delete_flushed_pending(&self.db_conn, &ids);
             }
             AppCmd::Noop => {}
         }
