@@ -2,7 +2,7 @@
   description = "Reel - A modern, native media player for the Linux desktop";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs?rev=51af08a5a2511a027cce68ce2025387983a50f19";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
   };
