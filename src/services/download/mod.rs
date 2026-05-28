@@ -5,6 +5,7 @@
 //! built on top of them — group-status derivation here, the queue scheduler in
 //! [`queue`], snapshot/top-up in [`snapshot`], and prune selection in [`prune`].
 
+pub mod prune;
 pub mod queue;
 pub mod snapshot;
 
