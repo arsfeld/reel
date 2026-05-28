@@ -162,7 +162,7 @@ impl SimpleComponent for DownloadsView {
 
                 #[name = "listbox"]
                 gtk::ListBox {
-                    add_css_class: "boxed-list",
+                    add_css_class: "downloads-list",
                     set_selection_mode: gtk::SelectionMode::None,
                     set_margin_top: 12,
                     set_margin_bottom: 12,
@@ -289,8 +289,8 @@ impl DownloadsView {
         for row in rows {
             match row {
                 DownloadRow::Standalone(item) => {
-                    let widget = self.item_row(&item, false, sender);
-                    self.listbox.append(&widget);
+                    let content = self.build_item_content(&item, false, sender);
+                    self.listbox.append(&card_row(&[&content]));
                 }
                 DownloadRow::Group {
                     group_id,
@@ -300,13 +300,21 @@ impl DownloadsView {
                     total,
                     episodes,
                 } => {
+                    // The whole show is one glass card: header on top, each
+                    // episode below it separated by a hairline.
                     let agg = group_status_text(status, done, total);
-                    let header = self.group_header_row(&group_id, &title, &agg, &episodes, sender);
-                    self.listbox.append(&header);
+                    let header =
+                        self.build_group_header_content(&group_id, &title, &agg, &episodes, sender);
+                    let card = gtk::Box::builder()
+                        .orientation(gtk::Orientation::Vertical)
+                        .build();
+                    card.append(&header);
                     for ep in &episodes {
-                        let widget = self.item_row(ep, true, sender);
-                        self.listbox.append(&widget);
+                        let content = self.build_item_content(ep, true, sender);
+                        content.add_css_class("download-episode");
+                        card.append(&content);
                     }
+                    self.listbox.append(&card_row(&[&card]));
                 }
             }
         }
@@ -376,14 +384,15 @@ impl DownloadsView {
         Some(url)
     }
 
-    /// A single download row: poster + title + status + progress + actions.
-    fn item_row(
+    /// The content of a single download entry: poster + title + status +
+    /// progress + actions. Returned as a bare `Box` so it can sit on its own
+    /// glass card (standalone) or stack inside a group card (episode).
+    fn build_item_content(
         &mut self,
         item: &DownloadItemView,
         nested: bool,
         sender: &ComponentSender<Self>,
-    ) -> gtk::ListBoxRow {
-        let row = gtk::ListBoxRow::builder().selectable(false).build();
+    ) -> gtk::Box {
         let hbox = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(12)
@@ -456,20 +465,19 @@ impl DownloadsView {
             },
         );
 
-        row.set_child(Some(&hbox));
-        row
+        hbox
     }
 
-    /// A group header row: poster, title, aggregate status, and group actions.
-    fn group_header_row(
+    /// The header content for a show group: poster, title, aggregate status,
+    /// and group actions. Sits at the top of the group's glass card.
+    fn build_group_header_content(
         &mut self,
         group_id: &str,
         title: &str,
         agg_status: &str,
         episodes: &[DownloadItemView],
         sender: &ComponentSender<Self>,
-    ) -> gtk::ListBoxRow {
-        let row = gtk::ListBoxRow::builder().selectable(false).build();
+    ) -> gtk::Box {
         let hbox = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(12)
@@ -553,9 +561,24 @@ impl DownloadsView {
         });
         hbox.append(&del);
 
-        row.set_child(Some(&hbox));
-        row
+        hbox
     }
+}
+
+/// Wrap content widgets in a non-selectable listbox row whose child is a glass
+/// "download card" (translucent backing, hairline edge, soft shadow) matching
+/// the home/library design language.
+fn card_row(children: &[&impl IsA<gtk::Widget>]) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::builder().selectable(false).build();
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["download-card"])
+        .build();
+    for child in children {
+        card.append(*child);
+    }
+    row.set_child(Some(&card));
+    row
 }
 
 /// The action buttons appropriate for a download state.
