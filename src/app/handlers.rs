@@ -129,6 +129,8 @@ pub fn handle_video_output(
             }
         }
         VideoPlayerOutput::EndOfFile => {
+            // Stop the transcode session + keepalive now that the file ended (R14).
+            stop_active_session(app, sender);
             app.screensaver.uninhibit(root);
             let _ = app.mpris.status_tx.send(PlayState::Stopped);
             let _ = app.mpris.metadata_tx.send(mpris::MprisMetadata::default());
@@ -320,12 +322,10 @@ pub fn handle_play_media(
     app.last_position = 0.0;
     app.current_view = CurrentView::Player;
     // R11: a quality override applies only to the current title. Reset the
-    // session-only state on every new title. (Stopping the prior transcode
-    // session is U10's job, on Leave/teardown.)
+    // session-only state on every new title, stopping any prior transcode
+    // session + keepalive first so switching titles never orphans one (U10/R14).
+    stop_active_session(app, sender);
     app.current_quality = crate::models::playback::QualitySelection::Auto;
-    app.active_transcode_session = None;
-    app.transcode_base_offset = 0.0;
-    app.current_decision = None;
     let title = player_title_for_item(media_item.as_ref(), &url);
     enter_player_mode(
         root,
@@ -384,6 +384,11 @@ fn begin_initial_playback(
             base_offset_secs: 0.0,
             is_transcode: false,
         });
+        app.video_player.emit(VideoPlayerMsg::SetDecisionInfo {
+            available: false,
+            selection: crate::models::playback::QualitySelection::Auto,
+            indicator: String::new(),
+        });
         return;
     }
 
@@ -398,6 +403,11 @@ fn begin_initial_playback(
             resume_secs,
             base_offset_secs: 0.0,
             is_transcode: false,
+        });
+        app.video_player.emit(VideoPlayerMsg::SetDecisionInfo {
+            available: false,
+            selection: crate::models::playback::QualitySelection::Auto,
+            indicator: String::new(),
         });
         return;
     };
@@ -416,6 +426,13 @@ fn begin_initial_playback(
     // `url` is kept as the last-resort direct-play fallback if the decision
     // cannot be reached (surfaced, not silent — U7).
     let fallback_url = url;
+    // Make the quality menu available immediately (Auto, no indicator yet) so
+    // the user can override even before the first decision resolves (U9).
+    app.video_player.emit(VideoPlayerMsg::SetDecisionInfo {
+        available: true,
+        selection: crate::models::playback::QualitySelection::Auto,
+        indicator: String::new(),
+    });
     // Tag with a fresh switch epoch so a later switch can supersede the initial
     // play if the user picks quality immediately (U8).
     let epoch = app.switch_state.begin();
@@ -434,6 +451,19 @@ fn begin_initial_playback(
             },
         }
     });
+}
+
+/// Tear down the active transcode session and its keepalive (U10/R14): stop the
+/// keepalive timer, `/stop` the session on the server, and clear the session-only
+/// decision state. Called on EOF, navigate-away/`Leave`, and quality-fallback.
+/// A no-op when no transcode is active (direct-play / local).
+pub(super) fn stop_active_session(app: &mut App, sender: &ComponentSender<App>) {
+    super::transcode_keepalive::stop(app);
+    app.current_decision = None;
+    app.transcode_base_offset = 0.0;
+    if let Some(session) = app.active_transcode_session.take() {
+        stop_session_async(app, session, sender);
+    }
 }
 
 /// Stop a transcode session in the background (fire-and-forget, bounded retry in
@@ -476,6 +506,7 @@ pub fn handle_playback_resolved(
     let previous_session = app.active_transcode_session.take();
     let (url, resume_out, base_offset) = super::utils::set_url_for_decision(&decision, resume_secs);
     let is_transcode = decision.kind.is_transcode_like();
+    let indicator = decision.indicator_text();
     info!(
         "Playback resolved: {:?} (resume={:?}, base_offset={base_offset})",
         decision.kind, resume_out
@@ -489,6 +520,14 @@ pub fn handle_playback_resolved(
         base_offset_secs: base_offset,
         is_transcode,
     });
+    // Update the quality menu indicator (R16) from the server-actual decision.
+    app.video_player.emit(VideoPlayerMsg::SetDecisionInfo {
+        available: true,
+        selection: app.current_quality,
+        indicator,
+    });
+    // Restart the keepalive timer for the newly active session (U10/R15).
+    super::transcode_keepalive::restart(app, sender);
 
     // Stop the prior session now that the new stream is loading (R14, U8).
     if let Some(prev) = previous_session
@@ -520,15 +559,30 @@ pub fn handle_playback_resolve_failed(
     }
     tracing::warn!("{message}; falling back to direct play");
     sender.input(AppMsg::ShowToast(message));
+    let previous_session = app.active_transcode_session.take();
     app.current_decision = None;
-    app.active_transcode_session = None;
     app.transcode_base_offset = 0.0;
+    // The override is discarded on a failed switch — revert the menu to Auto so
+    // the radio reflects the recovered (fallback) stream rather than the rung
+    // the user tried and that failed to resolve (U9 menu-state-during-reload).
+    app.current_quality = crate::models::playback::QualitySelection::Auto;
     app.video_player.emit(VideoPlayerMsg::SetUrl {
         url: Some(fallback_url),
         resume_secs,
         base_offset_secs: 0.0,
         is_transcode: false,
     });
+    app.video_player.emit(VideoPlayerMsg::SetDecisionInfo {
+        available: true,
+        selection: crate::models::playback::QualitySelection::Auto,
+        indicator: String::new(),
+    });
+    // No live transcode after a fallback — stop any keepalive, stop the old
+    // session that the fallback superseded (U10/R14).
+    super::transcode_keepalive::stop(app);
+    if let Some(prev) = previous_session {
+        stop_session_async(app, prev, sender);
+    }
 }
 
 /// Handle ConnectionSaved: persist the source and wire it to all views.

@@ -42,6 +42,7 @@ mod download_handlers;
 mod handlers;
 mod player_ui;
 mod source_validation;
+mod transcode_keepalive;
 mod utils;
 mod watch_events;
 mod widget_builder;
@@ -114,6 +115,13 @@ pub struct App {
     /// Epoch guard for overlapping quality/seek switches (U8): a resolve result
     /// from a superseded switch is discarded and its session stopped.
     switch_state: crate::components::player::switch_state::SwitchState,
+    /// Fixed-interval keepalive timer for the active transcode session (U10/R15);
+    /// `None` when no transcode is active. Pings independent of playback so a
+    /// paused transcode is not reaped.
+    keepalive_source: Option<glib::SourceId>,
+    /// Consecutive keepalive ping failures; a session is declared lost past a
+    /// threshold (U10).
+    keepalive_failures: u32,
 }
 
 #[derive(Debug)]
@@ -151,6 +159,8 @@ pub enum AppMsg {
         is_remote: bool,
     },
     ShowToast(String),
+    /// Keepalive timer tick — ping the active transcode session (U10/R15).
+    TranscodeKeepalive,
     FocusSearch,
     ShowCollections,
     ShowDownloads,
@@ -223,6 +233,9 @@ pub enum AppCmd {
     QueueOfflineSync(crate::models::download::PendingSync),
     /// Pending-sync rows successfully flushed to the source on reconnect.
     FlushedPending(Vec<i64>),
+    /// Result of a transcode keepalive ping (U10): `true` = alive, `false` =
+    /// failed. A run of failures declares the session lost.
+    KeepalivePinged(bool),
 }
 
 #[relm4::component(pub)]
@@ -438,6 +451,8 @@ impl Component for App {
             transcode_base_offset: 0.0,
             current_decision: None,
             switch_state: crate::components::player::switch_state::SwitchState::new(),
+            keepalive_source: None,
+            keepalive_failures: 0,
         };
 
         // Reconcile downloads against disk and rebuild the queue (no transfers
@@ -568,6 +583,8 @@ impl Component for App {
             }
             AppMsg::GoBack => {
                 if self.stack.visible_child_name().as_deref() == Some("player") {
+                    // Stop the transcode session + keepalive on navigate-away (R14).
+                    handlers::stop_active_session(self, &sender);
                     // Stop watch tracking when leaving player
                     let events = self.watch_tracker.stop(self.last_position);
                     dispatch_watch_events(
@@ -672,6 +689,9 @@ impl Component for App {
                     toast.set_timeout(3);
                     self.toast_overlay.add_toast(toast);
                 }
+            }
+            AppMsg::TranscodeKeepalive => {
+                transcode_keepalive::tick(self, &sender);
             }
             AppMsg::ShowFileChooser => {
                 show_file_chooser(root, sender.input_sender().clone());
@@ -1011,6 +1031,9 @@ impl Component for App {
                 watch_events::queue_offline_sync(&self.db, &pending)
             }
             AppCmd::FlushedPending(ids) => watch_events::delete_flushed_pending(&self.db, &ids),
+            AppCmd::KeepalivePinged(ok) => {
+                transcode_keepalive::record_result(self, ok, &sender);
+            }
             AppCmd::Noop => {}
         }
     }

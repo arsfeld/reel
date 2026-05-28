@@ -170,6 +170,54 @@ pub struct PlaybackDecision {
     pub throttled: bool,
 }
 
+impl PlaybackDecision {
+    /// Human-readable decision indicator for the OSD (R16). Direct-play reads
+    /// "Direct Play"; a transcode/direct-stream reads "Transcoding" with the
+    /// server-actual output resolution and bitrate appended when known (sourced
+    /// from the decision response, never the requested preset — so an "Original"
+    /// that compatibility-transcodes shows the real res/bitrate).
+    pub fn indicator_text(&self) -> String {
+        if self.kind == PlaybackDecisionKind::DirectPlay {
+            return "Direct Play".to_string();
+        }
+        let mut s = "Transcoding".to_string();
+        if let Some(res) = self.video_resolution.as_deref().filter(|r| !r.is_empty()) {
+            s.push(' ');
+            s.push_str(&format_resolution(res));
+        }
+        if let Some(kbps) = self.video_bitrate_kbps.filter(|b| *b > 0) {
+            s.push_str(" · ");
+            s.push_str(&format_bitrate_kbps(kbps));
+        }
+        s
+    }
+}
+
+/// Normalize Plex's `videoResolution` (e.g. "1080", "720", "4k", "sd") for
+/// display: bare digit strings gain a "p" suffix, named tiers are upper-cased.
+fn format_resolution(res: &str) -> String {
+    let r = res.trim();
+    if !r.is_empty() && r.chars().all(|c| c.is_ascii_digit()) {
+        format!("{r}p")
+    } else {
+        r.to_uppercase()
+    }
+}
+
+/// Format a kbps bitrate as "8 Mbps" / "1.5 Mbps" (≥ 1000 kbps) or "720 kbps".
+fn format_bitrate_kbps(kbps: i64) -> String {
+    if kbps >= 1000 {
+        let mbps = kbps as f64 / 1000.0;
+        if (mbps.fract()).abs() < 0.05 {
+            format!("{} Mbps", mbps.round() as i64)
+        } else {
+            format!("{mbps:.1} Mbps")
+        }
+    } else {
+        format!("{kbps} kbps")
+    }
+}
+
 impl std::fmt::Debug for PlaybackDecision {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PlaybackDecision")
@@ -276,6 +324,64 @@ mod tests {
     fn redact_plex_token_at_end_of_string() {
         let masked = redact_plex_token("https://h/x?X-Plex-Token=abc");
         assert_eq!(masked, "https://h/x?X-Plex-Token=REDACTED");
+    }
+
+    fn decision(
+        kind: PlaybackDecisionKind,
+        res: Option<&str>,
+        kbps: Option<i64>,
+    ) -> PlaybackDecision {
+        PlaybackDecision {
+            kind,
+            url: "https://h/x".into(),
+            session: None,
+            video_resolution: res.map(str::to_string),
+            video_bitrate_kbps: kbps,
+            throttled: false,
+        }
+    }
+
+    #[test]
+    fn indicator_direct_play() {
+        assert_eq!(
+            decision(PlaybackDecisionKind::DirectPlay, Some("1080"), Some(20_000)).indicator_text(),
+            "Direct Play"
+        );
+    }
+
+    #[test]
+    fn indicator_transcode_with_res_and_bitrate() {
+        // Covers R16: server-actual res/bitrate from the response, formatted.
+        assert_eq!(
+            decision(PlaybackDecisionKind::Transcode, Some("1080"), Some(8_000)).indicator_text(),
+            "Transcoding 1080p · 8 Mbps"
+        );
+        assert_eq!(
+            decision(PlaybackDecisionKind::Transcode, Some("720"), Some(1_877)).indicator_text(),
+            "Transcoding 720p · 1.9 Mbps"
+        );
+    }
+
+    #[test]
+    fn indicator_transcode_named_tier_and_kbps() {
+        assert_eq!(
+            decision(PlaybackDecisionKind::Transcode, Some("4k"), Some(720)).indicator_text(),
+            "Transcoding 4K · 720 kbps"
+        );
+    }
+
+    #[test]
+    fn indicator_transcode_without_metadata() {
+        // Original that compatibility-transcodes with no reported res/bitrate.
+        assert_eq!(
+            decision(PlaybackDecisionKind::DirectStream, None, None).indicator_text(),
+            "Transcoding"
+        );
+        // Empty/zero are treated as absent, not rendered.
+        assert_eq!(
+            decision(PlaybackDecisionKind::Transcode, Some(""), Some(0)).indicator_text(),
+            "Transcoding"
+        );
     }
 
     #[test]

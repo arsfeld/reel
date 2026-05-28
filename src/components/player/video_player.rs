@@ -170,6 +170,14 @@ pub(crate) enum VideoPlayerMsg {
     SelectAudio(String),
     SelectSubtitle(Option<String>),
     SetTitle(Option<String>),
+    /// Update the quality menu (U9): whether quality control applies to this
+    /// source, the active selection (Auto / a manual rung), and the decision
+    /// indicator text ("Direct Play" / "Transcoding 1080p · 8 Mbps", R16).
+    SetDecisionInfo {
+        available: bool,
+        selection: crate::models::playback::QualitySelection,
+        indicator: String,
+    },
     PopoverVisibilityChanged(bool),
     ClosePopovers,
     /// Set intro/credits skip markers for the current media.
@@ -258,6 +266,13 @@ pub(crate) struct VideoPlayer {
     /// `None` once filled (>= 100) or never buffering. Drives the status
     /// plate and suppresses poll-derived state flicker during buffering.
     buffering_percent: Option<i32>,
+    /// Quality menu state (U9). `quality_available` gates the menu's
+    /// sensitivity (only Plex sources can re-decide); `current_selection` is
+    /// the active radio item; `decision_indicator` is the R16 indicator text.
+    quality_available: bool,
+    current_selection: crate::models::playback::QualitySelection,
+    decision_indicator: String,
+    quality_ui_signature: String,
 }
 
 #[relm4::component(pub(crate))]
@@ -562,6 +577,36 @@ impl Component for VideoPlayer {
                                     },
                                 },
 
+                                #[name = "quality_menu"]
+                                gtk::MenuButton {
+                                    set_icon_name: "video-display-symbolic",
+                                    add_css_class: "flat",
+                                    add_css_class: "circular",
+                                    set_tooltip_text: Some("Quality"),
+                                    #[wrap(Some)]
+                                    set_popover = &gtk::Popover {
+                                        gtk::Box {
+                                            set_orientation: gtk::Orientation::Vertical,
+                                            set_spacing: 4,
+                                            set_margin_top: 8,
+                                            set_margin_bottom: 8,
+                                            set_margin_start: 8,
+                                            set_margin_end: 8,
+                                            #[name = "quality_indicator"]
+                                            gtk::Label {
+                                                add_css_class: "dim-label",
+                                                set_xalign: 0.0,
+                                                set_visible: false,
+                                            },
+                                            #[name = "quality_box"]
+                                            gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_spacing: 4,
+                                            },
+                                        },
+                                    },
+                                },
+
                                 #[name = "volume_button"]
                                 gtk::Button {
                                     set_icon_name: "audio-volume-high-symbolic",
@@ -715,6 +760,13 @@ impl Component for VideoPlayer {
             self.media.as_ref(),
             &sender,
             &mut self.track_ui_signature,
+        );
+        crate::components::player::quality_menu::rebuild_quality_popover(
+            widgets,
+            self.current_selection,
+            &self.decision_indicator,
+            &mut self.quality_ui_signature,
+            &sender,
         );
         self.refresh_widgets(widgets, root);
         let _ = root;
@@ -908,6 +960,15 @@ impl VideoPlayer {
             VideoPlayerMsg::SetTitle(title) => {
                 self.title = title;
             }
+            VideoPlayerMsg::SetDecisionInfo {
+                available,
+                selection,
+                indicator,
+            } => {
+                self.quality_available = available;
+                self.current_selection = selection;
+                self.decision_indicator = indicator;
+            }
             VideoPlayerMsg::PopoverVisibilityChanged(open) => {
                 self.osd.popover_open = open;
                 if open {
@@ -1060,6 +1121,10 @@ impl VideoPlayer {
             track_ui_signature: String::new(),
             skip_markers: None,
             buffering_percent: None,
+            quality_available: false,
+            current_selection: crate::models::playback::QualitySelection::Auto,
+            decision_indicator: String::new(),
+            quality_ui_signature: String::new(),
         }
     }
 
@@ -1154,6 +1219,8 @@ impl VideoPlayer {
         widgets
             .subtitle_menu
             .set_sensitive(has_audio || has_subs || self.media.is_some());
+        // Quality control only applies to sources that can re-decide (Plex).
+        widgets.quality_menu.set_visible(self.quality_available);
 
         // Skip intro / credits button visibility. Only show when the OSD
         // is revealed and the playhead is inside a marked range.
@@ -1372,6 +1439,11 @@ impl VideoPlayer {
 
         let Some(url) = url else {
             widgets.picture.set_paintable(gtk::gdk::Paintable::NONE);
+            // Clearing the stream (stop / leave) resets the quality menu so a
+            // stale indicator doesn't linger into the next title.
+            self.quality_available = false;
+            self.current_selection = crate::models::playback::QualitySelection::Auto;
+            self.decision_indicator.clear();
             let _ = sender.output(VideoPlayerOutput::StateChanged(PlayState::Stopped));
             return;
         };
@@ -1886,7 +1958,11 @@ struct TickSnapshot {
 }
 
 fn wire_popover_handlers(widgets: &VideoPlayerWidgets, sender: &ComponentSender<VideoPlayer>) {
-    for menu in [&widgets.audio_menu, &widgets.subtitle_menu] {
+    for menu in [
+        &widgets.audio_menu,
+        &widgets.subtitle_menu,
+        &widgets.quality_menu,
+    ] {
         let Some(popover) = menu.popover() else {
             continue;
         };
