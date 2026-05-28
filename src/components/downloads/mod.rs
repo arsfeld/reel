@@ -19,12 +19,13 @@ use crate::services::media_source::MediaSource;
 
 use row::{DownloadItemView, DownloadRow, derive_rows, group_retry_targets};
 
-/// Displayed poster size in a download row (2:3 movie poster).
-const POSTER_W: i32 = 56;
-const POSTER_H: i32 = 84;
+/// Displayed poster-card size in the downloads grid (2:3 movie poster),
+/// matching the library grid's proportions at a slightly smaller scale.
+const CARD_W: i32 = 160;
+const CARD_H: i32 = 240;
 /// Requested transcode size (2× the display size for crisp HiDPI rendering).
-const POSTER_REQ_W: u32 = 112;
-const POSTER_REQ_H: u32 = 168;
+const POSTER_REQ_W: u32 = 320;
+const POSTER_REQ_H: u32 = 480;
 
 /// GTK widget handles for a rendered row, kept so progress ticks and arriving
 /// artwork can update the row in place without rebuilding the whole listbox.
@@ -61,7 +62,7 @@ pub struct DownloadsView {
     over_budget_warning: bool,
     /// Whether the disk-full banner should show.
     disk_full: bool,
-    listbox: gtk::ListBox,
+    grid: gtk::FlowBox,
     banner: adw::Banner,
     /// Active source, used to resolve a poster path into an artwork URL.
     source: Option<Arc<dyn MediaSource>>,
@@ -160,14 +161,19 @@ impl SimpleComponent for DownloadsView {
                 set_vexpand: true,
                 set_hscrollbar_policy: gtk::PolicyType::Never,
 
-                #[name = "listbox"]
-                gtk::ListBox {
-                    add_css_class: "downloads-list",
+                #[name = "grid"]
+                gtk::FlowBox {
+                    add_css_class: "downloads-grid",
                     set_selection_mode: gtk::SelectionMode::None,
-                    set_margin_top: 12,
-                    set_margin_bottom: 12,
-                    set_margin_start: 12,
-                    set_margin_end: 12,
+                    set_homogeneous: true,
+                    set_min_children_per_line: 1,
+                    set_max_children_per_line: 12,
+                    set_column_spacing: 4,
+                    set_row_spacing: 4,
+                    set_margin_top: 16,
+                    set_margin_bottom: 16,
+                    set_margin_start: 16,
+                    set_margin_end: 16,
                     set_valign: gtk::Align::Start,
                 },
             },
@@ -185,7 +191,7 @@ impl SimpleComponent for DownloadsView {
             groups: Vec::new(),
             over_budget_warning: false,
             disk_full: false,
-            listbox: widgets.listbox.clone(),
+            grid: widgets.grid.clone(),
             banner: widgets.banner.clone(),
             source: None,
             artwork_cache: None,
@@ -257,6 +263,16 @@ impl SimpleComponent for DownloadsView {
     }
 }
 
+/// Borrowed fields needed to render one show as a single poster card.
+struct GroupCardInfo<'a> {
+    group_id: &'a str,
+    title: &'a str,
+    status: GroupStatus,
+    done: usize,
+    total: usize,
+    episodes: &'a [DownloadItemView],
+}
+
 impl DownloadsView {
     /// Update the banner and rebuild the listbox from the current state.
     fn rebuild(&mut self, sender: &ComponentSender<Self>) {
@@ -274,24 +290,21 @@ impl DownloadsView {
             self.banner.set_revealed(false);
         }
 
-        while let Some(child) = self.listbox.first_child() {
-            self.listbox.remove(&child);
+        while let Some(child) = self.grid.first_child() {
+            self.grid.remove(&child);
         }
-        // Widget handles point at the rows we just dropped; the texture cache
+        // Widget handles point at the cards we just dropped; the texture cache
         // stays so reloaded posters appear instantly.
         self.row_widgets.clear();
 
         let rows = derive_rows(&self.downloads, &self.groups);
         if rows.is_empty() {
-            self.listbox.append(&empty_row());
+            self.grid.append(&empty_card());
             return;
         }
         for row in rows {
-            match row {
-                DownloadRow::Standalone(item) => {
-                    let content = self.build_item_content(&item, false, sender);
-                    self.listbox.append(&card_row(&[&content]));
-                }
+            let card = match row {
+                DownloadRow::Standalone(item) => self.item_card(&item, sender),
                 DownloadRow::Group {
                     group_id,
                     title,
@@ -299,24 +312,19 @@ impl DownloadsView {
                     done,
                     total,
                     episodes,
-                } => {
-                    // The whole show is one glass card: header on top, each
-                    // episode below it separated by a hairline.
-                    let agg = group_status_text(status, done, total);
-                    let header =
-                        self.build_group_header_content(&group_id, &title, &agg, &episodes, sender);
-                    let card = gtk::Box::builder()
-                        .orientation(gtk::Orientation::Vertical)
-                        .build();
-                    card.append(&header);
-                    for ep in &episodes {
-                        let content = self.build_item_content(ep, true, sender);
-                        content.add_css_class("download-episode");
-                        card.append(&content);
-                    }
-                    self.listbox.append(&card_row(&[&card]));
-                }
-            }
+                } => self.group_card(
+                    GroupCardInfo {
+                        group_id: &group_id,
+                        title: &title,
+                        status,
+                        done,
+                        total,
+                        episodes: &episodes,
+                    },
+                    sender,
+                ),
+            };
+            self.grid.append(&card);
         }
     }
 
@@ -384,68 +392,32 @@ impl DownloadsView {
         Some(url)
     }
 
-    /// The content of a single download entry: poster + title + status +
-    /// progress + actions. Returned as a bare `Box` so it can sit on its own
-    /// glass card (standalone) or stack inside a group card (episode).
-    fn build_item_content(
-        &mut self,
-        item: &DownloadItemView,
-        nested: bool,
-        sender: &ComponentSender<Self>,
-    ) -> gtk::Box {
-        let hbox = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
-            .margin_top(8)
-            .margin_bottom(8)
-            .margin_start(if nested { 24 } else { 12 })
-            .margin_end(12)
-            .build();
+    /// A single download as a poster card: poster artwork with the status and
+    /// progress overlaid at the bottom and the per-item action buttons revealed
+    /// over the poster on hover. The title sits beneath the poster.
+    fn item_card(&mut self, item: &DownloadItemView, sender: &ComponentSender<Self>) -> gtk::Box {
+        let card = build_poster_card(&item_label(item));
+        let poster_url = self.load_poster(
+            &card.picture,
+            &card.placeholder,
+            item.poster_path.as_deref(),
+            sender,
+        );
 
-        let (frame, picture, placeholder) = build_row_poster();
-        let poster_url =
-            self.load_poster(&picture, &placeholder, item.poster_path.as_deref(), sender);
-        hbox.append(&frame);
-
-        let vbox = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(4)
-            .valign(gtk::Align::Center)
-            .hexpand(true)
-            .build();
-        let title = gtk::Label::builder()
-            .label(item_label(item))
-            .halign(gtk::Align::Start)
-            .build();
-        title.add_css_class("body");
-        vbox.append(&title);
-
-        let status = gtk::Label::builder()
-            .label(status_text(item))
-            .halign(gtk::Align::Start)
-            .build();
-        status.add_css_class("caption");
-        status.add_css_class("dim-label");
-        vbox.append(&status);
-
-        // Always present (so progress ticks can reveal it); shown only while a
-        // transfer is in flight or paused with a known fraction.
-        let bar = gtk::ProgressBar::builder().build();
+        card.status.set_label(&status_text(item));
         if let Some(frac) = item.progress {
-            bar.set_fraction(frac);
+            card.progress.set_fraction(frac);
         }
-        bar.set_visible(
+        card.progress.set_visible(
             item.progress.is_some()
                 && matches!(
                     item.state,
                     DownloadState::Downloading | DownloadState::Paused
                 ),
         );
-        vbox.append(&bar);
-        hbox.append(&vbox);
 
         for (icon, tooltip, action) in actions_for_state(item.state) {
-            hbox.append(&action_button(
+            card.actions.append(&action_button(
                 &item.media_item_id,
                 icon,
                 tooltip,
@@ -457,75 +429,46 @@ impl DownloadsView {
         self.row_widgets.insert(
             item.media_item_id.clone(),
             RowWidgets {
-                picture,
-                placeholder,
+                picture: card.picture,
+                placeholder: card.placeholder,
                 poster_url,
-                progress_bar: Some(bar),
-                status_label: Some(status),
+                progress_bar: Some(card.progress),
+                status_label: Some(card.status),
             },
         );
 
-        hbox
+        card.container
     }
 
-    /// The header content for a show group: poster, title, aggregate status,
-    /// and group actions. Sits at the top of the group's glass card.
-    fn build_group_header_content(
-        &mut self,
-        group_id: &str,
-        title: &str,
-        agg_status: &str,
-        episodes: &[DownloadItemView],
-        sender: &ComponentSender<Self>,
-    ) -> gtk::Box {
-        let hbox = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
-            .margin_top(10)
-            .margin_bottom(6)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
+    /// A whole show as a single poster card: series artwork with the aggregate
+    /// "6/10 episodes" status overlaid and retry-failed / delete-all actions.
+    fn group_card(&mut self, info: GroupCardInfo<'_>, sender: &ComponentSender<Self>) -> gtk::Box {
+        let GroupCardInfo {
+            group_id,
+            title,
+            status,
+            done,
+            total,
+            episodes,
+        } = info;
+        let card = build_poster_card(title);
 
-        // Group poster comes from any member (episodes fall back to the series
-        // poster), so the show artwork shows even before episodes are expanded.
-        let (frame, picture, placeholder) = build_row_poster();
+        // Poster comes from any member (episodes fall back to the series poster).
         let poster_path = episodes.iter().find_map(|e| e.poster_path.clone());
-        let poster_url = self.load_poster(&picture, &placeholder, poster_path.as_deref(), sender);
-        hbox.append(&frame);
-
-        let vbox = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(2)
-            .valign(gtk::Align::Center)
-            .hexpand(true)
-            .build();
-        let title_lbl = gtk::Label::builder()
-            .label(title)
-            .halign(gtk::Align::Start)
-            .build();
-        title_lbl.add_css_class("heading");
-        vbox.append(&title_lbl);
-
-        let agg = gtk::Label::builder()
-            .label(agg_status)
-            .halign(gtk::Align::Start)
-            .build();
-        agg.add_css_class("caption");
-        agg.add_css_class("dim-label");
-        vbox.append(&agg);
-        hbox.append(&vbox);
-
-        self.row_widgets.insert(
-            group_id.to_string(),
-            RowWidgets {
-                picture,
-                placeholder,
-                poster_url,
-                progress_bar: None,
-                status_label: None,
-            },
+        let poster_url = self.load_poster(
+            &card.picture,
+            &card.placeholder,
+            poster_path.as_deref(),
+            sender,
         );
+
+        card.status
+            .set_label(&group_status_text(status, done, total));
+        // While episodes are still arriving, show how far the show has gotten.
+        if status == GroupStatus::Downloading && total > 0 {
+            card.progress.set_fraction(done as f64 / total as f64);
+            card.progress.set_visible(true);
+        }
 
         // Retry-all when any member failed.
         let retry_targets = group_retry_targets(episodes);
@@ -533,7 +476,7 @@ impl DownloadsView {
             let btn = gtk::Button::builder()
                 .icon_name("view-refresh-symbolic")
                 .tooltip_text("Retry failed episodes")
-                .css_classes(["flat"])
+                .css_classes(["flat", "circular"])
                 .build();
             let s = sender.input_sender().clone();
             btn.connect_clicked(move |_| {
@@ -542,15 +485,15 @@ impl DownloadsView {
                     action: DownloadItemAction::Retry,
                 });
             });
-            hbox.append(&btn);
+            card.actions.append(&btn);
         }
 
-        // Delete the whole group's members.
+        // Delete the whole show's members.
         let all_ids: Vec<String> = episodes.iter().map(|e| e.media_item_id.clone()).collect();
         let del = gtk::Button::builder()
             .icon_name("user-trash-symbolic")
             .tooltip_text("Delete all")
-            .css_classes(["flat"])
+            .css_classes(["flat", "circular"])
             .build();
         let s = sender.input_sender().clone();
         del.connect_clicked(move |_| {
@@ -559,26 +502,21 @@ impl DownloadsView {
                 action: DownloadItemAction::Delete,
             });
         });
-        hbox.append(&del);
+        card.actions.append(&del);
 
-        hbox
-    }
-}
+        self.row_widgets.insert(
+            group_id.to_string(),
+            RowWidgets {
+                picture: card.picture,
+                placeholder: card.placeholder,
+                poster_url,
+                progress_bar: None,
+                status_label: Some(card.status),
+            },
+        );
 
-/// Wrap content widgets in a non-selectable listbox row whose child is a glass
-/// "download card" (translucent backing, hairline edge, soft shadow) matching
-/// the home/library design language.
-fn card_row(children: &[&impl IsA<gtk::Widget>]) -> gtk::ListBoxRow {
-    let row = gtk::ListBoxRow::builder().selectable(false).build();
-    let card = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .css_classes(["download-card"])
-        .build();
-    for child in children {
-        card.append(*child);
+        card.container
     }
-    row.set_child(Some(&card));
-    row
 }
 
 /// The action buttons appropriate for a download state.
@@ -631,7 +569,7 @@ fn action_button(
     let btn = gtk::Button::builder()
         .icon_name(icon)
         .tooltip_text(tooltip)
-        .css_classes(["flat"])
+        .css_classes(["flat", "circular"])
         .valign(gtk::Align::Center)
         .build();
     let s = sender.input_sender().clone();
@@ -645,41 +583,126 @@ fn action_button(
     btn
 }
 
-fn empty_row() -> gtk::ListBoxRow {
-    let row = gtk::ListBoxRow::builder().selectable(false).build();
+fn empty_card() -> gtk::Label {
     let label = gtk::Label::builder()
         .label("No downloads yet. Download a movie or show to watch offline.")
         .margin_top(24)
         .margin_bottom(24)
         .build();
     label.add_css_class("dim-label");
-    row.set_child(Some(&label));
-    row
+    label
 }
 
-/// A small rounded poster (picture + centered placeholder icon) for a row.
-fn build_row_poster() -> (gtk::Frame, gtk::Picture, gtk::Image) {
+/// Widget handles for a freshly built poster card that the caller fills in.
+struct PosterCard {
+    /// The full card (poster frame + title) appended to the grid.
+    container: gtk::Box,
+    picture: gtk::Picture,
+    placeholder: gtk::Image,
+    /// Bottom-overlaid status line (e.g. "Downloading — 300 MB · 30%").
+    status: gtk::Label,
+    /// Bottom-edge progress bar; hidden until there's a fraction to show.
+    progress: gtk::ProgressBar,
+    /// Top-right action button tray, revealed over the poster on hover.
+    actions: gtk::Box,
+}
+
+/// Build a library-style poster card: a rounded `media-card-frame` wrapping the
+/// poster, a bottom scrim with the status line + progress bar overlaid, a
+/// hover-revealed action tray, and the title beneath. The caller fills in the
+/// poster, status text, progress, and action buttons.
+fn build_poster_card(title: &str) -> PosterCard {
     let picture = gtk::Picture::builder()
         .content_fit(gtk::ContentFit::Cover)
-        .width_request(POSTER_W)
-        .height_request(POSTER_H)
+        .width_request(CARD_W)
+        .height_request(CARD_H)
+        .css_classes(["media-card-poster"])
         .build();
+
     let placeholder = gtk::Image::builder()
         .icon_name("video-x-generic-symbolic")
-        .pixel_size(20)
+        .pixel_size(48)
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
-        .css_classes(["dim-label"])
+        .css_classes(["media-card-placeholder-icon"])
         .build();
+
+    // Bottom gradient scrim so the overlaid status text stays readable.
+    let scrim = gtk::Box::builder()
+        .halign(gtk::Align::Fill)
+        .valign(gtk::Align::End)
+        .height_request(64)
+        .css_classes(["media-card-scrim"])
+        .build();
+
+    let status = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::End)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .margin_start(10)
+        .margin_end(10)
+        .margin_bottom(12)
+        .css_classes(["download-status"])
+        .build();
+
+    let progress = gtk::ProgressBar::builder()
+        .halign(gtk::Align::Fill)
+        .valign(gtk::Align::End)
+        .css_classes(["watch-progress"])
+        .visible(false)
+        .build();
+
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(4)
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Start)
+        .margin_top(6)
+        .margin_end(6)
+        .css_classes(["download-actions"])
+        .build();
+
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&picture));
+    overlay.add_overlay(&scrim);
     overlay.add_overlay(&placeholder);
+    overlay.add_overlay(&status);
+    overlay.add_overlay(&progress);
+    overlay.add_overlay(&actions);
+
     let frame = gtk::Frame::builder()
-        .css_classes(["download-poster-frame"])
-        .valign(gtk::Align::Center)
+        .css_classes(["media-card-frame"])
         .child(&overlay)
         .build();
-    (frame, picture, placeholder)
+
+    let title_label = gtk::Label::builder()
+        .label(title)
+        .halign(gtk::Align::Start)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .max_width_chars(18)
+        .lines(2)
+        .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::WordChar)
+        .css_classes(["media-card-title"])
+        .build();
+
+    let container = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(0)
+        .width_request(CARD_W)
+        .css_classes(["media-card"])
+        .build();
+    container.append(&frame);
+    container.append(&title_label);
+
+    PosterCard {
+        container,
+        picture,
+        placeholder,
+        status,
+        progress,
+        actions,
+    }
 }
 
 /// "Movie" or "S1E2 · Episode title" label.
