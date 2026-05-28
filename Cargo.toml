@@ -23,7 +23,6 @@ serde_json = "1"
 toml = "0.8"
 
 # Database
-rusqlite = { version = "0.32", features = ["bundled"] }
 diesel = { version = "2.3.9", features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
 diesel_migrations = "2.3"
 # Pinned to match rusqlite's libsqlite3-sys so Cargo unifies the single

@@ -678,10 +678,13 @@ impl Component for ShowDetail {
                 }
             }
             ShowDetailMsg::EpisodesLoaded(episodes) => {
+                use diesel::Connection as _;
                 // Load watch progress for each episode
                 self.watch_progress.clear();
-                if let Ok(conn) = rusqlite::Connection::open(config::db_path()) {
-                    let repo = WatchProgressRepo::new(&conn);
+                if let Ok(mut conn) =
+                    diesel::SqliteConnection::establish(&config::db_path().to_string_lossy())
+                {
+                    let mut repo = WatchProgressRepo::new(&mut conn);
                     for ep in &episodes {
                         if let Ok(Some(progress)) = repo.find_by_media_id(&ep.id) {
                             self.watch_progress.insert(ep.id.clone(), progress);

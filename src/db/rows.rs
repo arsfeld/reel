@@ -80,6 +80,61 @@ pub struct NewMediaItemRow {
     pub updated_at: String,
 }
 
+/// Update projection for `media_items` on conflict. Excludes the identity
+/// columns (id, source_type, source_id, external_id, media_type) and
+/// `added_at`, matching the legacy upsert which preserved those on update.
+/// `treat_none_as_null` so a cleared field overwrites with NULL.
+#[derive(Debug, AsChangeset)]
+#[diesel(table_name = media_items, treat_none_as_null = true)]
+pub struct MediaItemChangeset {
+    pub title: String,
+    pub year: Option<i32>,
+    pub overview: Option<String>,
+    pub content_rating: Option<String>,
+    pub rating: Option<f64>,
+    pub runtime_minutes: Option<i32>,
+    pub poster_path: Option<String>,
+    pub backdrop_path: Option<String>,
+    pub genres: String,
+    pub parent_id: Option<String>,
+    pub season_number: Option<i32>,
+    pub episode_number: Option<i32>,
+    pub air_date: Option<String>,
+    pub file_path: Option<String>,
+    pub video_resolution: Option<String>,
+    pub hdr: Option<String>,
+    pub updated_at: String,
+}
+
+impl TryFrom<&MediaItem> for MediaItemChangeset {
+    type Error = DbError;
+
+    fn try_from(m: &MediaItem) -> Result<Self, DbError> {
+        let genres = serde_json::to_string(&m.genres)
+            .map_err(|e| DbError::Data(format!("Failed to serialize genres: {e}")))?;
+
+        Ok(MediaItemChangeset {
+            title: m.title.clone(),
+            year: m.year,
+            overview: m.overview.clone(),
+            content_rating: m.content_rating.clone(),
+            rating: m.rating,
+            runtime_minutes: m.runtime_minutes,
+            poster_path: m.poster_path.clone(),
+            backdrop_path: m.backdrop_path.clone(),
+            genres,
+            parent_id: m.parent_id.clone(),
+            season_number: m.season_number,
+            episode_number: m.episode_number,
+            air_date: m.air_date.clone(),
+            file_path: m.file_path.clone(),
+            video_resolution: m.video_resolution.clone(),
+            hdr: m.hdr.map(|h| h.as_str().to_string()),
+            updated_at: m.updated_at.clone(),
+        })
+    }
+}
+
 impl TryFrom<MediaItemRow> for MediaItem {
     type Error = DbError;
 
@@ -391,7 +446,8 @@ mod tests {
         for hdr in [None, Some(HdrFormat::Hdr), Some(HdrFormat::DolbyVision)] {
             let mut m = movie();
             m.hdr = hdr;
-            let back = MediaItem::try_from(read_row(NewMediaItemRow::try_from(&m).unwrap())).unwrap();
+            let back =
+                MediaItem::try_from(read_row(NewMediaItemRow::try_from(&m).unwrap())).unwrap();
             assert_eq!(back.hdr, hdr);
         }
     }
