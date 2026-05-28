@@ -4,6 +4,7 @@ use adw;
 use gtk::prelude::*;
 use relm4::prelude::*;
 
+use crate::models::hub::MediaHub;
 use crate::models::media::MediaItem;
 use crate::models::watch::WatchProgress;
 use crate::services::artwork::ArtworkCache;
@@ -11,7 +12,7 @@ use crate::services::media_source::MediaSource;
 
 mod shelf;
 
-use shelf::{Generation, HomeCard, Shelf, ShelfId, poster_result_is_current};
+use shelf::{Generation, HomeCard, Shelf, ShelfId, hub_duplicates_core, poster_result_is_current};
 
 pub struct HomeView {
     source: Option<Arc<dyn MediaSource>>,
@@ -88,6 +89,9 @@ pub enum HomeViewCmd {
         /// (library title, items) for each non-empty library, in library order.
         recently_added: Vec<(String, Vec<MediaItem>)>,
         collections: Vec<MediaItem>,
+        /// Server-curated hubs (Recommended / Because-you-watched / genres),
+        /// in server order. Empty for non-Plex sources.
+        hubs: Vec<MediaHub>,
     },
     PosterLoaded {
         generation: Generation,
@@ -307,10 +311,16 @@ impl Component for HomeView {
                             .flatten()
                             .collect();
 
+                        // Server-curated hubs. NotSupported (non-Plex) yields
+                        // an empty list, so those sources simply show no hub
+                        // rows.
+                        let hubs = src.hubs().await.unwrap_or_default();
+
                         HomeViewCmd::HomeData {
                             continue_watching,
                             recently_added,
                             collections,
+                            hubs,
                         }
                     });
                 } else {
@@ -356,6 +366,7 @@ impl Component for HomeView {
                 continue_watching,
                 recently_added,
                 collections,
+                hubs,
             } => {
                 self.loading = false;
 
@@ -385,6 +396,18 @@ impl Component for HomeView {
                     let cards: Vec<(MediaItem, Option<f64>)> =
                         collections.into_iter().map(|item| (item, None)).collect();
                     self.populate_shelf(col_id, cards, false, &sender);
+                }
+
+                // Append server-curated hubs below the Reel-owned core, dropping
+                // any that duplicate Continue Watching / Recently Added.
+                for hub in hubs {
+                    if hub.items.is_empty() || hub_duplicates_core(hub.identifier.as_deref()) {
+                        continue;
+                    }
+                    let hub_id = self.add_shelf(&hub.title);
+                    let cards: Vec<(MediaItem, Option<f64>)> =
+                        hub.items.into_iter().map(|item| (item, None)).collect();
+                    self.populate_shelf(hub_id, cards, false, &sender);
                 }
 
                 self.refresh_visible_page();

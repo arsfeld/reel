@@ -190,6 +190,24 @@ pub fn poster_result_is_current(result_gen: Generation, current_gen: Generation)
     result_gen == current_gen
 }
 
+/// Whether a Plex hub duplicates a shelf the home already renders itself
+/// (Continue Watching / On Deck / Recently Added) and should be dropped to
+/// avoid showing the same content twice. Matched loosely on the hub identifier
+/// because Plex's exact identifiers vary across server versions. "recommended"
+/// is intentionally NOT matched by the "recent" check (different letters).
+pub fn hub_duplicates_core(identifier: Option<&str>) -> bool {
+    match identifier {
+        Some(id) => {
+            let id = id.to_lowercase();
+            id.contains("ondeck")
+                || id.contains("continue")
+                || id.contains("recent")
+                || id.contains("inprogress")
+        }
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +285,21 @@ mod tests {
         assert!(poster_result_is_current(5, 5));
         assert!(!poster_result_is_current(4, 5));
         assert!(!poster_result_is_current(6, 5));
+    }
+
+    #[test]
+    fn hub_dedup_drops_core_duplicates() {
+        assert!(hub_duplicates_core(Some("home.ondeck")));
+        assert!(hub_duplicates_core(Some("home.continue")));
+        assert!(hub_duplicates_core(Some("home.movies.recentlyAdded")));
+        assert!(hub_duplicates_core(Some("tv.inprogress")));
+    }
+
+    #[test]
+    fn hub_dedup_keeps_discovery_rows() {
+        assert!(!hub_duplicates_core(Some("home.movies.recommended")));
+        assert!(!hub_duplicates_core(Some("home.television.becauseYouWatched")));
+        assert!(!hub_duplicates_core(Some("home.movies.genre.action")));
+        assert!(!hub_duplicates_core(None));
     }
 }
