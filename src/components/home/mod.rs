@@ -18,7 +18,11 @@ use hero::{Hero, hero_candidates, next_index, prev_index};
 use shelf::{Generation, HomeCard, Shelf, ShelfId, hub_duplicates_core, poster_result_is_current};
 
 pub struct HomeView {
+    /// The browsed source: drives Latest / Recently Added / Collections / hubs.
     source: Option<Arc<dyn MediaSource>>,
+    /// All connected sources (label + source), used only to build the single
+    /// merged Continue Watching row that spans every server.
+    sources: Vec<(String, Arc<dyn MediaSource>)>,
     artwork_cache: Option<Arc<ArtworkCache>>,
     /// The vertical container holding all shelf sections.
     shelves_box: gtk::Box,
@@ -64,6 +68,9 @@ pub struct HomeView {
 #[allow(clippy::large_enum_variant)]
 pub enum HomeViewMsg {
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
+    /// Update the full set of connected sources (label + source). Drives the
+    /// merged, cross-source Continue Watching row.
+    SetSources(Vec<(String, Arc<dyn MediaSource>)>),
     /// Show/hide the "Connecting to Plex…" loading page.
     SetConnecting(bool),
     /// Update the hidden-library set. Applied to subsequently loaded home data.
@@ -91,6 +98,7 @@ impl std::fmt::Debug for HomeViewMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SetSource(..) => write!(f, "SetSource(..)"),
+            Self::SetSources(s) => write!(f, "SetSources({} sources)", s.len()),
             Self::SetConnecting(v) => write!(f, "SetConnecting({v})"),
             Self::SetVisibility(h) => write!(f, "SetVisibility({} hidden)", h.len()),
             Self::LoadHome { in_progress } => {
@@ -108,6 +116,45 @@ impl std::fmt::Debug for HomeViewMsg {
     }
 }
 
+/// Merge per-source Continue Watching lists into one badged list. Dedupe by the
+/// composite MediaItem id (first occurrence wins — the same title held on two
+/// servers has DIFFERENT external ids, so it correctly appears once per server,
+/// each badged; cross-source title de-dup is explicitly out of scope). Order is
+/// best-effort: per-source order preserved, sources concatenated in input order
+/// (MediaItem carries no reliable cross-source last-played timestamp).
+pub fn merge_continue_watching(
+    per_source: Vec<(String, Vec<MediaItem>)>,
+) -> Vec<(MediaItem, String)> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut merged: Vec<(MediaItem, String)> = Vec::new();
+    for (label, items) in per_source {
+        for item in items {
+            if seen.insert(item.id.clone()) {
+                merged.push((item, label.clone()));
+            }
+        }
+    }
+    merged
+}
+
+/// Drop merged Continue Watching entries belonging to hidden libraries while
+/// preserving each surviving item's source label. Mirrors
+/// `retain_visible_items` but operates on `(item, label)` pairs.
+pub fn retain_visible_merged(
+    items: Vec<(MediaItem, String)>,
+    hidden: &HashSet<String>,
+) -> Vec<(MediaItem, String)> {
+    items
+        .into_iter()
+        .filter_map(|(item, label)| {
+            let visible = crate::services::visibility::retain_visible_items(vec![item], hidden)
+                .into_iter()
+                .next();
+            visible.map(|item| (item, label))
+        })
+        .collect()
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum HomeViewOutput {
@@ -120,7 +167,10 @@ pub enum HomeViewOutput {
 #[derive(Debug)]
 pub enum HomeViewCmd {
     HomeData {
-        continue_watching: Vec<MediaItem>,
+        /// Merged, cross-source Continue Watching: each item paired with its
+        /// source's display label for badging. Empty when no source advertises
+        /// server-side Continue Watching (the local-DB fallback is used instead).
+        continue_watching: Vec<(MediaItem, String)>,
         /// (library title, items) for each non-empty library, in library order.
         recently_added: Vec<(String, Vec<MediaItem>)>,
         collections: Vec<MediaItem>,
@@ -264,6 +314,7 @@ impl Component for HomeView {
 
         let model = Self {
             source: None,
+            sources: Vec::new(),
             artwork_cache: None,
             shelves_box,
             shelves: Vec::new(),
@@ -295,6 +346,9 @@ impl Component for HomeView {
                 self.source = Some(source);
                 self.artwork_cache = Some(artwork_cache);
             }
+            HomeViewMsg::SetSources(sources) => {
+                self.sources = sources;
+            }
             HomeViewMsg::SetConnecting(connecting) => {
                 self.connecting = connecting;
                 self.refresh_visible_page();
@@ -310,17 +364,23 @@ impl Component for HomeView {
                 self.last_error = None;
                 self.clear_shelves();
 
-                // Whether the browsed source provides server-side Continue
-                // Watching (Plex On Deck, Jellyfin Resume). Local sources don't,
-                // so their Continue Watching is synthesized from the progress DB.
-                let server_continue_watching = self
-                    .source
-                    .as_ref()
-                    .map(|s| s.source_type().provides_server_hubs())
-                    .unwrap_or(false);
+                // The merged Continue Watching row spans every connected source
+                // that advertises server-side Continue Watching (Plex On Deck,
+                // Jellyfin Resume). Sources that fold CW into the local progress
+                // DB (Local) don't advertise it.
+                let cw_sources: Vec<(String, Arc<dyn MediaSource>)> = self
+                    .sources
+                    .iter()
+                    .filter(|(_, s)| s.source_type().provides_server_hubs())
+                    .cloned()
+                    .collect();
+                // True when at least one source offers a server CW row, so the
+                // local-DB fallback below is suppressed.
+                let server_continue_watching = !cw_sources.is_empty();
 
-                // Sources without server-side Continue Watching build it from
-                // the local DB progress the app pushes in.
+                // With no server CW source at all (e.g. only Local), build the
+                // single Continue Watching row from the local DB progress the
+                // app pushes in.
                 if !server_continue_watching && !in_progress.is_empty() {
                     let cw_id = self.add_shelf("Continue Watching");
                     let cards: Vec<(MediaItem, Option<f64>)> = in_progress
@@ -335,11 +395,16 @@ impl Component for HomeView {
                     self.refresh_visible_page();
                     let src = source.clone();
                     sender.oneshot_command(async move {
-                        let continue_watching = if server_continue_watching {
-                            src.continue_watching().await.unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        };
+                        // Fan out over every server-CW source, badge each list
+                        // with its source label, then merge into one row. Errors
+                        // or empty lists simply contribute nothing.
+                        let cw_futures = cw_sources.into_iter().map(|(label, s)| async move {
+                            let items = s.continue_watching().await.unwrap_or_default();
+                            (label, items)
+                        });
+                        let per_source: Vec<(String, Vec<MediaItem>)> =
+                            futures::future::join_all(cw_futures).await;
+                        let continue_watching = merge_continue_watching(per_source);
 
                         let libs = match src.libraries().await {
                             Ok(l) => l,
@@ -474,10 +539,7 @@ impl Component for HomeView {
                 // the lists. Filtering here (at receive time, against the
                 // current hidden set) rather than at fetch time means a library
                 // hidden while a fetch was in flight is still excluded.
-                let continue_watching = crate::services::visibility::retain_visible_items(
-                    continue_watching,
-                    &self.hidden,
-                );
+                let continue_watching = retain_visible_merged(continue_watching, &self.hidden);
                 let recently_added: Vec<(String, Vec<MediaItem>)> = recently_added
                     .into_iter()
                     .filter_map(|(title, items)| {
@@ -497,14 +559,14 @@ impl Component for HomeView {
 
                 if !continue_watching.is_empty() {
                     let cw_id = self.add_shelf("Continue Watching");
-                    let cards: Vec<(MediaItem, Option<f64>)> = continue_watching
+                    let cards: Vec<(MediaItem, Option<f64>, String)> = continue_watching
                         .into_iter()
-                        .map(|item| {
+                        .map(|(item, label)| {
                             let frac = item.resume_fraction();
-                            (item, frac)
+                            (item, frac, label)
                         })
                         .collect();
-                    self.populate_shelf(cw_id, cards, true, &sender);
+                    self.populate_continue_watching(cw_id, cards, &sender);
                 }
 
                 // One Recently Added shelf per library (already filtered to
@@ -609,6 +671,41 @@ impl HomeView {
                     let _ = sender_card.send(HomeViewMsg::CardActivated {
                         item: item_click.clone(),
                         resume: resume_on_click,
+                    });
+                });
+
+                shelf.row.append(&card.container);
+                shelf.cards.push((card, item));
+            }
+            shelf.section.set_visible(true);
+        }
+
+        self.fetch_posters(shelf_id, sender);
+    }
+
+    /// Fill the cross-source Continue Watching shelf. Like `populate_shelf` with
+    /// `resume_on_click = true`, but each card is badged with its source label
+    /// so the merged row makes clear which server an item came from.
+    fn populate_continue_watching(
+        &mut self,
+        shelf_id: ShelfId,
+        cards: Vec<(MediaItem, Option<f64>, String)>,
+        sender: &ComponentSender<Self>,
+    ) {
+        if cards.is_empty() {
+            return;
+        }
+        if let Some(shelf) = self.shelves.iter_mut().find(|s| s.id == shelf_id) {
+            for (item, progress, label) in cards {
+                let card = HomeCard::new();
+                card.set_media_with_source(&item, progress, &label);
+
+                let sender_card = sender.input_sender().clone();
+                let item_click = item.clone();
+                card.gesture.connect_released(move |_, _, _, _| {
+                    let _ = sender_card.send(HomeViewMsg::CardActivated {
+                        item: item_click.clone(),
+                        resume: true,
                     });
                 });
 
@@ -726,5 +823,115 @@ impl HomeView {
         } else {
             self.stack.set_visible_child(&self.empty_page);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::media::{MediaType, SourceType};
+
+    fn cw_item(source_type: SourceType, source_id: &str, external_id: &str) -> MediaItem {
+        MediaItem {
+            id: format!("{}:{source_id}:{external_id}", source_type.as_str()),
+            source_type,
+            source_id: source_id.into(),
+            external_id: external_id.into(),
+            media_type: MediaType::Movie,
+            title: format!("Title {external_id}"),
+            year: None,
+            overview: None,
+            content_rating: None,
+            rating: None,
+            runtime_minutes: None,
+            poster_path: None,
+            series_poster_path: None,
+            backdrop_path: None,
+            genres: Vec::new(),
+            parent_id: None,
+            season_number: None,
+            episode_number: None,
+            air_date: None,
+            file_path: None,
+            video_resolution: None,
+            hdr: None,
+            added_at: String::new(),
+            updated_at: String::new(),
+            playback_position_ms: None,
+            watched: false,
+            library_section_id: None,
+        }
+    }
+
+    #[test]
+    fn merge_continue_watching_across_sources() {
+        let plex = vec![
+            cw_item(SourceType::Plex, "p", "1"),
+            cw_item(SourceType::Plex, "p", "2"),
+        ];
+        let jelly = vec![cw_item(SourceType::Jellyfin, "j", "9")];
+        let merged =
+            merge_continue_watching(vec![("Plex".into(), plex), ("Jellyfin".into(), jelly)]);
+        let ids: Vec<&str> = merged.iter().map(|(i, _)| i.id.as_str()).collect();
+        assert_eq!(merged.len(), 3);
+        assert!(ids.contains(&"plex:p:1"));
+        assert!(ids.contains(&"plex:p:2"));
+        assert!(ids.contains(&"jellyfin:j:9"));
+    }
+
+    #[test]
+    fn merge_dedupes_by_composite_id() {
+        let a = vec![cw_item(SourceType::Plex, "p", "1")];
+        let b = vec![
+            cw_item(SourceType::Plex, "p", "1"),
+            cw_item(SourceType::Plex, "p", "2"),
+        ];
+        let merged = merge_continue_watching(vec![("A".into(), a), ("B".into(), b)]);
+        assert_eq!(merged.len(), 2);
+        // First occurrence wins: the duplicate keeps source A's label.
+        let dup = merged.iter().find(|(i, _)| i.id == "plex:p:1").unwrap();
+        assert_eq!(dup.1, "A");
+    }
+
+    #[test]
+    fn merged_items_carry_source_label() {
+        let plex = vec![cw_item(SourceType::Plex, "p", "1")];
+        let jelly = vec![cw_item(SourceType::Jellyfin, "j", "9")];
+        let merged = merge_continue_watching(vec![
+            ("Living Room".into(), plex),
+            ("Basement".into(), jelly),
+        ]);
+        let p = merged.iter().find(|(i, _)| i.id == "plex:p:1").unwrap();
+        let j = merged.iter().find(|(i, _)| i.id == "jellyfin:j:9").unwrap();
+        assert_eq!(p.1, "Living Room");
+        assert_eq!(j.1, "Basement");
+    }
+
+    #[test]
+    fn source_without_continue_watching_contributes_nothing() {
+        let plex = vec![cw_item(SourceType::Plex, "p", "1")];
+        let merged =
+            merge_continue_watching(vec![("Empty".into(), Vec::new()), ("Plex".into(), plex)]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].0.id, "plex:p:1");
+    }
+
+    #[test]
+    fn retain_visible_merged_preserves_labels() {
+        let visible = cw_item(SourceType::Plex, "p", "1");
+        let mut hidden_item = cw_item(SourceType::Plex, "p", "2");
+        hidden_item.library_section_id = Some("42".into());
+        let merged = vec![
+            (visible, "Living Room".to_string()),
+            (hidden_item, "Living Room".to_string()),
+        ];
+
+        let mut hidden = HashSet::new();
+        hidden.insert("plex:p:42".to_string());
+
+        let kept = retain_visible_merged(merged, &hidden);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0.id, "plex:p:1");
+        assert_eq!(kept[0].1, "Living Room");
     }
 }
