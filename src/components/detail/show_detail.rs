@@ -32,7 +32,6 @@ pub struct ShowDetail {
     overview_label: gtk::Label,
     backdrop: gtk::Picture,
     poster: gtk::Picture,
-    poster_spacer: gtk::Box,
     // Genre chips + actions
     genres_box: gtk::FlowBox,
     play_button: gtk::Button,
@@ -153,7 +152,7 @@ impl Component for ShowDetail {
             .hexpand(true)
             .build();
 
-        // ═══ HERO: backdrop + gradient overlay + floating poster ═══
+        // ═══ HERO: backdrop + gradient + headline (poster, title, meta, play) ═══
 
         let hero_overlay = gtk::Overlay::builder()
             .height_request(420)
@@ -173,11 +172,24 @@ impl Component for ShowDetail {
             .hexpand(true)
             .build();
 
-        // Poster art — clamped to match content width, floats at bottom-left overlapping hero edge
-        let poster_clamp = adw::Clamp::builder()
+        // Headline: poster + text column, anchored to the bottom of the hero and
+        // clamped to match the content width below it.
+        let headline_clamp = adw::Clamp::builder()
             .maximum_size(960)
             .valign(gtk::Align::End)
             .build();
+        let headline_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(28)
+            .valign(gtk::Align::End)
+            .margin_start(28)
+            .margin_end(28)
+            .margin_bottom(24)
+            .css_classes(["detail-hero-headline"])
+            .build();
+
+        // Poster floats at bottom-left. Hidden until art loads; GTK4 skips hidden
+        // children in box layout so the text column reclaims the room.
         let poster = gtk::Picture::builder()
             .content_fit(gtk::ContentFit::Cover)
             .width_request(170)
@@ -185,61 +197,24 @@ impl Component for ShowDetail {
             .css_classes(["detail-poster-hero"])
             .halign(gtk::Align::Start)
             .valign(gtk::Align::End)
-            .margin_start(28)
-            .margin_bottom(0)
-            .visible(false)
-            .build();
-        poster_clamp.set_child(Some(&poster));
-
-        hero_overlay.add_overlay(&backdrop);
-        hero_overlay.add_overlay(&hero_gradient);
-        hero_overlay.add_overlay(&poster_clamp);
-
-        main_box.append(&hero_overlay);
-
-        // ═══ Hero-to-content blend bar ═══
-
-        let hero_blend = gtk::Box::builder()
-            .css_classes(["detail-hero-blend"])
-            .height_request(48)
-            .hexpand(true)
-            .build();
-        main_box.append(&hero_blend);
-
-        // ═══ Clamped content below hero ═══
-
-        let clamp = adw::Clamp::builder().maximum_size(960).build();
-        let content_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(18)
-            .margin_start(20)
-            .margin_end(20)
-            .margin_top(16)
-            .margin_bottom(32)
-            .build();
-
-        // ═══ Title + metadata (indented for poster) ═══
-
-        let title_meta_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(0)
-            .build();
-
-        let poster_spacer = gtk::Box::builder()
-            .width_request(198)
             .visible(false)
             .build();
 
-        let title_meta_content = gtk::Box::builder()
+        let text_column = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
+            .spacing(10)
             .hexpand(true)
+            .valign(gtk::Align::End)
             .build();
 
+        // Title — capped at 2 lines so long titles don't push the badges and Play
+        // button out of the fixed-height hero.
         let title_label = gtk::Label::builder()
             .halign(gtk::Align::Start)
             .wrap(true)
-            .css_classes(["title-1"])
+            .lines(2)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["title-1", "detail-hero-title"])
             .build();
 
         let meta_box = gtk::Box::builder()
@@ -269,39 +244,17 @@ impl Component for ShowDetail {
         let director_label = gtk::Label::builder()
             .halign(gtk::Align::Start)
             .wrap(true)
-            .css_classes(["dim-label"])
+            .css_classes(["dim-label", "detail-hero-credit"])
             .visible(false)
-            .margin_top(2)
             .build();
         let writer_label = gtk::Label::builder()
             .halign(gtk::Align::Start)
             .wrap(true)
-            .css_classes(["dim-label"])
+            .css_classes(["dim-label", "detail-hero-credit"])
             .visible(false)
             .build();
 
-        title_meta_content.append(&title_label);
-        title_meta_content.append(&meta_box);
-        title_meta_content.append(&director_label);
-        title_meta_content.append(&writer_label);
-
-        title_meta_row.append(&poster_spacer);
-        title_meta_row.append(&title_meta_content);
-        content_box.append(&title_meta_row);
-
-        // ═══ Genre chips ═══
-
-        let genres_box = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .halign(gtk::Align::Start)
-            .max_children_per_line(10)
-            .row_spacing(6)
-            .column_spacing(6)
-            .build();
-        content_box.append(&genres_box);
-
-        // ═══ Action buttons ═══
-
+        // Action buttons
         let actions_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(10)
@@ -321,7 +274,34 @@ impl Component for ShowDetail {
         });
 
         actions_row.append(&play_button);
-        content_box.append(&actions_row);
+
+        text_column.append(&title_label);
+        text_column.append(&meta_box);
+        text_column.append(&director_label);
+        text_column.append(&writer_label);
+        text_column.append(&actions_row);
+
+        headline_row.append(&poster);
+        headline_row.append(&text_column);
+        headline_clamp.set_child(Some(&headline_row));
+
+        hero_overlay.set_child(Some(&backdrop));
+        hero_overlay.add_overlay(&hero_gradient);
+        hero_overlay.add_overlay(&headline_clamp);
+
+        main_box.append(&hero_overlay);
+
+        // ═══ Clamped content below hero ═══
+
+        let clamp = adw::Clamp::builder().maximum_size(960).build();
+        let content_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(18)
+            .margin_start(20)
+            .margin_end(20)
+            .margin_top(20)
+            .margin_bottom(32)
+            .build();
 
         // ═══ Overview ═══
 
@@ -331,6 +311,17 @@ impl Component for ShowDetail {
             .visible(false)
             .build();
         content_box.append(&overview_label);
+
+        // ═══ Genre chips ═══
+
+        let genres_box = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .halign(gtk::Align::Start)
+            .max_children_per_line(10)
+            .row_spacing(6)
+            .column_spacing(6)
+            .build();
+        content_box.append(&genres_box);
 
         // ═══ Show info panel (frosted glass) ═══
 
@@ -485,7 +476,6 @@ impl Component for ShowDetail {
             overview_label,
             backdrop,
             poster,
-            poster_spacer,
             genres_box,
             play_button,
             director_label,
@@ -573,8 +563,16 @@ impl Component for ShowDetail {
                 self.collections_panel.set_visible(false);
 
                 self.poster.set_visible(false);
-                self.poster_spacer.set_visible(false);
                 self.episode_section.set_visible(false);
+
+                // Clear any previous show's backdrop so it doesn't linger while
+                // the new one loads (or stays empty when the new show has none).
+                self.backdrop.set_paintable(None::<&gtk::gdk::Texture>);
+                if show.backdrop_path.is_none() {
+                    self.backdrop.add_css_class("detail-hero-empty");
+                } else {
+                    self.backdrop.remove_css_class("detail-hero-empty");
+                }
 
                 // Load artwork
                 if let (Some(source), Some(cache)) = (&self.source, &self.artwork_cache) {
@@ -732,7 +730,6 @@ impl Component for ShowDetail {
             ShowDetailCmd::PosterReady(texture) => {
                 self.poster.set_paintable(Some(&texture));
                 self.poster.set_visible(true);
-                self.poster_spacer.set_visible(true);
             }
             ShowDetailCmd::DetailLoaded(detail) => {
                 self.populate_enrichment(&detail, &sender);

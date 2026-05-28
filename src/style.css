@@ -341,15 +341,52 @@ gridview > child:selected .media-card-frame {
     background-color: alpha(@card_bg_color, 0.25);
 }
 
+/* No-backdrop fallback: a dark fill so the headline still reads. The gradient
+   scrim renders on top, keeping white text legible regardless of theme. */
+.detail-hero-empty {
+    background-image: linear-gradient(
+        to bottom,
+        rgb(40, 40, 46),
+        rgb(20, 20, 24)
+    );
+}
+
+/* Scrim is strongest at the bottom where the headline sits, fading to clear at
+   the top so the backdrop stays visible. Keeps white text readable over bright
+   backdrops (R6). */
 .detail-hero-overlay {
     background: linear-gradient(
         to top,
-        alpha(black, 0.30) 0%,
-        alpha(black, 0.55) 30%,
-        alpha(black, 0.35) 55%,
-        alpha(black, 0.08) 80%,
+        alpha(black, 0.82) 0%,
+        alpha(black, 0.62) 22%,
+        alpha(black, 0.32) 52%,
+        alpha(black, 0.08) 82%,
         transparent 100%
     );
+}
+
+/* ── Hero headline (poster + title + meta + credits + play) ────────── */
+
+.detail-hero-title {
+    color: #ffffff;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
+}
+
+.detail-hero-credit {
+    color: alpha(white, 0.85);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}
+
+/* Badges over an arbitrary backdrop need a dark, opaque pill rather than the
+   theme-tinted one used in the content area below (D7). */
+.detail-hero-headline .detail-badge {
+    background-color: alpha(black, 0.55);
+    color: #ffffff;
+}
+
+.detail-hero-headline .detail-badge.accent {
+    background-color: alpha(black, 0.55);
+    color: @accent_color;
 }
 
 /* ── Poster floating over hero bottom ─────────────────────────────── */
