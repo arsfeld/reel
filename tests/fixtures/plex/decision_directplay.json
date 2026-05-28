@@ -1,0 +1,650 @@
+{
+  "MediaContainer": {
+    "size": 1,
+    "allowSync": "1",
+    "directPlayDecisionCode": 1000,
+    "directPlayDecisionText": "Direct play OK.",
+    "generalDecisionCode": 1000,
+    "generalDecisionText": "Direct play OK.",
+    "identifier": "com.plexapp.plugins.library",
+    "librarySectionID": "1",
+    "librarySectionTitle": "Movies",
+    "librarySectionUUID": "c03c2bf3-3f47-41de-a99d-e2deb5b518fb",
+    "mediaTagPrefix": "/system/bundle/media/flags/",
+    "mediaTagVersion": "1777730215",
+    "resourceSession": "",
+    "transcodeDecisionCode": 1000,
+    "transcodeDecisionText": "Direct play not available; Conversion OK.",
+    "Metadata": [
+      {
+        "addedAt": 1772297790,
+        "art": "/library/metadata/136798/art/1777549974",
+        "audienceRating": 6.3,
+        "audienceRatingImage": "rottentomatoes://image.rating.upright",
+        "chapterSource": "media",
+        "contentRating": "R",
+        "contentRatingAge": 16,
+        "duration": 6906048,
+        "guid": "plex://movie/5e1632e44c78f7003e7f16f1",
+        "key": "/library/metadata/136798",
+        "lastViewedAt": 1779988770,
+        "librarySectionID": "1",
+        "librarySectionKey": "/library/sections/1",
+        "librarySectionTitle": "Movies",
+        "originallyAvailableAt": "2025-06-18",
+        "primaryExtraKey": "/library/metadata/136799",
+        "rating": 8.8,
+        "ratingImage": "rottentomatoes://image.rating.ripe",
+        "ratingKey": "136798",
+        "slug": "28-years-later-2025",
+        "studio": "Columbia Pictures",
+        "summary": "A group of survivors of the rage virus live on a small island. When one of the group leaves the island on a mission into the mainland, he discovers secrets, wonders, and horrors that have mutated not only the infected but other survivors.",
+        "tagline": "Time didn't heal anything.",
+        "thumb": "/library/metadata/136798/thumb/1777549974",
+        "title": "28 Years Later",
+        "type": "movie",
+        "updatedAt": 1777549974,
+        "viewOffset": 114498,
+        "year": 2025,
+        "Media": [
+          {
+            "hasVoiceActivity": "0",
+            "id": "282965",
+            "videoProfile": "main 10",
+            "audioChannels": 2,
+            "audioCodec": "mp3",
+            "bitrate": 1877,
+            "container": "mpegts",
+            "duration": 6906048,
+            "height": 464,
+            "protocol": null,
+            "videoCodec": "h264",
+            "videoFrameRate": "24p",
+            "videoResolution": "720p",
+            "width": 1280,
+            "selected": true,
+            "Part": [
+              {
+                "deepAnalysisVersion": "6",
+                "id": "950874",
+                "indexes": "sd",
+                "requiredBandwidths": "9608,5082,2718,2718,2718,2718,2718,2718",
+                "videoProfile": "main 10",
+                "bitrate": 1877,
+                "container": "mpegts",
+                "duration": 6906048,
+                "height": 464,
+                "protocol": "hls",
+                "width": 1280,
+                "decision": "directplay",
+                "selected": true,
+                "Stream": [
+                  {
+                    "bitDepth": 8,
+                    "bitrate": 1781,
+                    "codec": "h264",
+                    "colorTrc": "bt709",
+                    "default": true,
+                    "displayTitle": "1080p",
+                    "extendedDisplayTitle": "1080p (HEVC Main 10)",
+                    "frameRate": 23.97599983215332,
+                    "height": 464,
+                    "id": "3799552",
+                    "language": "English",
+                    "languageCode": "eng",
+                    "languageTag": "en",
+                    "requiredBandwidths": "9353,4826,2465,2465,2465,2465,2465,2465",
+                    "streamType": 1,
+                    "width": 1280,
+                    "decision": "directplay",
+                    "location": "direct"
+                  },
+                  {
+                    "bitrate": 96,
+                    "bitrateMode": "vbr",
+                    "channels": 2,
+                    "codec": "mp3",
+                    "default": true,
+                    "displayTitle": "English (EAC3 5.1)",
+                    "extendedDisplayTitle": "English (EAC3 5.1)",
+                    "id": "3799553",
+                    "language": "English",
+                    "languageCode": "eng",
+                    "languageTag": "en",
+                    "requiredBandwidths": "256,256,256,256,256,256,256,256",
+                    "selected": true,
+                    "streamType": 2,
+                    "decision": "directplay",
+                    "location": "direct"
+                  },
+                  {
+                    "canAutoSync": "0",
+                    "codec": "ass",
+                    "container": "ass",
+                    "displayTitle": "English",
+                    "extendedDisplayTitle": "English (SRT)",
+                    "format": "ass",
+                    "id": "3799555",
+                    "language": "English",
+                    "languageCode": "eng",
+                    "languageTag": "en",
+                    "requiredBandwidths": "1,1,1,1,1,1,1,1",
+                    "selected": true,
+                    "streamType": 3,
+                    "decision": "directplay",
+                    "location": "direct"
+                  }
+                ],
+                "key": "/library/parts/950874/1772297784/file.mkv"
+              }
+            ]
+          }
+        ],
+        "UltraBlurColors": [
+          {
+            "bottomLeft": "3c1320",
+            "bottomRight": "2c061c",
+            "topLeft": "272f35",
+            "topRight": "a22f20"
+          }
+        ],
+        "Genre": [
+          {
+            "filter": "genre=173",
+            "id": "173",
+            "tag": "Horror"
+          },
+          {
+            "filter": "genre=174",
+            "id": "174",
+            "tag": "Thriller"
+          },
+          {
+            "filter": "genre=17897",
+            "id": "17897",
+            "tag": "Science Fiction"
+          }
+        ],
+        "Country": [
+          {
+            "filter": "country=22397",
+            "id": "22397",
+            "tag": "United Kingdom"
+          },
+          {
+            "filter": "country=26067",
+            "id": "26067",
+            "tag": "United States of America"
+          }
+        ],
+        "Rating": [
+          {
+            "image": "imdb://image.rating",
+            "type": "audience",
+            "value": "6.6"
+          },
+          {
+            "image": "rottentomatoes://image.rating.ripe",
+            "type": "critic",
+            "value": "8.8"
+          },
+          {
+            "image": "rottentomatoes://image.rating.upright",
+            "type": "audience",
+            "value": "6.3"
+          },
+          {
+            "image": "themoviedb://image.rating",
+            "type": "audience",
+            "value": "6.6"
+          }
+        ],
+        "Director": [
+          {
+            "filter": "director=156964",
+            "id": "156964",
+            "tag": "Danny Boyle",
+            "tagKey": "5d776825f54112001f5bbe7a",
+            "thumb": "https://metadata-static.plex.tv/d/people/d94cd1c4a4d2ee4f6d33f35868b27c43.jpg"
+          }
+        ],
+        "Writer": [
+          {
+            "filter": "writer=102076",
+            "id": "102076",
+            "tag": "Alex Garland",
+            "tagKey": "5d776825f54112001f5bbe96",
+            "thumb": "https://metadata-static.plex.tv/d/people/dda50169db62569f6a8e204752af106b.jpg"
+          }
+        ],
+        "Role": [
+          {
+            "filter": "actor=156965",
+            "id": "156965",
+            "role": "Isla",
+            "tag": "Jodie Comer",
+            "tagKey": "5d776bcd7a53e9001e730570",
+            "thumb": "https://metadata-static.plex.tv/7/people/78c50a1dbf8612c6a9e4fc5e32d96766.jpg"
+          },
+          {
+            "filter": "actor=57981",
+            "id": "57981",
+            "role": "Jamie",
+            "tag": "Aaron Taylor-Johnson",
+            "tagKey": "5d77682a880197001ec9141f",
+            "thumb": "https://metadata-static.plex.tv/3/people/323c0af3c5a1904309b915a7c13a1b79.jpg"
+          },
+          {
+            "filter": "actor=124035",
+            "id": "124035",
+            "role": "Spike",
+            "tag": "Alfie Williams",
+            "tagKey": "60ab5ef9db19e9002cbbb0f9",
+            "thumb": "https://metadata-static.plex.tv/9/people/910d6da46a7b384c58a809fb7f6dbeb3.jpg"
+          },
+          {
+            "filter": "actor=39661",
+            "id": "39661",
+            "role": "Dr. Ian Kelson",
+            "tag": "Ralph Fiennes",
+            "tagKey": "5d7768267e9a3c0020c6a9eb",
+            "thumb": "https://metadata-static.plex.tv/c/people/cd1165b587e82edf3ddd42cb24fe3712.jpg"
+          },
+          {
+            "filter": "actor=149028",
+            "id": "149028",
+            "role": "Jimmy Crystal",
+            "tag": "Jack O'Connell",
+            "tagKey": "5d77683beb5d26001f1e2060",
+            "thumb": "https://metadata-static.plex.tv/e/people/eddc4472bac2d6ca7dc28347741eee18.jpg"
+          },
+          {
+            "filter": "actor=109354",
+            "id": "109354",
+            "role": "Samson",
+            "tag": "Chi Lewis-Parry",
+            "tagKey": "5f40223bfea1a1003f9ee8ff",
+            "thumb": "https://metadata-static.plex.tv/9/people/91e575f9b390bf9fad327b24cce81afa.jpg"
+          },
+          {
+            "filter": "actor=156966",
+            "id": "156966",
+            "role": "Erik Sundqvist",
+            "tag": "Edvin Ryding",
+            "tagKey": "5d7768b5374a5b001fecdef2",
+            "thumb": "https://metadata-static.plex.tv/2/people/26480b8133a21bb8144691122c0e8ec2.jpg"
+          },
+          {
+            "filter": "actor=156967",
+            "id": "156967",
+            "role": "Sam",
+            "tag": "Christopher Fulford",
+            "tagKey": "5d776826151a60001f24aa4c",
+            "thumb": "https://metadata-static.plex.tv/e/people/e494133711b6107b70a23f3a4f1dac0a.jpg"
+          },
+          {
+            "filter": "actor=156968",
+            "id": "156968",
+            "role": "Jenny",
+            "tag": "Stella Gonet",
+            "tagKey": "5d7768783ab0e7001f502191",
+            "thumb": "https://metadata-static.plex.tv/a/people/a57ead86401d869be7252e028e1e5d21.jpg"
+          },
+          {
+            "filter": "actor=111743",
+            "id": "111743",
+            "role": "Jimmy's Mother",
+            "tag": "Kim Allan",
+            "tagKey": "5d776cb2594b2b001e6fb04e",
+            "thumb": "https://metadata-static.plex.tv/f/people/f35ba8f73ec551e917970a550ad514e9.jpg"
+          },
+          {
+            "filter": "actor=157475",
+            "id": "157475",
+            "role": "Jimmy\u2019s Father",
+            "tag": "Sandy Batchelor",
+            "tagKey": "5d776c097a53e9001e737950",
+            "thumb": "https://metadata-static.plex.tv/a/people/a8e1fcc18b0d77dcfe040c5e6683a879.jpg"
+          },
+          {
+            "filter": "actor=156972",
+            "id": "156972",
+            "role": "Anthony",
+            "tag": "Geoffrey Newland",
+            "tagKey": "5d776bbbfb0d55001f570e9d",
+            "thumb": "https://metadata-static.plex.tv/5/people/571fb1a9b2230b16424c8e8198eba187.jpg"
+          },
+          {
+            "filter": "actor=148518",
+            "id": "148518",
+            "role": "Dave",
+            "tag": "Joe Blakemore",
+            "tagKey": "5d776c6dfb0d55001f5875be",
+            "thumb": "https://metadata-static.plex.tv/e/people/e955383c582ef758df7a67f4956e7686.jpg"
+          },
+          {
+            "filter": "actor=156973",
+            "id": "156973",
+            "role": "Pregnant Infected",
+            "tag": "Celi Crossland",
+            "tagKey": "5f4045165a76a80042d90aea",
+            "thumb": "https://metadata-static.plex.tv/3/people/3f024ed6f95b86bf9525479076a412fa.jpg"
+          },
+          {
+            "filter": "actor=107494",
+            "id": "107494",
+            "role": "Jimmy Jimmy",
+            "tag": "Robert Rhodes",
+            "tagKey": "62568527bb0b5608145147ac",
+            "thumb": "https://metadata-static.plex.tv/f/people/f838d1ec975e268e28bb66cbf130fc4e.jpg"
+          },
+          {
+            "filter": "actor=132426",
+            "id": "132426",
+            "role": "Jimmy Ink",
+            "tag": "Erin Kellyman",
+            "tagKey": "5d776bbcfb0d55001f57132a",
+            "thumb": "https://metadata-static.plex.tv/0/people/05019b7054be29b3b3a8ccd15532be04.jpg"
+          },
+          {
+            "filter": "actor=157476",
+            "id": "157476",
+            "role": "Jimmy Fox",
+            "tag": "Sam Locke",
+            "tagKey": "5f3fd32102101b0040edb62b",
+            "thumb": "https://metadata-static.plex.tv/6/people/660664b0c01fd23b113f2898a61e26a6.jpg"
+          },
+          {
+            "filter": "actor=189504",
+            "id": "189504",
+            "role": "Jimmy Jones",
+            "tag": "Maura Bird",
+            "tagKey": "5f3fc4271ae7100041fcf36a",
+            "thumb": "https://metadata-static.plex.tv/6/people/62786c1b78622637b63738831f42c216.jpg"
+          },
+          {
+            "filter": "actor=156976",
+            "id": "156976",
+            "role": "Jimmy Snake",
+            "tag": "Ghazi Al Ruffai",
+            "tagKey": "638b04980fb3eaa956e069c7",
+            "thumb": "https://metadata-static.plex.tv/b/people/b7d2e8815c70288efdc965fbcc40f010.jpg"
+          },
+          {
+            "filter": "actor=156977",
+            "id": "156977",
+            "role": "Jimmima",
+            "tag": "Emma Laird",
+            "tagKey": "5d7770d6dd931c001e394a07",
+            "thumb": "https://metadata-static.plex.tv/6/people/62a1a52a7842b668202d173405685f78.jpg"
+          },
+          {
+            "filter": "actor=156978",
+            "id": "156978",
+            "role": "Jimmy Shite",
+            "tag": "Connor Newall",
+            "tagKey": "68581d05d7281e90599eea57",
+            "thumb": "https://metadata-static.plex.tv/9/people/963c04da9c085572f4d35d1ce1a4aecf.jpg"
+          },
+          {
+            "filter": "actor=156988",
+            "id": "156988",
+            "role": "Jimmy's Auntie",
+            "tag": "Haley Flaherty",
+            "tagKey": "5d776beb51dd69001fe35a2a",
+            "thumb": "https://metadata-static.plex.tv/f/people/f92b7656aad0d84f11c9d9f5fa1f4135.jpg"
+          },
+          {
+            "filter": "actor=41855",
+            "id": "41855",
+            "role": "Jonno (uncredited)",
+            "tag": "Gordon Alexander",
+            "tagKey": "5d77687533f255001e856f04",
+            "thumb": "https://metadata-static.plex.tv/people/5d77687533f255001e856f04.jpg"
+          },
+          {
+            "filter": "actor=157477",
+            "id": "157477",
+            "role": "Dead Body #6 (Uncredited)",
+            "tag": "Col Needham",
+            "tagKey": "5f3fb980864225004279d666",
+            "thumb": "https://metadata-static.plex.tv/8/people/87d004c821426b8e19bce09049100980.jpg"
+          },
+          {
+            "filter": "actor=185605",
+            "id": "185605",
+            "role": "Guy (uncredited)",
+            "tag": "Kris Deedigan",
+            "tagKey": "67d0266ebd3351f8b3ca20f3",
+            "thumb": "https://metadata-static.plex.tv/9/people/933860e34c587c470ee066f85823e2d0.jpg"
+          },
+          {
+            "filter": "actor=156979",
+            "id": "156979",
+            "role": "Girl Villager",
+            "tag": "Sienna Giblin",
+            "tagKey": "68558162a6118738bb241294"
+          },
+          {
+            "filter": "actor=156971",
+            "id": "156971",
+            "role": "Rosey",
+            "tag": "Amy Cameron",
+            "tagKey": "685581627584ffd28d2ad34e"
+          },
+          {
+            "filter": "actor=156969",
+            "id": "156969",
+            "role": "Young Jimmy",
+            "tag": "Rocco Haynes",
+            "tagKey": "5e1654e9275947003dc6d561"
+          },
+          {
+            "filter": "actor=156980",
+            "id": "156980",
+            "role": "Teenage Girl Villager",
+            "tag": "Hayley Walters",
+            "tagKey": "685581637790cac0f0770631"
+          },
+          {
+            "filter": "actor=156981",
+            "id": "156981",
+            "role": "Slow Low #1",
+            "tag": "Peter Labas",
+            "tagKey": "685581617480c75de1cded40"
+          },
+          {
+            "filter": "actor=156982",
+            "id": "156982",
+            "role": "Slow Low #2",
+            "tag": "Kat Kitchener",
+            "tagKey": "67f904a570fafc9db54c5b2d"
+          },
+          {
+            "filter": "actor=156983",
+            "id": "156983",
+            "role": "Slow Low #3",
+            "tag": "Jason Kuang Yao Lee",
+            "tagKey": "6855816230cea840a76b0375"
+          },
+          {
+            "filter": "actor=156984",
+            "id": "156984",
+            "role": "Slow Low #4",
+            "tag": "Ember Storm",
+            "tagKey": "685581636756086f34f5efd2"
+          },
+          {
+            "filter": "actor=156985",
+            "id": "156985",
+            "role": "Hanging Man",
+            "tag": "Jake Grimes",
+            "tagKey": "685581637584ffd28d2ad350"
+          },
+          {
+            "filter": "actor=156986",
+            "id": "156986",
+            "role": "Berserker",
+            "tag": "Chris Gregory",
+            "tagKey": "685581633fa31626d10fe3cb"
+          },
+          {
+            "filter": "actor=156987",
+            "id": "156987",
+            "role": "Infected Woman",
+            "tag": "Helen Rowlands",
+            "tagKey": "68558164c799ade501c3e9c3"
+          },
+          {
+            "filter": "actor=156989",
+            "id": "156989",
+            "role": "Jimmy's Cousin Delilah",
+            "tag": "Harriet Taylor",
+            "tagKey": "685581667584ffd28d2ad366"
+          },
+          {
+            "filter": "actor=156990",
+            "id": "156990",
+            "role": "Jimmy's Sister",
+            "tag": "Hannah Allan-Robertson",
+            "tagKey": "685581638c4cfd73740111dd"
+          },
+          {
+            "filter": "actor=156991",
+            "id": "156991",
+            "role": "Jimmy's Sister",
+            "tag": "Annabelle Graham",
+            "tagKey": "68558163a6118738bb241296"
+          },
+          {
+            "filter": "actor=156992",
+            "id": "156992",
+            "role": "Jimmy's Sister",
+            "tag": "Olivia Morley",
+            "tagKey": "685581638c4cfd73740111d9"
+          },
+          {
+            "filter": "actor=156993",
+            "id": "156993",
+            "role": "Jimmy's Sister",
+            "tag": "Theadora Rawlings",
+            "tagKey": "685581637480c75de1cded4e"
+          },
+          {
+            "filter": "actor=156994",
+            "id": "156994",
+            "role": "Jimmy's Sister",
+            "tag": "Darcie Smith",
+            "tagKey": "62a212b6f9cbeda2ee2977b5"
+          },
+          {
+            "filter": "actor=156995",
+            "id": "156995",
+            "role": "Jimmy's Sister",
+            "tag": "Isla Vickers",
+            "tagKey": "6855816332c9c73e1a449630"
+          },
+          {
+            "filter": "actor=156996",
+            "id": "156996",
+            "role": "Baby Isla",
+            "tag": "Lachlan Tucker",
+            "tagKey": "685581647480c75de1cded54"
+          },
+          {
+            "filter": "actor=156997",
+            "id": "156997",
+            "role": "Baby Isla",
+            "tag": "Winnow Short",
+            "tagKey": "68558163194020e6631adf44"
+          },
+          {
+            "filter": "actor=156998",
+            "id": "156998",
+            "role": "Baby Isla",
+            "tag": "Olivia Grace Lee",
+            "tagKey": "685581638970c9edb6f9e36b"
+          },
+          {
+            "filter": "actor=156999",
+            "id": "156999",
+            "role": "Baby Isla",
+            "tag": "Lucas Toole",
+            "tagKey": "68558163a6118738bb241298"
+          },
+          {
+            "filter": "actor=157000",
+            "id": "157000",
+            "role": "Baby Isla",
+            "tag": "Cohen Lewis Williamson",
+            "tagKey": "685581637584ffd28d2ad352"
+          },
+          {
+            "filter": "actor=157001",
+            "id": "157001",
+            "role": "Baby Isla",
+            "tag": "Myles Woodhouse",
+            "tagKey": "6855816332c9c73e1a44962e"
+          },
+          {
+            "filter": "actor=157002",
+            "id": "157002",
+            "role": "Emaciated Infected (uncredited)",
+            "tag": "Angus Neill",
+            "tagKey": "675ad135c3266309cfe4e570"
+          },
+          {
+            "filter": "actor=157004",
+            "id": "157004",
+            "role": "Accordionist (uncredited)",
+            "tag": "RuMac",
+            "tagKey": "6877fb0cc6721307fbbd8a4f"
+          }
+        ],
+        "Producer": [
+          {
+            "filter": "producer=157006",
+            "id": "157006",
+            "tag": "Alex Garland",
+            "tagKey": "5d776825f54112001f5bbe96",
+            "thumb": "https://metadata-static.plex.tv/d/people/dda50169db62569f6a8e204752af106b.jpg"
+          },
+          {
+            "filter": "producer=157005",
+            "id": "157005",
+            "tag": "Danny Boyle",
+            "tagKey": "5d776825f54112001f5bbe7a",
+            "thumb": "https://metadata-static.plex.tv/d/people/d94cd1c4a4d2ee4f6d33f35868b27c43.jpg"
+          },
+          {
+            "filter": "producer=146416",
+            "id": "146416",
+            "tag": "Peter Rice",
+            "tagKey": "5f3ffa5552f20000414d594a",
+            "thumb": "https://metadata-static.plex.tv/6/people/690ab3a6bc8483c706138f06483d164d.jpg"
+          },
+          {
+            "filter": "producer=102117",
+            "id": "102117",
+            "tag": "Andrew Macdonald",
+            "tagKey": "5f3fab72cae2c60042e5ca2e",
+            "thumb": "https://metadata-static.plex.tv/c/people/cd13b9c2ef126714158cf4a1dcb32087.jpg"
+          },
+          {
+            "filter": "producer=157007",
+            "id": "157007",
+            "tag": "Bernard Bellew",
+            "tagKey": "5d77682a3c3c2a001fbcbd6a",
+            "thumb": "https://metadata-static.plex.tv/c/people/cc9e8803c85a32498bff151bb5999289.jpg"
+          }
+        ],
+        "CommonSenseMedia": [
+          {
+            "id": "155765",
+            "oneLiner": "Brutal zombie threequel is gory but surprisingly good."
+          }
+        ]
+      }
+    ]
+  }
+}

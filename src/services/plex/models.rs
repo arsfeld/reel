@@ -20,6 +20,27 @@ where
     }))
 }
 
+/// Deserialize an optional i64 that Plex may send as a JSON number or a
+/// stringified number. The transcode decision response returns `Media.id` /
+/// `Part.id` / `Stream.id` as strings while metadata endpoints send numbers.
+fn de_opt_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum IntOrStr {
+        Int(i64),
+        Str(String),
+    }
+    let opt = Option::<IntOrStr>::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(IntOrStr::Int(i)) => Ok(Some(i)),
+        Some(IntOrStr::Str(s)) => s.parse::<i64>().map(Some).map_err(serde::de::Error::custom),
+    }
+}
+
 // --- Library listing response ---
 
 #[derive(Debug, Deserialize)]
@@ -150,8 +171,14 @@ pub struct PlexRole {
     pub thumb: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PlexMedia {
+    /// Plex's internal Media id. Dropped before U3; kept now for transcode
+    /// correlation. Positional `mediaIndex` (not this id) drives the transcode
+    /// URL — see [`crate::services::plex`] transcode flow. Plex sends this as a
+    /// string on decision responses, a number on metadata.
+    #[serde(default, deserialize_with = "de_opt_i64")]
+    pub id: Option<i64>,
     #[serde(rename = "videoResolution")]
     pub video_resolution: Option<String>,
     #[serde(rename = "videoCodec")]
@@ -168,15 +195,126 @@ pub struct PlexMedia {
     /// "HDR10+", "HLG", "Dolby Vision", "DV". Absent on older Plex servers.
     #[serde(rename = "videoDynamicRange")]
     pub video_dynamic_range: Option<String>,
+    /// Output protocol on a decision response (e.g. "hls" for a transcode).
+    pub protocol: Option<String>,
+    /// Whether the transcode decision selected this Media variant. Decision
+    /// responses only; absent on plain metadata.
+    pub selected: Option<bool>,
     #[serde(default, rename = "Part")]
     pub parts: Vec<PlexPart>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PlexPart {
-    pub key: String,
+    /// Plex's internal Part id. Dropped before U3. String on decision
+    /// responses, number on metadata.
+    #[serde(default, deserialize_with = "de_opt_i64")]
+    pub id: Option<i64>,
+    /// Present on direct-play; absent (server-generated) on transcode parts.
+    #[serde(default)]
+    pub key: Option<String>,
     pub file: Option<String>,
     pub size: Option<i64>,
+    pub container: Option<String>,
+    /// Transcode decision for this part on a `/decision` response:
+    /// `directplay` | `copy` | `transcode`. Absent on plain metadata.
+    pub decision: Option<String>,
+    #[serde(default, rename = "Stream")]
+    pub streams: Vec<PlexStream>,
+}
+
+/// A single media stream (video / audio / subtitle) as returned on a transcode
+/// decision response. Only the fields the transcode flow needs are modeled.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlexStream {
+    #[serde(default, deserialize_with = "de_opt_i64")]
+    pub id: Option<i64>,
+    /// 1 = video, 2 = audio, 3 = subtitle.
+    #[serde(rename = "streamType")]
+    pub stream_type: Option<i32>,
+    pub codec: Option<String>,
+    /// Per-stream transcode decision: `directplay` | `copy` | `transcode`.
+    pub decision: Option<String>,
+    /// Where the stream is sourced from on a decision (e.g. "segments-av",
+    /// "direct").
+    pub location: Option<String>,
+    pub selected: Option<bool>,
+}
+
+/// A live server-side transcode session, as listed by `/transcode/sessions` or
+/// (on some Plex versions) embedded in a decision response. On the target
+/// server (PMS 1.43) it is **absent** from the decision response — the
+/// indicator's resolution/bitrate therefore come from the selected `PlexMedia`,
+/// not from here (see U1 findings).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlexTranscodeSession {
+    /// The session key — equals the client-supplied `session` id (U1: the
+    /// server honors a client-chosen id).
+    pub key: Option<String>,
+    #[serde(rename = "videoDecision")]
+    pub video_decision: Option<String>,
+    #[serde(rename = "audioDecision")]
+    pub audio_decision: Option<String>,
+    pub container: Option<String>,
+    pub protocol: Option<String>,
+    /// Whether the transcoder is throttled (caught up to the playhead). The
+    /// buffering watchdog (U8) reads this.
+    pub throttled: Option<bool>,
+    pub complete: Option<bool>,
+    pub progress: Option<f64>,
+    /// Total media duration in milliseconds.
+    pub duration: Option<i64>,
+    #[serde(rename = "transcodeHwEncoding")]
+    pub transcode_hw_encoding: Option<String>,
+}
+
+// --- Transcode decision response (`/video/:/transcode/universal/decision`) ---
+
+/// Response from the universal transcode `/decision` endpoint. Reuses
+/// [`PlexMetadata`] for the item body (the decision echoes `ratingKey`/`title`/
+/// `type`), adding the container-level decision codes and an optional
+/// [`PlexTranscodeSession`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlexDecisionResponse {
+    #[serde(rename = "MediaContainer")]
+    pub media_container: PlexDecisionContainer,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlexDecisionContainer {
+    #[serde(rename = "generalDecisionCode")]
+    pub general_decision_code: Option<i64>,
+    #[serde(rename = "generalDecisionText")]
+    pub general_decision_text: Option<String>,
+    #[serde(rename = "directPlayDecisionCode")]
+    pub direct_play_decision_code: Option<i64>,
+    #[serde(rename = "directPlayDecisionText")]
+    pub direct_play_decision_text: Option<String>,
+    #[serde(rename = "transcodeDecisionCode")]
+    pub transcode_decision_code: Option<i64>,
+    #[serde(rename = "transcodeDecisionText")]
+    pub transcode_decision_text: Option<String>,
+    #[serde(default, rename = "Metadata")]
+    pub metadata: Vec<PlexMetadata>,
+    /// Absent on the target server's decision response (U1); present on
+    /// `/transcode/sessions`. Modeled here for Plex versions that include it.
+    #[serde(rename = "TranscodeSession")]
+    pub transcode_session: Option<PlexTranscodeSession>,
+}
+
+/// Response from `/transcode/sessions` (list of active transcode sessions).
+/// Used to verify a session started/stopped and to read `throttled` state.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlexTranscodeSessionsResponse {
+    #[serde(rename = "MediaContainer")]
+    pub media_container: PlexTranscodeSessionsContainer,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlexTranscodeSessionsContainer {
+    pub size: Option<i32>,
+    #[serde(default, rename = "TranscodeSession")]
+    pub sessions: Vec<PlexTranscodeSession>,
 }
 
 // --- Chapter response (intro/credits skip markers) ---
@@ -304,7 +442,10 @@ mod tests {
         assert_eq!(m.duration, Some(9300000));
         assert_eq!(m.genres.len(), 2);
         assert_eq!(m.genres[0].tag, "Science Fiction");
-        assert_eq!(m.media[0].parts[0].key, "/library/parts/456/1234/file.mkv");
+        assert_eq!(
+            m.media[0].parts[0].key.as_deref(),
+            Some("/library/parts/456/1234/file.mkv")
+        );
     }
 
     #[test]
@@ -769,5 +910,125 @@ mod tests {
         let resp: PlexHubResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.media_container.hubs[0].title, "Recently Added");
         assert_eq!(resp.media_container.hubs[0].metadata.len(), 1);
+    }
+
+    // --- U3: transcode decision request/response models ---
+
+    /// First Part of the first Media of the first Metadata in a decision.
+    fn first_part(resp: &PlexDecisionResponse) -> &PlexPart {
+        resp.media_container.metadata[0].media[0]
+            .parts
+            .first()
+            .expect("decision has a Part")
+    }
+
+    #[test]
+    fn parse_transcode_decision_fixture_yields_transcode_part() {
+        // Covers R1/R3: a recorded transcode decision parses with
+        // Part.decision == "transcode" and per-stream transcode decisions.
+        let json = include_str!("../../../tests/fixtures/plex/decision_transcode.json");
+        let resp: PlexDecisionResponse = serde_json::from_str(json).unwrap();
+        let mc = &resp.media_container;
+        assert_eq!(mc.transcode_decision_code, Some(1001));
+        assert_eq!(mc.direct_play_decision_code, Some(3000));
+        let part = first_part(&resp);
+        assert_eq!(part.decision.as_deref(), Some("transcode"));
+        let video = part
+            .streams
+            .iter()
+            .find(|s| s.stream_type == Some(1))
+            .unwrap();
+        assert_eq!(video.decision.as_deref(), Some("transcode"));
+    }
+
+    #[test]
+    fn transcode_decision_sources_output_from_selected_media_not_session() {
+        // U1 finding: TranscodeSession is absent from the decision response on
+        // the target server, so the indicator's resolution/bitrate come from the
+        // selected Media element, not TranscodeSession.
+        let json = include_str!("../../../tests/fixtures/plex/decision_transcode.json");
+        let resp: PlexDecisionResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.media_container.transcode_session.is_none());
+        let media = &resp.media_container.metadata[0].media[0];
+        assert_eq!(media.selected, Some(true));
+        assert_eq!(media.video_codec.as_deref(), Some("h264")); // output codec
+        assert_eq!(media.video_resolution.as_deref(), Some("720p"));
+        assert_eq!(media.bitrate, Some(1877));
+    }
+
+    #[test]
+    fn parse_directplay_decision_fixture() {
+        // Covers R4: a direct-play decision parses with Part.decision ==
+        // "directplay" and a usable part key.
+        let json = include_str!("../../../tests/fixtures/plex/decision_directplay.json");
+        let resp: PlexDecisionResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.media_container.direct_play_decision_code, Some(1000));
+        let part = first_part(&resp);
+        assert_eq!(part.decision.as_deref(), Some("directplay"));
+        assert!(part.key.as_deref().unwrap().contains("/library/parts/"));
+    }
+
+    #[test]
+    fn parse_copy_directstream_decision_fixture() {
+        // A direct-stream (remux) decision: video copied, audio transcoded.
+        let json = include_str!("../../../tests/fixtures/plex/decision_copy.json");
+        let resp: PlexDecisionResponse = serde_json::from_str(json).unwrap();
+        let part = first_part(&resp);
+        assert_eq!(part.decision.as_deref(), Some("copy"));
+        let video = part
+            .streams
+            .iter()
+            .find(|s| s.stream_type == Some(1))
+            .unwrap();
+        let audio = part
+            .streams
+            .iter()
+            .find(|s| s.stream_type == Some(2))
+            .unwrap();
+        assert_eq!(video.decision.as_deref(), Some("copy"));
+        assert_eq!(audio.decision.as_deref(), Some("transcode"));
+    }
+
+    #[test]
+    fn decision_populates_media_and_part_ids() {
+        // Covers: Media.id / Part.id (previously dropped) are populated.
+        let json = include_str!("../../../tests/fixtures/plex/decision_transcode.json");
+        let resp: PlexDecisionResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.media_container.metadata[0].media[0].id, Some(282965));
+        assert_eq!(first_part(&resp).id, Some(950874));
+    }
+
+    #[test]
+    fn plain_metadata_without_decision_fields_still_parses() {
+        // Back-compat: a normal metadata payload (no decision/id/Stream fields)
+        // still deserializes; the new fields default to None/empty.
+        let json = r#"{
+            "MediaContainer": {"size": 1, "Metadata": [{
+                "ratingKey": "1", "title": "Plain", "type": "movie",
+                "Media": [{"videoResolution": "1080", "Part": [{"key": "/p/1/file.mkv"}]}]
+            }]}
+        }"#;
+        let resp: PlexMetadataResponse = serde_json::from_str(json).unwrap();
+        let media = &resp.media_container.metadata[0].media[0];
+        assert_eq!(media.id, None);
+        assert_eq!(media.selected, None);
+        let part = &media.parts[0];
+        assert_eq!(part.id, None);
+        assert_eq!(part.decision, None);
+        assert_eq!(part.key.as_deref(), Some("/p/1/file.mkv"));
+        assert!(part.streams.is_empty());
+    }
+
+    #[test]
+    fn parse_transcode_sessions_list() {
+        // /transcode/sessions parses, exposing throttled + decisions (U10/U1).
+        let json = include_str!("../../../tests/fixtures/plex/transcode_session.json");
+        let resp: PlexTranscodeSessionsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.media_container.sessions.len(), 1);
+        let s = &resp.media_container.sessions[0];
+        assert_eq!(s.key.as_deref(), Some("reel-session-abcdef"));
+        assert_eq!(s.video_decision.as_deref(), Some("transcode"));
+        assert_eq!(s.throttled, Some(false));
+        assert_eq!(s.transcode_hw_encoding.as_deref(), Some("vaapi"));
     }
 }
