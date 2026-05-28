@@ -97,6 +97,22 @@ impl SourceType {
             _ => None,
         }
     }
+
+    /// Whether this source reports watch state (progress, scrobble) and exposes
+    /// skip markers to a remote server. True for every networked backend (Plex,
+    /// Jellyfin); false only for the local filesystem source, which has nowhere
+    /// to report. Replaces the old hardcoded `== SourceType::Plex` progress gates
+    /// so a Jellyfin item is never silently excluded from reporting.
+    pub fn reports_watch_state(self) -> bool {
+        !matches!(self, Self::Local)
+    }
+
+    /// Whether this source provides server-side curated rows (Continue Watching,
+    /// hubs). True for networked backends; false for the local source, whose
+    /// Continue Watching is synthesized from the local progress DB instead.
+    pub fn provides_server_hubs(self) -> bool {
+        !matches!(self, Self::Local)
+    }
 }
 
 /// A media item in the library (movie, show, season, or episode).
@@ -476,6 +492,20 @@ mod tests {
     #[test]
     fn source_type_unknown_returns_none() {
         assert_eq!(SourceType::from_str("emby"), None);
+    }
+
+    #[test]
+    fn reports_watch_state_true_for_non_local() {
+        assert!(SourceType::Plex.reports_watch_state());
+        assert!(SourceType::Jellyfin.reports_watch_state());
+        assert!(!SourceType::Local.reports_watch_state());
+    }
+
+    #[test]
+    fn provides_server_hubs_true_for_non_local() {
+        assert!(SourceType::Plex.provides_server_hubs());
+        assert!(SourceType::Jellyfin.provides_server_hubs());
+        assert!(!SourceType::Local.provides_server_hubs());
     }
 
     #[test]

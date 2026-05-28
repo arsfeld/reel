@@ -310,15 +310,18 @@ impl Component for HomeView {
                 self.last_error = None;
                 self.clear_shelves();
 
-                let is_plex = self
+                // Whether the browsed source provides server-side Continue
+                // Watching (Plex On Deck, Jellyfin Resume). Local sources don't,
+                // so their Continue Watching is synthesized from the progress DB.
+                let server_continue_watching = self
                     .source
                     .as_ref()
-                    .map(|s| s.source_type() == crate::models::media::SourceType::Plex)
+                    .map(|s| s.source_type().provides_server_hubs())
                     .unwrap_or(false);
 
-                // Non-Plex sources have no On Deck; build Continue Watching from
+                // Sources without server-side Continue Watching build it from
                 // the local DB progress the app pushes in.
-                if !is_plex && !in_progress.is_empty() {
+                if !server_continue_watching && !in_progress.is_empty() {
                     let cw_id = self.add_shelf("Continue Watching");
                     let cards: Vec<(MediaItem, Option<f64>)> = in_progress
                         .iter()
@@ -332,7 +335,7 @@ impl Component for HomeView {
                     self.refresh_visible_page();
                     let src = source.clone();
                     sender.oneshot_command(async move {
-                        let continue_watching = if is_plex {
+                        let continue_watching = if server_continue_watching {
                             src.continue_watching().await.unwrap_or_default()
                         } else {
                             Vec::new()

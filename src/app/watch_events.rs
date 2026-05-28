@@ -7,7 +7,6 @@ use tracing::{debug, info, warn};
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::watch::WatchProgress;
 use crate::services::media_source::MediaSource;
-use crate::services::plex::source::PlexSource;
 use crate::services::watch_state::WatchStateEvent;
 
 use super::App;
@@ -17,7 +16,7 @@ use super::utils::iso_now;
 pub fn dispatch_watch_events(
     db_conn: &Option<Connection>,
     events: Vec<WatchStateEvent>,
-    source: &Option<Arc<PlexSource>>,
+    source: &Option<Arc<dyn MediaSource>>,
     sender: &ComponentSender<App>,
 ) {
     for event in events {
@@ -53,14 +52,14 @@ pub fn dispatch_watch_events(
                         warn!("Failed to mark as watched: {e}");
                     }
                 }
-                // Fire-and-forget Plex scrobble
+                // Fire-and-forget scrobble to the owning server.
                 if !rating_key.is_empty()
                     && let Some(source) = source.clone()
                 {
                     info!("Scrobble: rating_key={rating_key}");
                     sender.oneshot_command(async move {
                         if let Err(e) = source.scrobble(&rating_key).await {
-                            warn!("Plex scrobble failed: {e}");
+                            warn!("Scrobble failed: {e}");
                         }
                         AppCmd::Noop
                     });
@@ -81,7 +80,7 @@ pub fn dispatch_watch_events(
                             .report_progress(&rating_key, &state, time_ms, duration_ms)
                             .await
                         {
-                            warn!("Plex timeline report failed: {e}");
+                            warn!("Timeline report failed: {e}");
                         }
                         AppCmd::Noop
                     });

@@ -47,7 +47,7 @@ pub fn handle_video_output(
             if let Some(ref item) = app.now_playing {
                 let meta = mpris::metadata_from_media_item(item, duration_secs, None);
                 let _ = app.mpris.metadata_tx.send(meta);
-                let rating_key = if item.source_type == SourceType::Plex {
+                let rating_key = if item.source_type.reports_watch_state() {
                     Some(item.external_id.as_str())
                 } else {
                     None
@@ -68,7 +68,7 @@ pub fn handle_video_output(
             if let Some(ref item) = app.now_playing
                 && !app.watch_tracker.is_active()
             {
-                let rating_key = if item.source_type == SourceType::Plex {
+                let rating_key = if item.source_type.reports_watch_state() {
                     Some(item.external_id.as_str())
                 } else {
                     None
@@ -187,9 +187,10 @@ pub fn handle_play_media(
         resume_secs: app.pending_resume.take(),
     });
 
-    // Fetch skip-intro / skip-credits markers from Plex.
+    // Fetch skip-intro / skip-credits markers from the owning server.
+    // skip_markers degrades to NotSupported for sources without them.
     if let Some(ref item) = media_item
-        && item.source_type == SourceType::Plex
+        && item.source_type.reports_watch_state()
         && let Some(source) = app.active_source.clone()
     {
         let rating_key = item.external_id.clone();
@@ -243,7 +244,7 @@ pub fn handle_connection_saved(
     let source = Arc::new(PlexSource::new(client, name.clone()));
     let artwork_cache = Arc::new(ArtworkCache::new(config::artwork_dir()));
 
-    app.active_source = Some(source.clone());
+    app.active_source = Some(source.clone() as Arc<dyn MediaSource>);
     app.source_url = Some(url.clone());
 
     // Feed the sidebar tree: source identity, current visibility, and (async)

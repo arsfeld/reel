@@ -78,7 +78,7 @@ pub struct App {
     /// Resume position to seek to after file loads. Set from saved watch progress.
     pending_resume: Option<f64>,
     /// Active media source for scrobble/timeline reporting.
-    active_source: Option<Arc<PlexSource>>,
+    active_source: Option<Arc<dyn MediaSource>>,
     /// Base URL of the active source, used as the `source_id` when building
     /// per-library visibility keys.
     source_url: Option<String>,
@@ -405,9 +405,15 @@ impl Component for App {
                 self.home_view
                     .emit(HomeViewMsg::SetVisibility(hidden.clone()));
                 // If the library being viewed was just hidden, drop to Home.
+                // Key by the browsed source's own type (not a hardcoded "plex")
+                // so per-source visibility resolves correctly for any backend.
+                let source_type = self
+                    .active_source
+                    .as_ref()
+                    .map_or("plex", |s| s.source_type().as_str());
                 let redirect = match (&self.current_view, &self.source_url) {
                     (CurrentView::Library(key), Some(url)) => {
-                        hidden.contains(&LibrarySection::visibility_key_for("plex", url, key))
+                        hidden.contains(&LibrarySection::visibility_key_for(source_type, url, key))
                     }
                     _ => false,
                 };
@@ -568,14 +574,14 @@ impl Component for App {
                     };
                     let _ = repo.upsert(&progress);
                 }
-                // Fire-and-forget Plex scrobble
-                if item.source_type == SourceType::Plex
+                // Fire-and-forget scrobble to the owning server.
+                if item.source_type.reports_watch_state()
                     && let Some(source) = self.active_source.clone()
                 {
                     let key = item.external_id.clone();
                     sender.oneshot_command(async move {
                         if let Err(e) = source.scrobble(&key).await {
-                            tracing::warn!("Plex scrobble failed: {e}");
+                            tracing::warn!("Scrobble failed: {e}");
                         }
                         AppCmd::Noop
                     });
@@ -595,14 +601,14 @@ impl Component for App {
                     let repo = WatchProgressRepo::new(conn);
                     let _ = repo.mark_unwatched(&item.id);
                 }
-                // Fire-and-forget Plex unscrobble
-                if item.source_type == SourceType::Plex
+                // Fire-and-forget unscrobble to the owning server.
+                if item.source_type.reports_watch_state()
                     && let Some(source) = self.active_source.clone()
                 {
                     let key = item.external_id.clone();
                     sender.oneshot_command(async move {
                         if let Err(e) = source.unscrobble(&key).await {
-                            tracing::warn!("Plex unscrobble failed: {e}");
+                            tracing::warn!("Unscrobble failed: {e}");
                         }
                         AppCmd::Noop
                     });
@@ -702,7 +708,7 @@ impl Component for App {
                 let plex_source = Arc::new(PlexSource::new(client, name));
                 let artwork_cache = Arc::new(ArtworkCache::new(crate::config::artwork_dir()));
 
-                self.active_source = Some(plex_source.clone());
+                self.active_source = Some(plex_source.clone() as Arc<dyn MediaSource>);
                 self.source_url = Some(url.clone());
 
                 // Feed the sidebar tree: source identity, current visibility, and
