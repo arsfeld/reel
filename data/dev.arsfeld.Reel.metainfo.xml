@@ -28,8 +28,8 @@
 
   <launchable type="desktop-id">dev.arsfeld.Reel.desktop</launchable>
 
-  <url type="homepage">https://github.com/arosenfeld/reel</url>
-  <url type="bugtracker">https://github.com/arosenfeld/reel/issues</url>
+  <url type="homepage">https://github.com/arsfeld/reel</url>
+  <url type="bugtracker">https://github.com/arsfeld/reel/issues</url>
 
   <content_rating type="oars-1.1" />
 

@@ -2,3 +2,13 @@
 result
 .direnv/
 .reasonix/
+
+# Local planning artifacts (not for the repo)
+docs/plans/
+docs/brainstorms/
+
+# flatpak local build artifacts
+/build/
+/repo/
+.flatpak-builder/
+*.flatpak
