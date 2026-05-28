@@ -482,8 +482,12 @@ fn handle_buffering(
     };
     if let Some(state) = new_state
         && let Some(pipe) = pipeline_weak.upgrade()
+        && let Err(e) = pipe.set_state(state)
     {
-        let _ = pipe.set_state(state);
+        // A discarded failure here can strand playback paused (a failed resume
+        // leaves wants_play true with no retry); surface it like the
+        // construction-time set_state does.
+        tracing::warn!("buffering set_state({state:?}) failed: {e}");
     }
 }
 
