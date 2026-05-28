@@ -4,7 +4,6 @@ use std::time::Instant;
 use adw::prelude::*;
 use gtk::glib;
 use relm4::prelude::*;
-use rusqlite::Connection;
 use tracing::info;
 
 use crate::components::connection::{ConnectionDialog, ConnectionDialogOutput};
@@ -18,6 +17,7 @@ use crate::components::player::video_player::{
 };
 use crate::components::settings_dialog;
 use crate::components::sidebar::{Sidebar, SidebarMsg, SidebarOutput};
+use crate::db::database::Database;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::library::LibrarySection;
 use crate::models::media::{MediaItem, MediaType, SourceType};
@@ -44,7 +44,7 @@ mod utils;
 mod watch_events;
 mod widget_builder;
 
-use db_helpers::{init_database, load_in_progress, load_watch_data, reclaim_stream_cache};
+use db_helpers::{load_in_progress, load_watch_data, reclaim_stream_cache};
 use dialogs::show_file_chooser;
 use handlers::{handle_connection_saved, handle_play_media, handle_video_output};
 use player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
@@ -70,7 +70,7 @@ pub struct App {
     /// Library header title label — updated when sidebar navigation changes.
     library_title: gtk::Label,
     current_view: CurrentView,
-    db_conn: Option<Connection>,
+    db: Option<Database>,
     now_playing: Option<MediaItem>,
     watch_tracker: WatchStateTracker,
     /// Cached current position for save-on-exit.
@@ -278,16 +278,22 @@ impl Component for App {
         let player_chrome_revealer = built.player_chrome_revealer;
         let player_window_title = built.player_window_title;
 
-        // Initialize database
-        let db_conn = init_database();
+        // Initialize database (shared, single connection for the whole app)
+        let db = Database::open();
+        if let Some(db) = &db {
+            show_detail.emit(ShowDetailMsg::SetDb(db.clone()));
+        }
 
         // Load and validate saved source (async — tests connection, re-discovers if stale)
         let mut has_sources = false;
-        if let Some(ref conn) = db_conn {
-            let repo = crate::db::source_repo::SourceRepo::new(conn);
-            if let Ok(sources) = repo.list()
-                && let Some(source) = sources.into_iter().find(|s| s.enabled)
-            {
+        if let Some(db) = &db {
+            let saved = db.with(|conn| {
+                crate::db::source_repo::SourceRepo::new(conn)
+                    .list()
+                    .ok()
+                    .and_then(|sources| sources.into_iter().find(|s| s.enabled))
+            });
+            if let Some(source) = saved {
                 has_sources = true;
                 info!(
                     "Loaded saved Plex source: {} (url={})",
@@ -318,7 +324,7 @@ impl Component for App {
             split_view,
             library_title,
             current_view: CurrentView::default(),
-            db_conn,
+            db,
             now_playing: None,
             source_url: None,
             watch_tracker: WatchStateTracker::new(),
@@ -381,7 +387,7 @@ impl Component for App {
                 self.home_view.emit(HomeViewMsg::SetVisibility(
                     self.settings.library_visibility.hidden.clone(),
                 ));
-                let in_progress = load_in_progress(&self.db_conn);
+                let in_progress = load_in_progress(&self.db);
                 self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
             }
             AppMsg::Navigate(section) => {
@@ -419,7 +425,7 @@ impl Component for App {
                     sender.input(AppMsg::NavigateHome);
                 } else if matches!(self.current_view, CurrentView::Home) {
                     // Refresh Home in place so it reflects the new visibility.
-                    let in_progress = load_in_progress(&self.db_conn);
+                    let in_progress = load_in_progress(&self.db);
                     self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
                 }
             }
@@ -446,7 +452,7 @@ impl Component for App {
                 if self.stack.visible_child_name().as_deref() == Some("player") {
                     // Stop watch tracking when leaving player
                     let events = self.watch_tracker.stop(self.last_position);
-                    dispatch_watch_events(&self.db_conn, events, &self.active_source, &sender);
+                    dispatch_watch_events(&self.db, events, &self.active_source, &sender);
                     self.now_playing = None;
                     self.video_player.emit(VideoPlayerMsg::Clear);
                     leave_player_mode(root, &mut self.player_chrome_revealer);
@@ -558,19 +564,21 @@ impl Component for App {
             }
             AppMsg::MarkWatched(item) => {
                 info!("Marking as watched: {}", item.title);
-                if let Some(ref conn) = self.db_conn {
-                    let repo = WatchProgressRepo::new(conn);
-                    let progress = WatchProgress {
-                        media_item_id: item.id.clone(),
-                        position_seconds: 0.0,
-                        duration_seconds: item
-                            .runtime_minutes
-                            .map(|m| m as f64 * 60.0)
-                            .unwrap_or(0.0),
-                        watched: true,
-                        last_watched_at: iso_now(),
-                    };
-                    let _ = repo.upsert(&progress);
+                if let Some(db) = &self.db {
+                    db.with(|conn| {
+                        let mut repo = WatchProgressRepo::new(conn);
+                        let progress = WatchProgress {
+                            media_item_id: item.id.clone(),
+                            position_seconds: 0.0,
+                            duration_seconds: item
+                                .runtime_minutes
+                                .map(|m| m as f64 * 60.0)
+                                .unwrap_or(0.0),
+                            watched: true,
+                            last_watched_at: iso_now(),
+                        };
+                        let _ = repo.upsert(&progress);
+                    });
                 }
                 // Fire-and-forget Plex scrobble
                 if item.source_type == SourceType::Plex
@@ -585,7 +593,7 @@ impl Component for App {
                     });
                 }
                 // Refresh watch data
-                let watch_data = load_watch_data(&self.db_conn);
+                let watch_data = load_watch_data(&self.db);
                 self.library_view
                     .emit(LibraryViewMsg::SetWatchData(watch_data));
                 sender.input(AppMsg::ShowToast(format!(
@@ -595,9 +603,11 @@ impl Component for App {
             }
             AppMsg::MarkUnwatched(item) => {
                 info!("Marking as unwatched: {}", item.title);
-                if let Some(ref conn) = self.db_conn {
-                    let repo = WatchProgressRepo::new(conn);
-                    let _ = repo.mark_unwatched(&item.id);
+                if let Some(db) = &self.db {
+                    db.with(|conn| {
+                        let mut repo = WatchProgressRepo::new(conn);
+                        let _ = repo.mark_unwatched(&item.id);
+                    });
                 }
                 // Fire-and-forget Plex unscrobble
                 if item.source_type == SourceType::Plex
@@ -612,7 +622,7 @@ impl Component for App {
                     });
                 }
                 // Refresh watch data
-                let watch_data = load_watch_data(&self.db_conn);
+                let watch_data = load_watch_data(&self.db);
                 self.library_view
                     .emit(LibraryViewMsg::SetWatchData(watch_data));
                 sender.input(AppMsg::ShowToast(format!(
@@ -678,27 +688,29 @@ impl Component for App {
                 self.source_connecting = false;
 
                 // Update saved URL in DB (clear old entries — URL may have changed)
-                if let Some(ref conn) = self.db_conn {
-                    let repo = crate::db::source_repo::SourceRepo::new(conn);
-                    if let Ok(old_sources) = repo.list() {
-                        for s in &old_sources {
-                            let _ = repo.delete(&s.id);
+                if let Some(db) = &self.db {
+                    db.with(|conn| {
+                        let mut repo = crate::db::source_repo::SourceRepo::new(conn);
+                        if let Ok(old_sources) = repo.list() {
+                            for s in &old_sources {
+                                let _ = repo.delete(&s.id);
+                            }
                         }
-                    }
-                    let source = Source {
-                        id: Source::make_id(&url),
-                        source_type: SourceType::Plex,
-                        name: name.clone(),
-                        config: SourceConfig {
-                            url: url.clone(),
-                            token: token.clone(),
-                        },
-                        enabled: true,
-                        last_synced_at: None,
-                    };
-                    if let Err(e) = repo.insert(&source) {
-                        tracing::warn!("Failed to update source: {e}");
-                    }
+                        let source = Source {
+                            id: Source::make_id(&url),
+                            source_type: SourceType::Plex,
+                            name: name.clone(),
+                            config: SourceConfig {
+                                url: url.clone(),
+                                token: token.clone(),
+                            },
+                            enabled: true,
+                            last_synced_at: None,
+                        };
+                        if let Err(e) = repo.insert(&source) {
+                            tracing::warn!("Failed to update source: {e}");
+                        }
+                    });
                 }
 
                 let client = PlexClient::new(&url, &token);
@@ -737,7 +749,7 @@ impl Component for App {
                 // Re-trigger home data load now that the source is available.
                 // NavigateHome fires before validation completes, so LoadHome
                 // was skipped — retry it here.
-                let in_progress = load_in_progress(&self.db_conn);
+                let in_progress = load_in_progress(&self.db);
                 self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
                 self.library_view.emit(LibraryViewMsg::SetSource(
                     plex_source.clone(),
@@ -754,7 +766,7 @@ impl Component for App {
                     .emit(ShowDetailMsg::SetSource(plex_source, artwork_cache));
 
                 // Send watch data to library view
-                let watch_data = load_watch_data(&self.db_conn);
+                let watch_data = load_watch_data(&self.db);
                 self.library_view
                     .emit(LibraryViewMsg::SetWatchData(watch_data));
 

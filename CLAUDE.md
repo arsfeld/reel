@@ -2,9 +2,11 @@
 
 ## Project Overview
 
-Reel is a native Linux media player built with Rust, GTK4, Relm4, libadwaita, and libmpv. It targets the "Infuse for Linux" experience: beautiful library UI, automatic metadata, Plex integration, and universal format support.
+Reel is a native Linux media player built with Rust, GTK4, Relm4, libadwaita, and GStreamer. It targets the "Infuse for Linux" experience: beautiful library UI, automatic metadata, Plex integration, and universal format support.
 
-**Architecture**: Relm4 (Elm/MVU) components -> Service layer -> Backend layer (mpv, SQLite, HTTP APIs).
+**Architecture**: Relm4 (Elm/MVU) components -> Service layer -> Backend layer (GStreamer, SQLite, HTTP APIs).
+
+**Playback backend (read this before touching player code)**: Video plays through GStreamer `playbin3` with a `gtk4paintablesink`, wrapped by `PlaybackPipeline` in `src/player/gst_pipeline.rs` and driven by the `VideoPlayer` Relm4 component in `src/components/player/video_player.rs`. There is **no libmpv** in this codebase, and no `MpvBackend`, `VideoBackend` trait, or `playback_tracker.rs`. The TDD examples further down that reference mpv, `MpvBackend`, `VideoBackend`, `VideoArea`, or `playback_tracker.rs` are illustrative of testing *patterns* (extract pure functions, mock at a boundary), not the real modules — the live state-tracking equivalent is the pure tracker in `src/services/watch_state.rs`.
 
 ## Build & Run
 
@@ -37,7 +39,7 @@ nix develop -c cargo fmt
 nix develop -c cargo test
 
 # Unit tests for a specific module
-nix develop -c cargo test player::backend
+nix develop -c cargo test services::watch_state
 
 # Tests with output visible
 nix develop -c cargo test -- --nocapture
@@ -48,7 +50,7 @@ nix develop -c cargo test -- --test-threads=1
 # GTK integration tests (need virtual display)
 nix develop -c xvfb-run --auto-servernum cargo test -- --test-threads=1
 
-# Integration tests requiring libmpv/display
+# Integration tests requiring GStreamer/display
 nix develop -c xvfb-run --auto-servernum cargo test --features integration
 
 # Continuous testing during development
@@ -62,16 +64,16 @@ src/
   main.rs                          # Entry point
   app.rs                           # Root App component (Relm4)
   player/
-    mod.rs
-    backend.rs                     # PlayState, EndReason enums + VideoBackend trait
-    mpv/
-      mod.rs                       # MpvBackend (wraps libmpv2)
-      gl_render.rs                 # Raw FFI: mpv render context + OpenGL
+    mod.rs                         # PlayState enum, SkipMarkers, window_title_for_state
+    gst_pipeline.rs                # PlaybackPipeline (GStreamer playbin3 + gtk4paintablesink)
+    pipeline_msgs.rs               # Pipeline bus message types
+    subtitles.rs                   # Subtitle handling
+    tracks.rs                      # Audio/subtitle track models
   components/
     mod.rs
     player/
       mod.rs
-      video_area.rs                # VideoArea Relm4 component (GLArea + mpv)
+      video_player.rs              # VideoPlayer Relm4 component (drives PlaybackPipeline)
     # Future: sidebar.rs, library/, detail/, search.rs, settings/
   # Future: models/, services/, db/
 tests/
@@ -599,11 +601,9 @@ fn parse_fails_on_missing_required_field() {
 ```
 src/
   player/
-    backend.rs              # Unit tests in #[cfg(test)] mod tests
-    playback_tracker.rs     # Unit tests in #[cfg(test)] mod tests
-    mpv/
-      mod.rs                # NO unit tests (FFI, needs real mpv)
-      gl_render.rs          # NO unit tests (raw FFI, needs GL context)
+    mod.rs                  # Unit tests for pure helpers (window_title_for_state)
+    gst_pipeline.rs         # NO unit tests (needs real GStreamer/display)
+    tracks.rs               # Unit tests for track models in #[cfg(test)]
   services/
     filename_parser.rs      # Extensive unit tests + proptest
     plex/
@@ -659,7 +659,7 @@ tempfile = "3"
 default = ["wayland", "x11"]
 wayland = ["dep:gdk4-wayland"]
 x11 = ["dep:gdk4-x11"]
-integration = []  # Gate tests needing real libmpv/display
+integration = []  # Gate tests needing real GStreamer/display
 ```
 
 ### File Size Limits
@@ -716,10 +716,10 @@ async fn record_plex_libraries() {
 
 ## Key Architectural Rules
 
-1. **No mpv calls outside player/mpv/**: All libmpv interaction goes through MpvBackend. VideoArea and App never import libmpv2 directly.
+1. **No GStreamer calls outside player/**: All `playbin3`/GStreamer interaction goes through `PlaybackPipeline` (`src/player/gst_pipeline.rs`). The `VideoPlayer` component and App never import `gstreamer` directly.
 2. **No GTK in services/**: The service layer is pure Rust. No gtk4::, no glib::, no relm4::.
 3. **No business logic in update()**: Relm4 `update()` methods are thin dispatchers. Extract logic to pure functions or service calls.
-4. **Traits at every boundary**: VideoBackend, MediaSource, MovieRepository. Mock-friendly by design.
+4. **Traits at boundaries**: MediaSource, MovieRepository, and similar seams. Mock-friendly by design. (Playback is concrete today — `PlaybackPipeline` wraps GStreamer; there is no `VideoBackend` trait.)
 5. **Errors as types, not strings**: Use thiserror enums. Each error variant testable via `matches!()`.
 
 ## Milestone-Specific Test Requirements

@@ -77,6 +77,125 @@ pub struct MediaCardWidgets {
     watched_icon: gtk::Image,
 }
 
+/// The poster overlay (frame) plus the child widgets that need later updates.
+struct PosterOverlay {
+    frame: gtk::Frame,
+    picture: gtk::Picture,
+    placeholder_icon: gtk::Image,
+    resolution_badge: gtk::Label,
+    rating_badge: gtk::Label,
+    content_rating_badge: gtk::Label,
+    progress_bar: gtk::ProgressBar,
+    watched_icon: gtk::Image,
+}
+
+/// Builds the poster picture with its overlaid badges, scrim, and progress bar,
+/// wrapped in a rounded frame.
+fn build_poster_overlay() -> PosterOverlay {
+    let picture = gtk::Picture::builder()
+        .content_fit(gtk::ContentFit::Cover)
+        .width_request(180)
+        .height_request(270)
+        .css_classes(["media-card-poster"])
+        .build();
+
+    // Placeholder icon shown when no poster texture is loaded
+    let placeholder_icon = gtk::Image::builder()
+        .icon_name("video-x-generic-symbolic")
+        .pixel_size(48)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .css_classes(["media-card-placeholder-icon"])
+        .visible(false)
+        .build();
+
+    // Resolution badge (top-right)
+    let resolution_badge = gtk::Label::builder()
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Start)
+        .margin_top(8)
+        .margin_end(8)
+        .css_classes(["media-badge", "resolution-badge"])
+        .visible(false)
+        .build();
+
+    // Rating badge (top-left)
+    let rating_badge = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::Start)
+        .margin_top(8)
+        .margin_start(8)
+        .css_classes(["media-badge", "rating-badge"])
+        .visible(false)
+        .build();
+
+    // Content rating badge (bottom-left of poster, e.g. "PG-13", "R")
+    let content_rating_badge = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::End)
+        .margin_bottom(10)
+        .margin_start(8)
+        .css_classes(["content-rating-badge"])
+        .visible(false)
+        .build();
+
+    // Watch progress bar (bottom of poster, visible for in-progress items)
+    let progress_bar = gtk::ProgressBar::builder()
+        .halign(gtk::Align::Fill)
+        .valign(gtk::Align::End)
+        .css_classes(["watch-progress"])
+        .visible(false)
+        .build();
+
+    // Watched checkmark (bottom-right of poster)
+    let watched_icon = gtk::Image::builder()
+        .icon_name("emblem-ok-symbolic")
+        .pixel_size(20)
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::End)
+        .margin_bottom(8)
+        .margin_end(8)
+        .css_classes(["watched-indicator"])
+        .visible(false)
+        .build();
+
+    // Bottom gradient scrim for progress/badges readability
+    let scrim = gtk::Box::builder()
+        .halign(gtk::Align::Fill)
+        .valign(gtk::Align::End)
+        .height_request(56)
+        .css_classes(["media-card-scrim"])
+        .build();
+
+    // Overlay stacks badges, placeholder icon, and progress on top of the poster
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&picture));
+    overlay.add_overlay(&scrim);
+    overlay.add_overlay(&placeholder_icon);
+    overlay.add_overlay(&resolution_badge);
+    overlay.add_overlay(&rating_badge);
+    overlay.add_overlay(&content_rating_badge);
+    overlay.add_overlay(&progress_bar);
+    overlay.add_overlay(&watched_icon);
+
+    // Wrap overlay in a frame for rounded corners + hover effects
+    let frame = gtk::Frame::builder()
+        .css_classes(["media-card-frame"])
+        .child(&overlay)
+        .build();
+
+    PosterOverlay {
+        frame,
+        picture,
+        placeholder_icon,
+        resolution_badge,
+        rating_badge,
+        content_rating_badge,
+        progress_bar,
+        watched_icon,
+    }
+}
+
 impl RelmGridItem for MediaCardData {
     type Root = gtk::Box;
     type Widgets = MediaCardWidgets;
@@ -91,97 +210,16 @@ impl RelmGridItem for MediaCardData {
             .width_request(180)
             .build();
 
-        let picture = gtk::Picture::builder()
-            .content_fit(gtk::ContentFit::Cover)
-            .width_request(180)
-            .height_request(270)
-            .css_classes(["media-card-poster"])
-            .build();
-
-        // Placeholder icon shown when no poster texture is loaded
-        let placeholder_icon = gtk::Image::builder()
-            .icon_name("video-x-generic-symbolic")
-            .pixel_size(48)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Center)
-            .css_classes(["media-card-placeholder-icon"])
-            .visible(false)
-            .build();
-
-        // Resolution badge (top-right)
-        let resolution_badge = gtk::Label::builder()
-            .halign(gtk::Align::End)
-            .valign(gtk::Align::Start)
-            .margin_top(8)
-            .margin_end(8)
-            .css_classes(["media-badge", "resolution-badge"])
-            .visible(false)
-            .build();
-
-        // Rating badge (top-left)
-        let rating_badge = gtk::Label::builder()
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Start)
-            .margin_top(8)
-            .margin_start(8)
-            .css_classes(["media-badge", "rating-badge"])
-            .visible(false)
-            .build();
-
-        // Content rating badge (bottom-left of poster, e.g. "PG-13", "R")
-        let content_rating_badge = gtk::Label::builder()
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::End)
-            .margin_bottom(10)
-            .margin_start(8)
-            .css_classes(["content-rating-badge"])
-            .visible(false)
-            .build();
-
-        // Watch progress bar (bottom of poster, visible for in-progress items)
-        let progress_bar = gtk::ProgressBar::builder()
-            .halign(gtk::Align::Fill)
-            .valign(gtk::Align::End)
-            .css_classes(["watch-progress"])
-            .visible(false)
-            .build();
-
-        // Watched checkmark (bottom-right of poster)
-        let watched_icon = gtk::Image::builder()
-            .icon_name("emblem-ok-symbolic")
-            .pixel_size(20)
-            .halign(gtk::Align::End)
-            .valign(gtk::Align::End)
-            .margin_bottom(8)
-            .margin_end(8)
-            .css_classes(["watched-indicator"])
-            .visible(false)
-            .build();
-
-        // Bottom gradient scrim for progress/badges readability
-        let scrim = gtk::Box::builder()
-            .halign(gtk::Align::Fill)
-            .valign(gtk::Align::End)
-            .height_request(56)
-            .css_classes(["media-card-scrim"])
-            .build();
-
-        // Overlay stacks badges, placeholder icon, and progress on top of the poster
-        let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&picture));
-        overlay.add_overlay(&scrim);
-        overlay.add_overlay(&placeholder_icon);
-        overlay.add_overlay(&resolution_badge);
-        overlay.add_overlay(&rating_badge);
-        overlay.add_overlay(&content_rating_badge);
-        overlay.add_overlay(&progress_bar);
-        overlay.add_overlay(&watched_icon);
-
-        // Wrap overlay in a frame for rounded corners + hover effects
-        let frame = gtk::Frame::builder()
-            .css_classes(["media-card-frame"])
-            .child(&overlay)
-            .build();
+        let PosterOverlay {
+            frame,
+            picture,
+            placeholder_icon,
+            resolution_badge,
+            rating_badge,
+            content_rating_badge,
+            progress_bar,
+            watched_icon,
+        } = build_poster_overlay();
 
         let title_label = gtk::Label::builder()
             .halign(gtk::Align::Start)
