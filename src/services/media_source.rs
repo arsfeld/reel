@@ -26,6 +26,23 @@ pub enum SourceError {
     Other(String),
 }
 
+/// How to download an item's original file. Built from the item's part key
+/// plus the live auth token, so it is regenerated rather than persisted (only
+/// the `part_key` is stored — a token refresh never strands a download).
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+pub struct DownloadDescriptor {
+    /// Direct, byte-rangeable URL of the original file.
+    pub url: String,
+    /// Source part key (persisted; the URL is rebuilt from it on each resume).
+    pub part_key: String,
+    /// Expected total size in bytes when the source knows it up front. Often
+    /// `None` for items fetched from list views (the size lives on the detail
+    /// metadata, not the list `MediaItem`); the transfer client then takes the
+    /// total from the first response's `Content-Length`.
+    pub expected_size: Option<u64>,
+}
+
 /// Abstract interface for a media source (Plex, Jellyfin, local, etc.).
 #[async_trait]
 pub trait MediaSource: Send + Sync {
@@ -38,6 +55,15 @@ pub trait MediaSource: Send + Sync {
     async fn children(&self, rating_key: &str) -> Result<Vec<MediaItem>, SourceError>;
     fn playback_url(&self, part_key: &str) -> String;
     fn artwork_url(&self, path: &str, width: u32, height: u32) -> String;
+
+    /// Describe how to download an item's original file. Default: not supported
+    /// — local-filesystem sources inherit this (their media is already on
+    /// disk), so only remote sources (Plex in v1) override it.
+    fn download_descriptor(&self, _item: &MediaItem) -> Result<DownloadDescriptor, SourceError> {
+        Err(SourceError::NotSupported(
+            "Downloads not supported by this source".into(),
+        ))
+    }
 
     /// Fetch collections for a library section. Default: not supported.
     async fn collections(&self, _library_key: &str) -> Result<Vec<MediaItem>, SourceError> {
