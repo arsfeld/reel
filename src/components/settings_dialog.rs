@@ -96,36 +96,13 @@ pub fn show_preferences(parent: &impl IsA<gtk::Widget>, settings: &Settings) -> 
 
     subtitles_page.add(&sub_group);
 
-    // --- Library page ---
-    let library_page = adw::PreferencesPage::builder()
-        .title("Library")
-        .icon_name("folder-videos-symbolic")
-        .name("library")
-        .build();
-
-    let display_group = adw::PreferencesGroup::builder().title("Display").build();
-
-    let sort_model = gtk::StringList::new(&["Title", "Year", "Date Added", "Rating"]);
-    let sort_combo = adw::ComboRow::builder()
-        .title("Default Sort")
-        .model(&sort_model)
-        .selected(sort_field_to_index(&settings.library.default_sort))
-        .build();
-
-    let sort_asc_switch = adw::SwitchRow::builder()
-        .title("Sort Ascending")
-        .active(settings.library.sort_ascending)
-        .build();
-
-    display_group.add(&sort_combo);
-    display_group.add(&sort_asc_switch);
-
-    library_page.add(&display_group);
+    // Sort and filters are now configured per-library directly in the library
+    // view (and persisted per library), so the settings dialog no longer
+    // carries a global "Default Sort" control.
 
     // --- Add pages ---
     dialog.add(&playback_page);
     dialog.add(&subtitles_page);
-    dialog.add(&library_page);
 
     // Build updated settings from current widget state for the caller.
     // The dialog is modal-like; we clone the initial settings and return.
@@ -147,8 +124,6 @@ pub fn show_preferences(parent: &impl IsA<gtk::Widget>, settings: &Settings) -> 
     let sub_lang_val = sub_lang_entry.text().to_string();
     let sub_font_val = sub_font_entry.text().to_string();
     let sub_size_val = sub_size_spin.value() as u32;
-    let sort_idx = sort_combo.selected();
-    let sort_asc_val = sort_asc_switch.is_active();
 
     updated.playback.resume_playback = resume_val;
     updated.playback.hwdec_mode = index_to_hwdec_mode(hwdec_idx);
@@ -162,8 +137,6 @@ pub fn show_preferences(parent: &impl IsA<gtk::Widget>, settings: &Settings) -> 
     };
     updated.subtitles.font_family = sub_font_val;
     updated.subtitles.font_size = sub_size_val;
-    updated.library.default_sort = index_to_sort_field(sort_idx);
-    updated.library.sort_ascending = sort_asc_val;
 
     // Save settings on dialog close
     let updated_for_close = updated.clone();
@@ -220,27 +193,6 @@ fn index_to_hwdec_mode(index: u32) -> String {
     .to_string()
 }
 
-fn sort_field_to_index(field: &str) -> u32 {
-    match field {
-        "title" => 0,
-        "year" => 1,
-        "added" => 2,
-        "rating" => 3,
-        _ => 0,
-    }
-}
-
-fn index_to_sort_field(index: u32) -> String {
-    match index {
-        0 => "title",
-        1 => "year",
-        2 => "added",
-        3 => "rating",
-        _ => "title",
-    }
-    .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,22 +206,8 @@ mod tests {
     }
 
     #[test]
-    fn sort_field_roundtrip() {
-        for field in &["title", "year", "added", "rating"] {
-            let idx = sort_field_to_index(field);
-            assert_eq!(index_to_sort_field(idx), *field);
-        }
-    }
-
-    #[test]
     fn unknown_hwdec_defaults_to_auto_safe() {
         assert_eq!(hwdec_mode_to_index("unknown"), 0);
         assert_eq!(index_to_hwdec_mode(99), "auto-safe");
-    }
-
-    #[test]
-    fn unknown_sort_defaults_to_title() {
-        assert_eq!(sort_field_to_index("unknown"), 0);
-        assert_eq!(index_to_sort_field(99), "title");
     }
 }

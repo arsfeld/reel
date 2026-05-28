@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::config;
+use crate::services::library_filter::{FilterState, SortOrder};
 
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)]
@@ -48,13 +51,35 @@ pub struct SubtitleSettings {
     pub font_size: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Per-library UI state (filters + sort), persisted across sessions and keyed
+/// by `LibrarySection::library_id`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LibraryUiState {
+    pub filters: FilterState,
+    pub sort: SortOrder,
+}
+
+/// Library view settings: one `LibraryUiState` entry per library, keyed by the
+/// composite library id.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LibrarySettings {
-    /// Default sort field: "title", "year", "added", "rating".
-    pub default_sort: String,
-    /// Sort ascending.
-    pub sort_ascending: bool,
+    pub per_library: HashMap<String, LibraryUiState>,
+}
+
+#[allow(dead_code)]
+impl LibrarySettings {
+    /// Get the saved UI state for a library, or a default (no filters,
+    /// Title A–Z) when none has been persisted yet.
+    pub fn get(&self, library_id: &str) -> LibraryUiState {
+        self.per_library.get(library_id).cloned().unwrap_or_default()
+    }
+
+    /// Replace the saved UI state for a library.
+    pub fn set(&mut self, library_id: &str, state: LibraryUiState) {
+        self.per_library.insert(library_id.to_string(), state);
+    }
 }
 
 // Settings has Default derived from its fields' defaults.
@@ -78,15 +103,6 @@ impl Default for SubtitleSettings {
             preferred_language: None,
             font_family: "Sans".to_string(),
             font_size: 36,
-        }
-    }
-}
-
-impl Default for LibrarySettings {
-    fn default() -> Self {
-        Self {
-            default_sort: "title".to_string(),
-            sort_ascending: true,
         }
     }
 }
@@ -163,8 +179,7 @@ mod tests {
         assert_eq!(s.subtitles.preferred_language, None);
         assert_eq!(s.subtitles.font_family, "Sans");
         assert_eq!(s.subtitles.font_size, 36);
-        assert_eq!(s.library.default_sort, "title");
-        assert!(s.library.sort_ascending);
+        assert!(s.library.per_library.is_empty());
     }
 
     // --- Serialization roundtrip ---
@@ -177,7 +192,10 @@ mod tests {
         assert_eq!(parsed.playback.default_volume, s.playback.default_volume);
         assert_eq!(parsed.playback.hwdec_mode, s.playback.hwdec_mode);
         assert_eq!(parsed.subtitles.font_family, s.subtitles.font_family);
-        assert_eq!(parsed.library.default_sort, s.library.default_sort);
+        assert_eq!(
+            parsed.library.per_library.len(),
+            s.library.per_library.len()
+        );
     }
 
     #[test]
@@ -196,10 +214,7 @@ mod tests {
                 font_family: "Noto Sans".to_string(),
                 font_size: 48,
             },
-            library: LibrarySettings {
-                default_sort: "year".to_string(),
-                sort_ascending: false,
-            },
+            library: LibrarySettings::default(),
         };
         let toml_str = toml::to_string_pretty(&s).unwrap();
         let parsed: Settings = toml::from_str(&toml_str).unwrap();
@@ -212,8 +227,6 @@ mod tests {
         assert_eq!(parsed.subtitles.preferred_language, Some("en".to_string()));
         assert_eq!(parsed.subtitles.font_family, "Noto Sans");
         assert_eq!(parsed.subtitles.font_size, 48);
-        assert_eq!(parsed.library.default_sort, "year");
-        assert!(!parsed.library.sort_ascending);
     }
 
     // --- Forward/backward compatibility ---
@@ -228,7 +241,7 @@ mod tests {
         assert!(s.playback.resume_playback);
         // Other sections get full defaults
         assert_eq!(s.subtitles.font_family, "Sans");
-        assert_eq!(s.library.default_sort, "title");
+        assert!(s.library.per_library.is_empty());
     }
 
     #[test]
@@ -256,12 +269,114 @@ mod tests {
 
     #[test]
     fn only_library_section_fills_rest_with_defaults() {
-        let toml_str = "[library]\ndefault_sort = \"year\"\nsort_ascending = false\n";
+        let toml_str = "[playback]\ndefault_volume = 90.0\n";
         let s: Settings = toml::from_str(toml_str).unwrap();
-        assert_eq!(s.library.default_sort, "year");
-        assert!(!s.library.sort_ascending);
-        assert_eq!(s.playback.default_volume, 100.0);
+        assert_eq!(s.playback.default_volume, 90.0);
+        assert!(s.library.per_library.is_empty());
         assert_eq!(s.subtitles.font_family, "Sans");
+    }
+
+    // --- Per-library UI state ---
+
+    #[test]
+    fn library_settings_get_unknown_returns_default() {
+        let ls = LibrarySettings::default();
+        let state = ls.get("plex:srv:1");
+        assert!(!state.filters.is_active());
+        assert_eq!(state.sort, SortOrder::TitleAsc);
+    }
+
+    #[test]
+    fn library_settings_set_and_get_roundtrip() {
+        use crate::services::library_filter::{GenreFilter, YearRangeFilter};
+        let mut ls = LibrarySettings::default();
+        let state = LibraryUiState {
+            filters: FilterState {
+                genres: Some(GenreFilter {
+                    selected_genres: vec!["Sci-Fi".to_string()],
+                }),
+                year_range: Some(YearRangeFilter {
+                    from: Some(2000),
+                    to: None,
+                }),
+                ..Default::default()
+            },
+            sort: SortOrder::YearNewest,
+        };
+        ls.set("plex:srv:1", state);
+        let got = ls.get("plex:srv:1");
+        assert_eq!(got.sort, SortOrder::YearNewest);
+        assert_eq!(
+            got.filters.genres.as_ref().unwrap().selected_genres,
+            vec!["Sci-Fi".to_string()]
+        );
+    }
+
+    #[test]
+    fn library_settings_set_does_not_pollute_other_library() {
+        let mut ls = LibrarySettings::default();
+        ls.set(
+            "plex:srv:1",
+            LibraryUiState {
+                sort: SortOrder::YearNewest,
+                ..Default::default()
+            },
+        );
+        // A different library still returns the default.
+        let other = ls.get("plex:srv:2");
+        assert_eq!(other.sort, SortOrder::TitleAsc);
+    }
+
+    #[test]
+    fn library_ui_state_toml_roundtrip_preserves_per_library() {
+        use crate::services::library_filter::WatchStatusFilter;
+        use crate::services::library_filter::WatchStatus;
+
+        let mut settings = Settings::default();
+        settings.library.set(
+            "plex:srv:1",
+            LibraryUiState {
+                filters: FilterState {
+                    watch_status: Some(WatchStatusFilter {
+                        status: WatchStatus::Unwatched,
+                    }),
+                    ..Default::default()
+                },
+                sort: SortOrder::DateAdded,
+            },
+        );
+        settings.library.set(
+            "plex:srv:2",
+            LibraryUiState {
+                sort: SortOrder::RatingHighest,
+                ..Default::default()
+            },
+        );
+
+        let toml_str = toml::to_string_pretty(&settings).unwrap();
+        let parsed: Settings = toml::from_str(&toml_str).unwrap();
+
+        let lib1 = parsed.library.get("plex:srv:1");
+        assert_eq!(lib1.sort, SortOrder::DateAdded);
+        assert!(lib1.filters.watch_status.is_some());
+
+        let lib2 = parsed.library.get("plex:srv:2");
+        assert_eq!(lib2.sort, SortOrder::RatingHighest);
+        assert!(!lib2.filters.is_active());
+    }
+
+    #[test]
+    fn library_ui_state_partial_toml_fills_filter_defaults() {
+        // A persisted state with only a sort and no filters table should
+        // deserialize with an inactive FilterState.
+        let toml_str = r#"
+[library.per_library."plex:srv:1"]
+sort = "YearNewest"
+"#;
+        let s: Settings = toml::from_str(toml_str).unwrap();
+        let state = s.library.get("plex:srv:1");
+        assert_eq!(state.sort, SortOrder::YearNewest);
+        assert!(!state.filters.is_active());
     }
 
     // --- Validation functions ---
