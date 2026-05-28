@@ -110,7 +110,9 @@ impl FilterPopover {
     }
 
     fn build_watch_status_group(&self) {
-        let group = adw::PreferencesGroup::builder().title("Watch status").build();
+        let group = adw::PreferencesGroup::builder()
+            .title("Watch status")
+            .build();
         let model = gtk::StringList::new(&["Any", "Unwatched", "In Progress", "Watched"]);
         let row = adw::ComboRow::builder()
             .title("Status")
@@ -281,12 +283,11 @@ impl FilterPopover {
     }
 
     fn build_runtime_group(&self) {
-        let group = adw::PreferencesGroup::builder().title("Runtime (minutes)").build();
+        let group = adw::PreferencesGroup::builder()
+            .title("Runtime (minutes)")
+            .build();
         let (from_val, to_val) = match self.state.borrow().runtime_range {
-            Some(rt) => (
-                rt.from.map_or(0.0, f64::from),
-                rt.to.map_or(0.0, f64::from),
-            ),
+            Some(rt) => (rt.from.map_or(0.0, f64::from), rt.to.map_or(0.0, f64::from)),
             None => (0.0, 0.0),
         };
 
@@ -347,7 +348,9 @@ impl FilterPopover {
             .map(|c| c.selected.clone())
             .unwrap_or_default();
 
-        let group = adw::PreferencesGroup::builder().title("Content rating").build();
+        let group = adw::PreferencesGroup::builder()
+            .title("Content rating")
+            .build();
         let expander = adw::ExpanderRow::builder().title("Ratings").build();
         if !selected.is_empty() {
             expander.set_subtitle(&format!("{} selected", selected.len()));
@@ -368,9 +371,11 @@ impl FilterPopover {
                 }
                 {
                     let mut s = state.borrow_mut();
-                    let cf = s.content_ratings.get_or_insert_with(|| ContentRatingFilter {
-                        selected: Vec::new(),
-                    });
+                    let cf = s
+                        .content_ratings
+                        .get_or_insert_with(|| ContentRatingFilter {
+                            selected: Vec::new(),
+                        });
                     if r.is_active() {
                         if !cf.selected.contains(&rating) {
                             cf.selected.push(rating.clone());

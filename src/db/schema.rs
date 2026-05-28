@@ -354,21 +354,17 @@ mod tests {
 
         // Pre-existing row survives.
         let title: String = conn
-            .query_row(
-                "SELECT title FROM media_items WHERE id = 'm1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT title FROM media_items WHERE id = 'm1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(title, "Dune");
 
         // New columns exist and default to NULL.
         let hdr: Option<String> = conn
-            .query_row(
-                "SELECT hdr FROM media_items WHERE id = 'm1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT hdr FROM media_items WHERE id = 'm1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(hdr, None);
         let vr: Option<String> = conn

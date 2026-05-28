@@ -41,7 +41,9 @@ pub async fn validate_or_rediscover_source(
             return AppCmd::SourceValidated { url, token, name };
         }
         if attempt < SAVED_URL_PROBE_ATTEMPTS {
-            info!("Saved URL probe {attempt}/{SAVED_URL_PROBE_ATTEMPTS} failed ({url}); retrying...");
+            info!(
+                "Saved URL probe {attempt}/{SAVED_URL_PROBE_ATTEMPTS} failed ({url}); retrying..."
+            );
             tokio::time::sleep(std::time::Duration::from_millis(SAVED_URL_PROBE_BACKOFF_MS)).await;
         }
     }

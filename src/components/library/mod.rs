@@ -772,7 +772,8 @@ impl Component for LibraryView {
                     self.sort_dropdown.unblock_signal(&self.sort_handler);
                 }
 
-                self.filter_popover.reset(&self.all_items, &self.filter_state);
+                self.filter_popover
+                    .reset(&self.all_items, &self.filter_state);
                 self.active_filters_bar.update(&self.filter_state);
                 self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);

@@ -615,8 +615,7 @@ pub fn reconcile(filter: &FilterState, items: &[MediaItem]) -> FilterState {
 
     let available_genres = extract_genres(items);
     if let Some(gf) = out.genres.as_mut() {
-        gf.selected_genres
-            .retain(|g| available_genres.contains(g));
+        gf.selected_genres.retain(|g| available_genres.contains(g));
         if gf.selected_genres.is_empty() {
             out.genres = None;
         }
@@ -779,7 +778,11 @@ mod tests {
     #[test]
     fn genre_filter_multi_genre_or_semantics() {
         let item = movie_with("Dune", Some(2021), None, vec!["Action"]);
-        assert!(filter_matches(&item, &genre_filter(&["Comedy", "Action"]), ANY));
+        assert!(filter_matches(
+            &item,
+            &genre_filter(&["Comedy", "Action"]),
+            ANY
+        ));
     }
 
     #[test]
@@ -806,7 +809,11 @@ mod tests {
     #[test]
     fn year_range_both_bounds_matches_inside() {
         let item = movie_with("M", Some(2005), None, vec![]);
-        assert!(filter_matches(&item, &year_filter(Some(2000), Some(2009)), ANY));
+        assert!(filter_matches(
+            &item,
+            &year_filter(Some(2000), Some(2009)),
+            ANY
+        ));
     }
 
     #[test]
@@ -933,7 +940,11 @@ mod tests {
     #[test]
     fn runtime_range_inside_matches() {
         let item = movie("M"); // 120 min
-        assert!(filter_matches(&item, &runtime_filter(Some(90), Some(130)), ANY));
+        assert!(filter_matches(
+            &item,
+            &runtime_filter(Some(90), Some(130)),
+            ANY
+        ));
     }
 
     #[test]
@@ -942,7 +953,11 @@ mod tests {
         item.runtime_minutes = Some(95);
         assert!(filter_matches(&item, &runtime_filter(None, Some(100)), ANY));
         item.runtime_minutes = Some(140);
-        assert!(!filter_matches(&item, &runtime_filter(None, Some(100)), ANY));
+        assert!(!filter_matches(
+            &item,
+            &runtime_filter(None, Some(100)),
+            ANY
+        ));
     }
 
     #[test]
@@ -956,7 +971,11 @@ mod tests {
     fn runtime_range_no_runtime_excluded_when_any_bound_set() {
         let mut item = movie("M");
         item.runtime_minutes = None;
-        assert!(!filter_matches(&item, &runtime_filter(None, Some(100)), ANY));
+        assert!(!filter_matches(
+            &item,
+            &runtime_filter(None, Some(100)),
+            ANY
+        ));
     }
 
     // === Content rating tests ===
@@ -1029,9 +1048,17 @@ mod tests {
     fn resolution_4k_matches_only_4k_items() {
         let mut item = movie("M");
         item.video_resolution = Some("4k".to_string());
-        assert!(filter_matches(&item, &res_filter(vec![ResolutionBucket::R4k], None), ANY));
+        assert!(filter_matches(
+            &item,
+            &res_filter(vec![ResolutionBucket::R4k], None),
+            ANY
+        ));
         item.video_resolution = Some("1080".to_string());
-        assert!(!filter_matches(&item, &res_filter(vec![ResolutionBucket::R4k], None), ANY));
+        assert!(!filter_matches(
+            &item,
+            &res_filter(vec![ResolutionBucket::R4k], None),
+            ANY
+        ));
     }
 
     #[test]
@@ -1045,27 +1072,51 @@ mod tests {
     #[test]
     fn resolution_item_with_no_resolution_excluded_when_bucket_set() {
         let item = movie("M"); // video_resolution None
-        assert!(!filter_matches(&item, &res_filter(vec![ResolutionBucket::R4k], None), ANY));
+        assert!(!filter_matches(
+            &item,
+            &res_filter(vec![ResolutionBucket::R4k], None),
+            ANY
+        ));
     }
 
     #[test]
     fn hdr_any_matches_hdr_and_dolby_vision() {
         let mut item = movie("M");
         item.hdr = Some(HdrFormat::Hdr);
-        assert!(filter_matches(&item, &res_filter(vec![], Some(HdrSelection::AnyHdr)), ANY));
+        assert!(filter_matches(
+            &item,
+            &res_filter(vec![], Some(HdrSelection::AnyHdr)),
+            ANY
+        ));
         item.hdr = Some(HdrFormat::DolbyVision);
-        assert!(filter_matches(&item, &res_filter(vec![], Some(HdrSelection::AnyHdr)), ANY));
+        assert!(filter_matches(
+            &item,
+            &res_filter(vec![], Some(HdrSelection::AnyHdr)),
+            ANY
+        ));
         item.hdr = None;
-        assert!(!filter_matches(&item, &res_filter(vec![], Some(HdrSelection::AnyHdr)), ANY));
+        assert!(!filter_matches(
+            &item,
+            &res_filter(vec![], Some(HdrSelection::AnyHdr)),
+            ANY
+        ));
     }
 
     #[test]
     fn hdr_sdr_only_matches_items_with_no_hdr() {
         let mut item = movie("M");
         item.hdr = None;
-        assert!(filter_matches(&item, &res_filter(vec![], Some(HdrSelection::SdrOnly)), ANY));
+        assert!(filter_matches(
+            &item,
+            &res_filter(vec![], Some(HdrSelection::SdrOnly)),
+            ANY
+        ));
         item.hdr = Some(HdrFormat::Hdr);
-        assert!(!filter_matches(&item, &res_filter(vec![], Some(HdrSelection::SdrOnly)), ANY));
+        assert!(!filter_matches(
+            &item,
+            &res_filter(vec![], Some(HdrSelection::SdrOnly)),
+            ANY
+        ));
     }
 
     #[test]
@@ -1139,7 +1190,10 @@ mod tests {
     fn sort_year_newest_first() {
         let a = movie_with("Old", Some(2010), None, vec![]);
         let b = movie_with("New", Some(2024), None, vec![]);
-        assert_eq!(sort_compare(&a, &b, SortOrder::YearNewest), Ordering::Greater);
+        assert_eq!(
+            sort_compare(&a, &b, SortOrder::YearNewest),
+            Ordering::Greater
+        );
     }
 
     #[test]
@@ -1157,7 +1211,10 @@ mod tests {
         let a = movie_with("Arrival", Some(2020), Some(8.0), vec![]);
         let b = movie_with("Dune", Some(2020), Some(8.0), vec![]);
         assert_eq!(sort_compare(&a, &b, SortOrder::YearNewest), Ordering::Less);
-        assert_eq!(sort_compare(&a, &b, SortOrder::RatingHighest), Ordering::Less);
+        assert_eq!(
+            sort_compare(&a, &b, SortOrder::RatingHighest),
+            Ordering::Less
+        );
     }
 
     // === apply_filters_and_sort tests ===
@@ -1168,7 +1225,12 @@ mod tests {
             movie_with("Arrival", Some(2016), Some(7.9), vec!["Sci-Fi", "Drama"]),
             movie_with("The Hangover", Some(2009), Some(7.7), vec!["Comedy"]),
             movie_with("Zoolander", Some(2001), Some(6.5), vec!["Comedy"]),
-            movie_with("Interstellar", Some(2014), Some(8.7), vec!["Sci-Fi", "Drama"]),
+            movie_with(
+                "Interstellar",
+                Some(2014),
+                Some(8.7),
+                vec!["Sci-Fi", "Drama"],
+            ),
         ]
     }
 
@@ -1176,7 +1238,8 @@ mod tests {
     fn apply_search_and_genre_filter_combined() {
         let items = sample_library();
         let filter = genre_filter(&["Sci-Fi"]);
-        let indices = apply_filters_and_sort(&items, "ar", &filter, SortOrder::TitleAsc, &no_watch());
+        let indices =
+            apply_filters_and_sort(&items, "ar", &filter, SortOrder::TitleAsc, &no_watch());
         let titles: Vec<&str> = indices.iter().map(|&i| items[i].title.as_str()).collect();
         assert_eq!(titles, vec!["Arrival", "Interstellar"]);
     }
@@ -1194,7 +1257,8 @@ mod tests {
             }),
             ..Default::default()
         };
-        let indices = apply_filters_and_sort(&items, "i", &filter, SortOrder::TitleAsc, &no_watch());
+        let indices =
+            apply_filters_and_sort(&items, "i", &filter, SortOrder::TitleAsc, &no_watch());
         let titles: Vec<&str> = indices.iter().map(|&i| items[i].title.as_str()).collect();
         assert_eq!(titles, vec!["Arrival", "Interstellar"]);
     }
@@ -1239,7 +1303,13 @@ mod tests {
         let titles: Vec<&str> = indices.iter().map(|&i| items[i].title.as_str()).collect();
         assert_eq!(
             titles,
-            vec!["Dune", "Arrival", "Interstellar", "The Hangover", "Zoolander"]
+            vec![
+                "Dune",
+                "Arrival",
+                "Interstellar",
+                "The Hangover",
+                "Zoolander"
+            ]
         );
     }
 
@@ -1278,7 +1348,11 @@ mod tests {
         // Returned SD → 4K regardless of insertion order; 720p absent.
         assert_eq!(
             extract_resolution_buckets(&items),
-            vec![ResolutionBucket::Sd, ResolutionBucket::R1080p, ResolutionBucket::R4k]
+            vec![
+                ResolutionBucket::Sd,
+                ResolutionBucket::R1080p,
+                ResolutionBucket::R4k
+            ]
         );
     }
 
@@ -1316,8 +1390,20 @@ mod tests {
         let filter = genre_filter(&["Sci-Fi", "Drama"]);
         let pills = pill_labels(&filter);
         assert_eq!(pills.len(), 2);
-        assert_eq!(pills[0], (FilterTag::Genre("Sci-Fi".to_string()), "Genre: Sci-Fi".to_string()));
-        assert_eq!(pills[1], (FilterTag::Genre("Drama".to_string()), "Genre: Drama".to_string()));
+        assert_eq!(
+            pills[0],
+            (
+                FilterTag::Genre("Sci-Fi".to_string()),
+                "Genre: Sci-Fi".to_string()
+            )
+        );
+        assert_eq!(
+            pills[1],
+            (
+                FilterTag::Genre("Drama".to_string()),
+                "Genre: Drama".to_string()
+            )
+        );
     }
 
     #[test]
@@ -1339,7 +1425,10 @@ mod tests {
     fn pill_for_resolution_and_hdr() {
         let filter = res_filter(vec![ResolutionBucket::R4k], Some(HdrSelection::AnyHdr));
         let pills = pill_labels(&filter);
-        assert!(pills.contains(&(FilterTag::Resolution(ResolutionBucket::R4k), "4K".to_string())));
+        assert!(pills.contains(&(
+            FilterTag::Resolution(ResolutionBucket::R4k),
+            "4K".to_string()
+        )));
         assert!(pills.contains(&(FilterTag::Hdr, "HDR".to_string())));
     }
 

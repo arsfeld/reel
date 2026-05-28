@@ -73,7 +73,10 @@ impl LibrarySettings {
     /// Get the saved UI state for a library, or a default (no filters,
     /// Title A–Z) when none has been persisted yet.
     pub fn get(&self, library_id: &str) -> LibraryUiState {
-        self.per_library.get(library_id).cloned().unwrap_or_default()
+        self.per_library
+            .get(library_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Replace the saved UI state for a library.
@@ -329,8 +332,8 @@ mod tests {
 
     #[test]
     fn library_ui_state_toml_roundtrip_preserves_per_library() {
-        use crate::services::library_filter::WatchStatusFilter;
         use crate::services::library_filter::WatchStatus;
+        use crate::services::library_filter::WatchStatusFilter;
 
         let mut settings = Settings::default();
         settings.library.set(
