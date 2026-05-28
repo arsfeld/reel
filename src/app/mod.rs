@@ -132,6 +132,7 @@ pub enum AppMsg {
     ShowToast(String),
     FocusSearch,
     ShowCollections,
+    ShowDownloads,
     ShowCollectionDetail(MediaItem),
     MarkWatched(MediaItem),
     MarkUnwatched(MediaItem),
@@ -213,6 +214,7 @@ impl Component for App {
                 SidebarOutput::NavigateHome => AppMsg::NavigateHome,
                 SidebarOutput::Navigate(section) => AppMsg::Navigate(section),
                 SidebarOutput::ShowCollections => AppMsg::ShowCollections,
+                SidebarOutput::ShowDownloads => AppMsg::ShowDownloads,
                 SidebarOutput::SetLibraryVisible { key, visible } => {
                     AppMsg::SetLibraryVisible { key, visible }
                 }
@@ -574,6 +576,14 @@ impl Component for App {
                 root.set_title(Some("Reel"));
                 self.library_title.set_label("Collections");
                 self.library_view.emit(LibraryViewMsg::LoadCollections);
+            }
+            AppMsg::ShowDownloads => {
+                // U12 wires navigation; the DownloadsView page is added in U13.
+                self.current_view = CurrentView::Downloads;
+                self.stack.set_visible_child_name("shell");
+                root.set_fullscreened(false);
+                root.set_title(Some("Reel"));
+                sender.input(AppMsg::ShowToast("Downloads".to_string()));
             }
             AppMsg::ShowCollectionDetail(item) => {
                 self.current_view = CurrentView::CollectionDetail(item.id.clone());
