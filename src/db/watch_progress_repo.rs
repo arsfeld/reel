@@ -157,6 +157,7 @@ mod tests {
             air_date: None,
             file_path: Some("/library/parts/456/file.mkv".to_string()),
             video_resolution: None,
+            hdr: None,
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
         }

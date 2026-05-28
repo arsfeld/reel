@@ -259,6 +259,7 @@ mod tests {
             air_date: None,
             file_path: None,
             video_resolution: None,
+            hdr: None,
             added_at: String::new(),
             updated_at: String::new(),
         };

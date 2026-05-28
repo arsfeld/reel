@@ -1,7 +1,7 @@
 use crate::models::{
     detail::{CastMember, CollectionRef, MediaDetail, TechnicalInfo},
     library::{LibrarySection, LibraryType},
-    media::{MediaItem, MediaType, SourceType},
+    media::{HdrFormat, MediaItem, MediaType, SourceType},
 };
 
 use super::models::{PlexLibrary, PlexMetadata};
@@ -42,6 +42,13 @@ pub fn plex_metadata_to_media_item(metadata: &PlexMetadata, source_id: &str) -> 
         .media
         .first()
         .and_then(|m| m.video_resolution.clone());
+
+    // Extract HDR / Dolby Vision from first Media's videoDynamicRange field.
+    let hdr = metadata
+        .media
+        .first()
+        .and_then(|m| m.video_dynamic_range.as_deref())
+        .and_then(HdrFormat::from_plex);
 
     // Convert duration from milliseconds to minutes
     let runtime_minutes = metadata.duration.map(|ms| (ms / 60_000) as i32);
@@ -97,6 +104,7 @@ pub fn plex_metadata_to_media_item(metadata: &PlexMetadata, source_id: &str) -> 
         air_date: metadata.originally_available_at.clone(),
         file_path,
         video_resolution,
+        hdr,
         added_at,
         updated_at,
     })
@@ -295,6 +303,7 @@ mod tests {
                 container: None,
                 width: None,
                 height: None,
+                video_dynamic_range: None,
                 parts: vec![PlexPart {
                     key: "/library/parts/456/file.mkv".to_string(),
                     file: Some("/data/movies/Dune.mkv".to_string()),
@@ -341,6 +350,7 @@ mod tests {
                 container: None,
                 width: None,
                 height: None,
+                video_dynamic_range: None,
                 parts: vec![PlexPart {
                     key: "/library/parts/501/file.mkv".to_string(),
                     file: Some("/data/tv/Show/S01E01.mkv".to_string()),
@@ -455,6 +465,7 @@ mod tests {
             container: None,
             width: None,
             height: None,
+            video_dynamic_range: None,
             parts: vec![PlexPart {
                 key: "/library/parts/456/file.mkv".to_string(),
                 file: None,
@@ -471,6 +482,78 @@ mod tests {
         plex.media.clear();
         let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
         assert_eq!(item.video_resolution, None);
+    }
+
+    #[test]
+    fn convert_movie_extracts_hdr() {
+        let mut plex = test_plex_movie();
+        plex.media = vec![PlexMedia {
+            video_resolution: Some("4k".to_string()),
+            video_codec: None,
+            audio_codec: None,
+            audio_channels: None,
+            bitrate: None,
+            container: None,
+            width: None,
+            height: None,
+            video_dynamic_range: Some("HDR".to_string()),
+            parts: vec![],
+        }];
+        let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(item.hdr, Some(HdrFormat::Hdr));
+    }
+
+    #[test]
+    fn convert_movie_extracts_dolby_vision() {
+        let mut plex = test_plex_movie();
+        plex.media = vec![PlexMedia {
+            video_resolution: Some("4k".to_string()),
+            video_codec: None,
+            audio_codec: None,
+            audio_channels: None,
+            bitrate: None,
+            container: None,
+            width: None,
+            height: None,
+            video_dynamic_range: Some("Dolby Vision".to_string()),
+            parts: vec![],
+        }];
+        let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(item.hdr, Some(HdrFormat::DolbyVision));
+    }
+
+    #[test]
+    fn convert_movie_sdr_gives_none_hdr() {
+        let mut plex = test_plex_movie();
+        plex.media = vec![PlexMedia {
+            video_resolution: Some("1080".to_string()),
+            video_codec: None,
+            audio_codec: None,
+            audio_channels: None,
+            bitrate: None,
+            container: None,
+            width: None,
+            height: None,
+            video_dynamic_range: Some("SDR".to_string()),
+            parts: vec![],
+        }];
+        let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(item.hdr, None);
+    }
+
+    #[test]
+    fn convert_movie_no_dynamic_range_field_gives_none_hdr() {
+        let plex = test_plex_movie(); // builder sets video_dynamic_range to None
+        let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(item.hdr, None);
+    }
+
+    #[test]
+    fn convert_no_media_gives_none_hdr() {
+        let mut plex = test_plex_movie();
+        plex.media.clear();
+        let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(item.hdr, None);
     }
 
     #[test]
@@ -605,6 +688,7 @@ mod tests {
             container: Some("mkv".to_string()),
             width: Some(1920),
             height: Some(1080),
+            video_dynamic_range: None,
             parts: vec![PlexPart {
                 key: "/library/parts/456/file.mkv".to_string(),
                 file: Some("/data/Dune.mkv".to_string()),

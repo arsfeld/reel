@@ -1,6 +1,6 @@
 use rusqlite::{Connection, params};
 
-use crate::models::media::{MediaItem, MediaType, SourceType};
+use crate::models::media::{HdrFormat, MediaItem, MediaType, SourceType};
 
 use super::DbError;
 
@@ -27,13 +27,13 @@ impl<'a> MediaRepo<'a> {
                 title, year, overview, content_rating, rating,
                 runtime_minutes, poster_path, backdrop_path, genres,
                 parent_id, season_number, episode_number, air_date,
-                file_path, added_at, updated_at
+                file_path, video_resolution, hdr, added_at, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5,
                 ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14,
                 ?15, ?16, ?17, ?18,
-                ?19, ?20, ?21
+                ?19, ?20, ?21, ?22, ?23
             )
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
@@ -50,6 +50,8 @@ impl<'a> MediaRepo<'a> {
                 episode_number = excluded.episode_number,
                 air_date = excluded.air_date,
                 file_path = excluded.file_path,
+                video_resolution = excluded.video_resolution,
+                hdr = excluded.hdr,
                 updated_at = excluded.updated_at",
             params![
                 item.id,
@@ -71,6 +73,8 @@ impl<'a> MediaRepo<'a> {
                 item.episode_number,
                 item.air_date,
                 item.file_path,
+                item.video_resolution,
+                item.hdr.map(|h| h.as_str()),
                 item.added_at,
                 item.updated_at,
             ],
@@ -197,6 +201,11 @@ fn row_to_media_item(row: &rusqlite::Row) -> Result<MediaItem, DbError> {
         air_date: row.get("air_date")?,
         file_path: row.get("file_path")?,
         video_resolution: row.get("video_resolution").ok().flatten(),
+        hdr: row
+            .get::<_, Option<String>>("hdr")
+            .ok()
+            .flatten()
+            .and_then(|s| HdrFormat::from_db_str(&s)),
         added_at: row.get("added_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -235,6 +244,7 @@ mod tests {
             air_date: None,
             file_path: Some("/library/parts/456/file.mkv".to_string()),
             video_resolution: None,
+            hdr: None,
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
         }
@@ -262,6 +272,7 @@ mod tests {
             air_date: Some("2024-03-01".to_string()),
             file_path: Some(format!("/library/parts/{id}/file.mkv")),
             video_resolution: None,
+            hdr: None,
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
         }
@@ -458,6 +469,53 @@ mod tests {
 
         let found = repo.find_by_id("m1").unwrap().unwrap();
         assert!(found.genres.is_empty());
+    }
+
+    #[test]
+    fn hdr_field_roundtrip_hdr() {
+        let conn = test_db();
+        let repo = MediaRepo::new(&conn);
+        let mut movie = test_movie("m1", "Dune");
+        movie.hdr = Some(HdrFormat::Hdr);
+        movie.video_resolution = Some("4k".to_string());
+        repo.upsert(&movie).unwrap();
+        let found = repo.find_by_id("m1").unwrap().unwrap();
+        assert_eq!(found.hdr, Some(HdrFormat::Hdr));
+        assert_eq!(found.video_resolution, Some("4k".to_string()));
+    }
+
+    #[test]
+    fn hdr_field_roundtrip_dolby_vision() {
+        let conn = test_db();
+        let repo = MediaRepo::new(&conn);
+        let mut movie = test_movie("m1", "Dune");
+        movie.hdr = Some(HdrFormat::DolbyVision);
+        repo.upsert(&movie).unwrap();
+        let found = repo.find_by_id("m1").unwrap().unwrap();
+        assert_eq!(found.hdr, Some(HdrFormat::DolbyVision));
+    }
+
+    #[test]
+    fn hdr_field_roundtrip_none() {
+        let conn = test_db();
+        let repo = MediaRepo::new(&conn);
+        let movie = test_movie("m1", "Dune"); // hdr: None
+        repo.upsert(&movie).unwrap();
+        let found = repo.find_by_id("m1").unwrap().unwrap();
+        assert_eq!(found.hdr, None);
+    }
+
+    #[test]
+    fn upsert_updates_hdr_value() {
+        let conn = test_db();
+        let repo = MediaRepo::new(&conn);
+        let mut movie = test_movie("m1", "Dune");
+        movie.hdr = Some(HdrFormat::Hdr);
+        repo.upsert(&movie).unwrap();
+        movie.hdr = Some(HdrFormat::DolbyVision);
+        repo.upsert(&movie).unwrap();
+        let found = repo.find_by_id("m1").unwrap().unwrap();
+        assert_eq!(found.hdr, Some(HdrFormat::DolbyVision));
     }
 
     #[test]

@@ -129,6 +129,10 @@ pub struct PlexMedia {
     pub container: Option<String>,
     pub width: Option<i32>,
     pub height: Option<i32>,
+    /// Plex's `videoDynamicRange` field. Typical values: "SDR", "HDR", "HDR10",
+    /// "HDR10+", "HLG", "Dolby Vision", "DV". Absent on older Plex servers.
+    #[serde(rename = "videoDynamicRange")]
+    pub video_dynamic_range: Option<String>,
     #[serde(default, rename = "Part")]
     pub parts: Vec<PlexPart>,
 }

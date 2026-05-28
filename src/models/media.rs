@@ -38,6 +38,46 @@ pub enum SourceType {
     Local,
 }
 
+/// High-dynamic-range format on a media item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HdrFormat {
+    /// Generic HDR (HDR10, HDR10+, HLG, …).
+    Hdr,
+    /// Dolby Vision (with or without HDR10 base layer).
+    DolbyVision,
+}
+
+impl HdrFormat {
+    /// Compact short string used for DB storage.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hdr => "hdr",
+            Self::DolbyVision => "dolby_vision",
+        }
+    }
+
+    /// Parse from the DB representation produced by `as_str`.
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "hdr" => Some(Self::Hdr),
+            "dolby_vision" => Some(Self::DolbyVision),
+            _ => None,
+        }
+    }
+
+    /// Map Plex's `videoDynamicRange` value to an `HdrFormat`. Returns `None`
+    /// for SDR, empty strings, and anything unrecognised — callers should
+    /// treat that as "no HDR signal." Case-insensitive.
+    pub fn from_plex(raw: &str) -> Option<Self> {
+        match raw.trim().to_lowercase().as_str() {
+            "" | "sdr" => None,
+            "dv" | "dolby vision" | "dolbyvision" | "dolby_vision" => Some(Self::DolbyVision),
+            s if s.contains("hdr") || s == "hlg" => Some(Self::Hdr),
+            _ => None,
+        }
+    }
+}
+
 impl SourceType {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -87,6 +127,9 @@ pub struct MediaItem {
     pub file_path: Option<String>,
     /// Video resolution from the primary media version (e.g., "1080", "4k").
     pub video_resolution: Option<String>,
+    /// High-dynamic-range format (HDR / Dolby Vision). `None` means SDR or
+    /// no signal from the source.
+    pub hdr: Option<HdrFormat>,
     pub added_at: String,
     pub updated_at: String,
 }
@@ -155,6 +198,7 @@ mod tests {
             air_date: None,
             file_path: Some("/library/parts/456/file.mkv".to_string()),
             video_resolution: Some("1080".to_string()),
+            hdr: None,
             added_at: "2024-01-15".to_string(),
             updated_at: "2024-01-15".to_string(),
         }
@@ -274,5 +318,55 @@ mod tests {
     #[test]
     fn format_resolution_unknown_defaults_to_hd() {
         assert_eq!(MediaItem::format_resolution("unknown"), "HD");
+    }
+
+    // --- HdrFormat ---
+
+    #[test]
+    fn hdr_from_plex_maps_hdr_variants_to_hdr() {
+        assert_eq!(HdrFormat::from_plex("HDR"), Some(HdrFormat::Hdr));
+        assert_eq!(HdrFormat::from_plex("HDR10"), Some(HdrFormat::Hdr));
+        assert_eq!(HdrFormat::from_plex("HDR10+"), Some(HdrFormat::Hdr));
+        assert_eq!(HdrFormat::from_plex("HLG"), Some(HdrFormat::Hdr));
+    }
+
+    #[test]
+    fn hdr_from_plex_maps_dolby_vision_variants() {
+        assert_eq!(
+            HdrFormat::from_plex("Dolby Vision"),
+            Some(HdrFormat::DolbyVision)
+        );
+        assert_eq!(HdrFormat::from_plex("DV"), Some(HdrFormat::DolbyVision));
+        assert_eq!(
+            HdrFormat::from_plex("DolbyVision"),
+            Some(HdrFormat::DolbyVision)
+        );
+    }
+
+    #[test]
+    fn hdr_from_plex_returns_none_for_sdr_or_empty() {
+        assert_eq!(HdrFormat::from_plex("SDR"), None);
+        assert_eq!(HdrFormat::from_plex(""), None);
+        assert_eq!(HdrFormat::from_plex("   "), None);
+        assert_eq!(HdrFormat::from_plex("unknown"), None);
+    }
+
+    #[test]
+    fn hdr_from_plex_is_case_insensitive() {
+        assert_eq!(HdrFormat::from_plex("hdr"), Some(HdrFormat::Hdr));
+        assert_eq!(HdrFormat::from_plex("hdr10"), Some(HdrFormat::Hdr));
+        assert_eq!(
+            HdrFormat::from_plex("dolby vision"),
+            Some(HdrFormat::DolbyVision)
+        );
+    }
+
+    #[test]
+    fn hdr_db_str_roundtrip() {
+        for fmt in [HdrFormat::Hdr, HdrFormat::DolbyVision] {
+            assert_eq!(HdrFormat::from_db_str(fmt.as_str()), Some(fmt));
+        }
+        assert_eq!(HdrFormat::from_db_str("nope"), None);
+        assert_eq!(HdrFormat::from_db_str(""), None);
     }
 }
