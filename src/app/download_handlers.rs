@@ -15,11 +15,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use relm4::ComponentController;
-use rusqlite::Connection;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+use crate::db::database::Database;
 use crate::db::downloads_repo::DownloadsRepo;
 use crate::models::download::{Download, DownloadState, FailReason};
 use crate::models::media::MediaItem;
@@ -242,9 +242,11 @@ impl App {
     /// Whether a completed local download exists for an item (badge predicate,
     /// R14). Only a `Completed` download is offline-ready.
     pub(super) fn is_downloaded(&self, media_item_id: &str) -> bool {
-        self.db_conn
+        self.db
             .as_ref()
-            .and_then(|conn| DownloadsRepo::new(conn).find(media_item_id).ok().flatten())
+            .and_then(|db| {
+                db.with(|conn| DownloadsRepo::new(conn).find(media_item_id).ok().flatten())
+            })
             .map(|d| crate::services::download::sidecar::shows_downloaded_badge(d.state))
             .unwrap_or(false)
     }
@@ -252,14 +254,14 @@ impl App {
     /// Push the current download state and banner flags to the Downloads view.
     pub(super) fn refresh_downloads_view(&self) {
         use crate::components::downloads::DownloadsViewMsg;
-        let (downloads, groups) = match self.db_conn.as_ref() {
-            Some(conn) => {
-                let repo = DownloadsRepo::new(conn);
+        let (downloads, groups) = match self.db.as_ref() {
+            Some(db) => db.with(|conn| {
+                let mut repo = DownloadsRepo::new(conn);
                 (
                     repo.list_all().unwrap_or_default(),
                     repo.list_groups().unwrap_or_default(),
                 )
-            }
+            }),
             None => (Vec::new(), Vec::new()),
         };
         self.downloads_view.emit(DownloadsViewMsg::SetDownloads {
@@ -276,15 +278,17 @@ impl App {
     pub(super) fn push_downloaded_ids(&self) {
         use crate::components::library::LibraryViewMsg;
         let ids: std::collections::HashSet<String> = self
-            .db_conn
+            .db
             .as_ref()
-            .map(|conn| {
-                DownloadsRepo::new(conn)
-                    .list_by_state(DownloadState::Completed)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|d| d.media_item_id)
-                    .collect()
+            .map(|db| {
+                db.with(|conn| {
+                    DownloadsRepo::new(conn)
+                        .list_by_state(DownloadState::Completed)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|d| d.media_item_id)
+                        .collect()
+                })
             })
             .unwrap_or_default();
         self.library_view
@@ -294,25 +298,27 @@ impl App {
 
 // --- handler free functions (operate on &mut App, keep update() thin) ---
 
-/// Borrow the repo from the app's connection, if the DB is available.
-fn with_repo<T>(app: &App, f: impl FnOnce(&DownloadsRepo) -> T) -> Option<T> {
-    let conn = app.db_conn.as_ref()?;
-    Some(f(&DownloadsRepo::new(conn)))
+/// Run `f` with a `DownloadsRepo` on the app's database, if available.
+fn with_repo<T>(app: &App, f: impl FnOnce(&mut DownloadsRepo) -> T) -> Option<T> {
+    let db = app.db.as_ref()?;
+    Some(db.with(|conn| f(&mut DownloadsRepo::new(conn))))
 }
 
 /// Persist the queue's current state for `media_item_id` (state + optional fail
 /// reason). A no-op if the DB is unavailable.
 fn persist_state(
-    conn: &Option<Connection>,
+    db: &Option<Database>,
     media_item_id: &str,
     state: DownloadState,
     fail_reason: Option<FailReason>,
 ) {
-    if let Some(conn) = conn {
-        let repo = DownloadsRepo::new(conn);
-        if let Err(e) = repo.update_state(media_item_id, state, fail_reason) {
-            warn!("Failed to persist download state for {media_item_id}: {e}");
-        }
+    if let Some(db) = db {
+        db.with(|conn| {
+            if let Err(e) = DownloadsRepo::new(conn).update_state(media_item_id, state, fail_reason)
+            {
+                warn!("Failed to persist download state for {media_item_id}: {e}");
+            }
+        });
     }
 }
 
@@ -345,12 +351,7 @@ fn apply_events(app: &mut App, events: Vec<DownloadEvent>) {
                 media_item_id,
                 part_key,
             } => {
-                persist_state(
-                    &app.db_conn,
-                    &media_item_id,
-                    DownloadState::Downloading,
-                    None,
-                );
+                persist_state(&app.db, &media_item_id, DownloadState::Downloading, None);
                 if let Some(params) = resolve_transfer(app, &media_item_id, &part_key) {
                     info!("Starting download transfer: {media_item_id}");
                     app.downloads.spawn(params);
@@ -359,7 +360,7 @@ fn apply_events(app: &mut App, events: Vec<DownloadEvent>) {
                     // slot frees and the user can retry.
                     let reschedule = app.downloads.queue.mark_failed(&media_item_id);
                     persist_state(
-                        &app.db_conn,
+                        &app.db,
                         &media_item_id,
                         DownloadState::Failed,
                         Some(FailReason::Network),
@@ -441,8 +442,8 @@ pub fn enqueue_group(
         title: parent.title.clone(),
         snapshot_at: iso_now(),
     };
-    if let Some(conn) = app.db_conn.as_ref()
-        && let Err(e) = DownloadsRepo::new(conn).upsert_group(&group)
+    if let Some(db) = app.db.as_ref()
+        && let Err(e) = db.with(|conn| DownloadsRepo::new(conn).upsert_group(&group))
     {
         warn!("Failed to persist download group: {e}");
     }
@@ -457,13 +458,13 @@ pub fn item_action(app: &mut App, media_item_id: &str, action: DownloadItemActio
     let events = match action {
         DownloadItemAction::Pause => {
             let e = app.downloads.queue.pause(media_item_id);
-            persist_state(&app.db_conn, media_item_id, DownloadState::Paused, None);
+            persist_state(&app.db, media_item_id, DownloadState::Paused, None);
             e
         }
         DownloadItemAction::Resume | DownloadItemAction::Retry => {
             let e = app.downloads.queue.resume(media_item_id);
             // Resume/retry returns the item to Queued; clear any prior reason.
-            persist_state(&app.db_conn, media_item_id, DownloadState::Queued, None);
+            persist_state(&app.db, media_item_id, DownloadState::Queued, None);
             e
         }
         DownloadItemAction::Cancel | DownloadItemAction::Delete => {
@@ -498,14 +499,16 @@ fn persist_queue_order(app: &App) {
         .iter()
         .map(|i| i.media_item_id.clone())
         .collect();
-    if let Some(conn) = app.db_conn.as_ref() {
-        let repo = DownloadsRepo::new(conn);
-        for (order, id) in ids.iter().enumerate() {
-            if let Ok(Some(mut row)) = repo.find(id) {
-                row.queue_order = order as i64;
-                let _ = repo.upsert(&row);
+    if let Some(db) = app.db.as_ref() {
+        db.with(|conn| {
+            let mut repo = DownloadsRepo::new(conn);
+            for (order, id) in ids.iter().enumerate() {
+                if let Ok(Some(mut row)) = repo.find(id) {
+                    row.queue_order = order as i64;
+                    let _ = repo.upsert(&row);
+                }
             }
-        }
+        });
     }
 }
 
@@ -544,11 +547,14 @@ pub fn handle_runner_msg(app: &mut App, msg: DownloadRunnerMsg) {
         } => {
             // Advisory byte count for the UI; the authoritative offset is the
             // on-disk `.part` length, so we only update the counter.
-            if let Some(conn) = app.db_conn.as_ref()
-                && let Ok(Some(mut row)) = DownloadsRepo::new(conn).find(&media_item_id)
-            {
-                row.byte_count = downloaded as i64;
-                let _ = DownloadsRepo::new(conn).upsert(&row);
+            if let Some(db) = app.db.as_ref() {
+                db.with(|conn| {
+                    let mut repo = DownloadsRepo::new(conn);
+                    if let Ok(Some(mut row)) = repo.find(&media_item_id) {
+                        row.byte_count = downloaded as i64;
+                        let _ = repo.upsert(&row);
+                    }
+                });
             }
             app.refresh_downloads_view();
         }
@@ -580,12 +586,7 @@ fn handle_transfer_finished(
             warn!("Download {media_item_id} failed: {err} ({reason:?})");
             let policy = failure_policy(reason);
             let events = app.downloads.queue.mark_failed(media_item_id);
-            persist_state(
-                &app.db_conn,
-                media_item_id,
-                DownloadState::Failed,
-                Some(reason),
-            );
+            persist_state(&app.db, media_item_id, DownloadState::Failed, Some(reason));
 
             if policy.pause_queue {
                 pause_all_active(app);
@@ -604,27 +605,31 @@ fn handle_transfer_finished(
 /// Mark a download complete: record total size + validator + final path, set
 /// `completed_at`, and write the self-contained sidecar.
 fn finalize_completed(app: &App, media_item_id: &str, transfer: &TransferResult) {
-    let Some(conn) = app.db_conn.as_ref() else {
+    let Some(db) = app.db.as_ref() else {
         return;
     };
-    let repo = DownloadsRepo::new(conn);
-    let Ok(Some(mut row)) = repo.find(media_item_id) else {
-        return;
-    };
-    row.state = DownloadState::Completed;
-    row.fail_reason = None;
-    row.total_size = Some(transfer.total_size as i64);
-    row.byte_count = transfer.total_size as i64;
-    row.validator = transfer.validator.clone();
-    row.file_path = Some(transfer.final_path.to_string_lossy().into_owned());
-    row.completed_at = Some(iso_now());
-    if let Err(e) = repo.upsert(&row) {
-        warn!("Failed to persist completed download {media_item_id}: {e}");
-        return;
-    }
-    if let Err(e) = crate::services::download::sidecar::write_sidecar(&transfer.final_path, &row) {
-        warn!("Failed to write sidecar for {media_item_id}: {e}");
-    }
+    db.with(|conn| {
+        let mut repo = DownloadsRepo::new(conn);
+        let Ok(Some(mut row)) = repo.find(media_item_id) else {
+            return;
+        };
+        row.state = DownloadState::Completed;
+        row.fail_reason = None;
+        row.total_size = Some(transfer.total_size as i64);
+        row.byte_count = transfer.total_size as i64;
+        row.validator = transfer.validator.clone();
+        row.file_path = Some(transfer.final_path.to_string_lossy().into_owned());
+        row.completed_at = Some(iso_now());
+        if let Err(e) = repo.upsert(&row) {
+            warn!("Failed to persist completed download {media_item_id}: {e}");
+            return;
+        }
+        if let Err(e) =
+            crate::services::download::sidecar::write_sidecar(&transfer.final_path, &row)
+        {
+            warn!("Failed to write sidecar for {media_item_id}: {e}");
+        }
+    });
 }
 
 /// Pause every active transfer (disk-full recovery posture).
@@ -632,7 +637,7 @@ fn pause_all_active(app: &mut App) {
     let active: Vec<String> = app.downloads.active.keys().cloned().collect();
     for id in active {
         let events = app.downloads.queue.pause(&id);
-        persist_state(&app.db_conn, &id, DownloadState::Paused, None);
+        persist_state(&app.db, &id, DownloadState::Paused, None);
         // pause() emits CancelTransfer for the aborted task; do not reschedule
         // (the queue is paused), so only honor the cancels.
         for event in events {
@@ -656,7 +661,7 @@ fn enforce_budget(app: &mut App, now_playing_id: &str) {
         prune::select_prune_candidates(&candidates, total, Some(budget), Some(now_playing_id));
     for id in &outcome.to_prune {
         delete_download_files(app, id);
-        persist_state(&app.db_conn, id, DownloadState::Pruned, None);
+        persist_state(&app.db, id, DownloadState::Pruned, None);
         let events = app.downloads.queue.cancel(id); // remove from scheduler
         for event in events {
             if let DownloadEvent::CancelTransfer { media_item_id } = event {
@@ -670,30 +675,32 @@ fn enforce_budget(app: &mut App, now_playing_id: &str) {
 
 /// Build prune candidates by joining completed downloads with their watch state.
 fn collect_prune_candidates(app: &App) -> Vec<prune::PruneCandidate> {
-    let Some(conn) = app.db_conn.as_ref() else {
+    let Some(db) = app.db.as_ref() else {
         return Vec::new();
     };
-    let repo = DownloadsRepo::new(conn);
-    let Ok(completed) = repo.list_completed_oldest_first() else {
-        return Vec::new();
-    };
-    let watch_repo = crate::db::watch_progress_repo::WatchProgressRepo::new(conn);
-    completed
-        .into_iter()
-        .map(|d| {
-            let progress = watch_repo.find_by_media_id(&d.media_item_id).ok().flatten();
-            let (watched, last_watched_at) = progress
-                .map(|p| (p.watched, Some(p.last_watched_at)))
-                .unwrap_or((false, None));
-            prune::PruneCandidate {
-                media_item_id: d.media_item_id,
-                size_bytes: d.total_size.or(Some(d.byte_count)).unwrap_or(0).max(0) as u64,
-                watched,
-                last_watched_at,
-                completed_at: d.completed_at,
-            }
-        })
-        .collect()
+    db.with(|conn| {
+        let completed = match DownloadsRepo::new(conn).list_completed_oldest_first() {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+        let mut watch_repo = crate::db::watch_progress_repo::WatchProgressRepo::new(conn);
+        completed
+            .into_iter()
+            .map(|d| {
+                let progress = watch_repo.find_by_media_id(&d.media_item_id).ok().flatten();
+                let (watched, last_watched_at) = progress
+                    .map(|p| (p.watched, Some(p.last_watched_at)))
+                    .unwrap_or((false, None));
+                prune::PruneCandidate {
+                    media_item_id: d.media_item_id,
+                    size_bytes: d.total_size.or(Some(d.byte_count)).unwrap_or(0).max(0) as u64,
+                    watched,
+                    last_watched_at,
+                    completed_at: d.completed_at,
+                }
+            })
+            .collect()
+    })
 }
 
 /// Rebuild the pure queue from persisted rows and recover any download left
@@ -706,21 +713,23 @@ fn collect_prune_candidates(app: &App) -> Vec<prune::PruneCandidate> {
 pub fn recover_on_startup(app: &mut App) {
     // 1. Reconcile DB rows against disk (flag missing files, re-adopt sidecars).
     let folder = app.settings.downloads.effective_folder();
-    if let Some(conn) = app.db_conn.as_ref() {
-        let repo = DownloadsRepo::new(conn);
-        match crate::services::download::sidecar::verify_downloads(&repo, &folder) {
-            Ok(report) => {
-                if !report.readopted.is_empty() || !report.failed_missing.is_empty() {
-                    info!(
-                        "Download reconcile: {} re-adopted, {} missing, {} unmanaged",
-                        report.readopted.len(),
-                        report.failed_missing.len(),
-                        report.unmanaged.len()
-                    );
+    if let Some(db) = app.db.as_ref() {
+        db.with(|conn| {
+            let mut repo = DownloadsRepo::new(conn);
+            match crate::services::download::sidecar::verify_downloads(&mut repo, &folder) {
+                Ok(report) => {
+                    if !report.readopted.is_empty() || !report.failed_missing.is_empty() {
+                        info!(
+                            "Download reconcile: {} re-adopted, {} missing, {} unmanaged",
+                            report.readopted.len(),
+                            report.failed_missing.len(),
+                            report.unmanaged.len()
+                        );
+                    }
                 }
+                Err(e) => warn!("Download reconcile failed: {e}"),
             }
-            Err(e) => warn!("Download reconcile failed: {e}"),
-        }
+        });
     }
 
     // 2. Rebuild the queue from persisted rows.
@@ -756,7 +765,7 @@ pub fn recover_on_startup(app: &mut App) {
         .map(|i| i.media_item_id.clone())
         .collect::<Vec<_>>()
     {
-        persist_state(&app.db_conn, &id, DownloadState::Queued, None);
+        persist_state(&app.db, &id, DownloadState::Queued, None);
     }
     app.refresh_downloads_view();
 }

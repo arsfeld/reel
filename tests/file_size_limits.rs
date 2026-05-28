@@ -104,7 +104,7 @@ fn report_files_above_soft_target() {
         if let Some(lines) = files
             .iter()
             .find(|p| p.to_string_lossy() == *gf)
-            .map(|p| count_lines(p))
+            .map(count_lines)
         {
             grandfathered_found.push((*gf, lines));
         }

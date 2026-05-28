@@ -47,6 +47,13 @@ pub fn downloads_dir() -> PathBuf {
     data_dir().join("downloads")
 }
 
+/// Path to streaming-cache temp files: `cache_dir()/stream-cache`.
+/// Isolated from `artwork/` and from the data dir's SQLite/downloads;
+/// nothing here is meant to survive a session (see `services::stream_cache`).
+pub fn stream_cache_dir() -> PathBuf {
+    cache_dir().join("stream-cache")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,6 +97,13 @@ mod tests {
         // Parent is data_dir(), which ends with "reel".
         assert!(p.parent().unwrap().ends_with("reel"));
         assert_eq!(p.parent().unwrap(), data_dir());
+    }
+
+    #[test]
+    fn stream_cache_dir_ends_with_stream_cache() {
+        let p = stream_cache_dir();
+        assert_eq!(p.file_name().unwrap(), "stream-cache");
+        assert!(p.parent().unwrap().ends_with("reel"));
     }
 
     #[test]

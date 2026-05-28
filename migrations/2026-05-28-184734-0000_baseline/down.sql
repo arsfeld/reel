@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS watch_progress;
+DROP TABLE IF EXISTS media_items;
+DROP TABLE IF EXISTS sources;

@@ -1,0 +1,7 @@
+# Diesel CLI config (dev-time only — the app self-migrates via embed_migrations!).
+# `diesel migration run` / `diesel print-schema` regenerate src/schema.rs.
+[print_schema]
+file = "src/schema.rs"
+
+[migrations_directory]
+dir = "migrations"
