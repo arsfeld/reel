@@ -854,8 +854,13 @@ impl Component for LibraryView {
                 self.rebuild_grid(&sender);
             }
             LibraryViewMsg::DecadeFilterChanged(decade) => {
-                self.filter_state.decade =
-                    decade.map(|d| library_filter::DecadeFilter { decade_start: d });
+                // Bridge: the legacy decade dropdown maps onto the new year_range
+                // filter (decade D → years D..=D+9). Replaced by the year-range
+                // control in the filter popover (U4/U6).
+                self.filter_state.year_range = decade.map(|d| library_filter::YearRangeFilter {
+                    from: Some(d),
+                    to: Some(d + 9),
+                });
                 self.update_clear_button_visibility();
                 self.rebuild_grid(&sender);
             }
@@ -1147,6 +1152,7 @@ impl LibraryView {
             &self.search_query,
             &self.filter_state,
             self.sort_order,
+            &self.watch_data,
         );
 
         if filtered_indices.is_empty() {
@@ -1379,7 +1385,17 @@ impl LibraryView {
 
     /// Rebuild decade dropdown from current all_items.
     fn rebuild_decade_dropdown(&mut self) {
-        let decades = library_filter::extract_decades(&self.all_items);
+        // Local decade extraction (the shared helper was removed in favour of
+        // year-range filtering; this bridge stays until U6 replaces the dropdown).
+        let mut decades: Vec<i32> = self
+            .all_items
+            .iter()
+            .filter_map(|item| item.year)
+            .map(|y| (y / 10) * 10)
+            .collect();
+        decades.sort_unstable();
+        decades.dedup();
+        decades.reverse();
 
         if decades == self.current_decades {
             return;
@@ -1418,7 +1434,7 @@ impl LibraryView {
         if let Some(ref gf) = self.filter_state.genres {
             count += gf.selected_genres.len() as u32;
         }
-        if self.filter_state.decade.is_some() {
+        if self.filter_state.year_range.is_some() {
             count += 1;
         }
         if count > 0 {
