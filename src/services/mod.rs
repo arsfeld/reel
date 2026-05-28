@@ -1,5 +1,6 @@
 #[allow(dead_code)]
 pub mod artwork;
+pub mod download;
 #[allow(dead_code)]
 pub mod library_filter;
 #[allow(dead_code)]
