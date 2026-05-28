@@ -172,6 +172,13 @@ pub fn handle_play_media(
     app.now_playing = media_item.clone();
     app.last_position = 0.0;
     app.current_view = CurrentView::Player;
+    // R11: a quality override applies only to the current title. Reset the
+    // session-only state on every new title. (Stopping the prior transcode
+    // session is U10's job, on Leave/teardown.)
+    app.current_quality = crate::models::playback::QualitySelection::Auto;
+    app.active_transcode_session = None;
+    app.transcode_base_offset = 0.0;
+    app.current_decision = None;
     let title = player_title_for_item(media_item.as_ref(), &url);
     enter_player_mode(
         root,
@@ -182,10 +189,56 @@ pub fn handle_play_media(
     app.video_player.emit(VideoPlayerMsg::SetTitle(Some(title)));
     app.stack.set_visible_child_name("player");
     app.video_player.emit(VideoPlayerMsg::SetAutoplay(true));
-    app.video_player.emit(VideoPlayerMsg::SetUrl {
-        url: Some(url),
-        resume_secs: app.pending_resume.take(),
-    });
+
+    let resume_secs = app.pending_resume.take();
+
+    // For a Plex item, route through the transcode decision (R1) instead of the
+    // eager direct-play URL the component passed. The decision is async, so we
+    // defer SetUrl to the PlaybackResolved command. Non-Plex sources (local
+    // files) keep the direct URL.
+    let resolve_via_plex = media_item
+        .as_ref()
+        .map(|i| i.source_type == SourceType::Plex && i.file_path.is_some())
+        .unwrap_or(false);
+
+    if let (true, Some(item), Some(source)) = (
+        resolve_via_plex,
+        media_item.as_ref(),
+        app.active_source.clone(),
+    ) {
+        let req = crate::models::playback::PlaybackRequest {
+            rating_key: item.external_id.clone(),
+            part_key: item.file_path.clone().unwrap_or_default(),
+            media_index: 0,
+            part_index: 0,
+            quality: crate::models::playback::QualitySelection::Auto,
+            force_transcode: false,
+            audio_stream_id: None,
+            subtitle_stream_id: None,
+            offset_secs: resume_secs.unwrap_or(0.0),
+        };
+        // `url` is kept as the last-resort direct-play fallback if the decision
+        // cannot be reached (surfaced, not silent — U7).
+        let fallback_url = url.clone();
+        sender.oneshot_command(async move {
+            match source.resolve_playback(&req).await {
+                Ok(decision) => AppCmd::PlaybackResolved {
+                    decision: Box::new(decision),
+                    resume_secs,
+                },
+                Err(e) => AppCmd::PlaybackResolveFailed {
+                    message: format!("Couldn't reach the server's transcoder: {e}"),
+                    fallback_url,
+                    resume_secs,
+                },
+            }
+        });
+    } else {
+        app.video_player.emit(VideoPlayerMsg::SetUrl {
+            url: Some(url),
+            resume_secs,
+        });
+    }
 
     // Fetch skip-intro / skip-credits markers from Plex.
     if let Some(ref item) = media_item
@@ -204,6 +257,51 @@ pub fn handle_play_media(
             }
         });
     }
+}
+
+/// Handle a resolved playback decision (U7): record the session-only decision
+/// state and hand the URL to the player with the decision-kind-specific resume
+/// policy (KTD1 — transcode resumes at 0 with a base offset; direct-play seeks).
+pub fn handle_playback_resolved(
+    app: &mut App,
+    decision: Box<crate::models::playback::PlaybackDecision>,
+    resume_secs: Option<f64>,
+) {
+    let (url, resume_out, base_offset) = super::utils::set_url_for_decision(&decision, resume_secs);
+    info!(
+        "Playback resolved: {:?} (resume={:?}, base_offset={base_offset})",
+        decision.kind, resume_out
+    );
+    app.active_transcode_session = decision.session.clone();
+    app.transcode_base_offset = base_offset;
+    app.current_decision = Some(*decision);
+    app.video_player.emit(VideoPlayerMsg::SetUrl {
+        url: Some(url),
+        resume_secs: resume_out,
+    });
+}
+
+/// Handle a failed playback decision (U7). Surfaces an actionable notice (so the
+/// fallback is never silent — an incompatible file direct-playing reproduces the
+/// original bug) and attempts a last-resort direct-play so something plays. The
+/// quality menu (U9) upgrades this to a persistent banner with a force-transcode
+/// action.
+pub fn handle_playback_resolve_failed(
+    app: &mut App,
+    message: String,
+    fallback_url: String,
+    resume_secs: Option<f64>,
+    sender: &ComponentSender<App>,
+) {
+    tracing::warn!("{message}; falling back to direct play");
+    sender.input(AppMsg::ShowToast(message));
+    app.current_decision = None;
+    app.active_transcode_session = None;
+    app.transcode_base_offset = 0.0;
+    app.video_player.emit(VideoPlayerMsg::SetUrl {
+        url: Some(fallback_url),
+        resume_secs,
+    });
 }
 
 /// Handle ConnectionSaved: persist the source and wire it to all views.

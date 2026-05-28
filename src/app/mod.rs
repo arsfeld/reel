@@ -46,7 +46,10 @@ mod widget_builder;
 
 use db_helpers::{init_database, load_in_progress, load_watch_data};
 use dialogs::show_file_chooser;
-use handlers::{handle_connection_saved, handle_play_media, handle_video_output};
+use handlers::{
+    handle_connection_saved, handle_play_media, handle_playback_resolve_failed,
+    handle_playback_resolved, handle_video_output,
+};
 use player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
 use source_validation::validate_or_rediscover_source;
 use utils::iso_now;
@@ -91,6 +94,17 @@ pub struct App {
     /// Windowed player chrome (back + title) overlaid on the video page.
     player_chrome_revealer: gtk::Revealer,
     player_window_title: adw::WindowTitle,
+
+    // --- Session-only playback-quality state (R11; never persisted) ---
+    /// The current title's quality selection. Reset to Auto on each new title.
+    current_quality: crate::models::playback::QualitySelection,
+    /// The active transcode session id, if the current decision transcodes.
+    active_transcode_session: Option<String>,
+    /// Content-time offset the current transcode stream was built at. The player
+    /// adds this to playbin3's 0-based position for display/seek/scrobble (U1).
+    transcode_base_offset: f64,
+    /// The current resolved decision, for the indicator (R16) and switching.
+    current_decision: Option<crate::models::playback::PlaybackDecision>,
 }
 
 #[derive(Debug)]
@@ -159,6 +173,19 @@ pub enum AppCmd {
     Noop,
     /// Skip markers fetched from the media source after playback starts.
     SkipMarkersLoaded(SkipMarkers),
+    /// A playback decision resolved (U7): hand the URL to the player using the
+    /// decision-kind-specific resume policy.
+    PlaybackResolved {
+        decision: Box<crate::models::playback::PlaybackDecision>,
+        resume_secs: Option<f64>,
+    },
+    /// The playback decision failed to resolve. Surfaces a notice and falls back
+    /// to a last-resort direct-play of `fallback_url` (not silent — R-guarded).
+    PlaybackResolveFailed {
+        message: String,
+        fallback_url: String,
+        resume_secs: Option<f64>,
+    },
 }
 
 #[relm4::component(pub)]
@@ -330,6 +357,10 @@ impl Component for App {
             mpris: mpris::spawn_mpris_server(),
             player_chrome_revealer,
             player_window_title,
+            current_quality: crate::models::playback::QualitySelection::Auto,
+            active_transcode_session: None,
+            transcode_base_offset: 0.0,
+            current_decision: None,
         };
 
         // Show a loading page on the home view while async validation runs.
@@ -677,6 +708,9 @@ impl Component for App {
         }
     }
 
+    // Command dispatcher; grows one arm per async command type (see init /
+    // handle_video_output for the same allow).
+    #[allow(clippy::too_many_lines)]
     fn update_cmd(
         &mut self,
         cmd: Self::CommandOutput,
@@ -799,6 +833,15 @@ impl Component for App {
                 self.video_player
                     .emit(VideoPlayerMsg::SetSkipMarkers(markers));
             }
+            AppCmd::PlaybackResolved {
+                decision,
+                resume_secs,
+            } => handle_playback_resolved(self, decision, resume_secs),
+            AppCmd::PlaybackResolveFailed {
+                message,
+                fallback_url,
+                resume_secs,
+            } => handle_playback_resolve_failed(self, message, fallback_url, resume_secs, &sender),
             AppCmd::Noop => {}
         }
     }

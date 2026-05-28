@@ -71,3 +71,80 @@ pub fn urlencoding_decode(s: &str) -> String {
     }
     out
 }
+
+/// Map a resolved [`PlaybackDecision`] plus the desired resume position into the
+/// `SetUrl` parameters and the transcode base offset. Pure so the play-path
+/// resume policy (the load-bearing KTD1 decision) is unit-testable.
+///
+/// Returns `(url, resume_secs, base_offset_secs)`:
+/// - **Direct-play:** the raw file timeline 0 == content 0, so the player seeks
+///   client-side to `position` (`resume_secs = position`); `base_offset = 0`.
+/// - **Transcode / direct-stream:** the stream is built at `offset = position`
+///   and `playbin3` reports position from 0 (U1 finding), so `resume_secs = 0`
+///   (no double-seek) and the player adds `base_offset = position` for the
+///   displayed position / seek bar / scrobble. (Within U5's ≤12s offset clamp,
+///   `base_offset` is effectively the start.)
+pub fn set_url_for_decision(
+    decision: &crate::models::playback::PlaybackDecision,
+    resume_secs: Option<f64>,
+) -> (String, Option<f64>, f64) {
+    use crate::models::playback::PlaybackDecisionKind;
+    let position = resume_secs.unwrap_or(0.0);
+    match decision.kind {
+        PlaybackDecisionKind::DirectPlay => (decision.url.clone(), resume_secs, 0.0),
+        PlaybackDecisionKind::Transcode | PlaybackDecisionKind::DirectStream => {
+            (decision.url.clone(), Some(0.0), position)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::playback::{PlaybackDecision, PlaybackDecisionKind};
+
+    fn decision(kind: PlaybackDecisionKind) -> PlaybackDecision {
+        PlaybackDecision {
+            kind,
+            url: "https://h/x?X-Plex-Token=t".into(),
+            session: Some("s".into()),
+            video_resolution: Some("720p".into()),
+            video_bitrate_kbps: Some(1877),
+            throttled: false,
+        }
+    }
+
+    #[test]
+    fn direct_play_seeks_to_position_no_base_offset() {
+        let (_url, resume, base) =
+            set_url_for_decision(&decision(PlaybackDecisionKind::DirectPlay), Some(2530.0));
+        assert_eq!(resume, Some(2530.0));
+        assert_eq!(base, 0.0);
+    }
+
+    #[test]
+    fn transcode_resumes_at_zero_with_base_offset() {
+        // KTD1: server offset already applied; resume_secs=0 avoids a double
+        // jump (a switch at 2530s lands at content 2530s, not ~5060s/EOF).
+        let (_url, resume, base) =
+            set_url_for_decision(&decision(PlaybackDecisionKind::Transcode), Some(2530.0));
+        assert_eq!(resume, Some(0.0));
+        assert_eq!(base, 2530.0);
+    }
+
+    #[test]
+    fn direct_stream_uses_transcode_resume_policy() {
+        let (_url, resume, base) =
+            set_url_for_decision(&decision(PlaybackDecisionKind::DirectStream), Some(100.0));
+        assert_eq!(resume, Some(0.0));
+        assert_eq!(base, 100.0);
+    }
+
+    #[test]
+    fn no_resume_position_is_zero_everywhere() {
+        let (_u, resume, base) =
+            set_url_for_decision(&decision(PlaybackDecisionKind::Transcode), None);
+        assert_eq!(resume, Some(0.0));
+        assert_eq!(base, 0.0);
+    }
+}
