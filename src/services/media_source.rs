@@ -5,6 +5,7 @@ use crate::models::{
     hub::MediaHub,
     library::LibrarySection,
     media::{MediaItem, SourceType},
+    playback::{PlaybackDecision, PlaybackRequest},
 };
 use crate::player::SkipMarkers;
 
@@ -38,6 +39,19 @@ pub trait MediaSource: Send + Sync {
     async fn children(&self, rating_key: &str) -> Result<Vec<MediaItem>, SourceError>;
     fn playback_url(&self, part_key: &str) -> String;
     fn artwork_url(&self, path: &str, width: u32, height: u32) -> String;
+
+    /// Resolve how to play an item: ask the source's transcode decision engine
+    /// and return the URL to hand the pipeline plus decision metadata (R1/R3/R4).
+    /// Sources without a transcoder inherit this default and fall back to the
+    /// direct-play [`Self::playback_url`]. Mirrors the `skip_markers` pattern.
+    async fn resolve_playback(
+        &self,
+        _req: &PlaybackRequest,
+    ) -> Result<PlaybackDecision, SourceError> {
+        Err(SourceError::NotSupported(
+            "Playback resolution not supported by this source".into(),
+        ))
+    }
 
     /// Fetch collections for a library section. Default: not supported.
     async fn collections(&self, _library_key: &str) -> Result<Vec<MediaItem>, SourceError> {
