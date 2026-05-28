@@ -4,6 +4,7 @@ pub mod convert;
 pub mod error;
 pub mod models;
 pub mod source;
+pub mod transcode;
 pub mod transcode_profile;
 
 #[cfg(test)]

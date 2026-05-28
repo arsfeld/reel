@@ -45,6 +45,16 @@ generic HTTP 400** on the universal transcoder:
    put the client id in the transcode/decision query string.
 2. **`hasMDE=1` in the query → 400.** The decision endpoint works with the *same* query
    as `start.m3u8` **minus `hasMDE`**. Omit it.
+3. **`X-Plex-Platform` is required AND value-validated** (found while validating U5).
+   Omitting it 400s both `decision` and `start.m3u8`. The *value* is checked:
+   `Generic` and `Chrome` are accepted, but **`Linux` is rejected with 400**. It must be
+   a **query** param (GStreamer fetches `start.m3u8` + segments from the URL, not via the
+   client's headers), so `PlexClient`'s header platform is irrelevant here. U5 sends
+   `X-Plex-Platform=Generic` in the query.
+
+Keepalive confirmed: `GET /video/:/transcode/universal/ping?session=<id>` returns 200 on a
+live session (the U1 404 was just an absent session). `/stop` likewise 200 on a live
+session, 404 once reaped (treat as success).
 
 With those two omitted, the string-replace `start.m3u8`→`decision` approach (KTD3) works
 and returns a parseable decision. A minimal working query (from `python-plexapi`):
