@@ -1,7 +1,7 @@
 ---
 title: "feat: Detail page Liquid Glass polish — hero restructure, layout fixes, CSS hygiene"
 date: 2026-05-27
-status: active
+status: completed
 type: feat
 origin: docs/brainstorms/2026-05-27-detail-page-liquid-glass-polish-requirements.md
 ---
