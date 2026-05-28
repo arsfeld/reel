@@ -37,6 +37,7 @@ use crate::settings::Settings;
 
 mod db_helpers;
 mod dialogs;
+mod download_handlers;
 mod handlers;
 mod player_ui;
 mod source_validation;
@@ -46,6 +47,7 @@ mod widget_builder;
 
 use db_helpers::{init_database, load_in_progress, load_watch_data};
 use dialogs::show_file_chooser;
+use download_handlers::{DownloadItemAction, DownloadManager, DownloadRunnerMsg};
 use handlers::{handle_connection_saved, handle_play_media, handle_video_output};
 use player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
 use source_validation::validate_or_rediscover_source;
@@ -91,6 +93,8 @@ pub struct App {
     /// Windowed player chrome (back + title) overlaid on the video page.
     player_chrome_revealer: gtk::Revealer,
     player_window_title: adw::WindowTitle,
+    /// Offline-download manager: pure queue + in-flight transfer tasks.
+    downloads: DownloadManager,
 }
 
 #[derive(Debug)]
@@ -138,6 +142,20 @@ pub enum AppMsg {
     OpenPreferences,
     OpenAbout,
     MprisInput(MprisCommand),
+    /// Enqueue a single library item (movie or episode) for download.
+    EnqueueDownload(MediaItem),
+    /// A per-item download action from the Downloads UI.
+    DownloadAction {
+        media_item_id: String,
+        action: DownloadItemAction,
+    },
+    /// Reorder a queued download to a new position.
+    ReorderDownload {
+        media_item_id: String,
+        new_index: usize,
+    },
+    /// Progress / completion streamed from a background transfer task.
+    DownloadRunner(DownloadRunnerMsg),
 }
 
 #[derive(Debug)]
@@ -180,6 +198,8 @@ impl Component for App {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let settings = Settings::load();
+        let (downloads, download_rx) =
+            DownloadManager::new(settings.downloads.effective_concurrency());
         let video_player = VideoPlayer::builder()
             .launch(VideoPlayerInit {
                 preferred_subtitle_lang: settings.subtitles.preferred_language.clone(),
@@ -326,7 +346,21 @@ impl Component for App {
             mpris: mpris::spawn_mpris_server(),
             player_chrome_revealer,
             player_window_title,
+            downloads,
         };
+
+        // Reconcile downloads against disk and rebuild the queue (no transfers
+        // start until the source validates — see download_handlers::start_pending).
+        download_handlers::recover_on_startup(&mut model);
+
+        // Relay transfer-task progress from tokio to the GTK main loop.
+        let sender_dl = sender.input_sender().clone();
+        let mut download_rx = download_rx;
+        glib::spawn_future_local(async move {
+            while let Some(msg) = download_rx.recv().await {
+                let _ = sender_dl.send(AppMsg::DownloadRunner(msg));
+            }
+        });
 
         // Show a loading page on the home view while async validation runs.
         if has_sources {
@@ -657,6 +691,24 @@ impl Component for App {
                     root.close();
                 }
             },
+            AppMsg::EnqueueDownload(item) => {
+                download_handlers::enqueue_download(self, &item);
+            }
+            AppMsg::DownloadAction {
+                media_item_id,
+                action,
+            } => {
+                download_handlers::item_action(self, &media_item_id, action);
+            }
+            AppMsg::ReorderDownload {
+                media_item_id,
+                new_index,
+            } => {
+                download_handlers::reorder_download(self, &media_item_id, new_index);
+            }
+            AppMsg::DownloadRunner(msg) => {
+                download_handlers::handle_runner_msg(self, msg);
+            }
         }
     }
 
@@ -763,6 +815,9 @@ impl Component for App {
                 self.home_view.emit(HomeViewMsg::SetConnecting(false));
                 // A specific library loads when the user picks it from the
                 // sidebar; the default view is Home, so no eager load here.
+
+                // The source is live — start any queued/recovered downloads.
+                download_handlers::start_pending(self);
             }
             AppCmd::LibrariesLoaded(libraries) => {
                 self.sidebar.emit(SidebarMsg::SetLibraries(libraries));
