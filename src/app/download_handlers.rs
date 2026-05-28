@@ -55,6 +55,7 @@ pub enum DownloadRunnerMsg {
 }
 
 pub use crate::components::downloads::DownloadItemAction;
+use crate::components::downloads::DownloadsViewMsg;
 
 /// How a failed transfer should affect the queue and UI, derived purely from
 /// the failure cause. Each `FailReason` maps to a distinct recovery posture
@@ -546,7 +547,7 @@ pub fn handle_runner_msg(app: &mut App, msg: DownloadRunnerMsg) {
         DownloadRunnerMsg::Progress {
             media_item_id,
             downloaded,
-            ..
+            total,
         } => {
             // Advisory byte count for the UI; the authoritative offset is the
             // on-disk `.part` length, so we only update the counter.
@@ -555,11 +556,25 @@ pub fn handle_runner_msg(app: &mut App, msg: DownloadRunnerMsg) {
                     let mut repo = DownloadsRepo::new(conn);
                     if let Ok(Some(mut row)) = repo.find(&media_item_id) {
                         row.byte_count = downloaded as i64;
+                        // Persist the total once it's known (from Content-Length)
+                        // so a structural rebuild — e.g. a sibling completing —
+                        // renders the right fraction rather than resetting the bar.
+                        if row.total_size.is_none()
+                            && let Some(t) = total
+                        {
+                            row.total_size = Some(t as i64);
+                        }
                         let _ = repo.upsert(&row);
                     }
                 });
             }
-            app.refresh_downloads_view();
+            // Update just this row in place instead of rebuilding the whole
+            // listbox on every tick (a rebuild would also drop/reload posters).
+            app.downloads_view.emit(DownloadsViewMsg::Progress {
+                media_item_id,
+                downloaded,
+                total,
+            });
         }
         DownloadRunnerMsg::Finished {
             media_item_id,

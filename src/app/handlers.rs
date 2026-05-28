@@ -365,6 +365,11 @@ pub fn handle_connection_saved(
             artwork_cache.clone(),
         ),
     );
+    app.downloads_view
+        .emit(crate::components::downloads::DownloadsViewMsg::SetSource(
+            source.clone(),
+            artwork_cache.clone(),
+        ));
     app.show_detail.emit(
         crate::components::detail::show_detail::ShowDetailMsg::SetSource(source, artwork_cache),
     );
