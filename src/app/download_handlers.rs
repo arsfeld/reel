@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use relm4::ComponentController;
 use rusqlite::Connection;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -53,19 +54,7 @@ pub enum DownloadRunnerMsg {
     },
 }
 
-/// Per-item action requested from the Downloads UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Constructed by the Downloads UI (U13/U14).
-pub enum DownloadItemAction {
-    Pause,
-    Resume,
-    /// Cancel an in-flight/queued download and discard its partial file.
-    Cancel,
-    /// Delete a completed (or any) download, removing its files.
-    Delete,
-    /// Retry a failed download.
-    Retry,
-}
+pub use crate::components::downloads::DownloadItemAction;
 
 /// How a failed transfer should affect the queue and UI, derived purely from
 /// the failure cause. Each `FailReason` maps to a distinct recovery posture
@@ -250,9 +239,26 @@ impl App {
         self.toast_overlay.add_toast(toast);
     }
 
-    /// Push the current download state to the Downloads view. The view is wired
-    /// in U13; until then this is a no-op that keeps the call sites stable.
-    pub(super) fn refresh_downloads_view(&self) {}
+    /// Push the current download state and banner flags to the Downloads view.
+    pub(super) fn refresh_downloads_view(&self) {
+        use crate::components::downloads::DownloadsViewMsg;
+        let (downloads, groups) = match self.db_conn.as_ref() {
+            Some(conn) => {
+                let repo = DownloadsRepo::new(conn);
+                (
+                    repo.list_all().unwrap_or_default(),
+                    repo.list_groups().unwrap_or_default(),
+                )
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        self.downloads_view.emit(DownloadsViewMsg::SetDownloads {
+            downloads,
+            groups,
+            over_budget_warning: self.downloads.over_budget_warning,
+            disk_full: self.downloads.disk_full,
+        });
+    }
 }
 
 // --- handler free functions (operate on &mut App, keep update() thin) ---
