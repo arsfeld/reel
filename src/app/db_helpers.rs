@@ -11,6 +11,16 @@ use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::media::MediaItem;
 use crate::models::watch::WatchProgress;
 
+/// Reclaim streaming-cache temp files orphaned by a previous crash or unclean
+/// exit. A clean stop removes its own temp file via `downloadbuffer`'s
+/// `temp-remove=true` default; this blunt sweep of the whole stream-cache dir
+/// is the backstop for crashes. Failures are logged inside `reclaim`, never
+/// fatal — a cache sweep must not block startup. Call before any playback
+/// pipeline can begin writing a new temp file.
+pub fn reclaim_stream_cache() {
+    crate::services::stream_cache::reclaim(&config::stream_cache_dir());
+}
+
 pub fn init_database() -> Option<Connection> {
     let db_path = config::db_path();
 
