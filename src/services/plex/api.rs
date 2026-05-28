@@ -47,11 +47,47 @@ impl PlexClient {
         }
     }
 
+    /// GET a URL, retrying transient connection/timeout errors with a short
+    /// backoff. The first request after a cold start (uncached DNS for
+    /// `*.plex.direct`, a LAN/VPN route still coming up, TLS session warm-up)
+    /// often fails before the connection is ready; retrying here means callers
+    /// get a connection that "just works" once the server is reachable, rather
+    /// than each call site implementing its own retry. HTTP status errors
+    /// (401/404/5xx) are returned immediately — they are not transient.
+    async fn request(&self, url: &str) -> Result<reqwest::Response, PlexError> {
+        const ATTEMPTS: u32 = 3;
+        const BACKOFF_MS: u64 = 600;
+        let mut last_err: Option<reqwest::Error> = None;
+        for attempt in 1..=ATTEMPTS {
+            match self.http.get(url).send().await {
+                Ok(resp) => {
+                    Self::check_status(&resp)?;
+                    return Ok(resp);
+                }
+                Err(e) if e.is_connect() || e.is_timeout() => {
+                    tracing::debug!(
+                        "Plex request transient error (attempt {attempt}/{ATTEMPTS}): {e}"
+                    );
+                    last_err = Some(e);
+                    if attempt < ATTEMPTS {
+                        tokio::time::sleep(std::time::Duration::from_millis(BACKOFF_MS)).await;
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err(last_err.map(PlexError::from).unwrap_or_else(|| {
+            PlexError::Server {
+                status: 0,
+                message: "request failed".into(),
+            }
+        }))
+    }
+
     /// Test the connection to the Plex server.
     pub async fn test_connection(&self) -> Result<String, PlexError> {
         let url = format!("{}/", self.base_url);
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         // Return the server name from the response
         let body: serde_json::Value = resp.json().await?;
         let name = body["MediaContainer"]["friendlyName"]
@@ -65,8 +101,7 @@ impl PlexClient {
     pub async fn libraries(&self) -> Result<Vec<PlexLibrary>, PlexError> {
         let start = std::time::Instant::now();
         let url = format!("{}/library/sections", self.base_url);
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         let body: PlexLibraryResponse = resp.json().await?;
         tracing::info!(
             "PlexClient::libraries() -> {} sections in {:?}",
@@ -80,15 +115,12 @@ impl PlexClient {
     pub async fn library_items(&self, library_key: &str) -> Result<Vec<PlexMetadata>, PlexError> {
         let start = std::time::Instant::now();
         let url = format!("{}/library/sections/{}/all", self.base_url, library_key);
-        let resp = self.http.get(&url).send().await?;
-        let http_elapsed = start.elapsed();
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         let body: PlexMetadataResponse = resp.json().await?;
         tracing::info!(
-            "PlexClient::library_items(key={}) -> {} items (http: {:?}, total: {:?})",
+            "PlexClient::library_items(key={}) -> {} items in {:?}",
             library_key,
             body.media_container.metadata.len(),
-            http_elapsed,
             start.elapsed()
         );
         Ok(body.media_container.metadata)
@@ -97,8 +129,7 @@ impl PlexClient {
     /// Get metadata for a specific item.
     pub async fn metadata(&self, rating_key: &str) -> Result<PlexMetadata, PlexError> {
         let url = format!("{}/library/metadata/{}", self.base_url, rating_key);
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         let body: PlexMetadataResponse = resp.json().await?;
         body.media_container
             .metadata
@@ -110,8 +141,7 @@ impl PlexClient {
     /// Get children of an item (seasons of a show, episodes of a season).
     pub async fn children(&self, rating_key: &str) -> Result<Vec<PlexMetadata>, PlexError> {
         let url = format!("{}/library/metadata/{}/children", self.base_url, rating_key);
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         let body: PlexMetadataResponse = resp.json().await?;
         Ok(body.media_container.metadata)
     }
@@ -119,8 +149,7 @@ impl PlexClient {
     /// Get chapter markers for a media item.
     pub async fn chapters(&self, rating_key: &str) -> Result<Vec<PlexChapter>, PlexError> {
         let url = format!("{}/library/metadata/{}/chapters", self.base_url, rating_key);
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         let body: PlexChapterResponse = resp.json().await?;
         Ok(body.media_container.chapters)
     }
@@ -131,8 +160,7 @@ impl PlexClient {
             "{}/library/sections/{}/collections",
             self.base_url, library_key
         );
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         let body: PlexMetadataResponse = resp.json().await?;
         Ok(body.media_container.metadata)
     }
@@ -146,8 +174,7 @@ impl PlexClient {
             "{}/library/collections/{}/children",
             self.base_url, collection_key
         );
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         let body: PlexMetadataResponse = resp.json().await?;
         Ok(body.media_container.metadata)
     }
@@ -189,8 +216,7 @@ impl PlexClient {
             "{}/:/timeline?ratingKey={}&key=/library/metadata/{}&state={}&time={}&duration={}&identifier=com.plexapp.plugins.library",
             self.base_url, rating_key, rating_key, state, time_ms, duration_ms
         );
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         Ok(())
     }
 
@@ -200,8 +226,7 @@ impl PlexClient {
             "{}/:/scrobble?key={}&identifier=com.plexapp.plugins.library",
             self.base_url, rating_key
         );
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         Ok(())
     }
 
@@ -211,16 +236,14 @@ impl PlexClient {
             "{}/:/unscrobble?key={}&identifier=com.plexapp.plugins.library",
             self.base_url, rating_key
         );
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         Ok(())
     }
 
     /// Get on-deck (continue watching) items.
     pub async fn on_deck(&self) -> Result<Vec<PlexMetadata>, PlexError> {
         let url = format!("{}/library/onDeck", self.base_url);
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         let body: PlexMetadataResponse = resp.json().await?;
         Ok(body.media_container.metadata)
     }
@@ -228,8 +251,7 @@ impl PlexClient {
     /// Get recently added items across all libraries.
     pub async fn recently_added(&self) -> Result<Vec<PlexMetadata>, PlexError> {
         let url = format!("{}/library/recentlyAdded", self.base_url);
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         let body: PlexMetadataResponse = resp.json().await?;
         Ok(body.media_container.metadata)
     }
@@ -243,8 +265,7 @@ impl PlexClient {
             "{}/library/sections/{}/recentlyAdded",
             self.base_url, library_key
         );
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         let body: PlexMetadataResponse = resp.json().await?;
         Ok(body.media_container.metadata)
     }
@@ -254,8 +275,7 @@ impl PlexClient {
     /// rows) computed server-side.
     pub async fn hubs(&self) -> Result<Vec<PlexHub>, PlexError> {
         let url = format!("{}/hubs", self.base_url);
-        let resp = self.http.get(&url).send().await?;
-        Self::check_status(&resp)?;
+        let resp = self.request(&url).await?;
         let body: PlexHubResponse = resp.json().await?;
         Ok(body.media_container.hubs)
     }

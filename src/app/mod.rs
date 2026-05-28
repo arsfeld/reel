@@ -715,15 +715,11 @@ impl Component for App {
                     self.settings.library_visibility.hidden.clone(),
                 ));
                 {
+                    // The PlexClient absorbs cold-start connection retries, so a
+                    // single fetch here is enough once the source is validated.
                     let src = plex_source.clone();
                     sender.oneshot_command(async move {
-                        match src.libraries().await {
-                            Ok(libs) => AppCmd::LibrariesLoaded(libs),
-                            Err(e) => {
-                                tracing::warn!("Failed to load libraries for sidebar: {e}");
-                                AppCmd::LibrariesLoaded(Vec::new())
-                            }
-                        }
+                        AppCmd::LibrariesLoaded(src.libraries().await.unwrap_or_default())
                     });
                 }
 
