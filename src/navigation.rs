@@ -13,6 +13,8 @@ pub enum CurrentView {
     ShowDetail(String),
     /// Collections list
     Collections,
+    /// Offline downloads list (top-level, source-independent).
+    Downloads,
     /// Collection detail page (items in a collection)
     CollectionDetail(String),
     /// Video player

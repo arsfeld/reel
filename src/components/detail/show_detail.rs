@@ -6,7 +6,7 @@ use adw::prelude::*;
 use relm4::prelude::*;
 use tracing::info;
 
-use crate::config;
+use crate::db::database::Database;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::detail::MediaDetail;
 use crate::models::media::{MediaItem, MediaType};
@@ -22,6 +22,7 @@ pub struct ShowDetail {
     selected_season: u32,
     source: Option<Arc<dyn MediaSource>>,
     artwork_cache: Option<Arc<ArtworkCache>>,
+    db: Option<Database>,
     watch_progress: HashMap<String, WatchProgress>,
     // Widgets
     title_label: gtk::Label,
@@ -65,8 +66,11 @@ pub struct ShowDetail {
 pub enum ShowDetailMsg {
     LoadShow(MediaItem),
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
+    SetDb(Database),
     SelectSeason(u32),
     PlayEpisode(usize),
+    /// Download the currently-loaded season's episodes as a group.
+    DownloadSeason,
     SeasonsLoaded(Vec<MediaItem>),
     EpisodesLoaded(Vec<MediaItem>),
     LoadError(String),
@@ -77,8 +81,10 @@ impl std::fmt::Debug for ShowDetailMsg {
         match self {
             Self::LoadShow(item) => write!(f, "LoadShow({})", item.title),
             Self::SetSource(..) => write!(f, "SetSource(..)"),
+            Self::SetDb(..) => write!(f, "SetDb(..)"),
             Self::SelectSeason(idx) => write!(f, "SelectSeason({idx})"),
             Self::PlayEpisode(idx) => write!(f, "PlayEpisode({idx})"),
+            Self::DownloadSeason => write!(f, "DownloadSeason"),
             Self::SeasonsLoaded(s) => write!(f, "SeasonsLoaded({} seasons)", s.len()),
             Self::EpisodesLoaded(e) => write!(f, "EpisodesLoaded({} episodes)", e.len()),
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
@@ -91,6 +97,12 @@ pub enum ShowDetailOutput {
     PlayMedia {
         url: String,
         media_item: Box<Option<crate::models::media::MediaItem>>,
+    },
+    /// Enqueue a show/season download: snapshot the current episode set.
+    DownloadGroup {
+        parent: Box<MediaItem>,
+        episodes: Vec<MediaItem>,
+        scope: crate::models::download::GroupScope,
     },
     Error(String),
 }
@@ -273,7 +285,18 @@ impl Component for ShowDetail {
             let _ = sender_play.send(ShowDetailMsg::PlayEpisode(0));
         });
 
+        let download_button = gtk::Button::builder()
+            .label("⤓  Download Season")
+            .css_classes(["pill"])
+            .halign(gtk::Align::Start)
+            .build();
+        let sender_dl = sender.input_sender().clone();
+        download_button.connect_clicked(move |_| {
+            let _ = sender_dl.send(ShowDetailMsg::DownloadSeason);
+        });
+
         actions_row.append(&play_button);
+        actions_row.append(&download_button);
 
         text_column.append(&title_label);
         text_column.append(&meta_box);
@@ -467,6 +490,7 @@ impl Component for ShowDetail {
             selected_season: 0,
             source: None,
             artwork_cache: None,
+            db: None,
             watch_progress: HashMap::new(),
             title_label,
             meta_box,
@@ -506,6 +530,9 @@ impl Component for ShowDetail {
             ShowDetailMsg::SetSource(source, artwork_cache) => {
                 self.source = Some(source);
                 self.artwork_cache = Some(artwork_cache);
+            }
+            ShowDetailMsg::SetDb(db) => {
+                self.db = Some(db);
             }
             ShowDetailMsg::LoadShow(show) => {
                 info!("Loading show detail: {}", show.title);
@@ -678,14 +705,23 @@ impl Component for ShowDetail {
                 }
             }
             ShowDetailMsg::EpisodesLoaded(episodes) => {
-                // Load watch progress for each episode
+                // Load watch progress for each episode from the shared connection.
                 self.watch_progress.clear();
-                if let Ok(conn) = rusqlite::Connection::open(config::db_path()) {
-                    let repo = WatchProgressRepo::new(&conn);
-                    for ep in &episodes {
-                        if let Ok(Some(progress)) = repo.find_by_media_id(&ep.id) {
-                            self.watch_progress.insert(ep.id.clone(), progress);
-                        }
+                if let Some(db) = &self.db {
+                    let loaded: Vec<(String, WatchProgress)> = db.with(|conn| {
+                        let mut repo = WatchProgressRepo::new(conn);
+                        episodes
+                            .iter()
+                            .filter_map(|ep| {
+                                repo.find_by_media_id(&ep.id)
+                                    .ok()
+                                    .flatten()
+                                    .map(|p| (ep.id.clone(), p))
+                            })
+                            .collect()
+                    });
+                    for (id, progress) in loaded {
+                        self.watch_progress.insert(id, progress);
                     }
                 }
 
@@ -703,6 +739,25 @@ impl Component for ShowDetail {
                         url,
                         media_item: Box::new(Some(ep.clone())),
                     });
+                }
+            }
+            ShowDetailMsg::DownloadSeason => {
+                if let Some(ref show) = self.show {
+                    if self.episodes.is_empty() {
+                        let _ = sender
+                            .output(ShowDetailOutput::Error("No episodes to download".into()));
+                    } else {
+                        info!(
+                            "Queuing season download for {}: {} episodes",
+                            show.title,
+                            self.episodes.len()
+                        );
+                        let _ = sender.output(ShowDetailOutput::DownloadGroup {
+                            parent: Box::new(show.clone()),
+                            episodes: self.episodes.clone(),
+                            scope: crate::models::download::GroupScope::Season,
+                        });
+                    }
                 }
             }
             ShowDetailMsg::LoadError(msg) => {

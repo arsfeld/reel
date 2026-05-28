@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -11,7 +12,9 @@ use crate::components::library::LibraryViewMsg;
 use crate::components::player::video_player::{VideoPlayerMsg, VideoPlayerOutput};
 use crate::components::sidebar::SidebarMsg;
 use crate::config;
+use crate::db::downloads_repo::DownloadsRepo;
 use crate::db::watch_progress_repo::WatchProgressRepo;
+use crate::models::download::DownloadState;
 use crate::models::media::{MediaItem, SourceType};
 use crate::models::source::{Source, SourceConfig};
 use crate::navigation::CurrentView;
@@ -28,7 +31,7 @@ use super::AppCmd;
 use super::AppMsg;
 use super::db_helpers::load_watch_data;
 use super::player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
-use super::watch_events::dispatch_watch_events;
+use super::watch_events::{dispatch_watch_events, resume_position};
 
 /// Handle VideoOutput messages from the video player component.
 #[allow(clippy::too_many_lines)]
@@ -79,7 +82,13 @@ pub fn handle_video_output(
             let events = app
                 .watch_tracker
                 .process_position(position_secs, Instant::now());
-            dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+            dispatch_watch_events(
+                &app.db,
+                events,
+                &app.active_source,
+                app.now_playing.as_ref().map(|i| i.id.as_str()),
+                sender,
+            );
         }
         VideoPlayerOutput::StateChanged(state) => {
             let _ = app.mpris.status_tx.send(state);
@@ -94,7 +103,13 @@ pub fn handle_video_output(
                         app.last_position,
                         Instant::now(),
                     );
-                    dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+                    dispatch_watch_events(
+                        &app.db,
+                        events,
+                        &app.active_source,
+                        app.now_playing.as_ref().map(|i| i.id.as_str()),
+                        sender,
+                    );
                 }
                 PlayState::Paused | PlayState::Stopped => {
                     app.screensaver.uninhibit(root);
@@ -103,7 +118,13 @@ pub fn handle_video_output(
                         app.last_position,
                         Instant::now(),
                     );
-                    dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+                    dispatch_watch_events(
+                        &app.db,
+                        events,
+                        &app.active_source,
+                        app.now_playing.as_ref().map(|i| i.id.as_str()),
+                        sender,
+                    );
                 }
             }
         }
@@ -113,9 +134,15 @@ pub fn handle_video_output(
             let _ = app.mpris.metadata_tx.send(mpris::MprisMetadata::default());
             let _ = app.mpris.position_tx.send(0);
             let events = app.watch_tracker.stop(app.last_position);
-            dispatch_watch_events(&app.db_conn, events, &app.active_source, sender);
+            dispatch_watch_events(
+                &app.db,
+                events,
+                &app.active_source,
+                app.now_playing.as_ref().map(|i| i.id.as_str()),
+                sender,
+            );
             app.now_playing = None;
-            let watch_data = load_watch_data(&app.db_conn);
+            let watch_data = load_watch_data(&app.db);
             app.library_view
                 .emit(LibraryViewMsg::SetWatchData(watch_data));
             if app.current_view == CurrentView::Player {
@@ -210,6 +237,44 @@ fn resolve_playback_at(
     });
 }
 
+/// Decide the local file path to play, if a complete on-disk copy exists.
+///
+/// Returns `Some(path)` only for a `Completed` download whose file is present on
+/// disk; an incomplete/`Paused`/`Failed` download, a missing file, or no
+/// download row all return `None`, so Play falls back to streaming (R13). Pure
+/// so the redirect decision is testable without GTK, the DB, or a real file
+/// outside the existence flag the caller supplies.
+pub fn local_playback_path(
+    state: Option<DownloadState>,
+    file_path: Option<&str>,
+    file_exists: bool,
+) -> Option<String> {
+    match (state, file_path) {
+        (Some(DownloadState::Completed), Some(path)) if file_exists => Some(path.to_string()),
+        _ => None,
+    }
+}
+
+/// Whether a complete local downloaded copy exists for the item (R12). When it
+/// does, Play uses it directly (no transcode decision needed).
+fn local_redirect(app: &App, item: Option<&MediaItem>) -> Option<String> {
+    let item = item?;
+    let db = app.db.as_ref()?;
+    let d = db
+        .with(|conn| DownloadsRepo::new(conn).find(&item.id))
+        .ok()
+        .flatten()?;
+    let exists = d
+        .file_path
+        .as_deref()
+        .map(|p| Path::new(p).exists())
+        .unwrap_or(false);
+    local_playback_path(Some(d.state), d.file_path.as_deref(), exists).map(|local| {
+        info!("Playing local downloaded copy for {}", item.id);
+        format!("file://{local}")
+    })
+}
+
 /// Handle PlayMedia: set up the player for a new media URL.
 pub fn handle_play_media(
     app: &mut App,
@@ -219,21 +284,38 @@ pub fn handle_play_media(
     root: &adw::ApplicationWindow,
 ) {
     info!("Playing media: {}...", &url[..url.len().min(80)]);
-    // Resume where playback left off, preferring the source's own offset (e.g.
-    // Plex view offset) so it stays in sync across devices; fall back to locally
-    // tracked progress only when the source reports none.
+    // Resume where playback left off. For a downloaded item watched offline, an
+    // unsynced offline position wins over the source's (stale) offset — the one
+    // sanctioned inversion of "Plex is authoritative". Otherwise the source
+    // offset wins, then locally tracked progress. A source-`watched` item drops
+    // the offline mid-progress (latest-state-wins).
     app.pending_resume = None;
     if let Some(ref item) = media_item {
-        app.pending_resume = item.resume_position_secs().or_else(|| {
-            let conn = app.db_conn.as_ref()?;
-            let repo = WatchProgressRepo::new(conn);
-            repo.find_by_media_id(&item.id)
-                .ok()
-                .flatten()
-                .filter(|progress| progress.should_show_resume())
-                .map(|progress| progress.resume_position())
-        });
+        let source_offset = item.resume_position_secs();
+        let (offline_pending, local_tracked) = match app.db.as_ref() {
+            Some(db) => db.with(|conn| {
+                let offline = DownloadsRepo::new(conn)
+                    .latest_pending_sync_for(&item.id)
+                    .ok()
+                    .flatten()
+                    .map(|p| p.position_ms as f64 / 1000.0);
+                let local = WatchProgressRepo::new(conn)
+                    .find_by_media_id(&item.id)
+                    .ok()
+                    .flatten()
+                    .filter(|progress| progress.should_show_resume())
+                    .map(|progress| progress.resume_position());
+                (offline, local)
+            }),
+            None => (None, None),
+        };
+        app.pending_resume =
+            resume_position(source_offset, offline_pending, local_tracked, item.watched);
     }
+    // Prefer a complete local downloaded copy when one exists; otherwise the
+    // source decides (transcode/direct stream). This is the single Play choke
+    // point (R12/R13).
+    let local_url = local_redirect(app, media_item.as_ref());
     app.now_playing = media_item.clone();
     app.last_position = 0.0;
     app.current_view = CurrentView::Player;
@@ -254,62 +336,72 @@ pub fn handle_play_media(
     app.video_player.emit(VideoPlayerMsg::SetTitle(Some(title)));
     app.stack.set_visible_child_name("player");
     app.video_player.emit(VideoPlayerMsg::SetAutoplay(true));
-
     let resume_secs = app.pending_resume.take();
 
-    // For a Plex item, route through the transcode decision (R1) instead of the
-    // eager direct-play URL the component passed. The decision is async, so we
-    // defer SetUrl to the PlaybackResolved command. Non-Plex sources (local
-    // files) keep the direct URL.
-    let resolve_via_plex = media_item
-        .as_ref()
-        .map(|i| i.source_type == SourceType::Plex && i.file_path.is_some())
-        .unwrap_or(false);
-
-    if let (true, Some(item), Some(source)) = (
-        resolve_via_plex,
-        media_item.as_ref(),
-        app.active_source.clone(),
-    ) {
-        let req = crate::models::playback::PlaybackRequest {
-            rating_key: item.external_id.clone(),
-            part_key: item.file_path.clone().unwrap_or_default(),
-            media_index: 0,
-            part_index: 0,
-            quality: crate::models::playback::QualitySelection::Auto,
-            force_transcode: false,
-            audio_stream_id: None,
-            subtitle_stream_id: None,
-            offset_secs: resume_secs.unwrap_or(0.0),
-        };
-        // `url` is kept as the last-resort direct-play fallback if the decision
-        // cannot be reached (surfaced, not silent — U7).
-        let fallback_url = url.clone();
-        // Tag this resolve with a fresh switch epoch so a later switch can
-        // supersede the initial play if the user picks quality immediately (U8).
-        let epoch = app.switch_state.begin();
-        sender.oneshot_command(async move {
-            match source.resolve_playback(&req).await {
-                Ok(decision) => AppCmd::PlaybackResolved {
-                    decision: Box::new(decision),
-                    resume_secs,
-                    epoch,
-                },
-                Err(e) => AppCmd::PlaybackResolveFailed {
-                    message: format!("Couldn't reach the server's transcoder: {e}"),
-                    fallback_url,
-                    resume_secs,
-                    epoch,
-                },
-            }
-        });
-    } else {
+    // A complete local download plays directly — no transcode decision needed.
+    if let Some(local_url) = local_url {
         app.video_player.emit(VideoPlayerMsg::SetUrl {
-            url: Some(url),
+            url: Some(local_url),
             resume_secs,
             base_offset_secs: 0.0,
             is_transcode: false,
         });
+        // (skip-markers fetch below still runs)
+    } else {
+        // For a streamed Plex item, route through the transcode decision (R1)
+        // instead of the eager direct-play URL the component passed. The
+        // decision is async, so SetUrl is deferred to PlaybackResolved. Non-Plex
+        // sources (local files) keep the direct URL.
+        let resolve_via_plex = media_item
+            .as_ref()
+            .map(|i| i.source_type == SourceType::Plex && i.file_path.is_some())
+            .unwrap_or(false);
+
+        if let (true, Some(item), Some(source)) = (
+            resolve_via_plex,
+            media_item.as_ref(),
+            app.active_source.clone(),
+        ) {
+            let req = crate::models::playback::PlaybackRequest {
+                rating_key: item.external_id.clone(),
+                part_key: item.file_path.clone().unwrap_or_default(),
+                media_index: 0,
+                part_index: 0,
+                quality: crate::models::playback::QualitySelection::Auto,
+                force_transcode: false,
+                audio_stream_id: None,
+                subtitle_stream_id: None,
+                offset_secs: resume_secs.unwrap_or(0.0),
+            };
+            // `url` is kept as the last-resort direct-play fallback if the
+            // decision cannot be reached (surfaced, not silent — U7).
+            let fallback_url = url.clone();
+            // Tag with a fresh switch epoch so a later switch can supersede the
+            // initial play if the user picks quality immediately (U8).
+            let epoch = app.switch_state.begin();
+            sender.oneshot_command(async move {
+                match source.resolve_playback(&req).await {
+                    Ok(decision) => AppCmd::PlaybackResolved {
+                        decision: Box::new(decision),
+                        resume_secs,
+                        epoch,
+                    },
+                    Err(e) => AppCmd::PlaybackResolveFailed {
+                        message: format!("Couldn't reach the server's transcoder: {e}"),
+                        fallback_url,
+                        resume_secs,
+                        epoch,
+                    },
+                }
+            });
+        } else {
+            app.video_player.emit(VideoPlayerMsg::SetUrl {
+                url: Some(url),
+                resume_secs,
+                base_offset_secs: 0.0,
+                is_transcode: false,
+            });
+        }
     }
 
     // Fetch skip-intro / skip-credits markers from Plex.
@@ -439,7 +531,7 @@ pub fn handle_connection_saved(
     app.connection_dialog = None;
 
     // Save to database
-    if let Some(ref conn) = app.db_conn {
+    if let Some(db) = &app.db {
         let source = Source {
             id: Source::make_id(&url),
             source_type: SourceType::Plex,
@@ -452,11 +544,13 @@ pub fn handle_connection_saved(
             last_synced_at: None,
         };
 
-        let repo = crate::db::source_repo::SourceRepo::new(conn);
-        let _ = repo.delete(&source.id);
-        if let Err(e) = repo.insert(&source) {
-            tracing::warn!("Failed to save source: {e}");
-        }
+        db.with(|conn| {
+            let mut repo = crate::db::source_repo::SourceRepo::new(conn);
+            let _ = repo.delete(&source.id);
+            if let Err(e) = repo.insert(&source) {
+                tracing::warn!("Failed to save source: {e}");
+            }
+        });
     }
 
     let client = PlexClient::new(&url, &token).with_remote(is_remote);
@@ -507,10 +601,60 @@ pub fn handle_connection_saved(
     );
 
     // Send watch data to library view
-    let watch_data = load_watch_data(&app.db_conn);
+    let watch_data = load_watch_data(&app.db);
     app.library_view
         .emit(LibraryViewMsg::SetWatchData(watch_data));
     // A library loads when picked from the sidebar; the default view is Home.
 
     sender.input(AppMsg::ShowToast(format!("Connected to {name}")));
+
+    // Flush any offline-recorded progress back to the source on (re)connect.
+    super::watch_events::flush_pending_sync(app, sender);
+
+    // The source is live — start any queued/recovered downloads.
+    super::download_handlers::start_pending(app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_with_existing_file_plays_local() {
+        // Covers the centralized redirect decision: complete copy present.
+        assert_eq!(
+            local_playback_path(Some(DownloadState::Completed), Some("/dl/m1.mkv"), true),
+            Some("/dl/m1.mkv".to_string())
+        );
+    }
+
+    #[test]
+    fn completed_but_file_missing_streams() {
+        // Covers AE3: local file deleted externally -> fall back to streaming.
+        assert_eq!(
+            local_playback_path(Some(DownloadState::Completed), Some("/dl/m1.mkv"), false),
+            None
+        );
+    }
+
+    #[test]
+    fn incomplete_or_paused_streams() {
+        for state in [
+            DownloadState::Queued,
+            DownloadState::Downloading,
+            DownloadState::Paused,
+            DownloadState::Failed,
+        ] {
+            assert_eq!(
+                local_playback_path(Some(state), Some("/dl/m1.mkv"), true),
+                None,
+                "state {state:?} must stream, not play a partial file"
+            );
+        }
+    }
+
+    #[test]
+    fn no_download_row_streams() {
+        assert_eq!(local_playback_path(None, None, false), None);
+    }
 }

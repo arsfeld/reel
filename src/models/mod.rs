@@ -1,5 +1,6 @@
 #[allow(dead_code)]
 pub mod detail;
+pub mod download;
 pub mod hub;
 pub mod library;
 pub mod media;
