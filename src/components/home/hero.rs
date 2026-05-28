@@ -17,11 +17,7 @@ pub fn hero_candidates(items: &[MediaItem], max: usize) -> Vec<MediaItem> {
 
 /// Next rotation index, wrapping at the end. Returns 0 for an empty set.
 pub fn next_index(current: usize, len: usize) -> usize {
-    if len == 0 {
-        0
-    } else {
-        (current + 1) % len
-    }
+    if len == 0 { 0 } else { (current + 1) % len }
 }
 
 /// Previous rotation index, wrapping at the start. Returns 0 for an empty set.

@@ -672,8 +672,9 @@ impl Component for App {
                     plex_source.clone(),
                     artwork_cache.clone(),
                 ));
-                self.library_view
-                    .emit(LibraryViewMsg::SetSavedUiState(self.settings.library.clone()));
+                self.library_view.emit(LibraryViewMsg::SetSavedUiState(
+                    self.settings.library.clone(),
+                ));
                 self.movie_detail.emit(MovieDetailMsg::SetSource(
                     plex_source.clone(),
                     artwork_cache.clone(),

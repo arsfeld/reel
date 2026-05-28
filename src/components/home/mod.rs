@@ -52,6 +52,7 @@ pub struct HomeView {
     loading: bool,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum HomeViewMsg {
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
     /// Show/hide the "Connecting to Plex…" loading page.
@@ -63,7 +64,10 @@ pub enum HomeViewMsg {
     LoadError(String),
     /// A card was activated. `resume` is set for Continue Watching cards, which
     /// resume playback rather than opening a detail page.
-    CardActivated { item: MediaItem, resume: bool },
+    CardActivated {
+        item: MediaItem,
+        resume: bool,
+    },
     /// Hero rotation (auto via timer, or manual via arrow keys).
     HeroAdvance,
     HeroBack,
@@ -270,6 +274,7 @@ impl Component for HomeView {
         ComponentParts { model, widgets }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
             HomeViewMsg::SetSource(source, artwork_cache) => {
@@ -330,8 +335,10 @@ impl Component for HomeView {
                             let key = lib.key.clone();
                             let title = lib.title.clone();
                             async move {
-                                let mut items =
-                                    src.recently_added_in_library(&key).await.unwrap_or_default();
+                                let mut items = src
+                                    .recently_added_in_library(&key)
+                                    .await
+                                    .unwrap_or_default();
                                 items.truncate(20);
                                 (title, items)
                             }
@@ -381,18 +388,17 @@ impl Component for HomeView {
             }
             HomeViewMsg::CardActivated { item, resume } => {
                 let should_play = item.file_path.is_some()
-                    && (resume
-                        || item.media_type == crate::models::media::MediaType::Episode);
-                if should_play {
-                    if let (Some(source), Some(part)) = (self.source.as_ref(), item.file_path.as_ref())
-                    {
-                        let url = source.playback_url(part);
-                        let _ = sender.output(HomeViewOutput::PlayMedia {
-                            url,
-                            media_item: item,
-                        });
-                        return;
-                    }
+                    && (resume || item.media_type == crate::models::media::MediaType::Episode);
+                if should_play
+                    && let (Some(source), Some(part)) =
+                        (self.source.as_ref(), item.file_path.as_ref())
+                {
+                    let url = source.playback_url(part);
+                    let _ = sender.output(HomeViewOutput::PlayMedia {
+                        url,
+                        media_item: item,
+                    });
+                    return;
                 }
                 let _ = sender.output(HomeViewOutput::ShowDetail(item));
             }
@@ -509,10 +515,10 @@ impl Component for HomeView {
                 if !poster_result_is_current(generation, self.build_generation) {
                     return;
                 }
-                if let Some(shelf) = self.shelves.iter().find(|s| s.id == shelf_id) {
-                    if let Some((card, _)) = shelf.cards.get(index) {
-                        card.set_poster(&texture);
-                    }
+                if let Some(shelf) = self.shelves.iter().find(|s| s.id == shelf_id)
+                    && let Some((card, _)) = shelf.cards.get(index)
+                {
+                    card.set_poster(&texture);
                 }
             }
             HomeViewCmd::HeroBackdropLoaded { token, texture } => {
@@ -658,10 +664,10 @@ impl HomeView {
         let cache = cache.clone();
         let cmd_sender = sender.command_sender().clone();
         gtk::glib::spawn_future_local(async move {
-            if let Ok(path) = cache.get_or_download(&url).await {
-                if let Ok(texture) = gtk::gdk::Texture::from_filename(&path) {
-                    let _ = cmd_sender.send(HomeViewCmd::HeroBackdropLoaded { token, texture });
-                }
+            if let Ok(path) = cache.get_or_download(&url).await
+                && let Ok(texture) = gtk::gdk::Texture::from_filename(&path)
+            {
+                let _ = cmd_sender.send(HomeViewCmd::HeroBackdropLoaded { token, texture });
             }
         });
     }

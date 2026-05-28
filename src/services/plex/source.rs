@@ -380,7 +380,9 @@ mod tests {
         let server = wiremock::MockServer::start().await;
 
         wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .and(wiremock::matchers::path("/library/sections/1/recentlyAdded"))
+            .and(wiremock::matchers::path(
+                "/library/sections/1/recentlyAdded",
+            ))
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
                 r#"{"MediaContainer":{"size":2,"Metadata":[
                     {"ratingKey":"1","title":"Newest","type":"movie","year":2025},

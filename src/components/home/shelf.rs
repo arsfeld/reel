@@ -298,7 +298,9 @@ mod tests {
     #[test]
     fn hub_dedup_keeps_discovery_rows() {
         assert!(!hub_duplicates_core(Some("home.movies.recommended")));
-        assert!(!hub_duplicates_core(Some("home.television.becauseYouWatched")));
+        assert!(!hub_duplicates_core(Some(
+            "home.television.becauseYouWatched"
+        )));
         assert!(!hub_duplicates_core(Some("home.movies.genre.action")));
         assert!(!hub_duplicates_core(None));
     }
