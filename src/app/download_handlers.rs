@@ -268,6 +268,27 @@ impl App {
             over_budget_warning: self.downloads.over_budget_warning,
             disk_full: self.downloads.disk_full,
         });
+        self.push_downloaded_ids();
+    }
+
+    /// Push the set of completed-download ids to the library grid so it can show
+    /// the "downloaded" badge on cards (R14).
+    pub(super) fn push_downloaded_ids(&self) {
+        use crate::components::library::LibraryViewMsg;
+        let ids: std::collections::HashSet<String> = self
+            .db_conn
+            .as_ref()
+            .map(|conn| {
+                DownloadsRepo::new(conn)
+                    .list_by_state(DownloadState::Completed)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|d| d.media_item_id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.library_view
+            .emit(LibraryViewMsg::SetDownloadedIds(ids));
     }
 }
 

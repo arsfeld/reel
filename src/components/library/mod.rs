@@ -80,6 +80,9 @@ pub struct LibraryView {
     /// Locally tracked watch progress from the DB, used as a fallback for items
     /// whose source reports no watch state (non-Plex sources, offline play).
     local_watch_data: HashMap<String, (f64, bool)>,
+    /// Media ids with a completed offline download, for the "downloaded" badge
+    /// (R14). Pushed by the app via [`LibraryViewMsg::SetDownloadedIds`].
+    downloaded_ids: std::collections::HashSet<String>,
     /// Continue Watching section container (label + horizontal scroll).
     continue_watching_section: gtk::Box,
     /// Horizontal box inside the Continue Watching scrolled window.
@@ -133,6 +136,8 @@ pub enum LibraryViewMsg {
     LoadCollectionItems(String),
     /// Set watch progress data: media_item_id -> (progress_fraction, watched).
     SetWatchData(HashMap<String, (f64, bool)>),
+    /// Set the media ids with a completed offline download (downloaded badge).
+    SetDownloadedIds(std::collections::HashSet<String>),
     /// Mark an item at grid position as watched.
     MarkWatchedAt(u32),
     /// Mark an item at grid position as unwatched.
@@ -164,6 +169,7 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::LoadCollections => write!(f, "LoadCollections"),
             Self::LoadCollectionItems(key) => write!(f, "LoadCollectionItems({key})"),
             Self::SetWatchData(data) => write!(f, "SetWatchData({} items)", data.len()),
+            Self::SetDownloadedIds(ids) => write!(f, "SetDownloadedIds({} ids)", ids.len()),
             Self::MarkWatchedAt(pos) => write!(f, "MarkWatchedAt({pos})"),
             Self::MarkUnwatchedAt(pos) => write!(f, "MarkUnwatchedAt({pos})"),
             Self::ContextMenuAt { x, y } => write!(f, "ContextMenuAt({x}, {y})"),
@@ -655,6 +661,7 @@ impl Component for LibraryView {
             texture_cache: HashMap::new(),
             watch_data: HashMap::new(),
             local_watch_data: HashMap::new(),
+            downloaded_ids: std::collections::HashSet::new(),
             continue_watching_section,
             continue_watching_box,
             poster_load_tracker: None,
@@ -934,6 +941,12 @@ impl Component for LibraryView {
                 // Rebuild the Continue Watching shelf (independent of filters).
                 self.rebuild_continue_watching(&sender);
             }
+            LibraryViewMsg::SetDownloadedIds(ids) => {
+                self.downloaded_ids = ids;
+                if !self.all_items.is_empty() {
+                    self.rebuild_grid(&sender);
+                }
+            }
             LibraryViewMsg::LoadCollectionItems(collection_key) => {
                 self.stack.set_visible_child(&self.loading_page);
                 self.all_items.clear();
@@ -1128,6 +1141,15 @@ impl LibraryView {
             library_filter::build_effective_watch_map(&self.all_items, &self.local_watch_data);
     }
 
+    /// Apply watch + downloaded indicators to a card from current state.
+    fn apply_card_state(&self, card: &mut MediaCardData, id: &str) {
+        if let Some(&(progress, watched)) = self.watch_data.get(id) {
+            card.watch_progress = Some(progress);
+            card.watched = watched;
+        }
+        card.downloaded = self.downloaded_ids.contains(id);
+    }
+
     /// Rebuild the grid from all_items using current search/filter/sort state.
     fn rebuild_grid(&mut self, sender: &ComponentSender<Self>) {
         let start = std::time::Instant::now();
@@ -1163,10 +1185,7 @@ impl LibraryView {
             card.card_width = self.grid_density.card_width();
             card.card_height = self.grid_density.card_height();
 
-            if let Some(&(progress, watched)) = self.watch_data.get(&item.id) {
-                card.watch_progress = Some(progress);
-                card.watched = watched;
-            }
+            self.apply_card_state(&mut card, &item.id);
 
             // Build the artwork URL and check texture cache
             if let (Some(poster_path), Some(source)) = (&item.poster_path, &source) {
