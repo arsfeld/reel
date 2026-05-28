@@ -150,12 +150,7 @@ pub fn retain_visible_merged(
 ) -> Vec<(MediaItem, String)> {
     items
         .into_iter()
-        .filter_map(|(item, label)| {
-            let visible = crate::services::visibility::retain_visible_items(vec![item], hidden)
-                .into_iter()
-                .next();
-            visible.map(|item| (item, label))
-        })
+        .filter(|(item, _)| crate::services::visibility::is_item_visible(item, hidden))
         .collect()
 }
 

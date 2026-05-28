@@ -196,12 +196,14 @@ impl MediaSource for JellyfinSource {
     }
 
     async fn hubs(&self) -> Result<Vec<MediaHub>, SourceError> {
-        // Minimal viable per-server hubs: Latest + Next Up. Empty hubs are
-        // dropped so the home view never renders an empty shelf (mirror Plex).
+        // Minimal viable per-server hubs: Latest + Next Up. The two fetches are
+        // independent, so run them concurrently to save a full round-trip on the
+        // Home load path. Empty hubs are dropped so the home view never renders
+        // an empty shelf (mirror Plex).
+        let (latest, next_up) = tokio::join!(self.client.latest(None), self.client.next_up());
         let mut hubs = Vec::new();
 
-        let latest = self.client.latest(None).await?;
-        let latest_items = self.convert_items(&latest, None);
+        let latest_items = self.convert_items(&latest?, None);
         if !latest_items.is_empty() {
             hubs.push(MediaHub {
                 title: "Latest".to_string(),
@@ -210,8 +212,7 @@ impl MediaSource for JellyfinSource {
             });
         }
 
-        let next_up = self.client.next_up().await?;
-        let next_up_items = self.convert_items(&next_up, None);
+        let next_up_items = self.convert_items(&next_up?, None);
         if !next_up_items.is_empty() {
             hubs.push(MediaHub {
                 title: "Next Up".to_string(),
