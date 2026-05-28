@@ -7,6 +7,7 @@ use tracing::info;
 use crate::models::detail::MediaDetail;
 use crate::models::media::MediaItem;
 use crate::services::artwork::ArtworkCache;
+use crate::services::download::download_eligible;
 use crate::services::media_source::MediaSource;
 
 #[allow(dead_code)]
@@ -26,6 +27,8 @@ pub struct MovieDetail {
     genres_box: gtk::FlowBox,
     overview_label: gtk::Label,
     play_button: gtk::Button,
+    download_button: gtk::Button,
+    downloaded_badge: gtk::Label,
     backdrop: gtk::Picture,
     poster: gtk::Picture,
     // Enriched sections
@@ -43,6 +46,9 @@ pub enum MovieDetailMsg {
     LoadMovie(MediaItem),
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
     Play,
+    Download,
+    /// Reflect whether a completed local download exists for the shown item.
+    SetDownloaded(bool),
 }
 
 impl std::fmt::Debug for MovieDetailMsg {
@@ -51,6 +57,8 @@ impl std::fmt::Debug for MovieDetailMsg {
             Self::LoadMovie(item) => write!(f, "LoadMovie({})", item.title),
             Self::SetSource(..) => write!(f, "SetSource(..)"),
             Self::Play => write!(f, "Play"),
+            Self::Download => write!(f, "Download"),
+            Self::SetDownloaded(v) => write!(f, "SetDownloaded({v})"),
         }
     }
 }
@@ -62,6 +70,8 @@ pub enum MovieDetailOutput {
         url: String,
         media_item: Box<Option<crate::models::media::MediaItem>>,
     },
+    /// Enqueue this movie for offline download.
+    DownloadMedia(Box<MediaItem>),
     Error(String),
 }
 
@@ -245,7 +255,26 @@ impl Component for MovieDetail {
             let _ = sender_play.send(MovieDetailMsg::Play);
         });
 
+        let download_button = gtk::Button::builder()
+            .label("⤓  Download")
+            .css_classes(["pill"])
+            .halign(gtk::Align::Start)
+            .build();
+        let sender_dl = sender.input_sender().clone();
+        download_button.connect_clicked(move |_| {
+            let _ = sender_dl.send(MovieDetailMsg::Download);
+        });
+
+        let downloaded_badge = gtk::Label::builder()
+            .label("✓ Downloaded")
+            .css_classes(["pill", "success"])
+            .valign(gtk::Align::Center)
+            .visible(false)
+            .build();
+
         actions_row.append(&play_button);
+        actions_row.append(&download_button);
+        actions_row.append(&downloaded_badge);
 
         text_column.append(&title_label);
         text_column.append(&meta_box);
@@ -372,6 +401,8 @@ impl Component for MovieDetail {
             genres_box,
             overview_label,
             play_button,
+            download_button,
+            downloaded_badge,
             backdrop,
             poster,
             cast_section,
@@ -449,6 +480,13 @@ impl Component for MovieDetail {
                 }
 
                 self.play_button.set_sensitive(item.file_path.is_some());
+                // Gate the Download action on eligibility (remote source with a
+                // part key; hidden for local sources). Badge is hidden until the
+                // app reports an existing completed download (SetDownloaded).
+                let eligible = download_eligible(item.source_type, item.file_path.as_deref());
+                self.download_button.set_visible(eligible);
+                self.download_button.set_sensitive(eligible);
+                self.downloaded_badge.set_visible(false);
 
                 // Reset enriched sections while loading
                 self.director_label.set_visible(false);
@@ -542,6 +580,22 @@ impl Component for MovieDetail {
                         media_item: Box::new(Some(item.clone())),
                     });
                 }
+            }
+            MovieDetailMsg::Download => {
+                if let Some(ref item) = self.item
+                    && download_eligible(item.source_type, item.file_path.as_deref())
+                {
+                    info!("Queuing download: {}", item.title);
+                    let _ = sender.output(MovieDetailOutput::DownloadMedia(Box::new(item.clone())));
+                    // Optimistic: the queue runs; the badge flips on completion
+                    // when the app re-reports state.
+                    self.download_button.set_sensitive(false);
+                }
+            }
+            MovieDetailMsg::SetDownloaded(downloaded) => {
+                self.downloaded_badge.set_visible(downloaded);
+                // A completed local copy: no point offering Download again.
+                self.download_button.set_visible(!downloaded);
             }
         }
     }
