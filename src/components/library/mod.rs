@@ -11,7 +11,7 @@ use relm4::prelude::*;
 use relm4::typed_view::grid::TypedGridView;
 use tracing::info;
 
-use crate::models::library::LibraryType;
+use crate::models::library::{LibrarySection, LibraryType};
 use crate::models::media::MediaItem;
 use crate::services::artwork::ArtworkCache;
 use crate::services::library_filter::{
@@ -28,6 +28,9 @@ use media_card::MediaCardData;
 pub struct LibraryView {
     grid: TypedGridView<MediaCardData, gtk::SingleSelection>,
     library_type: LibraryType,
+    /// Plex section key of the currently-loaded library. Drives the cache
+    /// short-circuit so switching between same-type libraries refetches.
+    library_key: Option<String>,
     source: Option<Arc<dyn MediaSource>>,
     artwork_cache: Option<Arc<ArtworkCache>>,
     // UI widgets
@@ -102,7 +105,7 @@ pub struct LibraryView {
 
 #[allow(dead_code)]
 pub enum LibraryViewMsg {
-    LoadLibrary(LibraryType),
+    LoadLibrary(LibrarySection),
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
     /// Seed the persisted per-library filter/sort state (from app settings).
     SetSavedUiState(LibrarySettings),
@@ -138,7 +141,7 @@ pub enum LibraryViewMsg {
 impl std::fmt::Debug for LibraryViewMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::LoadLibrary(lt) => write!(f, "LoadLibrary({lt:?})"),
+            Self::LoadLibrary(section) => write!(f, "LoadLibrary({})", section.title),
             Self::SetSource(..) => write!(f, "SetSource(..)"),
             Self::SetSavedUiState(..) => write!(f, "SetSavedUiState(..)"),
             Self::ItemActivated(pos) => write!(f, "ItemActivated({pos})"),
@@ -185,6 +188,36 @@ pub enum LibraryViewCmd {
 impl std::fmt::Debug for LibraryViewCmd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "LibraryViewCmd")
+    }
+}
+
+/// What a `LoadLibrary` request should do given the currently-loaded library.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LoadDecision {
+    /// The requested library is already loaded with items — just show it.
+    ShowExisting,
+    /// A fetch for the requested library is already in flight — ignore.
+    SkipDuplicateFetch,
+    /// Fetch the requested library.
+    Fetch,
+}
+
+/// Decide how to handle a `LoadLibrary` request. Keyed on the library *key* (not
+/// type) so switching between two same-type libraries (e.g. "Movies" and
+/// "4K Movies") refetches rather than showing the first library's stale items.
+pub(crate) fn load_decision(
+    current_key: Option<&str>,
+    requested_key: &str,
+    has_items: bool,
+    loading: bool,
+) -> LoadDecision {
+    let same = current_key == Some(requested_key);
+    if same && has_items {
+        LoadDecision::ShowExisting
+    } else if same && loading {
+        LoadDecision::SkipDuplicateFetch
+    } else {
+        LoadDecision::Fetch
     }
 }
 
@@ -586,6 +619,7 @@ impl Component for LibraryView {
         let model = Self {
             grid,
             library_type: LibraryType::Movie,
+            library_key: None,
             source: None,
             artwork_cache: None,
             stack,
@@ -642,37 +676,40 @@ impl Component for LibraryView {
             LibraryViewMsg::SetSavedUiState(saved) => {
                 self.saved_ui = saved;
             }
-            LibraryViewMsg::LoadLibrary(library_type) => {
-                // If same library type and we already have items, just show existing data.
-                // This preserves filter/sort state when navigating back from detail pages.
-                if library_type == self.library_type && !self.all_items.is_empty() {
-                    self.stack.set_visible_child(&self.grid_overlay);
-                    return;
+            LibraryViewMsg::LoadLibrary(section) => {
+                let current_key = self.library_key.as_deref();
+                match load_decision(
+                    current_key,
+                    &section.key,
+                    !self.all_items.is_empty(),
+                    self.loading_in_progress,
+                ) {
+                    // Same library already loaded: show it, preserving filter/sort
+                    // state when navigating back from a detail page.
+                    LoadDecision::ShowExisting => {
+                        self.stack.set_visible_child(&self.grid_overlay);
+                        return;
+                    }
+                    // A fetch for this same library is already in flight.
+                    LoadDecision::SkipDuplicateFetch => return,
+                    LoadDecision::Fetch => {}
                 }
 
-                // If a fetch is already in flight for the same library type,
-                // skip the redundant request.
-                if self.loading_in_progress && library_type == self.library_type {
-                    return;
-                }
-
-                // Switching library types: reset filters (genres differ) but keep sort
-                if library_type != self.library_type {
+                // Switching to a different library: reset filters (genres differ)
+                // but keep sort.
+                if current_key != Some(section.key.as_str()) {
                     self.filter_state.clear();
                     self.search_query.clear();
                     self.search_bar.set_search_mode(false);
                     self.search_entry.set_text("");
                 }
 
-                self.library_type = library_type;
+                self.library_type = section.library_type;
+                self.library_key = Some(section.key.clone());
                 self.loading_in_progress = true;
 
-                // Update hero header right away with library name
-                let type_name = match library_type {
-                    LibraryType::Movie => "Movies",
-                    LibraryType::Show => "TV Shows",
-                };
-                self.library_title.set_label(type_name);
+                // Update hero header right away with the library's own name.
+                self.library_title.set_label(&section.title);
                 self.library_hero_subtitle.set_label("Loading...");
 
                 // Build skeleton grid placeholders for a more polished loading state
@@ -685,46 +722,17 @@ impl Component for LibraryView {
                     return;
                 };
 
-                let lt = library_type;
+                let key = section.key.clone();
                 sender.oneshot_command(async move {
                     let start = std::time::Instant::now();
-                    match source.libraries().await {
-                        Ok(libs) => {
-                            let target_type = match lt {
-                                LibraryType::Movie => "movie",
-                                LibraryType::Show => "show",
-                            };
-                            let matching_libs: Vec<_> = libs
-                                .iter()
-                                .filter(|l| l.library_type.as_str() == target_type)
-                                .collect();
-
-                            // Fetch all library sections in parallel
-                            let fetch_start = std::time::Instant::now();
-                            let fetches: Vec<_> = matching_libs
-                                .iter()
-                                .map(|lib| source.library_items(&lib.key))
-                                .collect();
-                            let results = futures::future::join_all(fetches).await;
+                    match source.library_items(&key).await {
+                        Ok(items) => {
                             info!(
-                                "Fetched {} library sections in {:?}",
-                                matching_libs.len(),
-                                fetch_start.elapsed()
-                            );
-
-                            let mut all_items = Vec::new();
-                            for result in results {
-                                match result {
-                                    Ok(items) => all_items.extend(items),
-                                    Err(e) => return LibraryViewCmd::Error(e.to_string()),
-                                }
-                            }
-                            info!(
-                                "Library load complete: {} items in {:?}",
-                                all_items.len(),
+                                "Library {key} load complete: {} items in {:?}",
+                                items.len(),
                                 start.elapsed()
                             );
-                            LibraryViewCmd::Loaded(all_items)
+                            LibraryViewCmd::Loaded(items)
                         }
                         Err(e) => LibraryViewCmd::Error(e.to_string()),
                     }
@@ -754,13 +762,22 @@ impl Component for LibraryView {
                 // Compute the persistence key for this library and restore any
                 // saved filter/sort state, reconciled against the loaded items
                 // so stale values (e.g. a genre no longer present) are dropped.
-                let lib_id = format!(
-                    "{}:{}:{}",
-                    self.all_items[0].source_type.as_str(),
-                    self.all_items[0].source_id,
-                    self.library_type.as_str()
-                );
-                let saved = self.saved_ui.get(&lib_id);
+                //
+                // The key is section-based going forward so two same-type
+                // libraries don't share state. When no section-keyed entry
+                // exists yet, fall back to the legacy library-type key so
+                // existing prefs seed the first load instead of being wiped.
+                let source_type = self.all_items[0].source_type.as_str();
+                let source_id = self.all_items[0].source_id.clone();
+                let section_key = self.library_key.clone().unwrap_or_default();
+                let lib_id = format!("{source_type}:{source_id}:{section_key}");
+                let saved = if self.saved_ui.per_library.contains_key(&lib_id) {
+                    self.saved_ui.get(&lib_id)
+                } else {
+                    let legacy_id =
+                        format!("{source_type}:{source_id}:{}", self.library_type.as_str());
+                    self.saved_ui.get(&legacy_id)
+                };
                 self.library_id = Some(lib_id);
                 self.filter_state = library_filter::reconcile(&saved.filters, &self.all_items);
                 self.sort_order = saved.sort;
@@ -1524,4 +1541,40 @@ fn show_watch_context_menu(
 
     grid_view.insert_action_group("watch", Some(&action_group));
     popover.popup();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LoadDecision, load_decision};
+
+    #[test]
+    fn first_load_fetches() {
+        assert_eq!(load_decision(None, "1", false, false), LoadDecision::Fetch);
+    }
+
+    #[test]
+    fn same_library_with_items_shows_existing() {
+        assert_eq!(
+            load_decision(Some("1"), "1", true, false),
+            LoadDecision::ShowExisting
+        );
+    }
+
+    #[test]
+    fn switching_to_same_type_other_library_refetches() {
+        // "Movies" (key 1) loaded; navigating to "4K Movies" (key 2) must refetch
+        // even though both are movie-type — the old type-keyed cache would not.
+        assert_eq!(
+            load_decision(Some("1"), "2", true, false),
+            LoadDecision::Fetch
+        );
+    }
+
+    #[test]
+    fn duplicate_fetch_for_same_library_is_skipped() {
+        assert_eq!(
+            load_decision(Some("1"), "1", false, true),
+            LoadDecision::SkipDuplicateFetch
+        );
+    }
 }

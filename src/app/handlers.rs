@@ -9,6 +9,7 @@ use tracing::{debug, info};
 use crate::components::home::HomeViewMsg;
 use crate::components::library::LibraryViewMsg;
 use crate::components::player::video_player::{VideoPlayerMsg, VideoPlayerOutput};
+use crate::components::sidebar::SidebarMsg;
 use crate::config;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::media::{MediaItem, SourceType};
@@ -239,6 +240,30 @@ pub fn handle_connection_saved(
     let artwork_cache = Arc::new(ArtworkCache::new(config::artwork_dir()));
 
     app.active_source = Some(source.clone());
+    app.source_url = Some(url.clone());
+
+    // Feed the sidebar tree: source identity, current visibility, and (async)
+    // the source's libraries.
+    app.sidebar.emit(SidebarMsg::SetSource {
+        name: name.clone(),
+        source_type: "plex".to_string(),
+        source_id: url.clone(),
+    });
+    app.sidebar.emit(SidebarMsg::SetVisibility(
+        app.settings.library_visibility.hidden.clone(),
+    ));
+    {
+        let src = source.clone();
+        sender.oneshot_command(async move {
+            match src.libraries().await {
+                Ok(libs) => AppCmd::LibrariesLoaded(libs),
+                Err(e) => {
+                    tracing::warn!("Failed to load libraries for sidebar: {e}");
+                    AppCmd::LibrariesLoaded(Vec::new())
+                }
+            }
+        });
+    }
 
     app.home_view.emit(HomeViewMsg::SetSource(
         source.clone(),
@@ -265,14 +290,7 @@ pub fn handle_connection_saved(
     let watch_data = load_watch_data(&app.db_conn);
     app.library_view
         .emit(LibraryViewMsg::SetWatchData(watch_data));
-
-    if let CurrentView::Library(lt) = app.current_view {
-        app.library_view.emit(LibraryViewMsg::LoadLibrary(lt));
-    } else {
-        app.library_view.emit(LibraryViewMsg::LoadLibrary(
-            crate::models::library::LibraryType::Movie,
-        ));
-    }
+    // A library loads when picked from the sidebar; the default view is Home.
 
     sender.input(AppMsg::ShowToast(format!("Connected to {name}")));
 }

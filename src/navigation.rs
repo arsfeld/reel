@@ -1,13 +1,12 @@
-use crate::models::library::LibraryType;
-
 /// What the user is currently viewing.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 #[allow(dead_code)]
 pub enum CurrentView {
     /// Home page (Continue Watching + Recently Added)
+    #[default]
     Home,
-    /// Library grid (movies or shows)
-    Library(LibraryType),
+    /// Library grid, identified by its Plex section key.
+    Library(String),
     /// Movie detail page
     MovieDetail(String),
     /// Show detail page
@@ -18,10 +17,4 @@ pub enum CurrentView {
     CollectionDetail(String),
     /// Video player
     Player,
-}
-
-impl Default for CurrentView {
-    fn default() -> Self {
-        Self::Home
-    }
 }

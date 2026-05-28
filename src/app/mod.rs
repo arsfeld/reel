@@ -17,9 +17,9 @@ use crate::components::player::video_player::{
     VideoPlayer, VideoPlayerInit, VideoPlayerMsg, VideoPlayerOutput,
 };
 use crate::components::settings_dialog;
-use crate::components::sidebar::{Sidebar, SidebarOutput};
+use crate::components::sidebar::{Sidebar, SidebarMsg, SidebarOutput};
 use crate::db::watch_progress_repo::WatchProgressRepo;
-use crate::models::library::LibraryType;
+use crate::models::library::LibrarySection;
 use crate::models::media::{MediaItem, MediaType, SourceType};
 use crate::models::source::{Source, SourceConfig};
 use crate::models::watch::WatchProgress;
@@ -79,6 +79,9 @@ pub struct App {
     pending_resume: Option<f64>,
     /// Active media source for scrobble/timeline reporting.
     active_source: Option<Arc<PlexSource>>,
+    /// Base URL of the active source, used as the `source_id` when building
+    /// per-library visibility keys.
+    source_url: Option<String>,
     /// True while async startup validation of a saved source is in flight.
     source_connecting: bool,
     /// Application settings.
@@ -94,7 +97,14 @@ pub struct App {
 #[allow(dead_code)]
 pub enum AppMsg {
     NavigateHome,
-    Navigate(LibraryType),
+    Navigate(LibrarySection),
+    /// Persist a library/Collections visibility change (composite key + visible).
+    SetLibraryVisible {
+        key: String,
+        visible: bool,
+    },
+    /// The sidebar left edit mode; re-evaluate the current view and refresh Home.
+    SidebarEditModeExited,
     ShowMovieDetail(crate::models::media::MediaItem),
     ShowShowDetail(crate::models::media::MediaItem),
     GoBack,
@@ -139,6 +149,8 @@ pub enum AppCmd {
         name: String,
     },
     SourceValidationFailed(String),
+    /// The active source's libraries, fetched after validation, for the sidebar.
+    LibrariesLoaded(Vec<LibrarySection>),
     /// No-op for fire-and-forget async commands (scrobble, timeline).
     Noop,
     /// Skip markers fetched from the media source after playback starts.
@@ -179,8 +191,12 @@ impl Component for App {
             .launch(())
             .forward(sender.input_sender(), |output| match output {
                 SidebarOutput::NavigateHome => AppMsg::NavigateHome,
-                SidebarOutput::Navigate(target) => AppMsg::Navigate(target),
+                SidebarOutput::Navigate(section) => AppMsg::Navigate(section),
                 SidebarOutput::ShowCollections => AppMsg::ShowCollections,
+                SidebarOutput::SetLibraryVisible { key, visible } => {
+                    AppMsg::SetLibraryVisible { key, visible }
+                }
+                SidebarOutput::EditModeExited => AppMsg::SidebarEditModeExited,
             });
 
         let home_view = HomeView::builder()
@@ -300,6 +316,7 @@ impl Component for App {
             current_view: CurrentView::default(),
             db_conn,
             now_playing: None,
+            source_url: None,
             watch_tracker: WatchStateTracker::new(),
             last_position: 0.0,
             pending_resume: None,
@@ -363,20 +380,44 @@ impl Component for App {
                 let in_progress = load_in_progress(&self.db_conn);
                 self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
             }
-            AppMsg::Navigate(library_type) => {
-                self.current_view = CurrentView::Library(library_type);
+            AppMsg::Navigate(section) => {
+                self.current_view = CurrentView::Library(section.key.clone());
                 self.stack.set_visible_child_name("shell");
                 self.nav_view.replace_with_tags(&["library"]);
                 root.set_fullscreened(false);
                 root.set_title(Some("Reel"));
-                // Update library header title
-                let title = match library_type {
-                    LibraryType::Movie => "Movies",
-                    LibraryType::Show => "TV Shows",
+                self.library_title.set_label(&section.title);
+                self.library_view.emit(LibraryViewMsg::LoadLibrary(section));
+            }
+            AppMsg::SetLibraryVisible { key, visible } => {
+                // `key` is the composite visibility key built by the sidebar.
+                if visible {
+                    self.settings.library_visibility.hidden.remove(&key);
+                } else {
+                    self.settings.library_visibility.hidden.insert(key);
+                }
+                if let Err(e) = self.settings.save() {
+                    tracing::warn!("Failed to persist library visibility: {e}");
+                }
+            }
+            AppMsg::SidebarEditModeExited => {
+                let hidden = self.settings.library_visibility.hidden.clone();
+                self.home_view
+                    .emit(HomeViewMsg::SetVisibility(hidden.clone()));
+                // If the library being viewed was just hidden, drop to Home.
+                let redirect = match (&self.current_view, &self.source_url) {
+                    (CurrentView::Library(key), Some(url)) => {
+                        hidden.contains(&LibrarySection::visibility_key_for("plex", url, key))
+                    }
+                    _ => false,
                 };
-                self.library_title.set_label(title);
-                self.library_view
-                    .emit(LibraryViewMsg::LoadLibrary(library_type));
+                if redirect {
+                    sender.input(AppMsg::NavigateHome);
+                } else if matches!(self.current_view, CurrentView::Home) {
+                    // Refresh Home in place so it reflects the new visibility.
+                    let in_progress = load_in_progress(&self.db_conn);
+                    self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
+                }
             }
             AppMsg::ShowMovieDetail(item) => {
                 self.current_view = CurrentView::MovieDetail(item.id.clone());
@@ -661,6 +702,30 @@ impl Component for App {
                 let artwork_cache = Arc::new(ArtworkCache::new(crate::config::artwork_dir()));
 
                 self.active_source = Some(plex_source.clone());
+                self.source_url = Some(url.clone());
+
+                // Feed the sidebar tree: source identity, current visibility, and
+                // (async) the source's libraries.
+                self.sidebar.emit(SidebarMsg::SetSource {
+                    name: plex_source.name().to_string(),
+                    source_type: "plex".to_string(),
+                    source_id: url.clone(),
+                });
+                self.sidebar.emit(SidebarMsg::SetVisibility(
+                    self.settings.library_visibility.hidden.clone(),
+                ));
+                {
+                    let src = plex_source.clone();
+                    sender.oneshot_command(async move {
+                        match src.libraries().await {
+                            Ok(libs) => AppCmd::LibrariesLoaded(libs),
+                            Err(e) => {
+                                tracing::warn!("Failed to load libraries for sidebar: {e}");
+                                AppCmd::LibrariesLoaded(Vec::new())
+                            }
+                        }
+                    });
+                }
 
                 self.home_view.emit(HomeViewMsg::SetSource(
                     plex_source.clone(),
@@ -700,13 +765,11 @@ impl Component for App {
 
                 // Switch home view from connecting page to shelves.
                 self.home_view.emit(HomeViewMsg::SetConnecting(false));
-
-                if let CurrentView::Library(lt) = self.current_view {
-                    self.library_view.emit(LibraryViewMsg::LoadLibrary(lt));
-                } else {
-                    self.library_view
-                        .emit(LibraryViewMsg::LoadLibrary(LibraryType::Movie));
-                }
+                // A specific library loads when the user picks it from the
+                // sidebar; the default view is Home, so no eager load here.
+            }
+            AppCmd::LibrariesLoaded(libraries) => {
+                self.sidebar.emit(SidebarMsg::SetLibraries(libraries));
             }
             AppCmd::SourceValidationFailed(msg) => {
                 tracing::warn!("Saved Plex source not reachable: {msg}");

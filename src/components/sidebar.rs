@@ -1,41 +1,175 @@
+use std::collections::HashSet;
+
 use gtk::prelude::*;
 use relm4::prelude::*;
 
-use crate::models::library::LibraryType;
+use crate::models::library::{LibrarySection, LibraryType};
+
+/// Reserved section key for the per-source Collections entry's visibility.
+/// A real Plex section key is numeric, so this never collides.
+pub const COLLECTIONS_KEY: &str = "__collections__";
+
+/// What the sidebar currently has selected, for highlight sync.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SidebarSelection {
+    Home,
+    Library(String),
+    Collections,
+}
+
+/// Pure description of one rendered sidebar row. Derived from state by
+/// [`derive_rows`]; the GTK build consumes it. Free of widgets so the
+/// information architecture is unit-testable without a display.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SidebarRow {
+    Home,
+    /// The source node header. Carries the edit affordance.
+    SourceHeader {
+        name: String,
+    },
+    /// Placeholder shown under the source header before libraries resolve.
+    Loading,
+    /// Shown in normal mode when the source has libraries but all are hidden,
+    /// so the source node never collapses to nothing.
+    AllHidden,
+    Library {
+        key: String,
+        title: String,
+        library_type: LibraryType,
+        visible: bool,
+    },
+    Collections {
+        visible: bool,
+    },
+}
+
+/// Derive the ordered list of sidebar rows from current state. In normal mode
+/// only visible libraries (and Collections) appear; in edit mode every library
+/// appears with its visibility flag so a toggle can be rendered.
+pub fn derive_rows(
+    source_name: Option<&str>,
+    source_type: &str,
+    source_id: &str,
+    libraries: &[LibrarySection],
+    hidden: &HashSet<String>,
+    edit_mode: bool,
+) -> Vec<SidebarRow> {
+    let mut rows = vec![SidebarRow::Home];
+
+    let Some(name) = source_name else {
+        return rows;
+    };
+    rows.push(SidebarRow::SourceHeader {
+        name: name.to_string(),
+    });
+
+    // Source connected but its libraries have not been fetched yet.
+    if libraries.is_empty() {
+        rows.push(SidebarRow::Loading);
+        return rows;
+    }
+
+    let is_hidden = |key: &str| {
+        hidden.contains(&LibrarySection::visibility_key_for(
+            source_type,
+            source_id,
+            key,
+        ))
+    };
+
+    let mut any_visible = false;
+    for lib in libraries {
+        let visible = !is_hidden(&lib.key);
+        any_visible |= visible;
+        if edit_mode || visible {
+            rows.push(SidebarRow::Library {
+                key: lib.key.clone(),
+                title: lib.title.clone(),
+                library_type: lib.library_type,
+                visible,
+            });
+        }
+    }
+
+    let collections_visible = !is_hidden(COLLECTIONS_KEY);
+    any_visible |= collections_visible;
+    if edit_mode || collections_visible {
+        rows.push(SidebarRow::Collections {
+            visible: collections_visible,
+        });
+    }
+
+    if !edit_mode && !any_visible {
+        rows.push(SidebarRow::AllHidden);
+    }
+
+    rows
+}
+
+/// Navigation action a row triggers when activated. `None` for non-actionable
+/// rows (header, loading, all-hidden). Indexed in parallel with the listbox.
+#[derive(Debug, Clone)]
+enum RowAction {
+    None,
+    Home,
+    Library(LibrarySection),
+    Collections,
+}
 
 pub struct Sidebar {
-    selected: LibraryType,
-    home_selected: bool,
-    syncing: bool,
+    source_name: Option<String>,
+    source_type: String,
+    source_id: String,
+    libraries: Vec<LibrarySection>,
+    hidden: HashSet<String>,
+    edit_mode: bool,
+    selected: SidebarSelection,
     listbox: gtk::ListBox,
-    movies_count: gtk::Label,
-    shows_count: gtk::Label,
-    collections_count: gtk::Label,
+    /// Handler for `row-selected`, blocked around programmatic selection so a
+    /// rebuild or external highlight never emits a spurious navigation.
+    row_selected_handler: gtk::glib::SignalHandlerId,
+    /// Navigation action per listbox row, rebuilt alongside the rows.
+    row_actions: Vec<RowAction>,
 }
 
 #[derive(Debug)]
-#[allow(clippy::enum_variant_names)]
 #[allow(dead_code)]
 pub enum SidebarMsg {
-    SelectHome,
-    SelectMovies,
-    SelectShows,
-    SelectCollections,
-    /// Select a row programmatically (from ViewSwitcher sync). Does NOT emit output.
-    SelectExternal(LibraryType),
-    /// Update the item counts shown next to each row label.
-    SetCounts {
-        movies: usize,
-        shows: usize,
-        collections: usize,
+    /// Set the connected source's display name + identity (used to build
+    /// per-library visibility keys).
+    SetSource {
+        name: String,
+        source_type: String,
+        source_id: String,
     },
+    /// Provide the source's libraries (fetched async by the app).
+    SetLibraries(Vec<LibrarySection>),
+    /// Update the hidden-library set.
+    SetVisibility(HashSet<String>),
+    /// A listbox row was selected (by index into `row_actions`).
+    RowSelected(usize),
+    /// Toggle a library/collections entry's visibility (from its edit switch).
+    ToggleEntry { key: String, visible: bool },
+    /// Enter/leave edit mode.
+    ToggleEditMode,
+    /// Select a row programmatically (e.g. on startup / back navigation)
+    /// without emitting a navigation output.
+    SelectExternal(SidebarSelection),
 }
 
 #[derive(Debug)]
 pub enum SidebarOutput {
     NavigateHome,
-    Navigate(LibraryType),
+    Navigate(LibrarySection),
     ShowCollections,
+    /// Persist a visibility change for a library (or Collections) entry.
+    SetLibraryVisible {
+        key: String,
+        visible: bool,
+    },
+    /// Edit mode was exited; the app re-evaluates the current view (a hidden
+    /// current library redirects to Home).
+    EditModeExited,
 }
 
 #[relm4::component(pub)]
@@ -47,7 +181,7 @@ impl SimpleComponent for Sidebar {
     view! {
         gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
-            set_width_request: 220,
+            set_width_request: 240,
 
             adw::HeaderBar {
                 set_show_end_title_buttons: false,
@@ -58,121 +192,14 @@ impl SimpleComponent for Sidebar {
                 },
             },
 
-            #[name = "listbox"]
-            gtk::ListBox {
-                add_css_class: "navigation-sidebar",
-                set_selection_mode: gtk::SelectionMode::Single,
+            gtk::ScrolledWindow {
+                set_vexpand: true,
+                set_hscrollbar_policy: gtk::PolicyType::Never,
 
-                // --- Home row ---
-                gtk::ListBoxRow {
-                    set_selectable: true,
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 12,
-                        set_margin_all: 8,
-
-                        gtk::Image {
-                            set_icon_name: Some("go-home-symbolic"),
-                        },
-                        gtk::Label {
-                            set_label: "Home",
-                            set_hexpand: true,
-                            set_halign: gtk::Align::Start,
-                        },
-                    },
-                },
-
-                // --- Movies row ---
-                gtk::ListBoxRow {
-                    set_selectable: true,
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 12,
-                        set_margin_all: 8,
-
-                        gtk::Image {
-                            set_icon_name: Some("video-display-symbolic"),
-                        },
-                        #[name = "movies_label"]
-                        gtk::Label {
-                            set_label: "Movies",
-                            set_hexpand: true,
-                            set_halign: gtk::Align::Start,
-                        },
-                        #[name = "movies_count"]
-                        gtk::Label {
-                            add_css_class: "dim-label",
-                            add_css_class: "caption",
-                            set_halign: gtk::Align::End,
-                            set_margin_end: 4,
-                        },
-                    },
-                },
-
-                // --- TV Shows row ---
-                gtk::ListBoxRow {
-                    set_selectable: true,
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 12,
-                        set_margin_all: 8,
-
-                        gtk::Image {
-                            set_icon_name: Some("view-list-symbolic"),
-                        },
-                        #[name = "shows_label"]
-                        gtk::Label {
-                            set_label: "TV Shows",
-                            set_hexpand: true,
-                            set_halign: gtk::Align::Start,
-                        },
-                        #[name = "shows_count"]
-                        gtk::Label {
-                            add_css_class: "dim-label",
-                            add_css_class: "caption",
-                            set_halign: gtk::Align::End,
-                            set_margin_end: 4,
-                        },
-                    },
-                },
-
-                // --- Collections row ---
-                gtk::ListBoxRow {
-                    set_selectable: true,
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 12,
-                        set_margin_all: 8,
-
-                        gtk::Image {
-                            set_icon_name: Some("view-grid-symbolic"),
-                        },
-                        #[name = "collections_label"]
-                        gtk::Label {
-                            set_label: "Collections",
-                            set_hexpand: true,
-                            set_halign: gtk::Align::Start,
-                        },
-                        #[name = "collections_count"]
-                        gtk::Label {
-                            add_css_class: "dim-label",
-                            add_css_class: "caption",
-                            set_halign: gtk::Align::End,
-                            set_margin_end: 4,
-                        },
-                    },
-                },
-
-                connect_row_selected[sender] => move |_, row| {
-                    if let Some(row) = row {
-                        match row.index() {
-                            0 => sender.input(SidebarMsg::SelectHome),
-                            1 => sender.input(SidebarMsg::SelectMovies),
-                            2 => sender.input(SidebarMsg::SelectShows),
-                            3 => sender.input(SidebarMsg::SelectCollections),
-                            _ => {}
-                        }
-                    }
+                #[name = "listbox"]
+                gtk::ListBox {
+                    add_css_class: "navigation-sidebar",
+                    set_selection_mode: gtk::SelectionMode::Single,
                 },
             },
         }
@@ -185,78 +212,449 @@ impl SimpleComponent for Sidebar {
     ) -> ComponentParts<Self> {
         let widgets = view_output!();
 
-        // Select first row by default (Home)
-        let first_row = widgets.listbox.row_at_index(0);
-        widgets.listbox.select_row(first_row.as_ref());
+        // Connect row-selected manually so we hold the handler id and can block
+        // it around programmatic selection.
+        let input = sender.input_sender().clone();
+        let row_selected_handler = widgets.listbox.connect_row_selected(move |_, row| {
+            if let Some(row) = row {
+                let _ = input.send(SidebarMsg::RowSelected(row.index() as usize));
+            }
+        });
 
-        let model = Self {
-            selected: LibraryType::Movie,
-            home_selected: true,
-            syncing: false,
+        let mut model = Self {
+            source_name: None,
+            source_type: String::new(),
+            source_id: String::new(),
+            libraries: Vec::new(),
+            hidden: HashSet::new(),
+            edit_mode: false,
+            selected: SidebarSelection::Home,
             listbox: widgets.listbox.clone(),
-            movies_count: widgets.movies_count.clone(),
-            shows_count: widgets.shows_count.clone(),
-            collections_count: widgets.collections_count.clone(),
+            row_selected_handler,
+            row_actions: Vec::new(),
         };
+
+        model.rebuild(&sender);
 
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
-            SidebarMsg::SelectHome => {
-                if self.syncing {
-                    return;
-                }
-                self.home_selected = true;
-                let _ = sender.output(SidebarOutput::NavigateHome);
-            }
-            SidebarMsg::SelectMovies => {
-                if self.syncing {
-                    return;
-                }
-                self.home_selected = false;
-                self.selected = LibraryType::Movie;
-                let _ = sender.output(SidebarOutput::Navigate(LibraryType::Movie));
-            }
-            SidebarMsg::SelectShows => {
-                if self.syncing {
-                    return;
-                }
-                self.home_selected = false;
-                self.selected = LibraryType::Show;
-                let _ = sender.output(SidebarOutput::Navigate(LibraryType::Show));
-            }
-            SidebarMsg::SelectCollections => {
-                if self.syncing {
-                    return;
-                }
-                self.home_selected = false;
-                let _ = sender.output(SidebarOutput::ShowCollections);
-            }
-            SidebarMsg::SelectExternal(library_type) => {
-                self.syncing = true;
-                let row_idx = match library_type {
-                    LibraryType::Movie => 1,
-                    LibraryType::Show => 2,
-                };
-                if let Some(row) = self.listbox.row_at_index(row_idx) {
-                    self.listbox.select_row(Some(&row));
-                }
-                self.selected = library_type;
-                self.home_selected = false;
-                self.syncing = false;
-            }
-            SidebarMsg::SetCounts {
-                movies,
-                shows,
-                collections,
+            SidebarMsg::SetSource {
+                name,
+                source_type,
+                source_id,
             } => {
-                self.movies_count.set_label(&format!("({movies})"));
-                self.shows_count.set_label(&format!("({shows})"));
-                self.collections_count
-                    .set_label(&format!("({collections})"));
+                self.source_name = Some(name);
+                self.source_type = source_type;
+                self.source_id = source_id;
+                self.rebuild(&sender);
+            }
+            SidebarMsg::SetLibraries(libraries) => {
+                self.libraries = libraries;
+                self.rebuild(&sender);
+            }
+            SidebarMsg::SetVisibility(hidden) => {
+                self.hidden = hidden;
+                self.rebuild(&sender);
+            }
+            SidebarMsg::ToggleEditMode => {
+                self.edit_mode = !self.edit_mode;
+                self.rebuild(&sender);
+                if !self.edit_mode {
+                    let _ = sender.output(SidebarOutput::EditModeExited);
+                }
+            }
+            SidebarMsg::ToggleEntry { key, visible } => {
+                let vis_key =
+                    LibrarySection::visibility_key_for(&self.source_type, &self.source_id, &key);
+                if visible {
+                    self.hidden.remove(&vis_key);
+                } else {
+                    self.hidden.insert(vis_key);
+                }
+                // The switch already reflects the new state; no rebuild while in
+                // edit mode (rows stay put). Persistence + re-filter happen in
+                // the app via the output below.
+                let _ = sender.output(SidebarOutput::SetLibraryVisible { key, visible });
+            }
+            SidebarMsg::RowSelected(index) => {
+                // Programmatic selection is blocked at the signal, so this only
+                // fires for real user clicks on selectable (actionable) rows.
+                match self.row_actions.get(index) {
+                    Some(RowAction::Home) => {
+                        self.selected = SidebarSelection::Home;
+                        let _ = sender.output(SidebarOutput::NavigateHome);
+                    }
+                    Some(RowAction::Library(section)) => {
+                        self.selected = SidebarSelection::Library(section.key.clone());
+                        let _ = sender.output(SidebarOutput::Navigate(section.clone()));
+                    }
+                    Some(RowAction::Collections) => {
+                        self.selected = SidebarSelection::Collections;
+                        let _ = sender.output(SidebarOutput::ShowCollections);
+                    }
+                    Some(RowAction::None) | None => {}
+                }
+            }
+            SidebarMsg::SelectExternal(selection) => {
+                self.selected = selection;
+                self.listbox.block_signal(&self.row_selected_handler);
+                self.select_current_row();
+                self.listbox.unblock_signal(&self.row_selected_handler);
             }
         }
+    }
+}
+
+impl Sidebar {
+    /// Clear and rebuild the listbox from current state, refreshing the parallel
+    /// `row_actions`. The row-selected handler is blocked throughout so clearing
+    /// and re-selecting can't emit spurious navigation.
+    fn rebuild(&mut self, sender: &ComponentSender<Self>) {
+        self.listbox.block_signal(&self.row_selected_handler);
+
+        while let Some(child) = self.listbox.first_child() {
+            self.listbox.remove(&child);
+        }
+
+        let rows = derive_rows(
+            self.source_name.as_deref(),
+            &self.source_type,
+            &self.source_id,
+            &self.libraries,
+            &self.hidden,
+            self.edit_mode,
+        );
+
+        let mut actions = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let (widget, action) = self.build_row(row, sender);
+            self.listbox.append(&widget);
+            actions.push(action);
+        }
+        self.row_actions = actions;
+
+        self.select_current_row();
+        self.listbox.unblock_signal(&self.row_selected_handler);
+    }
+
+    /// Build the `ListBoxRow` for a derived row plus its navigation action.
+    fn build_row(
+        &self,
+        row: &SidebarRow,
+        sender: &ComponentSender<Self>,
+    ) -> (gtk::ListBoxRow, RowAction) {
+        match row {
+            SidebarRow::Home => (nav_row("go-home-symbolic", "Home", None), RowAction::Home),
+            SidebarRow::SourceHeader { name } => {
+                (self.source_header_row(name, sender), RowAction::None)
+            }
+            SidebarRow::Loading => {
+                let r = gtk::ListBoxRow::builder().selectable(false).build();
+                let b = indented_box();
+                let spinner = gtk::Spinner::builder().spinning(true).build();
+                b.append(&spinner);
+                b.append(&dim_label("Loading libraries…"));
+                r.set_child(Some(&b));
+                (r, RowAction::None)
+            }
+            SidebarRow::AllHidden => {
+                let r = gtk::ListBoxRow::builder().selectable(false).build();
+                let b = indented_box();
+                b.append(&dim_label("All libraries hidden"));
+                r.set_child(Some(&b));
+                (r, RowAction::None)
+            }
+            SidebarRow::Library {
+                key,
+                title,
+                library_type,
+                visible,
+            } => {
+                let icon = match library_type {
+                    LibraryType::Movie => "video-display-symbolic",
+                    LibraryType::Show => "view-list-symbolic",
+                };
+                let switch = self
+                    .edit_mode
+                    .then(|| self.entry_switch(key, *visible, sender));
+                let r = nav_row_indented(icon, title, switch);
+                (
+                    r,
+                    RowAction::Library(LibrarySection {
+                        key: key.clone(),
+                        title: title.clone(),
+                        library_type: *library_type,
+                        count: None,
+                    }),
+                )
+            }
+            SidebarRow::Collections { visible } => {
+                let switch = self
+                    .edit_mode
+                    .then(|| self.entry_switch(COLLECTIONS_KEY, *visible, sender));
+                let r = nav_row_indented("view-grid-symbolic", "Collections", switch);
+                (r, RowAction::Collections)
+            }
+        }
+    }
+
+    /// The source node header row: the source name plus the edit/Done affordance.
+    fn source_header_row(&self, name: &str, sender: &ComponentSender<Self>) -> gtk::ListBoxRow {
+        let r = gtk::ListBoxRow::builder().selectable(false).build();
+        let b = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .margin_top(8)
+            .margin_bottom(4)
+            .margin_start(8)
+            .margin_end(8)
+            .build();
+
+        let label = gtk::Label::builder()
+            .label(name)
+            .hexpand(true)
+            .halign(gtk::Align::Start)
+            .build();
+        label.add_css_class("heading");
+        b.append(&label);
+
+        let (icon, tooltip) = if self.edit_mode {
+            ("object-select-symbolic", "Done")
+        } else {
+            ("document-edit-symbolic", "Edit libraries")
+        };
+        let edit_btn = gtk::Button::builder()
+            .icon_name(icon)
+            .tooltip_text(tooltip)
+            .build();
+        edit_btn.add_css_class("flat");
+        let s = sender.input_sender().clone();
+        edit_btn.connect_clicked(move |_| {
+            let _ = s.send(SidebarMsg::ToggleEditMode);
+        });
+        b.append(&edit_btn);
+
+        r.set_child(Some(&b));
+        r
+    }
+
+    /// A visibility switch for a library/collections entry in edit mode.
+    fn entry_switch(
+        &self,
+        key: &str,
+        visible: bool,
+        sender: &ComponentSender<Self>,
+    ) -> gtk::Switch {
+        let switch = gtk::Switch::builder().valign(gtk::Align::Center).build();
+        // Set state before connecting so the initial value doesn't fire.
+        switch.set_active(visible);
+        let s = sender.input_sender().clone();
+        let key = key.to_string();
+        switch.connect_active_notify(move |sw| {
+            let _ = s.send(SidebarMsg::ToggleEntry {
+                key: key.clone(),
+                visible: sw.is_active(),
+            });
+        });
+        switch
+    }
+
+    /// Select the listbox row matching `self.selected`. Callers must block the
+    /// `row-selected` handler around this so it does not emit navigation.
+    fn select_current_row(&self) {
+        let target = self
+            .row_actions
+            .iter()
+            .position(|a| match (&self.selected, a) {
+                (SidebarSelection::Home, RowAction::Home) => true,
+                (SidebarSelection::Library(k), RowAction::Library(section)) => *k == section.key,
+                (SidebarSelection::Collections, RowAction::Collections) => true,
+                _ => false,
+            });
+        if let Some(idx) = target {
+            if let Some(row) = self.listbox.row_at_index(idx as i32) {
+                self.listbox.select_row(Some(&row));
+            }
+        } else {
+            self.listbox.unselect_all();
+        }
+    }
+}
+
+/// A standard navigation row: icon + label, optionally trailing widget.
+fn nav_row(icon: &str, label: &str, trailing: Option<gtk::Switch>) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::builder().selectable(true).build();
+    let b = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .margin_top(8)
+        .margin_bottom(8)
+        .margin_start(8)
+        .margin_end(8)
+        .build();
+    b.append(&gtk::Image::from_icon_name(icon));
+    let lbl = gtk::Label::builder()
+        .label(label)
+        .hexpand(true)
+        .halign(gtk::Align::Start)
+        .build();
+    b.append(&lbl);
+    if let Some(sw) = trailing {
+        b.append(&sw);
+    }
+    row.set_child(Some(&b));
+    row
+}
+
+/// A navigation row nested under the source node (extra start indent).
+fn nav_row_indented(icon: &str, label: &str, trailing: Option<gtk::Switch>) -> gtk::ListBoxRow {
+    let row = nav_row(icon, label, trailing);
+    if let Some(child) = row.child() {
+        child.set_margin_start(24);
+    }
+    row
+}
+
+fn indented_box() -> gtk::Box {
+    gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(6)
+        .margin_bottom(6)
+        .margin_start(24)
+        .margin_end(8)
+        .build()
+}
+
+fn dim_label(text: &str) -> gtk::Label {
+    let l = gtk::Label::builder()
+        .label(text)
+        .halign(gtk::Align::Start)
+        .build();
+    l.add_css_class("dim-label");
+    l.add_css_class("caption");
+    l
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn section(key: &str, title: &str, lt: LibraryType) -> LibrarySection {
+        LibrarySection {
+            key: key.to_string(),
+            title: title.to_string(),
+            library_type: lt,
+            count: None,
+        }
+    }
+
+    fn hidden(keys: &[&str]) -> HashSet<String> {
+        keys.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_source_shows_only_home() {
+        let rows = derive_rows(None, "plex", "srv", &[], &HashSet::new(), false);
+        assert_eq!(rows, vec![SidebarRow::Home]);
+    }
+
+    #[test]
+    fn source_without_libraries_shows_loading() {
+        let rows = derive_rows(Some("My Plex"), "plex", "srv", &[], &HashSet::new(), false);
+        assert_eq!(
+            rows,
+            vec![
+                SidebarRow::Home,
+                SidebarRow::SourceHeader {
+                    name: "My Plex".to_string()
+                },
+                SidebarRow::Loading,
+            ]
+        );
+    }
+
+    #[test]
+    fn normal_mode_lists_visible_libraries_and_collections() {
+        let libs = vec![
+            section("1", "Movies", LibraryType::Movie),
+            section("2", "4K Movies", LibraryType::Movie),
+        ];
+        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &HashSet::new(), false);
+        // Home, header, 2 libraries, collections.
+        assert_eq!(rows.len(), 5);
+        assert!(matches!(rows[2], SidebarRow::Library { ref title, .. } if title == "Movies"));
+        assert!(matches!(rows[4], SidebarRow::Collections { visible: true }));
+    }
+
+    #[test]
+    fn normal_mode_hides_hidden_library() {
+        let libs = vec![
+            section("1", "Movies", LibraryType::Movie),
+            section("2", "Home Videos", LibraryType::Movie),
+        ];
+        let h = hidden(&["plex:srv:2"]);
+        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false);
+        let lib_titles: Vec<_> = rows
+            .iter()
+            .filter_map(|r| match r {
+                SidebarRow::Library { title, .. } => Some(title.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lib_titles, vec!["Movies"]);
+    }
+
+    #[test]
+    fn edit_mode_lists_all_libraries_with_flags() {
+        let libs = vec![
+            section("1", "Movies", LibraryType::Movie),
+            section("2", "Home Videos", LibraryType::Movie),
+        ];
+        let h = hidden(&["plex:srv:2"]);
+        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, true);
+        let libs_in_rows: Vec<_> = rows
+            .iter()
+            .filter_map(|r| match r {
+                SidebarRow::Library { title, visible, .. } => Some((title.as_str(), *visible)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(libs_in_rows, vec![("Movies", true), ("Home Videos", false)]);
+    }
+
+    #[test]
+    fn all_hidden_keeps_source_node_with_marker() {
+        let libs = vec![section("1", "Movies", LibraryType::Movie)];
+        // Hide the library and Collections.
+        let h = hidden(&["plex:srv:1", "plex:srv:__collections__"]);
+        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false);
+        assert_eq!(
+            rows,
+            vec![
+                SidebarRow::Home,
+                SidebarRow::SourceHeader {
+                    name: "S".to_string()
+                },
+                SidebarRow::AllHidden,
+            ]
+        );
+    }
+
+    #[test]
+    fn collections_can_be_hidden_independently() {
+        let libs = vec![section("1", "Movies", LibraryType::Movie)];
+        let h = hidden(&["plex:srv:__collections__"]);
+        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false);
+        assert!(
+            !rows
+                .iter()
+                .any(|r| matches!(r, SidebarRow::Collections { .. }))
+        );
+        // The library is still visible, so no all-hidden marker.
+        assert!(!rows.iter().any(|r| matches!(r, SidebarRow::AllHidden)));
     }
 }
