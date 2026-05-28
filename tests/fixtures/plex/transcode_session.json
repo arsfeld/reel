@@ -1,0 +1,27 @@
+{
+  "MediaContainer": {
+    "size": 1,
+    "TranscodeSession": [
+      {
+        "key": "reel-session-abcdef",
+        "throttled": false,
+        "complete": false,
+        "progress": 3.5,
+        "duration": 6906048,
+        "remaining": 1200,
+        "context": "streaming",
+        "sourceVideoCodec": "hevc",
+        "sourceAudioCodec": "eac3",
+        "videoDecision": "transcode",
+        "audioDecision": "transcode",
+        "protocol": "hls",
+        "container": "mpegts",
+        "videoCodec": "h264",
+        "audioCodec": "mp3",
+        "width": 1280,
+        "height": 720,
+        "transcodeHwEncoding": "vaapi"
+      }
+    ]
+  }
+}

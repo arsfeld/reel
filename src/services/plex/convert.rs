@@ -35,7 +35,7 @@ pub fn plex_metadata_to_media_item(metadata: &PlexMetadata, source_id: &str) -> 
         .media
         .first()
         .and_then(|m| m.parts.first())
-        .map(|p| p.key.clone());
+        .and_then(|p| p.key.clone());
 
     // Extract video resolution from first Media
     let video_resolution = metadata
@@ -301,20 +301,13 @@ mod tests {
             writers: vec![],
             collections: vec![],
             media: vec![PlexMedia {
-                video_resolution: None,
-                video_codec: None,
-                audio_codec: None,
-                audio_channels: None,
-                bitrate: None,
-                container: None,
-                width: None,
-                height: None,
-                video_dynamic_range: None,
                 parts: vec![PlexPart {
-                    key: "/library/parts/456/file.mkv".to_string(),
+                    key: Some("/library/parts/456/file.mkv".to_string()),
                     file: Some("/data/movies/Dune.mkv".to_string()),
                     size: Some(15_000_000_000),
+                    ..Default::default()
                 }],
+                ..Default::default()
             }],
         }
     }
@@ -350,20 +343,13 @@ mod tests {
             writers: vec![],
             collections: vec![],
             media: vec![PlexMedia {
-                video_resolution: None,
-                video_codec: None,
-                audio_codec: None,
-                audio_channels: None,
-                bitrate: None,
-                container: None,
-                width: None,
-                height: None,
-                video_dynamic_range: None,
                 parts: vec![PlexPart {
-                    key: "/library/parts/501/file.mkv".to_string(),
+                    key: Some("/library/parts/501/file.mkv".to_string()),
                     file: Some("/data/tv/Show/S01E01.mkv".to_string()),
                     size: Some(2_000_000_000),
+                    ..Default::default()
                 }],
+                ..Default::default()
             }],
         }
     }
@@ -504,19 +490,11 @@ mod tests {
         let mut plex = test_plex_movie();
         plex.media = vec![PlexMedia {
             video_resolution: Some("1080".to_string()),
-            video_codec: None,
-            audio_codec: None,
-            audio_channels: None,
-            bitrate: None,
-            container: None,
-            width: None,
-            height: None,
-            video_dynamic_range: None,
             parts: vec![PlexPart {
-                key: "/library/parts/456/file.mkv".to_string(),
-                file: None,
-                size: None,
+                key: Some("/library/parts/456/file.mkv".to_string()),
+                ..Default::default()
             }],
+            ..Default::default()
         }];
         let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
         assert_eq!(item.video_resolution, Some("1080".to_string()));
@@ -535,15 +513,8 @@ mod tests {
         let mut plex = test_plex_movie();
         plex.media = vec![PlexMedia {
             video_resolution: Some("4k".to_string()),
-            video_codec: None,
-            audio_codec: None,
-            audio_channels: None,
-            bitrate: None,
-            container: None,
-            width: None,
-            height: None,
             video_dynamic_range: Some("HDR".to_string()),
-            parts: vec![],
+            ..Default::default()
         }];
         let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
         assert_eq!(item.hdr, Some(HdrFormat::Hdr));
@@ -554,15 +525,8 @@ mod tests {
         let mut plex = test_plex_movie();
         plex.media = vec![PlexMedia {
             video_resolution: Some("4k".to_string()),
-            video_codec: None,
-            audio_codec: None,
-            audio_channels: None,
-            bitrate: None,
-            container: None,
-            width: None,
-            height: None,
             video_dynamic_range: Some("Dolby Vision".to_string()),
-            parts: vec![],
+            ..Default::default()
         }];
         let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
         assert_eq!(item.hdr, Some(HdrFormat::DolbyVision));
@@ -573,15 +537,8 @@ mod tests {
         let mut plex = test_plex_movie();
         plex.media = vec![PlexMedia {
             video_resolution: Some("1080".to_string()),
-            video_codec: None,
-            audio_codec: None,
-            audio_channels: None,
-            bitrate: None,
-            container: None,
-            width: None,
-            height: None,
             video_dynamic_range: Some("SDR".to_string()),
-            parts: vec![],
+            ..Default::default()
         }];
         let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
         assert_eq!(item.hdr, None);
@@ -734,12 +691,13 @@ mod tests {
             container: Some("mkv".to_string()),
             width: Some(1920),
             height: Some(1080),
-            video_dynamic_range: None,
             parts: vec![PlexPart {
-                key: "/library/parts/456/file.mkv".to_string(),
+                key: Some("/library/parts/456/file.mkv".to_string()),
                 file: Some("/data/Dune.mkv".to_string()),
                 size: Some(15_000_000_000),
+                ..Default::default()
             }],
+            ..Default::default()
         }];
 
         let detail = plex_metadata_to_media_detail(&plex, "http://localhost:32400").unwrap();
