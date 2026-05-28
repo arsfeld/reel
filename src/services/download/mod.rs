@@ -7,6 +7,7 @@
 
 pub mod prune;
 pub mod queue;
+pub mod sidecar;
 pub mod snapshot;
 pub mod transfer;
 
