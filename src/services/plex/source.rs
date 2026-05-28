@@ -8,7 +8,7 @@ use crate::models::{
     library::LibrarySection,
     media::{MediaItem, SourceType},
 };
-use crate::services::media_source::{MediaSource, SourceError};
+use crate::services::media_source::{DownloadDescriptor, MediaSource, SourceError};
 
 use super::api::PlexClient;
 use super::convert::{
@@ -114,6 +114,23 @@ impl MediaSource for PlexSource {
 
     fn artwork_url(&self, path: &str, width: u32, height: u32) -> String {
         self.client.transcode_image_url(path, width, height)
+    }
+
+    fn download_descriptor(&self, item: &MediaItem) -> Result<DownloadDescriptor, SourceError> {
+        let part_key = item
+            .file_path
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| {
+                SourceError::NotFound(format!("No downloadable file for item {}", item.id))
+            })?;
+        Ok(DownloadDescriptor {
+            url: self.client.playback_url(part_key),
+            part_key: part_key.to_string(),
+            // The list MediaItem carries no size; the transfer client takes the
+            // total from the first response's Content-Length.
+            expected_size: None,
+        })
     }
 
     async fn collections(&self, library_key: &str) -> Result<Vec<MediaItem>, SourceError> {
@@ -333,6 +350,61 @@ mod tests {
         let url = source.playback_url("/library/parts/456/file.mkv");
         assert!(url.contains("/library/parts/456/file.mkv"));
         assert!(url.contains("X-Plex-Token=token"));
+    }
+
+    fn item_with_file(id: &str, file_path: Option<&str>) -> MediaItem {
+        MediaItem {
+            id: id.to_string(),
+            source_type: SourceType::Plex,
+            source_id: "http://localhost:32400".to_string(),
+            external_id: "456".to_string(),
+            media_type: crate::models::media::MediaType::Movie,
+            title: "Dune".to_string(),
+            year: Some(2021),
+            overview: None,
+            content_rating: None,
+            rating: None,
+            runtime_minutes: Some(155),
+            poster_path: None,
+            series_poster_path: None,
+            backdrop_path: None,
+            genres: vec![],
+            parent_id: None,
+            season_number: None,
+            episode_number: None,
+            air_date: None,
+            file_path: file_path.map(String::from),
+            video_resolution: None,
+            hdr: None,
+            added_at: "2026-01-01".to_string(),
+            updated_at: "2026-01-01".to_string(),
+            playback_position_ms: None,
+            watched: false,
+            library_section_id: None,
+        }
+    }
+
+    #[test]
+    fn plex_download_descriptor_has_download_url_and_part_key() {
+        let client = PlexClient::new("http://localhost:32400", "token");
+        let source = PlexSource::new(client, "Test".into());
+        let item = item_with_file("plex:srv:456", Some("/library/parts/456/file.mkv"));
+
+        let desc = source.download_descriptor(&item).unwrap();
+        assert!(desc.url.contains("download=1"));
+        assert!(desc.url.contains("X-Plex-Token=token"));
+        assert_eq!(desc.part_key, "/library/parts/456/file.mkv");
+        assert_eq!(desc.expected_size, None);
+    }
+
+    #[test]
+    fn plex_download_descriptor_errors_without_file() {
+        let client = PlexClient::new("http://localhost:32400", "token");
+        let source = PlexSource::new(client, "Test".into());
+        let item = item_with_file("plex:srv:456", None);
+
+        let result = source.download_descriptor(&item);
+        assert!(matches!(result, Err(SourceError::NotFound(_))));
     }
 
     #[test]

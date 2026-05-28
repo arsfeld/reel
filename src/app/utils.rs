@@ -12,6 +12,11 @@ use crate::models::watch::WatchProgress;
 /// item is watched, the local fallback is suppressed entirely; local is only
 /// consulted when the server has no opinion (e.g. an unreachable server or a
 /// `Local` source).
+///
+/// Superseded at the live Play call-site by [`super::watch_events::resume_position`]
+/// (which also folds in offline-download progress); retained for its server-wins /
+/// AE6 coverage of the source-watched fallback path.
+#[allow(dead_code)]
 pub fn resume_position_for(item: &MediaItem, local: Option<&WatchProgress>) -> Option<f64> {
     if let Some(secs) = item.resume_position_secs() {
         return Some(secs);

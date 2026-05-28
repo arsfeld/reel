@@ -1,11 +1,50 @@
+use std::path::PathBuf;
+
 use adw;
 use adw::prelude::*;
 
 use crate::settings::Settings;
 
-/// Build and present the preferences dialog.
+/// Bytes per gigabyte used by the download-budget spin row (decimal GB).
+const BYTES_PER_GB: f64 = 1_000_000_000.0;
+
+/// Human-readable size string for the usage readout (e.g. "1.5 GB").
+fn format_size(bytes: i64) -> String {
+    let b = bytes.max(0) as f64;
+    if b >= BYTES_PER_GB {
+        format!("{:.1} GB", b / BYTES_PER_GB)
+    } else if b >= 1_000_000.0 {
+        format!("{:.0} MB", b / 1_000_000.0)
+    } else if b >= 1_000.0 {
+        format!("{:.0} KB", b / 1_000.0)
+    } else {
+        format!("{b:.0} B")
+    }
+}
+
+/// Convert a budget spin value (decimal GB, `0` = no budget) to an optional
+/// byte count.
+fn gb_to_bytes(gb: f64) -> Option<u64> {
+    if gb <= 0.0 {
+        None
+    } else {
+        Some((gb * BYTES_PER_GB) as u64)
+    }
+}
+
+/// Convert an optional byte budget to a decimal-GB spin value (`None` = 0).
+fn bytes_to_gb(bytes: Option<u64>) -> f64 {
+    bytes.map(|b| b as f64 / BYTES_PER_GB).unwrap_or(0.0)
+}
+
+/// Build and present the preferences dialog. `downloads_usage_bytes` is the
+/// total size of completed downloads, shown in the Downloads page readout.
 #[allow(clippy::too_many_lines)]
-pub fn show_preferences(parent: &impl IsA<gtk::Widget>, settings: &Settings) -> Settings {
+pub fn show_preferences(
+    parent: &impl IsA<gtk::Widget>,
+    settings: &Settings,
+    downloads_usage_bytes: i64,
+) -> Settings {
     let dialog = adw::PreferencesDialog::builder()
         .title("Preferences")
         .search_enabled(true)
@@ -96,60 +135,87 @@ pub fn show_preferences(parent: &impl IsA<gtk::Widget>, settings: &Settings) -> 
 
     subtitles_page.add(&sub_group);
 
-    // Sort and filters are now configured per-library directly in the library
-    // view (and persisted per library), so the settings dialog no longer
-    // carries a global "Default Sort" control.
+    // --- Downloads page ---
+    let downloads_page = adw::PreferencesPage::builder()
+        .title("Downloads")
+        .icon_name("folder-download-symbolic")
+        .name("downloads")
+        .build();
+
+    let storage_group = adw::PreferencesGroup::builder().title("Storage").build();
+
+    let folder_entry = adw::EntryRow::builder()
+        .title("Downloads Folder")
+        .show_apply_button(true)
+        .build();
+    folder_entry.set_text(&settings.downloads.effective_folder().to_string_lossy());
+
+    let budget_spin = adw::SpinRow::with_range(0.0, 4096.0, 1.0);
+    budget_spin.set_title("Maximum Size (GB)");
+    budget_spin.set_subtitle("0 = no limit; oldest watched downloads are pruned when exceeded");
+    budget_spin.set_value(bytes_to_gb(settings.downloads.max_bytes));
+
+    let usage_row = adw::ActionRow::builder()
+        .title("Space Used")
+        .subtitle(format_size(downloads_usage_bytes))
+        .build();
+
+    storage_group.add(&folder_entry);
+    storage_group.add(&budget_spin);
+    storage_group.add(&usage_row);
+
+    let queue_group = adw::PreferencesGroup::builder().title("Queue").build();
+    let concurrency_spin = adw::SpinRow::with_range(1.0, 4.0, 1.0);
+    concurrency_spin.set_title("Simultaneous Downloads");
+    concurrency_spin.set_value(settings.downloads.effective_concurrency() as f64);
+    queue_group.add(&concurrency_spin);
+
+    downloads_page.add(&storage_group);
+    downloads_page.add(&queue_group);
 
     // --- Add pages ---
     dialog.add(&playback_page);
     dialog.add(&subtitles_page);
+    dialog.add(&downloads_page);
 
-    // Build updated settings from current widget state for the caller.
-    // The dialog is modal-like; we clone the initial settings and return.
-    // Real-time updates are handled via signal connections in the App.
-    let mut updated = settings.clone();
-
-    // We collect settings synchronously before presenting. The dialog
-    // signals will be connected by the caller for live updates.
-    // For now, settings are saved when the dialog is presented and
-    // the user has had a chance to modify values.
-
-    // Connect signals to update settings on change
-    let settings_clone = settings.clone();
-    let resume_val = resume_switch.is_active();
-    let hwdec_idx = hwdec_combo.selected();
-    let volume_val = volume_spin.value();
-    let skip_short_val = skip_short_spin.value();
-    let skip_long_val = skip_long_spin.value();
-    let sub_lang_val = sub_lang_entry.text().to_string();
-    let sub_font_val = sub_font_entry.text().to_string();
-    let sub_size_val = sub_size_spin.value() as u32;
-
-    updated.playback.resume_playback = resume_val;
-    updated.playback.hwdec_mode = index_to_hwdec_mode(hwdec_idx);
-    updated.playback.default_volume = volume_val;
-    updated.playback.skip_short_secs = skip_short_val;
-    updated.playback.skip_long_secs = skip_long_val;
-    updated.subtitles.preferred_language = if sub_lang_val.is_empty() {
-        None
-    } else {
-        Some(sub_lang_val)
-    };
-    updated.subtitles.font_family = sub_font_val;
-    updated.subtitles.font_size = sub_size_val;
-
-    // Save settings on dialog close
-    let updated_for_close = updated.clone();
+    // Persist on close, reading the *current* widget values (so user edits are
+    // captured, not the initial values).
+    let base = settings.clone();
+    let default_folder = settings.downloads.effective_folder();
     dialog.connect_closed(move |_| {
-        if let Err(e) = updated_for_close.save() {
+        let mut updated = base.clone();
+        updated.playback.resume_playback = resume_switch.is_active();
+        updated.playback.hwdec_mode = index_to_hwdec_mode(hwdec_combo.selected());
+        updated.playback.default_volume = volume_spin.value();
+        updated.playback.skip_short_secs = skip_short_spin.value();
+        updated.playback.skip_long_secs = skip_long_spin.value();
+        let sub_lang = sub_lang_entry.text().to_string();
+        updated.subtitles.preferred_language = if sub_lang.is_empty() {
+            None
+        } else {
+            Some(sub_lang)
+        };
+        updated.subtitles.font_family = sub_font_entry.text().to_string();
+        updated.subtitles.font_size = sub_size_spin.value() as u32;
+
+        // Downloads: an empty / default-equal folder stores `None` (resolve to
+        // the default at use); a budget of 0 stores `None` (no limit).
+        let folder_text = folder_entry.text().to_string();
+        updated.downloads.folder = match folder_text.as_str() {
+            "" => None,
+            s if default_folder.to_string_lossy() == s => None,
+            s => Some(PathBuf::from(s)),
+        };
+        updated.downloads.max_bytes = gb_to_bytes(budget_spin.value());
+        updated.downloads.concurrency = concurrency_spin.value() as usize;
+
+        if let Err(e) = updated.save() {
             tracing::warn!("Failed to save settings: {e}");
         }
     });
 
-    let _ = settings_clone;
-
     dialog.present(Some(parent));
-    updated
+    settings.clone()
 }
 
 /// Build and present the About dialog.
@@ -209,5 +275,25 @@ mod tests {
     fn unknown_hwdec_defaults_to_auto_safe() {
         assert_eq!(hwdec_mode_to_index("unknown"), 0);
         assert_eq!(index_to_hwdec_mode(99), "auto-safe");
+    }
+
+    #[test]
+    fn format_size_scales_units() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(2_000), "2 KB");
+        assert_eq!(format_size(5_000_000), "5 MB");
+        assert_eq!(format_size(1_500_000_000), "1.5 GB");
+        // Negative (shouldn't happen) clamps to 0.
+        assert_eq!(format_size(-5), "0 B");
+    }
+
+    #[test]
+    fn budget_gb_conversion_roundtrips_and_treats_zero_as_none() {
+        assert_eq!(gb_to_bytes(0.0), None);
+        assert_eq!(gb_to_bytes(-1.0), None);
+        assert_eq!(gb_to_bytes(2.0), Some(2_000_000_000));
+        assert_eq!(bytes_to_gb(None), 0.0);
+        assert_eq!(bytes_to_gb(Some(2_000_000_000)), 2.0);
     }
 }

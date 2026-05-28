@@ -8,6 +8,8 @@ mod models;
 #[allow(dead_code)]
 mod navigation;
 mod player;
+#[allow(unused)]
+mod schema;
 mod services;
 mod settings;
 

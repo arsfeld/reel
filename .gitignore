@@ -12,3 +12,4 @@ docs/brainstorms/
 /repo/
 .flatpak-builder/
 *.flatpak
+.worktrees
