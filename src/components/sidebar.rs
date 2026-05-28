@@ -9,12 +9,30 @@ use crate::models::library::{LibrarySection, LibraryType};
 /// A real Plex section key is numeric, so this never collides.
 pub const COLLECTIONS_KEY: &str = "__collections__";
 
-/// What the sidebar currently has selected, for highlight sync.
+/// What the sidebar currently has selected, for highlight sync. `Library`
+/// carries the composite `{source_id}:{key}` so two same-keyed libraries on
+/// different servers never highlight together.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SidebarSelection {
     Home,
-    Library(String),
-    Collections,
+    /// `(source_id, section_key)` — composite so per-source highlight is isolated.
+    Library(String, String),
+    /// `source_id` of the source whose Collections entry is selected.
+    Collections(String),
+}
+
+/// One connected source and its (possibly not-yet-loaded) libraries. The
+/// sidebar holds these in insertion order; `derive_rows` renders one group per
+/// entry.
+#[derive(Debug, Clone)]
+pub struct SourceGroup {
+    pub name: String,
+    pub source_type: String,
+    pub source_id: String,
+    pub libraries: Vec<LibrarySection>,
+    /// True once a libraries fetch completed (success or empty), so the group
+    /// shows a terminal state instead of spinning on "Loading" forever.
+    pub loaded: bool,
 }
 
 /// Pure description of one rendered sidebar row. Derived from state by
@@ -23,17 +41,20 @@ pub enum SidebarSelection {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SidebarRow {
     Home,
-    /// The source node header. Carries the edit affordance.
+    /// The source node header. Carries the source identity for the edit/remove
+    /// affordances.
     SourceHeader {
         name: String,
+        source_type: String,
+        source_id: String,
     },
-    /// Placeholder shown under the source header before libraries resolve.
+    /// Placeholder shown under a source header before its libraries resolve.
     Loading,
-    /// Shown when the source loaded but reported no (supported) libraries — a
+    /// Shown when a source loaded but reported no (supported) libraries — a
     /// terminal state, distinct from `Loading`, so the sidebar never spins
     /// forever if a fetch comes back empty.
     NoLibraries,
-    /// Shown in normal mode when the source has libraries but all are hidden,
+    /// Shown in normal mode when a source has libraries but all are hidden,
     /// so the source node never collapses to nothing.
     AllHidden,
     Library {
@@ -41,77 +62,86 @@ pub enum SidebarRow {
         title: String,
         library_type: LibraryType,
         visible: bool,
+        source_type: String,
+        source_id: String,
     },
     Collections {
         visible: bool,
+        source_type: String,
+        source_id: String,
     },
 }
 
-/// Derive the ordered list of sidebar rows from current state. In normal mode
-/// only visible libraries (and Collections) appear; in edit mode every library
-/// appears with its visibility flag so a toggle can be rendered.
+/// Derive the ordered list of sidebar rows from current state. Emits a single
+/// `Home` row at the top, then one group per source (in insertion order): a
+/// `SourceHeader` followed by that source's rows. In normal mode only visible
+/// libraries (and Collections) appear; in edit mode every library appears with
+/// its visibility flag so a toggle can be rendered. Visibility is keyed on the
+/// **composite** `{source_type}:{source_id}:{section_key}`, so two same-named
+/// libraries on different servers hide independently.
 pub fn derive_rows(
-    source_name: Option<&str>,
-    source_type: &str,
-    source_id: &str,
-    libraries: &[LibrarySection],
+    sources: &[SourceGroup],
     hidden: &HashSet<String>,
     edit_mode: bool,
-    loaded: bool,
 ) -> Vec<SidebarRow> {
     let mut rows = vec![SidebarRow::Home];
 
-    let Some(name) = source_name else {
-        return rows;
-    };
-    rows.push(SidebarRow::SourceHeader {
-        name: name.to_string(),
-    });
+    for group in sources {
+        rows.push(SidebarRow::SourceHeader {
+            name: group.name.clone(),
+            source_type: group.source_type.clone(),
+            source_id: group.source_id.clone(),
+        });
 
-    // Source connected but its libraries have not been fetched yet.
-    if !loaded {
-        rows.push(SidebarRow::Loading);
-        return rows;
-    }
+        // Source connected but its libraries have not been fetched yet.
+        if !group.loaded {
+            rows.push(SidebarRow::Loading);
+            continue;
+        }
 
-    // Loaded, but the source reported no supported libraries.
-    if libraries.is_empty() {
-        rows.push(SidebarRow::NoLibraries);
-        return rows;
-    }
+        // Loaded, but the source reported no supported libraries.
+        if group.libraries.is_empty() {
+            rows.push(SidebarRow::NoLibraries);
+            continue;
+        }
 
-    let is_hidden = |key: &str| {
-        hidden.contains(&LibrarySection::visibility_key_for(
-            source_type,
-            source_id,
-            key,
-        ))
-    };
+        let is_hidden = |key: &str| {
+            hidden.contains(&LibrarySection::visibility_key_for(
+                &group.source_type,
+                &group.source_id,
+                key,
+            ))
+        };
 
-    let mut any_visible = false;
-    for lib in libraries {
-        let visible = !is_hidden(&lib.key);
-        any_visible |= visible;
-        if edit_mode || visible {
-            rows.push(SidebarRow::Library {
-                key: lib.key.clone(),
-                title: lib.title.clone(),
-                library_type: lib.library_type,
-                visible,
+        let mut any_visible = false;
+        for lib in &group.libraries {
+            let visible = !is_hidden(&lib.key);
+            any_visible |= visible;
+            if edit_mode || visible {
+                rows.push(SidebarRow::Library {
+                    key: lib.key.clone(),
+                    title: lib.title.clone(),
+                    library_type: lib.library_type,
+                    visible,
+                    source_type: group.source_type.clone(),
+                    source_id: group.source_id.clone(),
+                });
+            }
+        }
+
+        let collections_visible = !is_hidden(COLLECTIONS_KEY);
+        any_visible |= collections_visible;
+        if edit_mode || collections_visible {
+            rows.push(SidebarRow::Collections {
+                visible: collections_visible,
+                source_type: group.source_type.clone(),
+                source_id: group.source_id.clone(),
             });
         }
-    }
 
-    let collections_visible = !is_hidden(COLLECTIONS_KEY);
-    any_visible |= collections_visible;
-    if edit_mode || collections_visible {
-        rows.push(SidebarRow::Collections {
-            visible: collections_visible,
-        });
-    }
-
-    if !edit_mode && !any_visible {
-        rows.push(SidebarRow::AllHidden);
+        if !edit_mode && !any_visible {
+            rows.push(SidebarRow::AllHidden);
+        }
     }
 
     rows
@@ -123,18 +153,22 @@ pub fn derive_rows(
 enum RowAction {
     None,
     Home,
-    Library(LibrarySection),
-    Collections,
+    /// A library plus the identity of the source that owns it.
+    Library {
+        section: LibrarySection,
+        source_type: String,
+        source_id: String,
+    },
+    /// The Collections entry plus its owning source identity.
+    Collections {
+        source_type: String,
+        source_id: String,
+    },
 }
 
 pub struct Sidebar {
-    source_name: Option<String>,
-    source_type: String,
-    source_id: String,
-    libraries: Vec<LibrarySection>,
-    /// True once a libraries fetch has completed (success or empty), so the
-    /// sidebar shows a terminal state instead of spinning on "Loading" forever.
-    libraries_loaded: bool,
+    /// Connected sources in insertion order; each renders as its own group.
+    sources: Vec<SourceGroup>,
     hidden: HashSet<String>,
     edit_mode: bool,
     selected: SidebarSelection,
@@ -149,22 +183,38 @@ pub struct Sidebar {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum SidebarMsg {
-    /// Set the connected source's display name + identity (used to build
-    /// per-library visibility keys).
+    /// Upsert a connected source's display name + identity, preserving
+    /// insertion order. Updates the name if `(type, id)` already exists, else
+    /// pushes a new not-loaded group.
     SetSource {
         name: String,
         source_type: String,
         source_id: String,
     },
-    /// Provide the source's libraries (fetched async by the app).
-    SetLibraries(Vec<LibrarySection>),
-    /// Update the hidden-library set.
+    /// Provide a source's libraries (fetched async by the app), matched by
+    /// `source_id`. Ignored if no such group exists.
+    SetLibraries {
+        source_id: String,
+        libraries: Vec<LibrarySection>,
+    },
+    /// Update the hidden-entry set (composite keys).
     SetVisibility(HashSet<String>),
     /// A listbox row was selected (by index into `row_actions`).
     RowSelected(usize),
     /// Toggle a library/collections entry's visibility (from its edit switch).
-    ToggleEntry { key: String, visible: bool },
-    /// Enter/leave edit mode.
+    /// Carries the owning source so the composite key is built correctly.
+    ToggleEntry {
+        key: String,
+        source_type: String,
+        source_id: String,
+        visible: bool,
+    },
+    /// The remove (trash) button on a source header was clicked.
+    RemoveSourceClicked {
+        source_type: String,
+        source_id: String,
+    },
+    /// Enter/leave edit mode (global across all sources).
     ToggleEditMode,
     /// Select a row programmatically (e.g. on startup / back navigation)
     /// without emitting a navigation output.
@@ -181,8 +231,13 @@ pub enum SidebarOutput {
         source_type: String,
         source_id: String,
     },
-    ShowCollections,
-    /// Persist a visibility change for a library (or Collections) entry.
+    /// Show the Collections of a specific source.
+    ShowCollections {
+        source_type: String,
+        source_id: String,
+    },
+    /// Persist a visibility change for a library (or Collections) entry. `key`
+    /// is the **composite** `{source_type}:{source_id}:{section_key}`.
     SetLibraryVisible {
         key: String,
         visible: bool,
@@ -190,6 +245,11 @@ pub enum SidebarOutput {
     /// Edit mode was exited; the app re-evaluates the current view (a hidden
     /// current library redirects to Home).
     EditModeExited,
+    /// The user removed a source (optimistic local removal already applied).
+    RemoveSource {
+        source_type: String,
+        source_id: String,
+    },
 }
 
 #[relm4::component(pub)]
@@ -242,11 +302,7 @@ impl SimpleComponent for Sidebar {
         });
 
         let mut model = Self {
-            source_name: None,
-            source_type: String::new(),
-            source_id: String::new(),
-            libraries: Vec::new(),
-            libraries_loaded: false,
+            sources: Vec::new(),
             hidden: HashSet::new(),
             edit_mode: false,
             selected: SidebarSelection::Home,
@@ -267,15 +323,32 @@ impl SimpleComponent for Sidebar {
                 source_type,
                 source_id,
             } => {
-                self.source_name = Some(name);
-                self.source_type = source_type;
-                self.source_id = source_id;
+                if let Some(existing) = self
+                    .sources
+                    .iter_mut()
+                    .find(|g| g.source_type == source_type && g.source_id == source_id)
+                {
+                    existing.name = name;
+                } else {
+                    self.sources.push(SourceGroup {
+                        name,
+                        source_type,
+                        source_id,
+                        libraries: Vec::new(),
+                        loaded: false,
+                    });
+                }
                 self.rebuild(&sender);
             }
-            SidebarMsg::SetLibraries(libraries) => {
-                self.libraries = libraries;
-                self.libraries_loaded = true;
-                self.rebuild(&sender);
+            SidebarMsg::SetLibraries {
+                source_id,
+                libraries,
+            } => {
+                if let Some(group) = self.sources.iter_mut().find(|g| g.source_id == source_id) {
+                    group.libraries = libraries;
+                    group.loaded = true;
+                    self.rebuild(&sender);
+                }
             }
             SidebarMsg::SetVisibility(hidden) => {
                 self.hidden = hidden;
@@ -288,41 +361,42 @@ impl SimpleComponent for Sidebar {
                     let _ = sender.output(SidebarOutput::EditModeExited);
                 }
             }
-            SidebarMsg::ToggleEntry { key, visible } => {
-                let vis_key =
-                    LibrarySection::visibility_key_for(&self.source_type, &self.source_id, &key);
+            SidebarMsg::ToggleEntry {
+                key,
+                source_type,
+                source_id,
+                visible,
+            } => {
+                let vis_key = LibrarySection::visibility_key_for(&source_type, &source_id, &key);
                 if visible {
                     self.hidden.remove(&vis_key);
                 } else {
-                    self.hidden.insert(vis_key);
+                    self.hidden.insert(vis_key.clone());
                 }
                 // The switch already reflects the new state; no rebuild while in
                 // edit mode (rows stay put). Persistence + re-filter happen in
-                // the app via the output below.
-                let _ = sender.output(SidebarOutput::SetLibraryVisible { key, visible });
+                // the app via the output below. Emit the COMPOSITE key so every
+                // consumer (retain_visible_items, redirect check, derive_rows)
+                // keys on the same string.
+                let _ = sender.output(SidebarOutput::SetLibraryVisible {
+                    key: vis_key,
+                    visible,
+                });
+            }
+            SidebarMsg::RemoveSourceClicked {
+                source_type,
+                source_id,
+            } => {
+                self.sources
+                    .retain(|g| !(g.source_type == source_type && g.source_id == source_id));
+                self.rebuild(&sender);
+                let _ = sender.output(SidebarOutput::RemoveSource {
+                    source_type,
+                    source_id,
+                });
             }
             SidebarMsg::RowSelected(index) => {
-                // Programmatic selection is blocked at the signal, so this only
-                // fires for real user clicks on selectable (actionable) rows.
-                match self.row_actions.get(index) {
-                    Some(RowAction::Home) => {
-                        self.selected = SidebarSelection::Home;
-                        let _ = sender.output(SidebarOutput::NavigateHome);
-                    }
-                    Some(RowAction::Library(section)) => {
-                        self.selected = SidebarSelection::Library(section.key.clone());
-                        let _ = sender.output(SidebarOutput::Navigate {
-                            section: section.clone(),
-                            source_type: self.source_type.clone(),
-                            source_id: self.source_id.clone(),
-                        });
-                    }
-                    Some(RowAction::Collections) => {
-                        self.selected = SidebarSelection::Collections;
-                        let _ = sender.output(SidebarOutput::ShowCollections);
-                    }
-                    Some(RowAction::None) | None => {}
-                }
+                self.handle_row_selected(index, &sender);
             }
             SidebarMsg::SelectExternal(selection) => {
                 self.selected = selection;
@@ -335,6 +409,41 @@ impl SimpleComponent for Sidebar {
 }
 
 impl Sidebar {
+    /// Dispatch a real user row click to a navigation output. Programmatic
+    /// selection is blocked at the signal, so this only fires for actionable
+    /// rows.
+    fn handle_row_selected(&mut self, index: usize, sender: &ComponentSender<Self>) {
+        match self.row_actions.get(index) {
+            Some(RowAction::Home) => {
+                self.selected = SidebarSelection::Home;
+                let _ = sender.output(SidebarOutput::NavigateHome);
+            }
+            Some(RowAction::Library {
+                section,
+                source_type,
+                source_id,
+            }) => {
+                self.selected = SidebarSelection::Library(source_id.clone(), section.key.clone());
+                let _ = sender.output(SidebarOutput::Navigate {
+                    section: section.clone(),
+                    source_type: source_type.clone(),
+                    source_id: source_id.clone(),
+                });
+            }
+            Some(RowAction::Collections {
+                source_type,
+                source_id,
+            }) => {
+                self.selected = SidebarSelection::Collections(source_id.clone());
+                let _ = sender.output(SidebarOutput::ShowCollections {
+                    source_type: source_type.clone(),
+                    source_id: source_id.clone(),
+                });
+            }
+            Some(RowAction::None) | None => {}
+        }
+    }
+
     /// Clear and rebuild the listbox from current state, refreshing the parallel
     /// `row_actions`. The row-selected handler is blocked throughout so clearing
     /// and re-selecting can't emit spurious navigation.
@@ -345,15 +454,7 @@ impl Sidebar {
             self.listbox.remove(&child);
         }
 
-        let rows = derive_rows(
-            self.source_name.as_deref(),
-            &self.source_type,
-            &self.source_id,
-            &self.libraries,
-            &self.hidden,
-            self.edit_mode,
-            self.libraries_loaded,
-        );
+        let rows = derive_rows(&self.sources, &self.hidden, self.edit_mode);
 
         let mut actions = Vec::with_capacity(rows.len());
         for row in &rows {
@@ -375,9 +476,14 @@ impl Sidebar {
     ) -> (gtk::ListBoxRow, RowAction) {
         match row {
             SidebarRow::Home => (nav_row("go-home-symbolic", "Home", None), RowAction::Home),
-            SidebarRow::SourceHeader { name } => {
-                (self.source_header_row(name, sender), RowAction::None)
-            }
+            SidebarRow::SourceHeader {
+                name,
+                source_type,
+                source_id,
+            } => (
+                self.source_header_row(name, source_type, source_id, sender),
+                RowAction::None,
+            ),
             SidebarRow::Loading => {
                 let r = gtk::ListBoxRow::builder().selectable(false).build();
                 let b = indented_box();
@@ -406,6 +512,8 @@ impl Sidebar {
                 title,
                 library_type,
                 visible,
+                source_type,
+                source_id,
             } => {
                 let icon = match library_type {
                     LibraryType::Movie => "video-display-symbolic",
@@ -413,30 +521,51 @@ impl Sidebar {
                 };
                 let switch = self
                     .edit_mode
-                    .then(|| self.entry_switch(key, *visible, sender));
+                    .then(|| self.entry_switch(key, source_type, source_id, *visible, sender));
                 let r = nav_row_indented(icon, title, switch);
                 (
                     r,
-                    RowAction::Library(LibrarySection {
-                        key: key.clone(),
-                        title: title.clone(),
-                        library_type: *library_type,
-                        count: None,
-                    }),
+                    RowAction::Library {
+                        section: LibrarySection {
+                            key: key.clone(),
+                            title: title.clone(),
+                            library_type: *library_type,
+                            count: None,
+                        },
+                        source_type: source_type.clone(),
+                        source_id: source_id.clone(),
+                    },
                 )
             }
-            SidebarRow::Collections { visible } => {
-                let switch = self
-                    .edit_mode
-                    .then(|| self.entry_switch(COLLECTIONS_KEY, *visible, sender));
+            SidebarRow::Collections {
+                visible,
+                source_type,
+                source_id,
+            } => {
+                let switch = self.edit_mode.then(|| {
+                    self.entry_switch(COLLECTIONS_KEY, source_type, source_id, *visible, sender)
+                });
                 let r = nav_row_indented("view-grid-symbolic", "Collections", switch);
-                (r, RowAction::Collections)
+                (
+                    r,
+                    RowAction::Collections {
+                        source_type: source_type.clone(),
+                        source_id: source_id.clone(),
+                    },
+                )
             }
         }
     }
 
-    /// The source node header row: the source name plus the edit/Done affordance.
-    fn source_header_row(&self, name: &str, sender: &ComponentSender<Self>) -> gtk::ListBoxRow {
+    /// The source node header row: source name, edit/Done toggle, and a remove
+    /// (trash) button.
+    fn source_header_row(
+        &self,
+        name: &str,
+        source_type: &str,
+        source_id: &str,
+        sender: &ComponentSender<Self>,
+    ) -> gtk::ListBoxRow {
         let r = gtk::ListBoxRow::builder().selectable(false).build();
         let b = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -471,6 +600,22 @@ impl Sidebar {
         });
         b.append(&edit_btn);
 
+        let remove_btn = gtk::Button::builder()
+            .icon_name("user-trash-symbolic")
+            .tooltip_text("Remove server")
+            .build();
+        remove_btn.add_css_class("flat");
+        let s = sender.input_sender().clone();
+        let st = source_type.to_string();
+        let sid = source_id.to_string();
+        remove_btn.connect_clicked(move |_| {
+            let _ = s.send(SidebarMsg::RemoveSourceClicked {
+                source_type: st.clone(),
+                source_id: sid.clone(),
+            });
+        });
+        b.append(&remove_btn);
+
         r.set_child(Some(&b));
         r
     }
@@ -479,6 +624,8 @@ impl Sidebar {
     fn entry_switch(
         &self,
         key: &str,
+        source_type: &str,
+        source_id: &str,
         visible: bool,
         sender: &ComponentSender<Self>,
     ) -> gtk::Switch {
@@ -487,9 +634,13 @@ impl Sidebar {
         switch.set_active(visible);
         let s = sender.input_sender().clone();
         let key = key.to_string();
+        let st = source_type.to_string();
+        let sid = source_id.to_string();
         switch.connect_active_notify(move |sw| {
             let _ = s.send(SidebarMsg::ToggleEntry {
                 key: key.clone(),
+                source_type: st.clone(),
+                source_id: sid.clone(),
                 visible: sw.is_active(),
             });
         });
@@ -504,8 +655,15 @@ impl Sidebar {
             .iter()
             .position(|a| match (&self.selected, a) {
                 (SidebarSelection::Home, RowAction::Home) => true,
-                (SidebarSelection::Library(k), RowAction::Library(section)) => *k == section.key,
-                (SidebarSelection::Collections, RowAction::Collections) => true,
+                (
+                    SidebarSelection::Library(sid, k),
+                    RowAction::Library {
+                        section, source_id, ..
+                    },
+                ) => *sid == *source_id && *k == section.key,
+                (SidebarSelection::Collections(sid), RowAction::Collections { source_id, .. }) => {
+                    *sid == *source_id
+                }
                 _ => false,
             });
         if let Some(idx) = target {
@@ -590,29 +748,40 @@ mod tests {
         keys.iter().map(|s| s.to_string()).collect()
     }
 
+    fn group(
+        name: &str,
+        source_type: &str,
+        source_id: &str,
+        libraries: Vec<LibrarySection>,
+        loaded: bool,
+    ) -> SourceGroup {
+        SourceGroup {
+            name: name.to_string(),
+            source_type: source_type.to_string(),
+            source_id: source_id.to_string(),
+            libraries,
+            loaded,
+        }
+    }
+
     #[test]
-    fn no_source_shows_only_home() {
-        let rows = derive_rows(None, "plex", "srv", &[], &HashSet::new(), false, false);
+    fn no_sources_shows_only_home() {
+        let rows = derive_rows(&[], &HashSet::new(), false);
         assert_eq!(rows, vec![SidebarRow::Home]);
     }
 
     #[test]
     fn not_loaded_shows_loading() {
-        let rows = derive_rows(
-            Some("My Plex"),
-            "plex",
-            "srv",
-            &[],
-            &HashSet::new(),
-            false,
-            false,
-        );
+        let sources = vec![group("My Plex", "plex", "srv", vec![], false)];
+        let rows = derive_rows(&sources, &HashSet::new(), false);
         assert_eq!(
             rows,
             vec![
                 SidebarRow::Home,
                 SidebarRow::SourceHeader {
-                    name: "My Plex".to_string()
+                    name: "My Plex".to_string(),
+                    source_type: "plex".to_string(),
+                    source_id: "srv".to_string(),
                 },
                 SidebarRow::Loading,
             ]
@@ -620,22 +789,17 @@ mod tests {
     }
 
     #[test]
-    fn loaded_but_empty_shows_no_libraries() {
-        let rows = derive_rows(
-            Some("My Plex"),
-            "plex",
-            "srv",
-            &[],
-            &HashSet::new(),
-            false,
-            true,
-        );
+    fn derive_rows_empty_source_shows_header_only() {
+        let sources = vec![group("My Plex", "plex", "srv", vec![], true)];
+        let rows = derive_rows(&sources, &HashSet::new(), false);
         assert_eq!(
             rows,
             vec![
                 SidebarRow::Home,
                 SidebarRow::SourceHeader {
-                    name: "My Plex".to_string()
+                    name: "My Plex".to_string(),
+                    source_type: "plex".to_string(),
+                    source_id: "srv".to_string(),
                 },
                 SidebarRow::NoLibraries,
             ]
@@ -648,19 +812,144 @@ mod tests {
             section("1", "Movies", LibraryType::Movie),
             section("2", "4K Movies", LibraryType::Movie),
         ];
-        let rows = derive_rows(
-            Some("S"),
-            "plex",
-            "srv",
-            &libs,
-            &HashSet::new(),
-            false,
-            true,
-        );
+        let sources = vec![group("S", "plex", "srv", libs, true)];
+        let rows = derive_rows(&sources, &HashSet::new(), false);
         // Home, header, 2 libraries, collections.
         assert_eq!(rows.len(), 5);
         assert!(matches!(rows[2], SidebarRow::Library { ref title, .. } if title == "Movies"));
-        assert!(matches!(rows[4], SidebarRow::Collections { visible: true }));
+        assert!(matches!(
+            rows[4],
+            SidebarRow::Collections { visible: true, .. }
+        ));
+    }
+
+    #[test]
+    fn derive_rows_two_sources_emits_two_groups() {
+        let plex = group(
+            "Plex",
+            "plex",
+            "px",
+            vec![section("1", "Movies", LibraryType::Movie)],
+            true,
+        );
+        let jelly = group(
+            "Jelly",
+            "jellyfin",
+            "jf",
+            vec![section("a", "Shows", LibraryType::Show)],
+            true,
+        );
+        let rows = derive_rows(&[plex, jelly], &HashSet::new(), false);
+
+        // Home appears exactly once, at the top.
+        assert_eq!(rows[0], SidebarRow::Home);
+        assert_eq!(
+            rows.iter()
+                .filter(|r| matches!(r, SidebarRow::Home))
+                .count(),
+            1
+        );
+
+        // Two headers, in insertion order.
+        let headers: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| match r {
+                SidebarRow::SourceHeader { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(headers, vec!["Plex", "Jelly"]);
+
+        // Each source contributes its own library + collections row.
+        let lib_titles: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| match r {
+                SidebarRow::Library { title, .. } => Some(title.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lib_titles, vec!["Movies", "Shows"]);
+        assert_eq!(
+            rows.iter()
+                .filter(|r| matches!(r, SidebarRow::Collections { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn derive_rows_hidden_library_excluded_per_source() {
+        // Same bare key "2" on two servers: hiding jellyfin:jf:2 must not hide
+        // the same-keyed Plex library plex:px:2.
+        let plex = group(
+            "Plex",
+            "plex",
+            "px",
+            vec![section("2", "Plex Lib", LibraryType::Movie)],
+            true,
+        );
+        let jelly = group(
+            "Jelly",
+            "jellyfin",
+            "jf",
+            vec![section("2", "Jelly Lib", LibraryType::Movie)],
+            true,
+        );
+        let h = hidden(&["jellyfin:jf:2"]);
+        let rows = derive_rows(&[plex, jelly], &h, false);
+
+        let lib_titles: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| match r {
+                SidebarRow::Library { title, .. } => Some(title.as_str()),
+                _ => None,
+            })
+            .collect();
+        // Plex lib survives, Jellyfin lib is hidden.
+        assert_eq!(lib_titles, vec!["Plex Lib"]);
+    }
+
+    #[test]
+    fn derive_rows_preserves_source_order() {
+        let a = group("A", "plex", "a", vec![], true);
+        let b = group("B", "jellyfin", "b", vec![], true);
+        let c = group("C", "plex", "c", vec![], true);
+        let rows = derive_rows(&[a, b, c], &HashSet::new(), false);
+        let headers: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| match r {
+                SidebarRow::SourceHeader { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(headers, vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn derive_rows_loading_state_per_source() {
+        // First source loaded with a library, second still loading.
+        let loaded = group(
+            "Loaded",
+            "plex",
+            "p",
+            vec![section("1", "Movies", LibraryType::Movie)],
+            true,
+        );
+        let pending = group("Pending", "jellyfin", "j", vec![], false);
+        let rows = derive_rows(&[loaded, pending], &HashSet::new(), false);
+        // Exactly one Loading row, belonging to the second group.
+        assert_eq!(
+            rows.iter()
+                .filter(|r| matches!(r, SidebarRow::Loading))
+                .count(),
+            1
+        );
+        // The Loading row comes after the second header.
+        let pending_header = rows
+            .iter()
+            .position(|r| matches!(r, SidebarRow::SourceHeader { name, .. } if name == "Pending"))
+            .unwrap();
+        assert!(matches!(rows[pending_header + 1], SidebarRow::Loading));
     }
 
     #[test]
@@ -669,8 +958,9 @@ mod tests {
             section("1", "Movies", LibraryType::Movie),
             section("2", "Home Videos", LibraryType::Movie),
         ];
+        let sources = vec![group("S", "plex", "srv", libs, true)];
         let h = hidden(&["plex:srv:2"]);
-        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false, true);
+        let rows = derive_rows(&sources, &h, false);
         let lib_titles: Vec<_> = rows
             .iter()
             .filter_map(|r| match r {
@@ -687,8 +977,9 @@ mod tests {
             section("1", "Movies", LibraryType::Movie),
             section("2", "Home Videos", LibraryType::Movie),
         ];
+        let sources = vec![group("S", "plex", "srv", libs, true)];
         let h = hidden(&["plex:srv:2"]);
-        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, true, true);
+        let rows = derive_rows(&sources, &h, true);
         let libs_in_rows: Vec<_> = rows
             .iter()
             .filter_map(|r| match r {
@@ -703,14 +994,17 @@ mod tests {
     fn all_hidden_keeps_source_node_with_marker() {
         let libs = vec![section("1", "Movies", LibraryType::Movie)];
         // Hide the library and Collections.
+        let sources = vec![group("S", "plex", "srv", libs, true)];
         let h = hidden(&["plex:srv:1", "plex:srv:__collections__"]);
-        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false, true);
+        let rows = derive_rows(&sources, &h, false);
         assert_eq!(
             rows,
             vec![
                 SidebarRow::Home,
                 SidebarRow::SourceHeader {
-                    name: "S".to_string()
+                    name: "S".to_string(),
+                    source_type: "plex".to_string(),
+                    source_id: "srv".to_string(),
                 },
                 SidebarRow::AllHidden,
             ]
@@ -720,8 +1014,9 @@ mod tests {
     #[test]
     fn collections_can_be_hidden_independently() {
         let libs = vec![section("1", "Movies", LibraryType::Movie)];
+        let sources = vec![group("S", "plex", "srv", libs, true)];
         let h = hidden(&["plex:srv:__collections__"]);
-        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false, true);
+        let rows = derive_rows(&sources, &h, false);
         assert!(
             !rows
                 .iter()

@@ -108,36 +108,53 @@ impl App {
             .and_then(|item| self.sources.for_item(item))
     }
 
-    /// Register a freshly-built source and wire it into every view: sidebar
-    /// identity, per-view `SetSource`, and an async libraries fetch. Shared by
-    /// the startup-validation and connection-saved paths so the wiring lives in
-    /// one place. Sets the browsed source to the one just wired.
-    fn wire_active_source(
+    /// Register a freshly-built source and add it to the sidebar as its own
+    /// group: register in the live registry (idempotent), push its identity +
+    /// visibility into the sidebar, and spawn an async libraries fetch. Called
+    /// for EVERY validated source so all servers appear in the sidebar — this
+    /// does NOT change the browsed source.
+    fn feed_sidebar_source(
         &mut self,
         source_type: SourceType,
-        source_id: String,
+        source_id: &str,
+        name: &str,
         source: Arc<dyn MediaSource>,
         sender: &ComponentSender<Self>,
     ) {
         self.sources
-            .register(source_type, source_id.clone(), source.clone());
-        self.browsed_source = Some((source_type, source_id.clone()));
-        let cache = self.artwork_cache.clone();
+            .register(source_type, source_id.to_string(), source.clone());
         let hidden = self.settings.library_visibility.hidden.clone();
 
         self.sidebar.emit(SidebarMsg::SetSource {
-            name: source.name().to_string(),
+            name: name.to_string(),
             source_type: source_type.as_str().to_string(),
-            source_id: source_id.clone(),
+            source_id: source_id.to_string(),
         });
-        self.sidebar.emit(SidebarMsg::SetVisibility(hidden.clone()));
-        {
-            // The client absorbs cold-start retries, so a single fetch suffices.
-            let src = source.clone();
-            sender.oneshot_command(async move {
-                AppCmd::LibrariesLoaded(src.libraries().await.unwrap_or_default())
-            });
-        }
+        self.sidebar.emit(SidebarMsg::SetVisibility(hidden));
+
+        // The client absorbs cold-start retries, so a single fetch suffices.
+        let src = source;
+        let id = source_id.to_string();
+        sender.oneshot_command(async move {
+            AppCmd::LibrariesLoaded {
+                source_id: id,
+                libraries: src.libraries().await.unwrap_or_default(),
+            }
+        });
+    }
+
+    /// Make `source` the browsed source and point every browse-oriented view at
+    /// it (Home, LibraryView, detail views). Per-item paths still resolve their
+    /// own source; this only drives the *browsed* list + Home shelves.
+    fn set_browsed_views(
+        &mut self,
+        source_type: SourceType,
+        source_id: &str,
+        source: Arc<dyn MediaSource>,
+    ) {
+        self.browsed_source = Some((source_type, source_id.to_string()));
+        let cache = self.artwork_cache.clone();
+        let hidden = self.settings.library_visibility.hidden.clone();
 
         self.home_view
             .emit(HomeViewMsg::SetSource(source.clone(), cache.clone()));
@@ -158,6 +175,92 @@ impl App {
         let watch_data = load_watch_data(&self.db_conn);
         self.library_view
             .emit(LibraryViewMsg::SetWatchData(watch_data));
+    }
+
+    /// Feed a source into the sidebar AND make it the browsed source. Used by
+    /// the connection-saved path, where a newly-added server should become the
+    /// active one.
+    fn wire_active_source(
+        &mut self,
+        source_type: SourceType,
+        source_id: String,
+        source: Arc<dyn MediaSource>,
+        sender: &ComponentSender<Self>,
+    ) {
+        self.feed_sidebar_source(
+            source_type,
+            &source_id,
+            source.name(),
+            source.clone(),
+            sender,
+        );
+        self.set_browsed_views(source_type, &source_id, source);
+    }
+
+    /// Remove a connected source and evict everything it owns. This is the ONLY
+    /// media/watch eviction path (R5 / DATA-PROTECTION) — it runs solely from
+    /// the explicit user-initiated remove-source action.
+    fn remove_source(
+        &mut self,
+        source_type: &str,
+        source_id: &str,
+        sender: &ComponentSender<Self>,
+    ) {
+        let Some(st) = SourceType::from_str(source_type) else {
+            return;
+        };
+
+        // Capture the display name before dropping the live source.
+        let name = self
+            .sources
+            .get(st, source_id)
+            .map(|s| s.name().to_string())
+            .unwrap_or_else(|| source_id.to_string());
+
+        // Drop from the live registry (the sidebar already removed its group
+        // optimistically).
+        self.sources.remove(st, source_id);
+
+        // Persisted eviction: the saved source row, then its media items, then
+        // any now-orphaned watch_progress rows (keyed by media_item_id, which
+        // embeds the source). Done in this order so orphan cleanup is accurate.
+        if let Some(ref conn) = self.db_conn {
+            let source_key = Source::make_id(st, source_id);
+            let _ = crate::db::source_repo::SourceRepo::new(conn).delete(&source_key);
+            if let Err(e) =
+                crate::db::media_repo::MediaRepo::new(conn).delete_by_source(&st, source_id)
+            {
+                tracing::warn!("Failed to delete media for removed source: {e}");
+            }
+            if let Err(e) = WatchProgressRepo::new(conn).cleanup_orphans() {
+                tracing::warn!("Failed to clean up watch progress for removed source: {e}");
+            }
+        }
+
+        // If the removed source was the browsed one, pick another registered
+        // source as browsed (or none) and navigate Home.
+        if self.browsed_source.as_ref().map(|(t, i)| (*t, i.as_str())) == Some((st, source_id)) {
+            self.browsed_source = None;
+            let next = self
+                .sources
+                .iter()
+                .next()
+                .map(|n| (n.source_type, n.source_id.clone(), n.source.clone()));
+            if let Some((next_type, next_id, next_src)) = next {
+                self.set_browsed_views(next_type, &next_id, next_src);
+            }
+            sender.input(AppMsg::NavigateHome);
+        } else {
+            // Removing a non-browsed source still changes Home (it fans out over
+            // all sources) and the library watch data.
+            let in_progress = load_in_progress(&self.db_conn);
+            self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
+            let watch_data = load_watch_data(&self.db_conn);
+            self.library_view
+                .emit(LibraryViewMsg::SetWatchData(watch_data));
+        }
+
+        sender.input(AppMsg::ShowToast(format!("Removed {name}")));
     }
 }
 
@@ -201,7 +304,16 @@ pub enum AppMsg {
     },
     ShowToast(String),
     FocusSearch,
-    ShowCollections,
+    /// Show the Collections of a specific source (per-source, from the sidebar).
+    ShowCollections {
+        source_type: String,
+        source_id: String,
+    },
+    /// Remove a connected source: evict its media/watch rows and saved config.
+    RemoveSource {
+        source_type: String,
+        source_id: String,
+    },
     ShowCollectionDetail(MediaItem),
     MarkWatched(MediaItem),
     MarkUnwatched(MediaItem),
@@ -224,8 +336,12 @@ pub enum AppCmd {
     /// Validation failed for a single source — identified by id so it never
     /// affects another source's data.
     SourceValidationFailed { source_id: String, message: String },
-    /// The active source's libraries, fetched after validation, for the sidebar.
-    LibrariesLoaded(Vec<LibrarySection>),
+    /// A source's libraries, fetched after validation, routed to its sidebar
+    /// group by `source_id`.
+    LibrariesLoaded {
+        source_id: String,
+        libraries: Vec<LibrarySection>,
+    },
     /// No-op for fire-and-forget async commands (scrobble, timeline).
     Noop,
     /// Skip markers fetched from the media source after playback starts.
@@ -275,11 +391,24 @@ impl Component for App {
                     source_type,
                     source_id,
                 },
-                SidebarOutput::ShowCollections => AppMsg::ShowCollections,
+                SidebarOutput::ShowCollections {
+                    source_type,
+                    source_id,
+                } => AppMsg::ShowCollections {
+                    source_type,
+                    source_id,
+                },
                 SidebarOutput::SetLibraryVisible { key, visible } => {
                     AppMsg::SetLibraryVisible { key, visible }
                 }
                 SidebarOutput::EditModeExited => AppMsg::SidebarEditModeExited,
+                SidebarOutput::RemoveSource {
+                    source_type,
+                    source_id,
+                } => AppMsg::RemoveSource {
+                    source_type,
+                    source_id,
+                },
             });
 
         let home_view = HomeView::builder()
@@ -639,14 +768,32 @@ impl Component for App {
             AppMsg::FocusSearch => {
                 self.library_view.emit(LibraryViewMsg::FocusSearch);
             }
-            AppMsg::ShowCollections => {
+            AppMsg::ShowCollections {
+                source_type,
+                source_id,
+            } => {
                 self.current_view = CurrentView::Collections;
                 self.stack.set_visible_child_name("shell");
                 self.nav_view.replace_with_tags(&["library"]);
                 root.set_fullscreened(false);
                 root.set_title(Some("Reel"));
                 self.library_title.set_label("Collections");
+                // Collections are per-source: point the browsed source + the
+                // LibraryView list at the owning source before loading.
+                if let Some(st) = SourceType::from_str(&source_type) {
+                    self.browsed_source = Some((st, source_id.clone()));
+                    if let Some(src) = self.sources.get(st, &source_id) {
+                        self.library_view
+                            .emit(LibraryViewMsg::SetSource(src, self.artwork_cache.clone()));
+                    }
+                }
                 self.library_view.emit(LibraryViewMsg::LoadCollections);
+            }
+            AppMsg::RemoveSource {
+                source_type,
+                source_id,
+            } => {
+                self.remove_source(&source_type, &source_id, &sender);
             }
             AppMsg::ShowCollectionDetail(item) => {
                 self.current_view = CurrentView::CollectionDetail(item.id.clone());
@@ -809,10 +956,19 @@ impl Component for App {
                 // multi-source UI can reach them.
                 if let Some(built) = source_factory::build_source(&source) {
                     let source_id = source.config.url.clone();
-                    if self.browsed_source.is_none() {
-                        self.wire_active_source(source.source_type, source_id, built, &sender);
-                    } else {
-                        self.sources.register(source.source_type, source_id, built);
+                    // Every validated source becomes its own sidebar group so
+                    // all servers appear; only the first one also becomes the
+                    // browsed source that drives Home + the LibraryView list.
+                    let make_browsed = self.browsed_source.is_none();
+                    self.feed_sidebar_source(
+                        source.source_type,
+                        &source_id,
+                        &source.name,
+                        built.clone(),
+                        &sender,
+                    );
+                    if make_browsed {
+                        self.set_browsed_views(source.source_type, &source_id, built);
                     }
                 }
 
@@ -826,8 +982,14 @@ impl Component for App {
                 // A specific library loads when the user picks it from the
                 // sidebar; the default view is Home, so no eager load here.
             }
-            AppCmd::LibrariesLoaded(libraries) => {
-                self.sidebar.emit(SidebarMsg::SetLibraries(libraries));
+            AppCmd::LibrariesLoaded {
+                source_id,
+                libraries,
+            } => {
+                self.sidebar.emit(SidebarMsg::SetLibraries {
+                    source_id,
+                    libraries,
+                });
             }
             AppCmd::SourceValidationFailed { source_id, message } => {
                 // One source failing must not disturb others: log + toast, leave
