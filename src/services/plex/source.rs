@@ -32,6 +32,18 @@ impl PlexSource {
             libraries_cache: OnceLock::new(),
         }
     }
+
+    /// Stop a transcode session (R14). Exposed as an inherent method (not on the
+    /// `MediaSource` trait) because session lifecycle is Plex-specific and the
+    /// App holds a concrete `PlexSource`.
+    pub async fn stop_transcode(&self, session: &str) -> Result<(), SourceError> {
+        Ok(self.client.stop_transcode(session).await?)
+    }
+
+    /// Keep a transcode session alive (R15). Fired on a timer by U10.
+    pub async fn ping_transcode(&self, session: &str) -> Result<(), SourceError> {
+        Ok(self.client.ping_transcode(session).await?)
+    }
 }
 
 impl From<PlexError> for SourceError {

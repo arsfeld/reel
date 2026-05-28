@@ -142,7 +142,72 @@ pub fn handle_video_output(
         VideoPlayerOutput::ControlsRevealedChanged(revealed) => {
             app.player_chrome_revealer.set_reveal_child(revealed);
         }
+        VideoPlayerOutput::SelectQuality {
+            selection,
+            position_secs,
+        } => {
+            // R10/KTD11: a manual capped rung forces a transcode (escape hatch);
+            // Auto and Original let the server decide.
+            let force = matches!(
+                selection,
+                crate::models::playback::QualitySelection::Manual(p)
+                    if p != crate::models::playback::QualityPreset::Original
+            );
+            app.current_quality = selection;
+            resolve_playback_at(app, selection, position_secs, force, sender);
+        }
+        VideoPlayerOutput::SeekReload { position_secs } => {
+            // Seek during a transcode: re-resolve at the new offset, same quality.
+            let quality = app.current_quality;
+            resolve_playback_at(app, quality, position_secs, false, sender);
+        }
     }
+}
+
+/// Re-resolve the current title at a new quality/offset (U8 switch + seek-reload,
+/// U10 track change). Tags the resolve with a fresh switch epoch so a superseded
+/// switch's result is discarded.
+fn resolve_playback_at(
+    app: &mut App,
+    quality: crate::models::playback::QualitySelection,
+    offset_secs: f64,
+    force_transcode: bool,
+    sender: &ComponentSender<App>,
+) {
+    let (Some(item), Some(source)) = (app.now_playing.clone(), app.active_source.clone()) else {
+        return;
+    };
+    if item.source_type != SourceType::Plex || item.file_path.is_none() {
+        return;
+    }
+    let req = crate::models::playback::PlaybackRequest {
+        rating_key: item.external_id.clone(),
+        part_key: item.file_path.clone().unwrap_or_default(),
+        media_index: 0,
+        part_index: 0,
+        quality,
+        force_transcode,
+        audio_stream_id: None,
+        subtitle_stream_id: None,
+        offset_secs,
+    };
+    let fallback_url = source.playback_url(&req.part_key);
+    let epoch = app.switch_state.begin();
+    sender.oneshot_command(async move {
+        match source.resolve_playback(&req).await {
+            Ok(decision) => AppCmd::PlaybackResolved {
+                decision: Box::new(decision),
+                resume_secs: Some(offset_secs),
+                epoch,
+            },
+            Err(e) => AppCmd::PlaybackResolveFailed {
+                message: format!("Couldn't switch quality: {e}"),
+                fallback_url,
+                resume_secs: Some(offset_secs),
+                epoch,
+            },
+        }
+    });
 }
 
 /// Handle PlayMedia: set up the player for a new media URL.
@@ -220,16 +285,21 @@ pub fn handle_play_media(
         // `url` is kept as the last-resort direct-play fallback if the decision
         // cannot be reached (surfaced, not silent — U7).
         let fallback_url = url.clone();
+        // Tag this resolve with a fresh switch epoch so a later switch can
+        // supersede the initial play if the user picks quality immediately (U8).
+        let epoch = app.switch_state.begin();
         sender.oneshot_command(async move {
             match source.resolve_playback(&req).await {
                 Ok(decision) => AppCmd::PlaybackResolved {
                     decision: Box::new(decision),
                     resume_secs,
+                    epoch,
                 },
                 Err(e) => AppCmd::PlaybackResolveFailed {
                     message: format!("Couldn't reach the server's transcoder: {e}"),
                     fallback_url,
                     resume_secs,
+                    epoch,
                 },
             }
         });
@@ -237,6 +307,8 @@ pub fn handle_play_media(
         app.video_player.emit(VideoPlayerMsg::SetUrl {
             url: Some(url),
             resume_secs,
+            base_offset_secs: 0.0,
+            is_transcode: false,
         });
     }
 
@@ -259,15 +331,46 @@ pub fn handle_play_media(
     }
 }
 
-/// Handle a resolved playback decision (U7): record the session-only decision
+/// Stop a transcode session in the background (fire-and-forget, bounded retry in
+/// the client). No-op for a non-Plex source or an empty session.
+fn stop_session_async(app: &App, session: String, sender: &ComponentSender<App>) {
+    if let Some(source) = app.active_source.clone() {
+        sender.oneshot_command(async move {
+            if let Err(e) = source.stop_transcode(&session).await {
+                debug!("stop_transcode({session}) failed: {e}");
+            }
+            AppCmd::Noop
+        });
+    }
+}
+
+/// Handle a resolved playback decision (U7/U8): record the session-only decision
 /// state and hand the URL to the player with the decision-kind-specific resume
 /// policy (KTD1 — transcode resumes at 0 with a base offset; direct-play seeks).
+///
+/// A result from a superseded switch (stale epoch) is discarded and its session
+/// stopped, so two rapid switches leave exactly one live stream (U8). On a fresh
+/// apply the *previous* session is stopped only after the new one resolved, so a
+/// failed re-decision never tears down a still-playable stream.
 pub fn handle_playback_resolved(
     app: &mut App,
     decision: Box<crate::models::playback::PlaybackDecision>,
     resume_secs: Option<f64>,
+    epoch: u64,
+    sender: &ComponentSender<App>,
 ) {
+    use crate::components::player::switch_state::SwitchOutcome;
+    if app.switch_state.evaluate(epoch) == SwitchOutcome::DiscardStale {
+        debug!("Discarding stale playback decision (epoch {epoch})");
+        if let Some(session) = decision.session.clone() {
+            stop_session_async(app, session, sender);
+        }
+        return;
+    }
+
+    let previous_session = app.active_transcode_session.take();
     let (url, resume_out, base_offset) = super::utils::set_url_for_decision(&decision, resume_secs);
+    let is_transcode = decision.kind.is_transcode_like();
     info!(
         "Playback resolved: {:?} (resume={:?}, base_offset={base_offset})",
         decision.kind, resume_out
@@ -278,7 +381,16 @@ pub fn handle_playback_resolved(
     app.video_player.emit(VideoPlayerMsg::SetUrl {
         url: Some(url),
         resume_secs: resume_out,
+        base_offset_secs: base_offset,
+        is_transcode,
     });
+
+    // Stop the prior session now that the new stream is loading (R14, U8).
+    if let Some(prev) = previous_session
+        && Some(&prev) != app.active_transcode_session.as_ref()
+    {
+        stop_session_async(app, prev, sender);
+    }
 }
 
 /// Handle a failed playback decision (U7). Surfaces an actionable notice (so the
@@ -291,8 +403,16 @@ pub fn handle_playback_resolve_failed(
     message: String,
     fallback_url: String,
     resume_secs: Option<f64>,
+    epoch: u64,
     sender: &ComponentSender<App>,
 ) {
+    use crate::components::player::switch_state::SwitchOutcome;
+    // A failure from a superseded switch must not disturb the newer stream (U8):
+    // the user already moved on, and the prior stream is still playing.
+    if app.switch_state.evaluate(epoch) == SwitchOutcome::DiscardStale {
+        debug!("Discarding stale playback failure (epoch {epoch})");
+        return;
+    }
     tracing::warn!("{message}; falling back to direct play");
     sender.input(AppMsg::ShowToast(message));
     app.current_decision = None;
@@ -301,6 +421,8 @@ pub fn handle_playback_resolve_failed(
     app.video_player.emit(VideoPlayerMsg::SetUrl {
         url: Some(fallback_url),
         resume_secs,
+        base_offset_secs: 0.0,
+        is_transcode: false,
     });
 }
 
