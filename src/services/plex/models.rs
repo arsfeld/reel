@@ -95,6 +95,10 @@ pub struct PlexMetadata {
     // Parent artwork (season art on episodes, show art on seasons)
     #[serde(rename = "parentThumb")]
     pub parent_thumb: Option<String>,
+    // Grandparent artwork: the series poster on an episode. Plex sends this on
+    // On Deck / recently-added episode payloads.
+    #[serde(rename = "grandparentThumb")]
+    pub grandparent_thumb: Option<String>,
 
     /// The library section this item belongs to. Plex sends `librarySectionID`
     /// as a JSON number on On Deck / recently-added payloads; absent on some

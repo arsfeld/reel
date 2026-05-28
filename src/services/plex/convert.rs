@@ -92,6 +92,7 @@ pub fn plex_metadata_to_media_item(metadata: &PlexMetadata, source_id: &str) -> 
         rating: metadata.rating,
         runtime_minutes,
         poster_path: metadata.thumb.clone(),
+        series_poster_path: metadata.grandparent_thumb.clone(),
         backdrop_path: metadata.art.clone(),
         genres,
         parent_id,
@@ -281,6 +282,7 @@ mod tests {
             index: None,
             originally_available_at: None,
             parent_thumb: None,
+            grandparent_thumb: None,
             library_section_id: None,
             view_offset: None,
             view_count: None,
@@ -335,7 +337,8 @@ mod tests {
             parent_index: Some(1),
             index: Some(1),
             originally_available_at: Some("2024-03-01".to_string()),
-            parent_thumb: None,
+            parent_thumb: Some("/library/metadata/400/thumb/season".to_string()),
+            grandparent_thumb: Some("/library/metadata/300/thumb/show".to_string()),
             library_section_id: None,
             view_offset: None,
             view_count: None,
@@ -441,6 +444,29 @@ mod tests {
             item.parent_id,
             Some("plex:http://localhost:32400:400".to_string())
         );
+    }
+
+    #[test]
+    fn convert_episode_series_poster_from_grandparent_thumb() {
+        let plex = test_plex_episode();
+        let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
+        // poster_path stays the episode's own still; series_poster_path carries
+        // the show poster so shelves can prefer it.
+        assert_eq!(
+            item.poster_path,
+            Some("/library/metadata/500/thumb/1".to_string())
+        );
+        assert_eq!(
+            item.series_poster_path,
+            Some("/library/metadata/300/thumb/show".to_string())
+        );
+    }
+
+    #[test]
+    fn convert_movie_has_no_series_poster() {
+        let plex = test_plex_movie();
+        let item = plex_metadata_to_media_item(&plex, "http://localhost:32400").unwrap();
+        assert_eq!(item.series_poster_path, None);
     }
 
     #[test]

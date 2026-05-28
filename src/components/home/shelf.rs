@@ -244,6 +244,7 @@ mod tests {
             rating: None,
             runtime_minutes: None,
             poster_path: None,
+            series_poster_path: None,
             backdrop_path: None,
             genres: Vec::new(),
             parent_id: None,

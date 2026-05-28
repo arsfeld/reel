@@ -115,6 +115,10 @@ pub struct MediaItem {
     pub runtime_minutes: Option<i32>,
     /// Relative path for poster image (e.g., /library/metadata/123/thumb/...)
     pub poster_path: Option<String>,
+    /// Poster of the parent series (Plex `grandparentThumb`) for an episode.
+    /// Lets portrait shelf cards show the show's poster instead of the episode's
+    /// landscape still. `None` for non-episodes and sources that don't report it.
+    pub series_poster_path: Option<String>,
     /// Relative path for backdrop image
     pub backdrop_path: Option<String>,
     pub genres: Vec<String>,
@@ -149,6 +153,15 @@ impl MediaItem {
             Some(y) => format!("{} ({})", self.title, y),
             None => self.title.clone(),
         }
+    }
+
+    /// Poster to show on a portrait shelf card: the parent series poster for an
+    /// episode (so a show's poster shows instead of a landscape episode still),
+    /// falling back to the item's own poster.
+    pub fn shelf_poster_path(&self) -> Option<&str> {
+        self.series_poster_path
+            .as_deref()
+            .or(self.poster_path.as_deref())
     }
 
     /// Build a composite ID from source info.
@@ -211,6 +224,7 @@ mod tests {
             rating: Some(8.0),
             runtime_minutes: Some(155),
             poster_path: Some("/library/metadata/123/thumb/1234567".to_string()),
+            series_poster_path: None,
             backdrop_path: Some("/library/metadata/123/art/1234567".to_string()),
             genres: vec!["Science Fiction".to_string(), "Adventure".to_string()],
             parent_id: None,
@@ -238,6 +252,20 @@ mod tests {
         let mut movie = test_movie();
         movie.year = None;
         assert_eq!(movie.display_title(), "Dune");
+    }
+
+    #[test]
+    fn shelf_poster_prefers_series_then_own() {
+        let mut m = test_movie();
+        // No series poster: falls back to the item's own poster.
+        assert_eq!(m.shelf_poster_path(), m.poster_path.as_deref());
+        // Series poster present: takes precedence.
+        m.series_poster_path = Some("/series/poster".to_string());
+        assert_eq!(m.shelf_poster_path(), Some("/series/poster"));
+        // Neither: None.
+        m.poster_path = None;
+        m.series_poster_path = None;
+        assert_eq!(m.shelf_poster_path(), None);
     }
 
     #[test]

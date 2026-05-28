@@ -149,6 +149,7 @@ mod tests {
             rating: None,
             runtime_minutes: Some(155),
             poster_path: None,
+            series_poster_path: None,
             backdrop_path: None,
             genres: vec![],
             parent_id: None,

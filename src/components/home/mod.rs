@@ -629,10 +629,12 @@ impl HomeView {
         let generation = self.build_generation;
 
         for (idx, (_, item)) in shelf.cards.iter().enumerate() {
-            let Some(poster_path) = item.poster_path.clone() else {
+            // Episodes prefer their series poster so shelves show a portrait
+            // show poster rather than the episode's landscape still.
+            let Some(poster_path) = item.shelf_poster_path() else {
                 continue;
             };
-            let artwork_url = source.artwork_url(&poster_path, 320, 480);
+            let artwork_url = source.artwork_url(poster_path, 320, 480);
             let cache_clone = cache.clone();
             let sender_clone = sender.command_sender().clone();
 

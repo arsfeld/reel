@@ -689,6 +689,7 @@ mod tests {
             rating: Some(7.5),
             runtime_minutes: Some(120),
             poster_path: None,
+            series_poster_path: None,
             backdrop_path: None,
             genres: vec!["Action".to_string(), "Sci-Fi".to_string()],
             parent_id: None,

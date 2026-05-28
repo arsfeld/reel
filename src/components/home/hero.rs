@@ -232,6 +232,7 @@ mod tests {
             rating: None,
             runtime_minutes: None,
             poster_path: None,
+            series_poster_path: None,
             backdrop_path: if has_backdrop {
                 Some("/art".into())
             } else {
