@@ -331,19 +331,99 @@ gridview > child:selected .media-card-frame {
     -gtk-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
+/* --- Home shelf cards --- */
+
+/* A little vertical breathing room so the hover shadow isn't clipped by the
+   shelf's scroll viewport. Horizontal gaps come from the row's own spacing. */
+.home-card {
+    margin: 2px 0 6px 0;
+}
+
+/* Rounded corners + layered elevation, matching the library grid frame. The
+   inset white hairline is the "liquid glass" edge that catches light. */
+.home-card-frame {
+    border-radius: 14px;
+    box-shadow:
+        0 1px 3px rgba(0, 0, 0, 0.16),
+        0 1px 2px rgba(0, 0, 0, 0.12),
+        inset 0 0 0 1px alpha(white, 0.07);
+}
+
+/* GTK4 CSS has no transform; a deeper, higher-offset shadow conveys the lift. */
+.home-card-frame:hover {
+    box-shadow:
+        0 14px 34px rgba(0, 0, 0, 0.38),
+        0 6px 14px rgba(0, 0, 0, 0.24),
+        inset 0 0 0 1px alpha(white, 0.13);
+}
+
+.home-card:focus-within .home-card-frame {
+    box-shadow:
+        0 0 0 3px @accent_color,
+        0 10px 26px rgba(0, 0, 0, 0.30);
+}
+
+.home-card-poster {
+    background-color: alpha(@card_bg_color, 0.4);
+}
+
+/* Shimmer placeholder while the poster texture downloads. */
+.home-card-poster.loading {
+    opacity: 0;
+    background-image: linear-gradient(
+        110deg,
+        alpha(@card_bg_color, 0.25) 0%,
+        alpha(@card_bg_color, 0.45) 40%,
+        alpha(@card_bg_color, 0.25) 80%
+    );
+    background-size: 200% 100%;
+}
+
+/* Bottom corners rounded to match the frame so the scrim never pokes past. */
+.home-card-scrim {
+    border-radius: 0 0 14px 14px;
+    background: linear-gradient(
+        to top,
+        alpha(black, 0.55) 0%,
+        alpha(black, 0.08) 60%,
+        transparent 100%
+    );
+}
+
+.home-card-title {
+    font-weight: 600;
+    font-size: 13px;
+    margin-top: 6px;
+    margin-left: 2px;
+    margin-right: 2px;
+    color: @window_fg_color;
+    line-height: 1.3;
+}
+
+.home-card-subtitle {
+    font-size: 11px;
+    margin-left: 2px;
+    margin-top: 1px;
+}
+
 /* --- Home featured hero --- */
 
 /* border-radius lives on the Picture itself: GTK4 does not clip a child to the
-   parent's rounded corners. */
+   parent's rounded corners. The layered shadow + inset hairline lift the hero
+   off the page as a floating glass slab. */
 .home-hero-backdrop {
     background-color: rgb(20, 20, 24);
-    border-radius: 12px;
+    border-radius: 14px;
+    box-shadow:
+        0 14px 40px rgba(0, 0, 0, 0.42),
+        0 3px 10px rgba(0, 0, 0, 0.24),
+        inset 0 0 0 1px alpha(white, 0.08);
 }
 
 /* Scrim darkest at the bottom where the title/actions sit, clear at the top so
    the backdrop stays visible. Keeps white text legible over bright art. */
 .home-hero-scrim {
-    border-radius: 12px;
+    border-radius: 14px;
     background: linear-gradient(
         to top,
         alpha(black, 0.82) 0%,

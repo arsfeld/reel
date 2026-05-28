@@ -95,9 +95,26 @@ impl HomeCard {
             .visible(false)
             .build();
 
+        // Bottom gradient scrim adds depth and keeps the progress bar legible
+        // over bright posters, matching the library grid cards.
+        let scrim = gtk::Box::builder()
+            .halign(gtk::Align::Fill)
+            .valign(gtk::Align::End)
+            .height_request(48)
+            .css_classes(["home-card-scrim"])
+            .build();
+
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&picture));
+        overlay.add_overlay(&scrim);
         overlay.add_overlay(&progress_bar);
+
+        // Frame wrapper gives rounded corners, elevation shadow, and a hover
+        // lift — the same treatment as the library media cards.
+        let frame = gtk::Frame::builder()
+            .css_classes(["home-card-frame"])
+            .child(&overlay)
+            .build();
 
         let title_label = gtk::Label::builder()
             .halign(gtk::Align::Start)
@@ -115,7 +132,7 @@ impl HomeCard {
             .visible(false)
             .build();
 
-        container.append(&overlay);
+        container.append(&frame);
         container.append(&title_label);
         container.append(&subtitle_label);
 
