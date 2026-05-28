@@ -29,6 +29,10 @@ pub enum SidebarRow {
     },
     /// Placeholder shown under the source header before libraries resolve.
     Loading,
+    /// Shown when the source loaded but reported no (supported) libraries — a
+    /// terminal state, distinct from `Loading`, so the sidebar never spins
+    /// forever if a fetch comes back empty.
+    NoLibraries,
     /// Shown in normal mode when the source has libraries but all are hidden,
     /// so the source node never collapses to nothing.
     AllHidden,
@@ -53,6 +57,7 @@ pub fn derive_rows(
     libraries: &[LibrarySection],
     hidden: &HashSet<String>,
     edit_mode: bool,
+    loaded: bool,
 ) -> Vec<SidebarRow> {
     let mut rows = vec![SidebarRow::Home];
 
@@ -64,8 +69,14 @@ pub fn derive_rows(
     });
 
     // Source connected but its libraries have not been fetched yet.
-    if libraries.is_empty() {
+    if !loaded {
         rows.push(SidebarRow::Loading);
+        return rows;
+    }
+
+    // Loaded, but the source reported no supported libraries.
+    if libraries.is_empty() {
+        rows.push(SidebarRow::NoLibraries);
         return rows;
     }
 
@@ -121,6 +132,9 @@ pub struct Sidebar {
     source_type: String,
     source_id: String,
     libraries: Vec<LibrarySection>,
+    /// True once a libraries fetch has completed (success or empty), so the
+    /// sidebar shows a terminal state instead of spinning on "Loading" forever.
+    libraries_loaded: bool,
     hidden: HashSet<String>,
     edit_mode: bool,
     selected: SidebarSelection,
@@ -226,6 +240,7 @@ impl SimpleComponent for Sidebar {
             source_type: String::new(),
             source_id: String::new(),
             libraries: Vec::new(),
+            libraries_loaded: false,
             hidden: HashSet::new(),
             edit_mode: false,
             selected: SidebarSelection::Home,
@@ -253,6 +268,7 @@ impl SimpleComponent for Sidebar {
             }
             SidebarMsg::SetLibraries(libraries) => {
                 self.libraries = libraries;
+                self.libraries_loaded = true;
                 self.rebuild(&sender);
             }
             SidebarMsg::SetVisibility(hidden) => {
@@ -326,6 +342,7 @@ impl Sidebar {
             &self.libraries,
             &self.hidden,
             self.edit_mode,
+            self.libraries_loaded,
         );
 
         let mut actions = Vec::with_capacity(rows.len());
@@ -357,6 +374,13 @@ impl Sidebar {
                 let spinner = gtk::Spinner::builder().spinning(true).build();
                 b.append(&spinner);
                 b.append(&dim_label("Loading libraries…"));
+                r.set_child(Some(&b));
+                (r, RowAction::None)
+            }
+            SidebarRow::NoLibraries => {
+                let r = gtk::ListBoxRow::builder().selectable(false).build();
+                let b = indented_box();
+                b.append(&dim_label("No libraries found"));
                 r.set_child(Some(&b));
                 (r, RowAction::None)
             }
@@ -558,13 +582,13 @@ mod tests {
 
     #[test]
     fn no_source_shows_only_home() {
-        let rows = derive_rows(None, "plex", "srv", &[], &HashSet::new(), false);
+        let rows = derive_rows(None, "plex", "srv", &[], &HashSet::new(), false, false);
         assert_eq!(rows, vec![SidebarRow::Home]);
     }
 
     #[test]
-    fn source_without_libraries_shows_loading() {
-        let rows = derive_rows(Some("My Plex"), "plex", "srv", &[], &HashSet::new(), false);
+    fn not_loaded_shows_loading() {
+        let rows = derive_rows(Some("My Plex"), "plex", "srv", &[], &HashSet::new(), false, false);
         assert_eq!(
             rows,
             vec![
@@ -578,12 +602,27 @@ mod tests {
     }
 
     #[test]
+    fn loaded_but_empty_shows_no_libraries() {
+        let rows = derive_rows(Some("My Plex"), "plex", "srv", &[], &HashSet::new(), false, true);
+        assert_eq!(
+            rows,
+            vec![
+                SidebarRow::Home,
+                SidebarRow::SourceHeader {
+                    name: "My Plex".to_string()
+                },
+                SidebarRow::NoLibraries,
+            ]
+        );
+    }
+
+    #[test]
     fn normal_mode_lists_visible_libraries_and_collections() {
         let libs = vec![
             section("1", "Movies", LibraryType::Movie),
             section("2", "4K Movies", LibraryType::Movie),
         ];
-        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &HashSet::new(), false);
+        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &HashSet::new(), false, true);
         // Home, header, 2 libraries, collections.
         assert_eq!(rows.len(), 5);
         assert!(matches!(rows[2], SidebarRow::Library { ref title, .. } if title == "Movies"));
