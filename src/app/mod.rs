@@ -21,7 +21,7 @@ use crate::components::sidebar::{Sidebar, SidebarMsg, SidebarOutput};
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::library::LibrarySection;
 use crate::models::media::{MediaItem, MediaType, SourceType};
-use crate::models::source::{Source, SourceConfig};
+use crate::models::source::Source;
 use crate::models::watch::WatchProgress;
 use crate::navigation::CurrentView;
 use crate::player::SkipMarkers;
@@ -48,7 +48,7 @@ use dialogs::show_file_chooser;
 use handlers::{handle_connection_saved, handle_play_media, handle_video_output};
 use player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
 use source_factory::SourceRegistry;
-use source_validation::validate_or_rediscover_source;
+use source_validation::validate_source;
 use utils::iso_now;
 use watch_events::dispatch_watch_events;
 use widget_builder::build_widgets;
@@ -216,13 +216,14 @@ pub enum AppMsg {
 
 #[derive(Debug)]
 pub enum AppCmd {
-    /// Validated (or re-discovered) server URL on startup.
-    SourceValidated {
-        url: String,
-        token: String,
-        name: String,
-    },
-    SourceValidationFailed(String),
+    /// A saved source validated (or was re-discovered) on startup. `source`
+    /// carries the final, possibly-rediscovered config; `original_id` is the
+    /// pre-validation id so the persistence upsert can clear a stale row when a
+    /// Plex URL changed.
+    SourceValidated { source: Source, original_id: String },
+    /// Validation failed for a single source — identified by id so it never
+    /// affects another source's data.
+    SourceValidationFailed { source_id: String, message: String },
     /// The active source's libraries, fetched after validation, for the sidebar.
     LibrariesLoaded(Vec<LibrarySection>),
     /// No-op for fire-and-forget async commands (scrobble, timeline).
@@ -359,25 +360,21 @@ impl Component for App {
         // Initialize database
         let db_conn = init_database();
 
-        // Load and validate saved source (async — tests connection, re-discovers if stale)
+        // Load and validate *all* enabled saved sources (async — each validates
+        // independently so one unreachable server never blocks or evicts another).
         let mut has_sources = false;
         if let Some(ref conn) = db_conn {
             let repo = crate::db::source_repo::SourceRepo::new(conn);
-            if let Ok(sources) = repo.list()
-                && let Some(source) = sources.into_iter().find(|s| s.enabled)
-            {
-                has_sources = true;
-                info!(
-                    "Loaded saved Plex source: {} (url={})",
-                    source.name, source.config.url
-                );
-                let url = source.config.url.clone();
-                let token = source.config.token.clone();
-                let name = source.name.clone();
-                let data_dir = crate::config::data_dir();
-                sender.oneshot_command(async move {
-                    validate_or_rediscover_source(url, token, name, data_dir).await
-                });
+            if let Ok(sources) = repo.list() {
+                for source in sources.into_iter().filter(|s| s.enabled) {
+                    has_sources = true;
+                    info!(
+                        "Loaded saved {:?} source: {} (url={})",
+                        source.source_type, source.name, source.config.url
+                    );
+                    let data_dir = crate::config::data_dir();
+                    sender.oneshot_command(async move { validate_source(source, data_dir).await });
+                }
             }
         }
 
@@ -777,52 +774,46 @@ impl Component for App {
         _root: &Self::Root,
     ) {
         match cmd {
-            AppCmd::SourceValidated { url, token, name } => {
+            AppCmd::SourceValidated {
+                source,
+                original_id,
+            } => {
                 let source_start = Instant::now();
-                info!("Plex source validated: {} (url={})", name, url);
+                info!(
+                    "{:?} source validated: {} (url={})",
+                    source.source_type, source.name, source.config.url
+                );
 
                 self.source_connecting = false;
 
-                // Update saved URL in DB (clear old entries — URL may have changed)
+                // Id-scoped upsert: clear only THIS source's row(s) — the new id
+                // and the pre-validation id (in case a Plex URL changed) — then
+                // insert. Never delete-all: another source's saved config (and so
+                // its ability to reconnect) must survive this revalidation.
+                // Media / watch rows are NEVER touched here — eviction happens
+                // only via the explicit remove-source path (R5 / U8).
                 if let Some(ref conn) = self.db_conn {
                     let repo = crate::db::source_repo::SourceRepo::new(conn);
-                    if let Ok(old_sources) = repo.list() {
-                        for s in &old_sources {
-                            let _ = repo.delete(&s.id);
-                        }
+                    let _ = repo.delete(&source.id);
+                    if original_id != source.id {
+                        let _ = repo.delete(&original_id);
                     }
-                    let source = Source {
-                        id: Source::make_id(SourceType::Plex, &url),
-                        source_type: SourceType::Plex,
-                        name: name.clone(),
-                        config: SourceConfig {
-                            url: url.clone(),
-                            token: token.clone(),
-                            user_id: None,
-                        },
-                        enabled: true,
-                        last_synced_at: None,
-                    };
                     if let Err(e) = repo.insert(&source) {
                         tracing::warn!("Failed to update source: {e}");
                     }
                 }
 
-                // Build via the factory and wire into every view.
-                let source = Source {
-                    id: Source::make_id(SourceType::Plex, &url),
-                    source_type: SourceType::Plex,
-                    name,
-                    config: SourceConfig {
-                        url: url.clone(),
-                        token,
-                        user_id: None,
-                    },
-                    enabled: true,
-                    last_synced_at: None,
-                };
+                // Build via the factory and register. The first validated source
+                // becomes the browsed one and is wired into the views; additional
+                // sources are registered so per-item resolution and (U8/U9) the
+                // multi-source UI can reach them.
                 if let Some(built) = source_factory::build_source(&source) {
-                    self.wire_active_source(SourceType::Plex, url, built, &sender);
+                    let source_id = source.config.url.clone();
+                    if self.browsed_source.is_none() {
+                        self.wire_active_source(source.source_type, source_id, built, &sender);
+                    } else {
+                        self.sources.register(source.source_type, source_id, built);
+                    }
                 }
 
                 info!(
@@ -838,11 +829,13 @@ impl Component for App {
             AppCmd::LibrariesLoaded(libraries) => {
                 self.sidebar.emit(SidebarMsg::SetLibraries(libraries));
             }
-            AppCmd::SourceValidationFailed(msg) => {
-                tracing::warn!("Saved Plex source not reachable: {msg}");
+            AppCmd::SourceValidationFailed { source_id, message } => {
+                // One source failing must not disturb others: log + toast, leave
+                // its saved row and all media/watch data intact.
+                tracing::warn!("Saved source {source_id} not reachable: {message}");
                 self.source_connecting = false;
                 self.home_view.emit(HomeViewMsg::SetConnecting(false));
-                sender.input(AppMsg::ShowToast(format!("Plex server unreachable: {msg}")));
+                sender.input(AppMsg::ShowToast(format!("Server unreachable: {message}")));
             }
             AppCmd::SkipMarkersLoaded(markers) => {
                 self.video_player
