@@ -155,6 +155,23 @@ impl WatchStatus {
     }
 }
 
+/// Overlay each item's source-reported watch state (e.g. Plex view
+/// count/offset) on top of locally tracked progress, so the source's own state
+/// wins. Items where the source has no opinion keep their local entry, letting
+/// local tracking serve as a fallback for non-Plex sources and offline play.
+pub fn build_effective_watch_map(
+    items: &[MediaItem],
+    local: &HashMap<String, (f64, bool)>,
+) -> HashMap<String, (f64, bool)> {
+    let mut map = local.clone();
+    for item in items {
+        if let Some(state) = item.source_watch_state() {
+            map.insert(item.id.clone(), state);
+        }
+    }
+    map
+}
+
 /// Derive a `WatchStatus` from a `(progress_fraction, watched)` pair as stored
 /// in `LibraryView`'s watch_data map. `watched` wins over progress.
 pub fn derived_watch_status(progress: f64, watched: bool) -> WatchStatus {
@@ -702,6 +719,7 @@ mod tests {
             added_at: "1700000000".to_string(),
             updated_at: "1700000000".to_string(),
             playback_position_ms: None,
+            watched: false,
             library_section_id: None,
         }
     }
@@ -1277,6 +1295,30 @@ mod tests {
         let titles: Vec<&str> = indices.iter().map(|&i| items[i].title.as_str()).collect();
         // Dune (watched) and Arrival (in progress) excluded.
         assert_eq!(titles, vec!["Interstellar", "The Hangover", "Zoolander"]);
+    }
+
+    #[test]
+    fn effective_watch_map_prefers_source_state() {
+        let mut watched = movie("Dune");
+        watched.watched = true;
+        let mut in_progress = movie("Arrival");
+        in_progress.playback_position_ms = Some(60 * 60_000); // 50% of 120 min
+        let silent = movie("Tenet"); // no source opinion
+
+        let mut local = HashMap::new();
+        // Local disagrees with the source on every item.
+        local.insert(watched.id.clone(), (0.3, false));
+        local.insert(in_progress.id.clone(), (0.0, true));
+        local.insert(silent.id.clone(), (0.7, false));
+
+        let items = vec![watched.clone(), in_progress.clone(), silent.clone()];
+        let map = build_effective_watch_map(&items, &local);
+
+        // Source state wins where it has an opinion.
+        assert_eq!(map.get(&watched.id), Some(&(1.0, true)));
+        assert_eq!(map.get(&in_progress.id), Some(&(0.5, false)));
+        // Source silent → local entry retained as fallback.
+        assert_eq!(map.get(&silent.id), Some(&(0.7, false)));
     }
 
     #[test]

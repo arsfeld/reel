@@ -72,8 +72,14 @@ pub struct LibraryView {
     library_id: Option<String>,
     /// Cached textures keyed by artwork URL to avoid re-fetching on grid rebuild.
     texture_cache: HashMap<String, gtk::gdk::Texture>,
-    /// Watch progress data keyed by media_item_id: (progress_fraction, watched).
+    /// Effective watch data keyed by media_item_id: (progress_fraction,
+    /// watched). Each source's own reported state (e.g. Plex view count/offset)
+    /// takes precedence over `local_watch_data`; recomputed when either input
+    /// changes. This is what the grid, filters, and Continue Watching read.
     watch_data: HashMap<String, (f64, bool)>,
+    /// Locally tracked watch progress from the DB, used as a fallback for items
+    /// whose source reports no watch state (non-Plex sources, offline play).
+    local_watch_data: HashMap<String, (f64, bool)>,
     /// Continue Watching section container (label + horizontal scroll).
     continue_watching_section: gtk::Box,
     /// Horizontal box inside the Continue Watching scrolled window.
@@ -648,6 +654,7 @@ impl Component for LibraryView {
             library_id: None,
             texture_cache: HashMap::new(),
             watch_data: HashMap::new(),
+            local_watch_data: HashMap::new(),
             continue_watching_section,
             continue_watching_box,
             poster_load_tracker: None,
@@ -765,6 +772,7 @@ impl Component for LibraryView {
 
                 let build_start = std::time::Instant::now();
                 self.all_items = items;
+                self.recompute_watch_data();
                 info!("Library loaded: {} items", self.all_items.len());
 
                 // Compute the persistence key for this library and restore any
@@ -917,7 +925,8 @@ impl Component for LibraryView {
                 }
             }
             LibraryViewMsg::SetWatchData(data) => {
-                self.watch_data = data;
+                self.local_watch_data = data;
+                self.recompute_watch_data();
                 // Re-populate grid to reflect updated watch indicators
                 if !self.all_items.is_empty() {
                     self.rebuild_grid(&sender);
@@ -1111,6 +1120,14 @@ impl LibraryView {
         }
     }
 
+    /// Recompute the effective watch map, overlaying each source's own reported
+    /// state (e.g. Plex view count/offset) on top of locally tracked progress.
+    /// Call whenever `all_items` or `local_watch_data` changes.
+    fn recompute_watch_data(&mut self) {
+        self.watch_data =
+            library_filter::build_effective_watch_map(&self.all_items, &self.local_watch_data);
+    }
+
     /// Rebuild the grid from all_items using current search/filter/sort state.
     fn rebuild_grid(&mut self, sender: &ComponentSender<Self>) {
         let start = std::time::Instant::now();
@@ -1146,7 +1163,6 @@ impl LibraryView {
             card.card_width = self.grid_density.card_width();
             card.card_height = self.grid_density.card_height();
 
-            // Apply watch state data if available
             if let Some(&(progress, watched)) = self.watch_data.get(&item.id) {
                 card.watch_progress = Some(progress);
                 card.watched = watched;
