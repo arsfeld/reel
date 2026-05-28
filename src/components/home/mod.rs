@@ -51,6 +51,10 @@ pub struct HomeView {
     last_error: Option<String>,
     /// Prevent concurrent loads.
     loading: bool,
+    /// True while a saved source is being validated on startup. Keeps the
+    /// connecting page pinned so a premature `LoadHome` (fired before the source
+    /// is ready) can't fall through to the "Connect to Plex" empty page.
+    connecting: bool,
     /// Hidden-library visibility keys (`source_type:source_id:section_key`).
     /// Items belonging to a hidden library are dropped from Continue Watching
     /// and Recently Added when home data is built.
@@ -277,6 +281,7 @@ impl Component for HomeView {
             stack,
             last_error: None,
             loading: false,
+            connecting: false,
             hidden: HashSet::new(),
         };
 
@@ -291,11 +296,8 @@ impl Component for HomeView {
                 self.artwork_cache = Some(artwork_cache);
             }
             HomeViewMsg::SetConnecting(connecting) => {
-                if connecting {
-                    self.stack.set_visible_child(&self.connecting_page);
-                } else {
-                    self.refresh_visible_page();
-                }
+                self.connecting = connecting;
+                self.refresh_visible_page();
             }
             HomeViewMsg::SetVisibility(hidden) => {
                 self.hidden = hidden;
@@ -712,6 +714,8 @@ impl HomeView {
     fn refresh_visible_page(&self) {
         if self.has_any_cards() {
             self.stack.set_visible_child(&self.scroll);
+        } else if self.connecting {
+            self.stack.set_visible_child(&self.connecting_page);
         } else if self.loading {
             self.stack.set_visible_child(&self.loading_page);
         } else if self.last_error.is_some() {
