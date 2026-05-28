@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use adw;
@@ -50,6 +51,10 @@ pub struct HomeView {
     last_error: Option<String>,
     /// Prevent concurrent loads.
     loading: bool,
+    /// Hidden-library visibility keys (`source_type:source_id:section_key`).
+    /// Items belonging to a hidden library are dropped from Continue Watching
+    /// and Recently Added when home data is built.
+    hidden: HashSet<String>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -57,6 +62,8 @@ pub enum HomeViewMsg {
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
     /// Show/hide the "Connecting to Plex…" loading page.
     SetConnecting(bool),
+    /// Update the hidden-library set. Applied to subsequently loaded home data.
+    SetVisibility(HashSet<String>),
     /// Load home page data: watch_progress items from local DB + recently_added from source.
     LoadHome {
         in_progress: Vec<(MediaItem, WatchProgress)>,
@@ -81,6 +88,7 @@ impl std::fmt::Debug for HomeViewMsg {
         match self {
             Self::SetSource(..) => write!(f, "SetSource(..)"),
             Self::SetConnecting(v) => write!(f, "SetConnecting({v})"),
+            Self::SetVisibility(h) => write!(f, "SetVisibility({} hidden)", h.len()),
             Self::LoadHome { in_progress } => {
                 write!(f, "LoadHome({} in progress)", in_progress.len())
             }
@@ -269,6 +277,7 @@ impl Component for HomeView {
             stack,
             last_error: None,
             loading: false,
+            hidden: HashSet::new(),
         };
 
         ComponentParts { model, widgets }
@@ -287,6 +296,9 @@ impl Component for HomeView {
                 } else {
                     self.refresh_visible_page();
                 }
+            }
+            HomeViewMsg::SetVisibility(hidden) => {
+                self.hidden = hidden;
             }
             HomeViewMsg::LoadHome { in_progress } => {
                 if self.loading {
@@ -452,6 +464,23 @@ impl Component for HomeView {
                 hubs,
             } => {
                 self.loading = false;
+
+                // Drop content from hidden libraries before anything consumes
+                // the lists. Filtering here (at receive time, against the
+                // current hidden set) rather than at fetch time means a library
+                // hidden while a fetch was in flight is still excluded.
+                let continue_watching = crate::services::visibility::retain_visible_items(
+                    continue_watching,
+                    &self.hidden,
+                );
+                let recently_added: Vec<(String, Vec<MediaItem>)> = recently_added
+                    .into_iter()
+                    .filter_map(|(title, items)| {
+                        let items =
+                            crate::services::visibility::retain_visible_items(items, &self.hidden);
+                        (!items.is_empty()).then_some((title, items))
+                    })
+                    .collect();
 
                 // Featured hero: drawn from recently-added items that have a
                 // backdrop. Computed before the shelves consume the lists.

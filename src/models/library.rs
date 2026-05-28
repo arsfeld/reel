@@ -11,6 +11,17 @@ pub struct LibrarySection {
     pub count: Option<i32>,
 }
 
+impl LibrarySection {
+    /// Stable per-(source, library) key used to store visibility and other
+    /// per-library preferences. Format: `"{source_type}:{source_id}:{section_key}"`.
+    /// Source-scoped so multiple sources never collide. Built from parts so
+    /// callers can compute the key from a bare section key (e.g. a
+    /// `MediaItem.library_section_id`) without a full `LibrarySection`.
+    pub fn visibility_key_for(source_type: &str, source_id: &str, section_key: &str) -> String {
+        format!("{source_type}:{source_id}:{section_key}")
+    }
+}
+
 /// Type of content in a library section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LibraryType {
@@ -64,5 +75,13 @@ mod tests {
         };
         let b = a.clone();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn visibility_key_for_formats_source_and_section() {
+        assert_eq!(
+            LibrarySection::visibility_key_for("plex", "http://host:32400", "4"),
+            "plex:http://host:32400:4"
+        );
     }
 }

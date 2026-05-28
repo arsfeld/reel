@@ -357,6 +357,9 @@ impl Component for App {
                 root.set_fullscreened(false);
                 root.set_title(Some("Reel"));
                 // Load home data: in-progress from local DB + recently_added from source
+                self.home_view.emit(HomeViewMsg::SetVisibility(
+                    self.settings.library_visibility.hidden.clone(),
+                ));
                 let in_progress = load_in_progress(&self.db_conn);
                 self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
             }
@@ -662,6 +665,9 @@ impl Component for App {
                 self.home_view.emit(HomeViewMsg::SetSource(
                     plex_source.clone(),
                     artwork_cache.clone(),
+                ));
+                self.home_view.emit(HomeViewMsg::SetVisibility(
+                    self.settings.library_visibility.hidden.clone(),
                 ));
                 // Re-trigger home data load now that the source is available.
                 // NavigateHome fires before validation completes, so LoadHome

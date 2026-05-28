@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +21,17 @@ pub struct Settings {
     pub playback: PlaybackSettings,
     pub subtitles: SubtitleSettings,
     pub library: LibrarySettings,
+    pub library_visibility: LibraryVisibility,
+}
+
+/// Per-(source, library) visibility. Opt-out: a library is visible unless its
+/// composite key is present in `hidden`. Keys are produced by
+/// `LibrarySection::visibility_key_for(source_type, source_id, section_key)`,
+/// so visibility is source-scoped and multi-source ready.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LibraryVisibility {
+    pub hidden: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +229,7 @@ mod tests {
                 font_size: 48,
             },
             library: LibrarySettings::default(),
+            library_visibility: LibraryVisibility::default(),
         };
         let toml_str = toml::to_string_pretty(&s).unwrap();
         let parsed: Settings = toml::from_str(&toml_str).unwrap();
@@ -380,6 +392,38 @@ sort = "YearNewest"
         let state = s.library.get("plex:srv:1");
         assert_eq!(state.sort, SortOrder::YearNewest);
         assert!(!state.filters.is_active());
+    }
+
+    // --- Library visibility ---
+
+    #[test]
+    fn library_visibility_defaults_to_empty() {
+        let s = Settings::default();
+        assert!(s.library_visibility.hidden.is_empty());
+    }
+
+    #[test]
+    fn library_visibility_toml_roundtrip() {
+        let mut s = Settings::default();
+        s.library_visibility
+            .hidden
+            .insert("plex:http://srv:32400:4".to_string());
+        let toml_str = toml::to_string_pretty(&s).unwrap();
+        let parsed: Settings = toml::from_str(&toml_str).unwrap();
+        assert!(
+            parsed
+                .library_visibility
+                .hidden
+                .contains("plex:http://srv:32400:4")
+        );
+    }
+
+    #[test]
+    fn library_visibility_absent_section_deserializes() {
+        // Settings written before this field existed must still load.
+        let toml_str = "[playback]\ndefault_volume = 80.0\n";
+        let s: Settings = toml::from_str(toml_str).unwrap();
+        assert!(s.library_visibility.hidden.is_empty());
     }
 
     // --- Validation functions ---
