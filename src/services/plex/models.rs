@@ -175,6 +175,37 @@ pub struct PlexChapter {
     pub end_time_offset: i64,
 }
 
+// --- Hubs response (home-screen curated rows) ---
+
+#[derive(Debug, Deserialize)]
+pub struct PlexHubResponse {
+    #[serde(rename = "MediaContainer")]
+    pub media_container: PlexHubContainer,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PlexHubContainer {
+    pub size: Option<i32>,
+    #[serde(default, rename = "Hub")]
+    pub hubs: Vec<PlexHub>,
+}
+
+/// A single hub (curated home-screen row) from the Plex `/hubs` API:
+/// Continue Watching, On Deck, Recently Added per library, Recommended,
+/// "Because you watched", genre rows, etc. `hub_identifier` distinguishes the
+/// kind of hub (e.g. `home.continue`, `home.ondeck`, `home.television.recent`)
+/// and is what the home view uses to drop hubs Reel already renders itself.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlexHub {
+    pub title: String,
+    #[serde(rename = "hubIdentifier")]
+    pub hub_identifier: Option<String>,
+    #[serde(rename = "type")]
+    pub hub_type: Option<String>,
+    #[serde(default, rename = "Metadata")]
+    pub metadata: Vec<PlexMetadata>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -555,5 +586,97 @@ mod tests {
         assert_eq!(m.view_offset, None);
         assert_eq!(m.view_count, None);
         assert_eq!(m.last_viewed_at, None);
+    }
+
+    #[test]
+    fn deserialize_hub_response() {
+        let json = r#"{
+            "MediaContainer": {
+                "size": 2,
+                "Hub": [
+                    {
+                        "title": "Recommended",
+                        "hubIdentifier": "home.movies.recommended",
+                        "type": "movie",
+                        "Metadata": [
+                            {"ratingKey": "10", "title": "Dune", "type": "movie", "year": 2021},
+                            {"ratingKey": "11", "title": "Arrival", "type": "movie", "year": 2016}
+                        ]
+                    },
+                    {
+                        "title": "Because you watched Breaking Bad",
+                        "hubIdentifier": "home.television.becauseYouWatched",
+                        "type": "show",
+                        "Metadata": [
+                            {"ratingKey": "20", "title": "Better Call Saul", "type": "show"}
+                        ]
+                    }
+                ]
+            }
+        }"#;
+
+        let resp: PlexHubResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.media_container.hubs.len(), 2);
+        let first = &resp.media_container.hubs[0];
+        assert_eq!(first.title, "Recommended");
+        assert_eq!(
+            first.hub_identifier,
+            Some("home.movies.recommended".to_string())
+        );
+        assert_eq!(first.hub_type, Some("movie".to_string()));
+        assert_eq!(first.metadata.len(), 2);
+        assert_eq!(first.metadata[0].title, "Dune");
+        assert_eq!(resp.media_container.hubs[1].metadata.len(), 1);
+    }
+
+    #[test]
+    fn deserialize_hub_response_empty() {
+        let json = r#"{"MediaContainer": {"size": 0}}"#;
+        let resp: PlexHubResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.media_container.hubs.is_empty());
+    }
+
+    #[test]
+    fn deserialize_hub_missing_optional_fields() {
+        let json = r#"{
+            "MediaContainer": {
+                "size": 1,
+                "Hub": [
+                    {"title": "Mixed Row"}
+                ]
+            }
+        }"#;
+
+        let resp: PlexHubResponse = serde_json::from_str(json).unwrap();
+        let hub = &resp.media_container.hubs[0];
+        assert_eq!(hub.title, "Mixed Row");
+        assert_eq!(hub.hub_identifier, None);
+        assert_eq!(hub.hub_type, None);
+        assert!(hub.metadata.is_empty());
+    }
+
+    #[test]
+    fn deserialize_hub_ignores_unknown_fields() {
+        let json = r#"{
+            "MediaContainer": {
+                "size": 1,
+                "librarySectionID": 1,
+                "Hub": [
+                    {
+                        "title": "Recently Added",
+                        "hubIdentifier": "home.movies.recent",
+                        "context": "hub.home.recentlyAdded",
+                        "more": true,
+                        "Metadata": [
+                            {"ratingKey": "30", "title": "New Film", "type": "movie"}
+                        ]
+                    }
+                ]
+            }
+        }"#;
+
+        let resp: PlexHubResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.media_container.hubs[0].title, "Recently Added");
+        assert_eq!(resp.media_container.hubs[0].metadata.len(), 1);
     }
 }

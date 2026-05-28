@@ -4,6 +4,7 @@ use async_trait::async_trait;
 
 use crate::models::{
     detail::MediaDetail,
+    hub::MediaHub,
     library::LibrarySection,
     media::{MediaItem, SourceType},
 };
@@ -143,6 +144,30 @@ impl MediaSource for PlexSource {
             .iter()
             .filter_map(|m| plex_metadata_to_media_item(m, base_url))
             .collect())
+    }
+
+    async fn hubs(&self) -> Result<Vec<MediaHub>, SourceError> {
+        let plex_hubs = self.client.hubs().await?;
+        let base_url = self.client.base_url();
+        let hubs = plex_hubs
+            .into_iter()
+            .map(|hub| {
+                let items: Vec<MediaItem> = hub
+                    .metadata
+                    .iter()
+                    .filter_map(|m| plex_metadata_to_media_item(m, base_url))
+                    .collect();
+                MediaHub {
+                    title: hub.title,
+                    identifier: hub.hub_identifier,
+                    items,
+                }
+            })
+            // Drop hubs that ended up empty (e.g. all items were unsupported
+            // types) so the home view never renders an empty hub shelf.
+            .filter(|hub| !hub.items.is_empty())
+            .collect();
+        Ok(hubs)
     }
 
     async fn report_progress(
@@ -299,6 +324,63 @@ mod tests {
         let client = PlexClient::new("http://localhost:32400", "token");
         let source = PlexSource::new(client, "Test".into());
         let _boxed: Box<dyn MediaSource> = Box::new(source);
+    }
+
+    #[tokio::test]
+    async fn plex_source_hubs_maps_and_drops_empty() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/hubs"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                r#"{"MediaContainer":{"size":2,"Hub":[
+                    {"title":"Recommended","hubIdentifier":"home.movies.recommended","type":"movie","Metadata":[
+                        {"ratingKey":"10","title":"Dune","type":"movie","year":2021},
+                        {"ratingKey":"11","title":"Better Call Saul","type":"show"}
+                    ]},
+                    {"title":"Drop Me","hubIdentifier":"home.music","type":"artist","Metadata":[
+                        {"ratingKey":"99","title":"Some Band","type":"artist"}
+                    ]}
+                ]}}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token");
+        let source = PlexSource::new(client, "Test".into());
+
+        let hubs = source.hubs().await.unwrap();
+        // The second hub's only item is an unsupported "artist" type, so the
+        // hub converts to zero items and is dropped.
+        assert_eq!(hubs.len(), 1);
+        assert_eq!(hubs[0].title, "Recommended");
+        assert_eq!(
+            hubs[0].identifier,
+            Some("home.movies.recommended".to_string())
+        );
+        // Mixed movie + show both convert.
+        assert_eq!(hubs[0].items.len(), 2);
+        assert_eq!(hubs[0].items[0].title, "Dune");
+    }
+
+    #[tokio::test]
+    async fn plex_source_hubs_empty_container() {
+        let server = wiremock::MockServer::start().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/hubs"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_string(r#"{"MediaContainer":{"size":0}}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let client = PlexClient::new(&server.uri(), "token");
+        let source = PlexSource::new(client, "Test".into());
+
+        let hubs = source.hubs().await.unwrap();
+        assert!(hubs.is_empty());
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 
 use crate::models::{
     detail::MediaDetail,
+    hub::MediaHub,
     library::LibrarySection,
     media::{MediaItem, SourceType},
 };
@@ -63,6 +64,15 @@ pub trait MediaSource: Send + Sync {
     async fn continue_watching(&self) -> Result<Vec<MediaItem>, SourceError> {
         Err(SourceError::NotSupported(
             "Continue watching not supported by this source".into(),
+        ))
+    }
+
+    /// Fetch the source's curated home hubs (Recommended, "Because you
+    /// watched", genre rows). Sources without a hub concept inherit this
+    /// default, which is how the home view degrades for non-Plex sources.
+    async fn hubs(&self) -> Result<Vec<MediaHub>, SourceError> {
+        Err(SourceError::NotSupported(
+            "Hubs not supported by this source".into(),
         ))
     }
 

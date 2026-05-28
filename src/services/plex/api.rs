@@ -234,6 +234,17 @@ impl PlexClient {
         Ok(body.media_container.metadata)
     }
 
+    /// Get the server's home hubs — curated rows (Continue Watching, On Deck,
+    /// Recently Added per library, Recommended, "Because you watched", genre
+    /// rows) computed server-side.
+    pub async fn hubs(&self) -> Result<Vec<PlexHub>, PlexError> {
+        let url = format!("{}/hubs", self.base_url);
+        let resp = self.http.get(&url).send().await?;
+        Self::check_status(&resp)?;
+        let body: PlexHubResponse = resp.json().await?;
+        Ok(body.media_container.hubs)
+    }
+
     fn check_status(resp: &reqwest::Response) -> Result<(), PlexError> {
         let status = resp.status();
         if status.is_success() {
