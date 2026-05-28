@@ -5,7 +5,72 @@ use tracing::warn;
 
 use super::DbError;
 
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
+
+/// Schema for the offline-downloads tables (v4). Kept as a constant so the
+/// fresh-database path (the main `init_db` batch) and the migration path
+/// (`migrate_to_v4`) create byte-identical tables.
+///
+/// Note: `downloads` deliberately has NO foreign key to `media_items`.
+/// Downloads are self-contained (they snapshot their own metadata) and must
+/// survive independently of the library cache — including the foreign-schema
+/// self-heal in `init_db`, which drops `media_items` and every other user
+/// table. That self-heal wipes these download tables too, but NOT the media
+/// files on disk; `DownloadsRepo::verify_downloads` re-adopts on-disk downloads
+/// from their sidecars after such a rebuild.
+const DOWNLOADS_SCHEMA: &str = "
+    CREATE TABLE IF NOT EXISTS download_groups (
+        id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL,
+        parent_media_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        snapshot_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS downloads (
+        media_item_id TEXT PRIMARY KEY,
+        part_key TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        fail_reason TEXT,
+        byte_count INTEGER NOT NULL DEFAULT 0,
+        total_size INTEGER,
+        validator TEXT,
+        file_path TEXT,
+        group_id TEXT,
+        queue_order INTEGER NOT NULL DEFAULT 0,
+        enqueued_at TEXT NOT NULL,
+        completed_at TEXT,
+        media_type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        year INTEGER,
+        parent_id TEXT,
+        season_number INTEGER,
+        episode_number INTEGER,
+        poster_path TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_downloads_state
+        ON downloads(state);
+    CREATE INDEX IF NOT EXISTS idx_downloads_group
+        ON downloads(group_id);
+    CREATE INDEX IF NOT EXISTS idx_downloads_queue_order
+        ON downloads(queue_order);
+
+    CREATE TABLE IF NOT EXISTS pending_sync (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        media_item_id TEXT NOT NULL,
+        rating_key TEXT NOT NULL,
+        position_ms INTEGER NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        offline_recorded_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pending_sync_recorded
+        ON pending_sync(offline_recorded_at);
+";
 
 /// Initialize the database schema. Creates tables if they don't exist.
 /// Idempotent: safe to call on every app startup.
@@ -87,6 +152,8 @@ pub fn init_db(conn: &Connection) -> Result<(), DbError> {
         ",
     )?;
 
+    conn.execute_batch(DOWNLOADS_SCHEMA)?;
+
     // Set schema version if not already set
     let count: i32 = conn.query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))?;
     if count == 0 {
@@ -104,7 +171,20 @@ pub fn init_db(conn: &Connection) -> Result<(), DbError> {
     if current_version < 3 {
         migrate_to_v3(conn)?;
     }
+    if current_version < 4 {
+        migrate_to_v4(conn)?;
+    }
 
+    Ok(())
+}
+
+/// Migrate schema to v4: add the offline-downloads tables (`download_groups`,
+/// `downloads`, `pending_sync`). Uses the shared `DOWNLOADS_SCHEMA` with
+/// `CREATE TABLE IF NOT EXISTS`, so it is idempotent and produces the same
+/// tables as a fresh `init_db`.
+fn migrate_to_v4(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(DOWNLOADS_SCHEMA)?;
+    conn.execute("UPDATE schema_version SET version = ?1", [4])?;
     Ok(())
 }
 
@@ -451,6 +531,141 @@ mod tests {
             )
             .unwrap();
         assert_eq!(vr, None);
+    }
+
+    #[test]
+    fn fresh_db_has_download_tables() {
+        let conn = test_db();
+        for table in ["downloads", "download_groups", "pending_sync"] {
+            let count: i32 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "table {table} should exist and be empty");
+        }
+    }
+
+    #[test]
+    fn migrate_v3_to_v4_adds_download_tables() {
+        // Build a v3 schema by hand (media_items + watch_progress, no downloads).
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE schema_version (version INTEGER NOT NULL);
+            INSERT INTO schema_version (version) VALUES (3);
+
+            CREATE TABLE media_items (
+                id TEXT PRIMARY KEY,
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                year INTEGER,
+                overview TEXT,
+                content_rating TEXT,
+                rating REAL,
+                runtime_minutes INTEGER,
+                poster_path TEXT,
+                backdrop_path TEXT,
+                genres TEXT NOT NULL DEFAULT '[]',
+                parent_id TEXT,
+                season_number INTEGER,
+                episode_number INTEGER,
+                air_date TEXT,
+                file_path TEXT,
+                video_resolution TEXT,
+                hdr TEXT,
+                added_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            ",
+        )
+        .unwrap();
+
+        assert_eq!(schema_version(&conn).unwrap(), 3);
+        init_db(&conn).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+
+        // Download tables now exist.
+        let downloads: i32 = conn
+            .query_row("SELECT COUNT(*) FROM downloads", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(downloads, 0);
+        let groups: i32 = conn
+            .query_row("SELECT COUNT(*) FROM download_groups", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(groups, 0);
+        let pending: i32 = conn
+            .query_row("SELECT COUNT(*) FROM pending_sync", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(pending, 0);
+    }
+
+    #[test]
+    fn migrate_to_v4_is_idempotent() {
+        let conn = test_db(); // already v4 via init_db
+        // Running init_db again must not error on the existing download tables.
+        init_db(&conn).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn fresh_and_migrated_download_schema_match() {
+        // Columns of `downloads` on a fresh DB.
+        let fresh = test_db();
+        let fresh_cols: Vec<String> = {
+            let mut stmt = fresh
+                .prepare("SELECT name FROM pragma_table_info('downloads') ORDER BY name")
+                .unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.collect::<Result<Vec<_>, _>>().unwrap()
+        };
+
+        // Columns of `downloads` after a v3->v4 migration.
+        let migrated = Connection::open_in_memory().unwrap();
+        migrated
+            .execute_batch(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL);
+                 INSERT INTO schema_version (version) VALUES (3);
+                 CREATE TABLE media_items (
+                     id TEXT PRIMARY KEY,
+                     source_type TEXT NOT NULL,
+                     source_id TEXT NOT NULL,
+                     external_id TEXT NOT NULL,
+                     media_type TEXT NOT NULL,
+                     title TEXT NOT NULL,
+                     year INTEGER,
+                     overview TEXT,
+                     content_rating TEXT,
+                     rating REAL,
+                     runtime_minutes INTEGER,
+                     poster_path TEXT,
+                     backdrop_path TEXT,
+                     genres TEXT NOT NULL DEFAULT '[]',
+                     parent_id TEXT,
+                     season_number INTEGER,
+                     episode_number INTEGER,
+                     air_date TEXT,
+                     file_path TEXT,
+                     video_resolution TEXT,
+                     hdr TEXT,
+                     added_at TEXT NOT NULL,
+                     updated_at TEXT NOT NULL
+                 );",
+            )
+            .unwrap();
+        init_db(&migrated).unwrap();
+        let migrated_cols: Vec<String> = {
+            let mut stmt = migrated
+                .prepare("SELECT name FROM pragma_table_info('downloads') ORDER BY name")
+                .unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.collect::<Result<Vec<_>, _>>().unwrap()
+        };
+
+        assert_eq!(fresh_cols, migrated_cols);
     }
 
     #[test]

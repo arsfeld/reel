@@ -1,3 +1,4 @@
+pub mod downloads_repo;
 pub mod error;
 pub mod media_repo;
 pub mod schema;
