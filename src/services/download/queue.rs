@@ -143,13 +143,13 @@ impl DownloadQueue {
     pub fn pause(&mut self, media_item_id: &str) -> Vec<DownloadEvent> {
         let mut events = Vec::new();
         let was_downloading = self.state_of(media_item_id) == Some(DownloadState::Downloading);
-        if let Some(item) = self.find_mut(media_item_id) {
-            if matches!(
+        if let Some(item) = self.find_mut(media_item_id)
+            && matches!(
                 item.state,
                 DownloadState::Downloading | DownloadState::Queued
-            ) {
-                item.state = DownloadState::Paused;
-            }
+            )
+        {
+            item.state = DownloadState::Paused;
         }
         if was_downloading {
             events.push(DownloadEvent::CancelTransfer {
@@ -162,10 +162,10 @@ impl DownloadQueue {
 
     /// Resume a `Paused` (or `Failed`) item back to `Queued` and reschedule.
     pub fn resume(&mut self, media_item_id: &str) -> Vec<DownloadEvent> {
-        if let Some(item) = self.find_mut(media_item_id) {
-            if matches!(item.state, DownloadState::Paused | DownloadState::Failed) {
-                item.state = DownloadState::Queued;
-            }
+        if let Some(item) = self.find_mut(media_item_id)
+            && matches!(item.state, DownloadState::Paused | DownloadState::Failed)
+        {
+            item.state = DownloadState::Queued;
         }
         self.schedule()
     }

@@ -8,6 +8,7 @@
 pub mod prune;
 pub mod queue;
 pub mod snapshot;
+pub mod transfer;
 
 use crate::models::download::DownloadState;
 
