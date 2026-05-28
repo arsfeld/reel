@@ -48,7 +48,19 @@ pub async fn validate_or_rediscover_source(
         // Any HTTP response (even 401) means the endpoint is reachable.
         if http.get(&probe).send().await.is_ok() {
             info!("Saved URL is reachable: {url}");
-            return AppCmd::SourceValidated { url, token, name };
+            // Known limitation (U2/KTD6): this fast path only probes
+            // reachability and has no plex.tv connection metadata, so it cannot
+            // classify the saved URL as local vs remote. Default to
+            // `is_remote = false` (no bitrate cap), preserving today's
+            // direct-play-first behavior — not a regression. A genuinely remote
+            // user reaches the cap via rediscovery (below) or the manual quality
+            // override (R10).
+            return AppCmd::SourceValidated {
+                url,
+                token,
+                name,
+                is_remote: false,
+            };
         }
         if std::time::Instant::now() >= deadline {
             break;
@@ -75,12 +87,16 @@ pub async fn validate_or_rediscover_source(
     };
 
     match auth::best_server_uri(server).await {
-        Some(new_url) => {
-            info!("Re-discovered server '{}' at {new_url}", server.name);
+        Some(selected) => {
+            info!(
+                "Re-discovered server '{}' at {} (remote={})",
+                server.name, selected.uri, selected.is_remote
+            );
             AppCmd::SourceValidated {
-                url: new_url,
+                url: selected.uri,
                 token,
                 name: server.name.clone(),
+                is_remote: selected.is_remote,
             }
         }
         None => AppCmd::SourceValidationFailed(format!(

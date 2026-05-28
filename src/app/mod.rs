@@ -124,6 +124,8 @@ pub enum AppMsg {
         url: String,
         token: String,
         name: String,
+        /// Whether the selected connection is remote/relay (R5/U2).
+        is_remote: bool,
     },
     ShowToast(String),
     FocusSearch,
@@ -147,6 +149,8 @@ pub enum AppCmd {
         url: String,
         token: String,
         name: String,
+        /// Whether the selected connection is remote/relay (R5/U2).
+        is_remote: bool,
     },
     SourceValidationFailed(String),
     /// The active source's libraries, fetched after validation, for the sidebar.
@@ -506,9 +510,17 @@ impl Component for App {
                     .transient_for(root)
                     .launch(client_id)
                     .forward(sender.input_sender(), |output| match output {
-                        ConnectionDialogOutput::ConnectionSaved { url, token, name } => {
-                            AppMsg::ConnectionSaved { url, token, name }
-                        }
+                        ConnectionDialogOutput::ConnectionSaved {
+                            url,
+                            token,
+                            name,
+                            is_remote,
+                        } => AppMsg::ConnectionSaved {
+                            url,
+                            token,
+                            name,
+                            is_remote,
+                        },
                         ConnectionDialogOutput::Cancelled => {
                             AppMsg::ShowToast("Connection cancelled".to_string())
                         }
@@ -516,8 +528,13 @@ impl Component for App {
                 dialog.widget().present();
                 self.connection_dialog = Some(dialog);
             }
-            AppMsg::ConnectionSaved { url, token, name } => {
-                handle_connection_saved(self, url, token, name, &sender);
+            AppMsg::ConnectionSaved {
+                url,
+                token,
+                name,
+                is_remote,
+            } => {
+                handle_connection_saved(self, url, token, name, is_remote, &sender);
             }
             AppMsg::ShowToast(message) => {
                 if !message.is_empty() {
@@ -667,7 +684,12 @@ impl Component for App {
         _root: &Self::Root,
     ) {
         match cmd {
-            AppCmd::SourceValidated { url, token, name } => {
+            AppCmd::SourceValidated {
+                url,
+                token,
+                name,
+                is_remote,
+            } => {
                 let source_start = Instant::now();
                 info!("Plex source validated: {} (url={})", name, url);
 
@@ -697,7 +719,7 @@ impl Component for App {
                     }
                 }
 
-                let client = PlexClient::new(&url, &token);
+                let client = PlexClient::new(&url, &token).with_remote(is_remote);
                 let plex_source = Arc::new(PlexSource::new(client, name));
                 let artwork_cache = Arc::new(ArtworkCache::new(crate::config::artwork_dir()));
 
