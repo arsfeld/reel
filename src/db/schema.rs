@@ -1,4 +1,7 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use rusqlite::Connection;
+use tracing::warn;
 
 use super::DbError;
 
@@ -7,6 +10,19 @@ const SCHEMA_VERSION: i32 = 3;
 /// Initialize the database schema. Creates tables if they don't exist.
 /// Idempotent: safe to call on every app startup.
 pub fn init_db(conn: &Connection) -> Result<(), DbError> {
+    // The data directory was historically shared with predecessor apps that
+    // used the same file with an incompatible schema (INTEGER ids,
+    // `position_ms`, extra tables). Their tables satisfy `CREATE TABLE IF NOT
+    // EXISTS` but lack reel-ng's columns, so every query fails. Detect that
+    // shape, snapshot it, and rebuild this database as reel-ng's own.
+    if is_foreign_schema(conn)? {
+        warn!("Database has an incompatible schema from another app; backing up and rebuilding");
+        if let Err(e) = backup_foreign_db(conn) {
+            warn!("Could not snapshot the incompatible database before rebuild: {e}");
+        }
+        drop_all_tables(conn)?;
+    }
+
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS schema_version (
@@ -89,6 +105,66 @@ pub fn init_db(conn: &Connection) -> Result<(), DbError> {
         migrate_to_v3(conn)?;
     }
 
+    Ok(())
+}
+
+/// Reel-ng's `media_items` table is keyed by a TEXT `id` and carries an
+/// `external_id` column. A predecessor app's table exists (so `IF NOT EXISTS`
+/// is a no-op) but has neither. Treat "table present without `external_id`" as
+/// the signal that this database belongs to another app and must be rebuilt.
+fn is_foreign_schema(conn: &Connection) -> Result<bool, DbError> {
+    let table_present: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'media_items'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_present == 0 {
+        return Ok(false);
+    }
+    let has_external_id: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('media_items') WHERE name = 'external_id'",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(has_external_id == 0)
+}
+
+/// Snapshot the current (incompatible) database next to itself before it is
+/// rebuilt, so the predecessor data is recoverable. No-op for in-memory
+/// databases. Best-effort: the caller logs and continues on failure.
+fn backup_foreign_db(conn: &Connection) -> Result<(), DbError> {
+    let main_file: String = conn.query_row(
+        "SELECT file FROM pragma_database_list WHERE name = 'main'",
+        [],
+        |row| row.get(0),
+    )?;
+    if main_file.is_empty() {
+        return Ok(()); // in-memory database
+    }
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup = format!("{main_file}.foreign-backup-{ts}");
+    conn.execute("VACUUM INTO ?1", [backup])?;
+    Ok(())
+}
+
+/// Drop every user table so the schema can be recreated from scratch. Internal
+/// `sqlite_*` tables are left alone. Foreign keys are disabled for the duration
+/// so cross-table references don't block the drops.
+fn drop_all_tables(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+    let names: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for name in names {
+        conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{name}\";"))?;
+    }
     Ok(())
 }
 
@@ -375,6 +451,87 @@ mod tests {
             )
             .unwrap();
         assert_eq!(vr, None);
+    }
+
+    #[test]
+    fn foreign_schema_is_rebuilt_as_reel_ng() {
+        // A predecessor app's database: INTEGER-keyed media_items with no
+        // external_id, a position_ms watch_progress table, an unknown table,
+        // and a schema_version with multiple rows.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE schema_version (version INTEGER NOT NULL);
+            INSERT INTO schema_version (version) VALUES (3);
+            INSERT INTO schema_version (version) VALUES (4);
+            INSERT INTO schema_version (version) VALUES (6);
+
+            CREATE TABLE media_items (
+                id INTEGER PRIMARY KEY,
+                summary TEXT,
+                library_section TEXT
+            );
+            INSERT INTO media_items (id, summary) VALUES (1, 'old data');
+
+            CREATE TABLE watch_progress (
+                media_item_id INTEGER PRIMARY KEY,
+                position_ms INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE collections (id INTEGER PRIMARY KEY);
+            ",
+        )
+        .unwrap();
+
+        init_db(&conn).unwrap();
+
+        // reel-ng's columns now exist.
+        let has_external_id: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('media_items') WHERE name = 'external_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_external_id, 1);
+        let has_position_seconds: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('watch_progress') WHERE name = 'position_seconds'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_position_seconds, 1);
+
+        // Foreign table and old rows are gone.
+        let collections: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'collections'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(collections, 0);
+        let media_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM media_items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(media_rows, 0);
+
+        // schema_version is a single, correct row.
+        let version_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version_rows, 1);
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn fresh_database_is_not_treated_as_foreign() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert!(!is_foreign_schema(&conn).unwrap());
+        init_db(&conn).unwrap();
+        // A reel-ng database (with external_id) is never flagged as foreign.
+        assert!(!is_foreign_schema(&conn).unwrap());
     }
 
     #[test]
