@@ -108,20 +108,27 @@ impl App {
             .and_then(|item| self.sources.for_item(item))
     }
 
+    /// The full set of connected sources as `(source_type, source_id, source)`,
+    /// for Home's cross-source merged Continue Watching row — Home resolves each
+    /// merged item's owning source by matching type + id.
+    fn home_sources(&self) -> Vec<(SourceType, String, Arc<dyn MediaSource>)> {
+        self.sources
+            .iter()
+            .map(|entry| {
+                (
+                    entry.source_type,
+                    entry.source_id.clone(),
+                    entry.source.clone(),
+                )
+            })
+            .collect()
+    }
+
     /// Register a freshly-built source and add it to the sidebar as its own
     /// group: register in the live registry (idempotent), push its identity +
     /// visibility into the sidebar, and spawn an async libraries fetch. Called
     /// for EVERY validated source so all servers appear in the sidebar — this
     /// does NOT change the browsed source.
-    /// The full set of connected sources as (display label, source) pairs, for
-    /// Home's cross-source merged Continue Watching row.
-    fn home_sources(&self) -> Vec<(String, Arc<dyn MediaSource>)> {
-        self.sources
-            .iter()
-            .map(|entry| (entry.source.name().to_string(), entry.source.clone()))
-            .collect()
-    }
-
     fn feed_sidebar_source(
         &mut self,
         source_type: SourceType,
@@ -130,6 +137,10 @@ impl App {
         source: Arc<dyn MediaSource>,
         sender: &ComponentSender<Self>,
     ) {
+        // Normalize to the same trailing-slash-trimmed form the API clients use
+        // for base_url(), so the registry key and sidebar source_id match the
+        // source_id every MediaItem carries (else per-item resolution misses).
+        let source_id = source_id.trim_end_matches('/');
         self.sources
             .register(source_type, source_id.to_string(), source.clone());
         // Home merges Continue Watching across all sources, so refresh its view
@@ -165,6 +176,8 @@ impl App {
         source_id: &str,
         source: Arc<dyn MediaSource>,
     ) {
+        // Match the trimmed form the clients/items use (see feed_sidebar_source).
+        let source_id = source_id.trim_end_matches('/');
         self.browsed_source = Some((source_type, source_id.to_string()));
         let cache = self.artwork_cache.clone();
         let hidden = self.settings.library_visibility.hidden.clone();
@@ -230,8 +243,8 @@ impl App {
             .map(|s| s.name().to_string())
             .unwrap_or_else(|| source_id.to_string());
 
-        // Drop from the live registry (the sidebar already removed its group
-        // optimistically).
+        // Drop from the live registry (the caller drops the sidebar group via
+        // SidebarMsg::DropSource after this confirmed removal).
         self.sources.remove(st, source_id);
         // Refresh Home's source set so the removed source leaves the merged
         // Continue Watching row on the subsequent LoadHome.
@@ -328,8 +341,15 @@ pub enum AppMsg {
         source_type: String,
         source_id: String,
     },
-    /// Remove a connected source: evict its media/watch rows and saved config.
+    /// A source's remove button was clicked: show a destructive confirmation
+    /// dialog before evicting anything.
     RemoveSource {
+        source_type: String,
+        source_id: String,
+    },
+    /// The user confirmed removal: evict the source's media/watch rows + saved
+    /// config and drop its sidebar group.
+    ConfirmRemoveSource {
         source_type: String,
         source_id: String,
     },
@@ -827,7 +847,45 @@ impl Component for App {
                 source_type,
                 source_id,
             } => {
+                // Destructive: confirm before evicting media + watch history
+                // (DATA-PROTECTION — never delete user data without explicit
+                // confirmation).
+                let name = SourceType::from_str(&source_type)
+                    .and_then(|st| self.sources.get(st, &source_id))
+                    .map_or_else(|| source_id.clone(), |s| s.name().to_string());
+                let dialog = adw::AlertDialog::new(
+                    Some("Remove server?"),
+                    Some(&format!(
+                        "Removing \u{201c}{name}\u{201d} deletes its synced media and watch \
+                         history from this device. This can't be undone."
+                    )),
+                );
+                dialog.add_response("cancel", "Cancel");
+                dialog.add_response("remove", "Remove");
+                dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+                dialog.set_default_response(Some("cancel"));
+                dialog.set_close_response("cancel");
+                let input = sender.input_sender().clone();
+                dialog.connect_response(None, move |_, response| {
+                    if response == "remove" {
+                        let _ = input.send(AppMsg::ConfirmRemoveSource {
+                            source_type: source_type.clone(),
+                            source_id: source_id.clone(),
+                        });
+                    }
+                });
+                dialog.present(Some(root));
+            }
+            AppMsg::ConfirmRemoveSource {
+                source_type,
+                source_id,
+            } => {
                 self.remove_source(&source_type, &source_id, &sender);
+                // Drop the now-evicted source's sidebar group.
+                self.sidebar.emit(SidebarMsg::DropSource {
+                    source_type,
+                    source_id,
+                });
             }
             AppMsg::ShowCollectionDetail(item) => {
                 self.current_view = CurrentView::CollectionDetail(item.id.clone());

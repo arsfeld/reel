@@ -6,7 +6,7 @@ use gtk::prelude::*;
 use relm4::prelude::*;
 
 use crate::models::hub::MediaHub;
-use crate::models::media::MediaItem;
+use crate::models::media::{MediaItem, SourceType};
 use crate::models::watch::WatchProgress;
 use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
@@ -22,7 +22,11 @@ pub struct HomeView {
     source: Option<Arc<dyn MediaSource>>,
     /// All connected sources (label + source), used only to build the single
     /// merged Continue Watching row that spans every server.
-    sources: Vec<(String, Arc<dyn MediaSource>)>,
+    /// All connected sources as `(source_type, source_id, source)`, so the
+    /// merged Continue Watching row can resolve each item's OWNING source for
+    /// playback/artwork — never the browsed one (a CW card may come from a
+    /// different server than the one being browsed).
+    sources: Vec<(SourceType, String, Arc<dyn MediaSource>)>,
     artwork_cache: Option<Arc<ArtworkCache>>,
     /// The vertical container holding all shelf sections.
     shelves_box: gtk::Box,
@@ -70,7 +74,7 @@ pub enum HomeViewMsg {
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
     /// Update the full set of connected sources (label + source). Drives the
     /// merged, cross-source Continue Watching row.
-    SetSources(Vec<(String, Arc<dyn MediaSource>)>),
+    SetSources(Vec<(SourceType, String, Arc<dyn MediaSource>)>),
     /// Show/hide the "Connecting to Plex…" loading page.
     SetConnecting(bool),
     /// Update the hidden-library set. Applied to subsequently loaded home data.
@@ -371,8 +375,8 @@ impl Component for HomeView {
                 let cw_sources: Vec<(String, Arc<dyn MediaSource>)> = self
                     .sources
                     .iter()
-                    .filter(|(_, s)| s.source_type().provides_server_hubs())
-                    .cloned()
+                    .filter(|(source_type, _, _)| source_type.provides_server_hubs())
+                    .map(|(_, _, s)| (s.name().to_string(), s.clone()))
                     .collect();
                 // True when at least one source offers a server CW row, so the
                 // local-DB fallback below is suppressed.
@@ -473,7 +477,7 @@ impl Component for HomeView {
                     && (resume || item.media_type == crate::models::media::MediaType::Episode);
                 if should_play
                     && let (Some(source), Some(part)) =
-                        (self.source.as_ref(), item.file_path.as_ref())
+                        (self.source_for_item(&item), item.file_path.as_ref())
                 {
                     let url = source.playback_url(part);
                     let _ = sender.output(HomeViewOutput::PlayMedia {
@@ -499,7 +503,7 @@ impl Component for HomeView {
             HomeViewMsg::HeroPlay => {
                 if let Some(item) = self.hero_items.get(self.hero_index).cloned() {
                     if let (Some(source), Some(part)) =
-                        (self.source.as_ref(), item.file_path.as_ref())
+                        (self.source_for_item(&item), item.file_path.as_ref())
                     {
                         let url = source.playback_url(part);
                         let _ = sender.output(HomeViewOutput::PlayMedia {
@@ -718,11 +722,22 @@ impl HomeView {
         self.fetch_posters(shelf_id, sender);
     }
 
+    /// Resolve the source that owns an item — matched by `source_type` +
+    /// `source_id` against the connected-source list — so a merged Continue
+    /// Watching card from another server uses ITS server's playback/artwork URL.
+    /// Falls back to the browsed source for items not in the list.
+    fn source_for_item(&self, item: &MediaItem) -> Option<&Arc<dyn MediaSource>> {
+        self.sources
+            .iter()
+            .find(|(source_type, source_id, _)| {
+                *source_type == item.source_type && *source_id == item.source_id
+            })
+            .map(|(_, _, source)| source)
+            .or(self.source.as_ref())
+    }
+
     fn fetch_posters(&self, shelf_id: ShelfId, sender: &ComponentSender<Self>) {
         let Some(ref cache) = self.artwork_cache else {
-            return;
-        };
-        let Some(ref source) = self.source else {
             return;
         };
         let Some(shelf) = self.shelves.iter().find(|s| s.id == shelf_id) else {
@@ -734,6 +749,11 @@ impl HomeView {
             // Episodes prefer their series poster so shelves show a portrait
             // show poster rather than the episode's landscape still.
             let Some(poster_path) = item.shelf_poster_path() else {
+                continue;
+            };
+            // Resolve the item's owning source so cross-source CW cards load
+            // artwork from their own server.
+            let Some(source) = self.source_for_item(item) else {
                 continue;
             };
             let artwork_url = source.artwork_url(poster_path, 320, 480);

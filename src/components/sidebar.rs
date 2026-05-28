@@ -209,8 +209,16 @@ pub enum SidebarMsg {
         source_id: String,
         visible: bool,
     },
-    /// The remove (trash) button on a source header was clicked.
+    /// The remove (trash) button on a source header was clicked. Emits a
+    /// `RemoveSource` output for the app to confirm; the group is NOT dropped
+    /// until the app sends `DropSource` after confirmation.
     RemoveSourceClicked {
+        source_type: String,
+        source_id: String,
+    },
+    /// Drop a source group from the sidebar — sent by the app once the user has
+    /// confirmed removal (the destructive media/watch eviction is the app's).
+    DropSource {
         source_type: String,
         source_id: String,
     },
@@ -387,13 +395,22 @@ impl SimpleComponent for Sidebar {
                 source_type,
                 source_id,
             } => {
-                self.sources
-                    .retain(|g| !(g.source_type == source_type && g.source_id == source_id));
-                self.rebuild(&sender);
+                // Do NOT remove the group here — removal evicts the source's
+                // media + watch history, so the app must confirm with the user
+                // first. The group is dropped only via `DropSource` once the
+                // app's confirmation dialog is accepted.
                 let _ = sender.output(SidebarOutput::RemoveSource {
                     source_type,
                     source_id,
                 });
+            }
+            SidebarMsg::DropSource {
+                source_type,
+                source_id,
+            } => {
+                self.sources
+                    .retain(|g| !(g.source_type == source_type && g.source_id == source_id));
+                self.rebuild(&sender);
             }
             SidebarMsg::RowSelected(index) => {
                 self.handle_row_selected(index, &sender);
