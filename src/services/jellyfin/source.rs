@@ -248,30 +248,41 @@ impl MediaSource for JellyfinSource {
         }
 
         // playing / paused: ensure a session exists, emitting a START on the
-        // first report for this item. Compute the id under the lock, then drop
-        // the guard before awaiting (never hold a std Mutex across .await).
-        let (session_id, is_new) = {
-            let mut sessions = self.play_sessions.lock().unwrap();
-            match sessions.get(rating_key) {
-                Some(existing) => (existing.clone(), false),
-                None => {
-                    let counter = SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
-                    let new_id = format!("{rating_key}-{counter}");
-                    sessions.insert(rating_key.to_string(), new_id.clone());
-                    (new_id, true)
-                }
-            }
+        // first report for this item. Read the existing id under the lock, then
+        // drop the guard before awaiting (never hold a std Mutex across .await).
+        let existing = {
+            let sessions = self.play_sessions.lock().unwrap();
+            sessions.get(rating_key).cloned()
         };
-
         let is_paused = state == "paused";
-        if is_new {
-            self.client
-                .report_playing(rating_key, &session_id, position_ticks)
-                .await?;
+
+        match existing {
+            Some(session_id) => {
+                self.client
+                    .report_progress(rating_key, &session_id, position_ticks, is_paused)
+                    .await?;
+            }
+            None => {
+                // New playback: open the session with a START. Only record the
+                // session id AFTER the server accepts the start — otherwise a
+                // failed start would leave a phantom session and every later
+                // /Progress would reference a session the server never opened
+                // (Jellyfin silently drops those). Recording on success lets the
+                // next tick retry the start instead.
+                let counter = SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let session_id = format!("{rating_key}-{counter}");
+                self.client
+                    .report_playing(rating_key, &session_id, position_ticks)
+                    .await?;
+                self.play_sessions
+                    .lock()
+                    .unwrap()
+                    .insert(rating_key.to_string(), session_id.clone());
+                self.client
+                    .report_progress(rating_key, &session_id, position_ticks, is_paused)
+                    .await?;
+            }
         }
-        self.client
-            .report_progress(rating_key, &session_id, position_ticks, is_paused)
-            .await?;
         Ok(())
     }
 
