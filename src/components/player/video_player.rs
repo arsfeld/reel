@@ -1397,14 +1397,15 @@ impl VideoPlayer {
             });
         }
 
-        // While buffering is active the pipeline may dip into Paused on a
-        // queue2 underrun. Suppress the poll-derived state transition so that
-        // automatic pause never leaks into `playback.playing` ownership or
-        // flickers the window title / MPRIS state — the pipeline resumes on
-        // its own once the buffer refills.
-        if self.buffering_percent.is_some() {
-            // Leave `playback.playing` untouched; it reflects user intent.
-        } else if was_playing != status.now_playing {
+        // Emit a state transition only on a genuine play/pause edge while not
+        // buffering. While buffering is active the pipeline may dip into Paused
+        // on a queue2 underrun; suppressing the poll-derived transition keeps
+        // that automatic pause from leaking into `playback.playing` ownership
+        // or flickering the window title / MPRIS state — the pipeline resumes
+        // on its own once the buffer refills. (When there is no edge,
+        // `playback.playing` already equals `now_playing`, so no update is
+        // needed.)
+        if self.buffering_percent.is_none() && was_playing != status.now_playing {
             self.playback.playing = status.now_playing;
             let state = if status.now_playing {
                 PlayState::Playing
@@ -1413,8 +1414,6 @@ impl VideoPlayer {
             };
             let _ = sender.output(VideoPlayerOutput::StateChanged(state));
             flash_center(&widgets.center_indicator, status.now_playing);
-        } else {
-            self.playback.playing = status.now_playing;
         }
 
         self.apply_pending_resume(status.is_prepared);
@@ -1718,6 +1717,16 @@ fn update_status_plate(
 ) {
     use crate::components::player::status_plate::{StatusPlate, status_plate};
 
+    // Loading and Buffering share the spinner layout; only the title differs.
+    let show_spinner = |title: &str| {
+        widgets.status_icon.set_visible(false);
+        widgets.status_spinner.set_visible(true);
+        widgets.status_spinner.set_spinning(true);
+        widgets.status_title.set_label(title);
+        widgets.status_detail.set_visible(false);
+        widgets.status_plate.set_visible(true);
+    };
+
     match status_plate(error_msg, is_prepared, buffering) {
         StatusPlate::Error(msg) => {
             widgets.status_spinner.set_spinning(false);
@@ -1728,24 +1737,8 @@ fn update_status_plate(
             widgets.status_detail.set_visible(true);
             widgets.status_plate.set_visible(true);
         }
-        StatusPlate::Buffering(pct) => {
-            widgets.status_icon.set_visible(false);
-            widgets.status_spinner.set_visible(true);
-            widgets.status_spinner.set_spinning(true);
-            widgets
-                .status_title
-                .set_label(&format!("Buffering… {pct}%"));
-            widgets.status_detail.set_visible(false);
-            widgets.status_plate.set_visible(true);
-        }
-        StatusPlate::Loading => {
-            widgets.status_icon.set_visible(false);
-            widgets.status_spinner.set_visible(true);
-            widgets.status_spinner.set_spinning(true);
-            widgets.status_title.set_label("Loading video…");
-            widgets.status_detail.set_visible(false);
-            widgets.status_plate.set_visible(true);
-        }
+        StatusPlate::Loading => show_spinner("Loading video…"),
+        StatusPlate::Buffering(pct) => show_spinner(&format!("Buffering… {pct}%")),
         StatusPlate::Hidden => {
             widgets.status_plate.set_visible(false);
             widgets.status_spinner.set_spinning(false);
