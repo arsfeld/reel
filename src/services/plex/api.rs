@@ -153,9 +153,13 @@ impl PlexClient {
     }
 
     /// Build a direct play URL for a media part.
+    ///
+    /// `download=1` is required: without it the `/library/parts/.../file.ext`
+    /// endpoint returns HTTP 500. With it, Plex serves the raw file with
+    /// `Accept-Ranges: bytes` so the player can seek.
     pub fn playback_url(&self, part_key: &str) -> String {
         format!(
-            "{}{}?X-Plex-Token={}",
+            "{}{}?download=1&X-Plex-Token={}",
             self.base_url, part_key, self.auth_token
         )
     }
@@ -259,7 +263,7 @@ mod tests {
         let url = client.playback_url("/library/parts/456/file.mkv");
         assert_eq!(
             url,
-            "http://192.168.1.100:32400/library/parts/456/file.mkv?X-Plex-Token=my-token"
+            "http://192.168.1.100:32400/library/parts/456/file.mkv?download=1&X-Plex-Token=my-token"
         );
     }
 

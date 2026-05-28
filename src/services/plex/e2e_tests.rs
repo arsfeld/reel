@@ -275,6 +275,7 @@ async fn playback_url_points_to_server() {
     assert!(url.starts_with(server.url()));
     assert!(url.contains(part_key));
     assert!(url.contains("X-Plex-Token=play-token"));
+    assert!(url.contains("download=1"));
 }
 
 #[tokio::test]
