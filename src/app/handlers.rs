@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -13,6 +14,7 @@ use crate::components::sidebar::SidebarMsg;
 use crate::config;
 use crate::db::downloads_repo::DownloadsRepo;
 use crate::db::watch_progress_repo::WatchProgressRepo;
+use crate::models::download::DownloadState;
 use crate::models::media::{MediaItem, SourceType};
 use crate::models::source::{Source, SourceConfig};
 use crate::navigation::CurrentView;
@@ -170,6 +172,45 @@ pub fn handle_video_output(
     }
 }
 
+/// Decide the local file path to play, if a complete on-disk copy exists.
+///
+/// Returns `Some(path)` only for a `Completed` download whose file is present on
+/// disk; an incomplete/`Paused`/`Failed` download, a missing file, or no
+/// download row all return `None`, so Play falls back to streaming (R13). Pure
+/// so the redirect decision is testable without GTK, the DB, or a real file
+/// outside the existence flag the caller supplies.
+pub fn local_playback_path(
+    state: Option<DownloadState>,
+    file_path: Option<&str>,
+    file_exists: bool,
+) -> Option<String> {
+    match (state, file_path) {
+        (Some(DownloadState::Completed), Some(path)) if file_exists => Some(path.to_string()),
+        _ => None,
+    }
+}
+
+/// Resolve the effective playback URL for an item: a `file://` URL to the local
+/// downloaded copy when one is complete and present, else the streamed source
+/// URL unchanged. The single Play choke point every path converges on (R12).
+fn local_redirect(app: &App, item: Option<&MediaItem>, stream_url: &str) -> String {
+    if let Some(item) = item
+        && let Some(conn) = app.db_conn.as_ref()
+        && let Ok(Some(d)) = DownloadsRepo::new(conn).find(&item.id)
+    {
+        let exists = d
+            .file_path
+            .as_deref()
+            .map(|p| Path::new(p).exists())
+            .unwrap_or(false);
+        if let Some(local) = local_playback_path(Some(d.state), d.file_path.as_deref(), exists) {
+            info!("Playing local downloaded copy for {}", item.id);
+            return format!("file://{local}");
+        }
+    }
+    stream_url.to_string()
+}
+
 /// Handle PlayMedia: set up the player for a new media URL.
 pub fn handle_play_media(
     app: &mut App,
@@ -207,6 +248,9 @@ pub fn handle_play_media(
         app.pending_resume =
             resume_position(source_offset, offline_pending, local_tracked, item.watched);
     }
+    // Redirect to a complete local copy when one exists; otherwise stream from
+    // the source (R12/R13). This single choke point covers every Play path.
+    let play_url = local_redirect(app, media_item.as_ref(), &url);
     app.now_playing = media_item.clone();
     app.last_position = 0.0;
     app.current_view = CurrentView::Player;
@@ -221,7 +265,7 @@ pub fn handle_play_media(
     app.stack.set_visible_child_name("player");
     app.video_player.emit(VideoPlayerMsg::SetAutoplay(true));
     app.video_player.emit(VideoPlayerMsg::SetUrl {
-        url: Some(url),
+        url: Some(play_url),
         resume_secs: app.pending_resume.take(),
     });
 
@@ -336,4 +380,48 @@ pub fn handle_connection_saved(
 
     // The source is live — start any queued/recovered downloads.
     super::download_handlers::start_pending(app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_with_existing_file_plays_local() {
+        // Covers the centralized redirect decision: complete copy present.
+        assert_eq!(
+            local_playback_path(Some(DownloadState::Completed), Some("/dl/m1.mkv"), true),
+            Some("/dl/m1.mkv".to_string())
+        );
+    }
+
+    #[test]
+    fn completed_but_file_missing_streams() {
+        // Covers AE3: local file deleted externally -> fall back to streaming.
+        assert_eq!(
+            local_playback_path(Some(DownloadState::Completed), Some("/dl/m1.mkv"), false),
+            None
+        );
+    }
+
+    #[test]
+    fn incomplete_or_paused_streams() {
+        for state in [
+            DownloadState::Queued,
+            DownloadState::Downloading,
+            DownloadState::Paused,
+            DownloadState::Failed,
+        ] {
+            assert_eq!(
+                local_playback_path(Some(state), Some("/dl/m1.mkv"), true),
+                None,
+                "state {state:?} must stream, not play a partial file"
+            );
+        }
+    }
+
+    #[test]
+    fn no_download_row_streams() {
+        assert_eq!(local_playback_path(None, None, false), None);
+    }
 }
