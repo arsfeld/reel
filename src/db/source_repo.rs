@@ -128,6 +128,7 @@ mod tests {
             config: SourceConfig {
                 url: "http://localhost:32400".to_string(),
                 token: "test-token-123".to_string(),
+                user_id: None,
             },
             enabled: true,
             last_synced_at: None,
