@@ -318,6 +318,8 @@ pub enum AppMsg {
         url: String,
         token: String,
         name: String,
+        source_type: String,
+        user_id: Option<String>,
     },
     ShowToast(String),
     FocusSearch,
@@ -753,15 +755,23 @@ impl Component for App {
                 handle_video_output(self, output, &sender, root);
             }
             AppMsg::ShowConnectionDialog => {
-                let client_id =
-                    crate::services::plex::auth::client_identifier(&crate::config::data_dir());
                 let dialog = ConnectionDialog::builder()
                     .transient_for(root)
-                    .launch(client_id)
+                    .launch(crate::config::data_dir())
                     .forward(sender.input_sender(), |output| match output {
-                        ConnectionDialogOutput::ConnectionSaved { url, token, name } => {
-                            AppMsg::ConnectionSaved { url, token, name }
-                        }
+                        ConnectionDialogOutput::ConnectionSaved {
+                            url,
+                            token,
+                            name,
+                            source_type,
+                            user_id,
+                        } => AppMsg::ConnectionSaved {
+                            url,
+                            token,
+                            name,
+                            source_type,
+                            user_id,
+                        },
                         ConnectionDialogOutput::Cancelled => {
                             AppMsg::ShowToast("Connection cancelled".to_string())
                         }
@@ -769,8 +779,15 @@ impl Component for App {
                 dialog.widget().present();
                 self.connection_dialog = Some(dialog);
             }
-            AppMsg::ConnectionSaved { url, token, name } => {
-                handle_connection_saved(self, url, token, name, &sender);
+            AppMsg::ConnectionSaved {
+                url,
+                token,
+                name,
+                source_type,
+                user_id,
+            } => {
+                let st = SourceType::from_str(&source_type).unwrap_or(SourceType::Plex);
+                handle_connection_saved(self, url, token, name, st, user_id, &sender);
             }
             AppMsg::ShowToast(message) => {
                 if !message.is_empty() {

@@ -216,26 +216,33 @@ pub fn handle_connection_saved(
     url: String,
     token: String,
     name: String,
+    source_type: SourceType,
+    user_id: Option<String>,
     sender: &ComponentSender<App>,
 ) {
-    info!("Plex connection saved: {} ({})", name, url);
+    info!(
+        "Connection saved: {} ({}) [{}]",
+        name,
+        url,
+        source_type.as_str()
+    );
     app.connection_dialog = None;
 
-    // Save to database
-    if let Some(ref conn) = app.db_conn {
-        let source = Source {
-            id: Source::make_id(SourceType::Plex, &url),
-            source_type: SourceType::Plex,
-            name: name.clone(),
-            config: SourceConfig {
-                url: url.clone(),
-                token: token.clone(),
-                user_id: None,
-            },
-            enabled: true,
-            last_synced_at: None,
-        };
+    let source = Source {
+        id: Source::make_id(source_type, &url),
+        source_type,
+        name: name.clone(),
+        config: SourceConfig {
+            url: url.clone(),
+            token,
+            user_id,
+        },
+        enabled: true,
+        last_synced_at: None,
+    };
 
+    // Persist (id-scoped upsert: delete-then-insert the *same* id, never others).
+    if let Some(ref conn) = app.db_conn {
         let repo = crate::db::source_repo::SourceRepo::new(conn);
         let _ = repo.delete(&source.id);
         if let Err(e) = repo.insert(&source) {
@@ -244,20 +251,8 @@ pub fn handle_connection_saved(
     }
 
     // Build the source via the factory and wire it into every view.
-    let source = Source {
-        id: Source::make_id(SourceType::Plex, &url),
-        source_type: SourceType::Plex,
-        name: name.clone(),
-        config: SourceConfig {
-            url: url.clone(),
-            token,
-            user_id: None,
-        },
-        enabled: true,
-        last_synced_at: None,
-    };
     if let Some(built) = super::source_factory::build_source(&source) {
-        app.wire_active_source(SourceType::Plex, url, built, sender);
+        app.wire_active_source(source_type, url, built, sender);
     }
     // A library loads when picked from the sidebar; the default view is Home.
 
