@@ -1,9 +1,15 @@
-//! Pure presentation logic for the player's central status plate.
+//! The player's central status plate: a centred overlay for blocking/transient
+//! playback states (initial load, network buffering, terminal errors).
 //!
-//! The plate is a centred overlay used for blocking/transient playback states
-//! (initial load, network buffering, terminal errors). Extracting the
-//! *decision* into a pure function keeps the priority ordering unit-testable
-//! without GTK (the actual widget mutation stays in `video_player.rs`).
+//! The *decision* ([`status_plate`]) is a pure function so the priority
+//! ordering is unit-testable without GTK; [`render`] applies that decision to
+//! the live widgets.
+
+use relm4::gtk;
+
+use gtk::prelude::*;
+
+use super::video_player::VideoPlayerWidgets;
 
 /// What the status plate should display, derived from playback state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +43,48 @@ pub(crate) fn status_plate(
         StatusPlate::Loading
     } else {
         StatusPlate::Hidden
+    }
+}
+
+/// Drive the central status plate from the pure [`status_plate`] decision.
+/// Shown for initial loading, network buffering, and terminal errors —
+/// seeking intentionally doesn't trigger it.
+///
+/// Note (v1 limitation): on a fast connection the buffering percent can jump
+/// 0 → 100 in well under a frame, so the "Buffering… N%" plate may flicker
+/// briefly. Accepted for v1 rather than adding a debounce timer.
+pub(crate) fn render(
+    widgets: &VideoPlayerWidgets,
+    error_msg: Option<&str>,
+    is_prepared: bool,
+    buffering: Option<i32>,
+) {
+    // Loading and Buffering share the spinner layout; only the title differs.
+    let show_spinner = |title: &str| {
+        widgets.status_icon.set_visible(false);
+        widgets.status_spinner.set_visible(true);
+        widgets.status_spinner.set_spinning(true);
+        widgets.status_title.set_label(title);
+        widgets.status_detail.set_visible(false);
+        widgets.status_plate.set_visible(true);
+    };
+
+    match status_plate(error_msg, is_prepared, buffering) {
+        StatusPlate::Error(msg) => {
+            widgets.status_spinner.set_spinning(false);
+            widgets.status_spinner.set_visible(false);
+            widgets.status_icon.set_visible(true);
+            widgets.status_title.set_label("Couldn't play video");
+            widgets.status_detail.set_label(&msg);
+            widgets.status_detail.set_visible(true);
+            widgets.status_plate.set_visible(true);
+        }
+        StatusPlate::Loading => show_spinner("Loading video…"),
+        StatusPlate::Buffering(pct) => show_spinner(&format!("Buffering… {pct}%")),
+        StatusPlate::Hidden => {
+            widgets.status_plate.set_visible(false);
+            widgets.status_spinner.set_spinning(false);
+        }
     }
 }
 
