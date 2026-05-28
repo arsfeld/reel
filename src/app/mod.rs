@@ -44,7 +44,7 @@ mod utils;
 mod watch_events;
 mod widget_builder;
 
-use db_helpers::{init_database, load_in_progress, load_watch_data};
+use db_helpers::{init_database, load_in_progress, load_watch_data, reclaim_stream_cache};
 use dialogs::show_file_chooser;
 use handlers::{handle_connection_saved, handle_play_media, handle_video_output};
 use player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
@@ -179,6 +179,10 @@ impl Component for App {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        // Reclaim streaming-cache temp files orphaned by a previous crash
+        // before any playback pipeline can begin writing a new one.
+        reclaim_stream_cache();
+
         let settings = Settings::load();
         let video_player = VideoPlayer::builder()
             .launch(VideoPlayerInit {
