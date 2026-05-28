@@ -109,8 +109,16 @@ pub fn base_item_to_media_item(dto: &BaseItemDto, source_id: &str) -> Option<Med
         _ => None,
     };
 
-    // Direct-play needs the media source id; the item id is the external_id.
-    let file_path = dto.media_sources.first().and_then(|ms| ms.id.clone());
+    // Direct-play needs BOTH the item id and the media-source id; the stream
+    // URL builder (`JellyfinClient::stream_url`) takes both. Store a composite
+    // `"{item_id}|{media_source_id}"` so `JellyfinSource::playback_url` can split
+    // it back apart. When the item has no media source but is itself playable
+    // (Movie/Episode), fall back to the bare item id (used as both).
+    let file_path = match dto.media_sources.first().and_then(|ms| ms.id.clone()) {
+        Some(media_source_id) => Some(format!("{}|{}", dto.id, media_source_id)),
+        None if matches!(media_type, MediaType::Movie | MediaType::Episode) => Some(dto.id.clone()),
+        None => None,
+    };
 
     let video_resolution = resolution_label(dto.height);
 
@@ -375,7 +383,8 @@ mod tests {
             Some("abc123/Backdrop/backtag".to_string())
         );
         assert_eq!(item.video_resolution, Some("1080".to_string()));
-        assert_eq!(item.file_path, Some("src1".to_string()));
+        // Composite "{item_id}|{media_source_id}" for direct-play.
+        assert_eq!(item.file_path, Some("abc123|src1".to_string()));
         assert_eq!(item.external_id, "abc123");
         assert_eq!(item.source_type, SourceType::Jellyfin);
         assert_eq!(item.source_id, SOURCE);
@@ -471,8 +480,20 @@ mod tests {
     }
 
     #[test]
-    fn convert_no_media_sources_gives_none_file_path() {
+    fn convert_no_media_sources_falls_back_to_bare_id_for_playable() {
+        // A playable item (Movie/Episode) with no media sources falls back to
+        // its bare id so it can still be streamed (used as both item + source).
         let mut dto = test_movie_dto();
+        dto.media_sources.clear();
+        let item = base_item_to_media_item(&dto, SOURCE).unwrap();
+        assert_eq!(item.file_path, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn convert_no_media_sources_gives_none_file_path_for_non_playable() {
+        // A Series is not directly playable; no media sources → no file_path.
+        let mut dto = test_movie_dto();
+        dto.type_ = Some("Series".to_string());
         dto.media_sources.clear();
         let item = base_item_to_media_item(&dto, SOURCE).unwrap();
         assert_eq!(item.file_path, None);
