@@ -1,6 +1,8 @@
 pub mod error;
 pub mod media_repo;
 pub mod migrations;
+#[allow(dead_code)]
+pub mod rows;
 pub mod schema;
 pub mod source_repo;
 #[allow(dead_code)]
