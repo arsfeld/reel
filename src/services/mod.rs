@@ -1,6 +1,8 @@
 #[allow(dead_code)]
 pub mod artwork;
 #[allow(dead_code)]
+pub mod jellyfin;
+#[allow(dead_code)]
 pub mod library_filter;
 #[allow(dead_code)]
 pub mod media_source;
