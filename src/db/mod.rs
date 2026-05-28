@@ -1,3 +1,4 @@
+pub mod database;
 pub mod error;
 pub mod init;
 pub mod media_repo;
