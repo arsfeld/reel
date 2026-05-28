@@ -47,8 +47,16 @@ impl PlaybackPipeline {
         // setting its removed `video-sink` property panics on GStreamer 1.26+.
         playbin.set_property("video-sink", &paintable_sink);
         playbin.set_property("uri", url);
-        // Leave `flags` at playbin3 defaults (video+audio+text+buffering+…).
-        // Setting a raw u32 panics: the property expects GstPlayFlags.
+        // Network streams (http/https) get GStreamer's `download` play flag:
+        // the stream is routed through an internally-created `downloadbuffer`
+        // that progressively writes the full file to a temp file on disk,
+        // smoothing jitter and serving in-buffer seeks from the local copy.
+        // Local files (`file://`) play directly. The flag is set via the typed
+        // `FlagsClass` builder, preserving the existing defaults — setting a
+        // raw u32 panics, the property expects GstPlayFlags.
+        if crate::services::stream_cache::should_cache_stream(url) {
+            enable_stream_cache(&playbin);
+        }
 
         if let Some(path) = local_path {
             let matches = find_matching_subtitles(std::path::Path::new(path));
@@ -297,6 +305,67 @@ impl Drop for PlaybackPipeline {
         }
         let _ = self.pipeline.set_state(gst::State::Null);
     }
+}
+
+/// Enable disk read-ahead for a network stream on `playbin`: prepare the cache
+/// directory, OR-in the `download` play flag, and configure the internally
+/// created `downloadbuffer`'s `temp-template` via `element-setup`.
+///
+/// If the cache directory can't be prepared (read-only / full partition), skip
+/// both the flag and the template and fall back to plain streaming — pointing
+/// `temp-template` at an unwritable dir would make `downloadbuffer` error and
+/// break otherwise-fine playback.
+fn enable_stream_cache(playbin: &gst::Element) {
+    use crate::services::stream_cache;
+
+    let cache_dir = crate::config::stream_cache_dir();
+    if let Err(e) = stream_cache::prepare(&cache_dir) {
+        tracing::warn!(
+            "stream cache disabled: cannot prepare {}: {e}",
+            cache_dir.display()
+        );
+        return;
+    }
+
+    if !set_download_flag(playbin) {
+        return;
+    }
+
+    // `playbin3` doesn't expose temp-template directly — it creates the
+    // `downloadbuffer` internally. Match it by factory name in `element-setup`
+    // and set the template. We do NOT set `temp-remove`: its `true` default
+    // removes the temp file on the element's READY transition, which a clean
+    // stop/teardown passes through (Drop → Null). Crash orphans are reclaimed
+    // by the startup sweep instead.
+    let template = stream_cache::temp_template(&cache_dir);
+    playbin.connect("element-setup", false, move |values| {
+        if let Ok(element) = values[1].get::<gst::Element>()
+            && element.factory().map(|f| f.name()).as_deref() == Some("downloadbuffer")
+        {
+            element.set_property("temp-template", &template);
+        }
+        None
+    });
+}
+
+/// OR-in the `download` bit on `playbin`'s `flags` property, preserving the
+/// existing defaults. Returns `false` (and logs) if the flags type or builder
+/// is unavailable, so the caller can fall back to plain streaming.
+fn set_download_flag(playbin: &gst::Element) -> bool {
+    let flags = playbin.property_value("flags");
+    let Some(flags_class) = glib::FlagsClass::with_type(flags.type_()) else {
+        tracing::warn!("playbin flags type unavailable; streaming without disk cache");
+        return false;
+    };
+    let Some(new_flags) = flags_class
+        .builder_with_value(flags)
+        .and_then(|b| b.set_by_nick("download").build())
+    else {
+        tracing::warn!("failed to set download flag; streaming without disk cache");
+        return false;
+    };
+    playbin.set_property_from_value("flags", &new_flags);
+    true
 }
 
 fn make_element(name: &str) -> Option<gst::Element> {

@@ -41,7 +41,6 @@ pub fn artwork_dir() -> PathBuf {
 /// Path to streaming-cache temp files: `cache_dir()/stream-cache`.
 /// Isolated from `artwork/` and from the data dir's SQLite/downloads;
 /// nothing here is meant to survive a session (see `services::stream_cache`).
-#[allow(dead_code)] // wired into the pipeline + startup reclaim in U3/U4
 pub fn stream_cache_dir() -> PathBuf {
     cache_dir().join("stream-cache")
 }
