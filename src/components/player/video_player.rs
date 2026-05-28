@@ -36,6 +36,9 @@ use relm4::gtk;
 use relm4::prelude::*;
 
 use crate::components::player::status_plate;
+use crate::components::player::video_player_chrome::{
+    flash_center, format_us, is_player_shortcut, rebuild_track_popovers, volume_icon,
+};
 use crate::player::PlayState;
 use crate::player::SkipMarkers;
 use crate::player::gst_pipeline::PlaybackPipeline;
@@ -741,6 +744,9 @@ impl VideoPlayer {
     /// Dispatch a single input message to its handler. Returns `true` if the
     /// caller should return early without running the post-dispatch widget
     /// refresh (used by messages that bail out, e.g. dropped subtitle files).
+    // Message dispatcher; one arm per VideoPlayerMsg (same allow as the App's
+    // dispatchers).
+    #[allow(clippy::too_many_lines)]
     fn dispatch_msg(
         &mut self,
         widgets: &mut <Self as relm4::Component>::Widgets,
@@ -1879,65 +1885,6 @@ struct TickSnapshot {
     error_msg: Option<String>,
 }
 
-fn is_player_shortcut(key: gtk::gdk::Key) -> bool {
-    use gtk::gdk::Key;
-    matches!(
-        key,
-        Key::space
-            | Key::k
-            | Key::K
-            | Key::Left
-            | Key::Right
-            | Key::Up
-            | Key::Down
-            | Key::j
-            | Key::J
-            | Key::l
-            | Key::L
-            | Key::Home
-            | Key::End
-            | Key::m
-            | Key::M
-            | Key::_9
-            | Key::_0
-            | Key::f
-            | Key::F
-            | Key::s
-            | Key::S
-            | Key::Escape
-    )
-}
-
-fn flash_center(image: &gtk::Image, playing: bool) {
-    image.set_icon_name(Some(if playing {
-        "media-playback-start-symbolic"
-    } else {
-        "media-playback-pause-symbolic"
-    }));
-    image.set_visible(true);
-    image.remove_css_class("video-center-indicator-flash");
-    image.add_css_class("video-center-indicator-flash");
-    let weak = image.downgrade();
-    glib::timeout_add_local_once(std::time::Duration::from_millis(550), move || {
-        if let Some(img) = weak.upgrade() {
-            img.set_visible(false);
-            img.remove_css_class("video-center-indicator-flash");
-        }
-    });
-}
-
-fn format_us(us: i64) -> String {
-    let total = (us.max(0) / 1_000_000) as u64;
-    let h = total / 3600;
-    let m = (total % 3600) / 60;
-    let s = total % 60;
-    if h > 0 {
-        format!("{h}:{m:02}:{s:02}")
-    } else {
-        format!("{m}:{s:02}")
-    }
-}
-
 fn wire_popover_handlers(widgets: &VideoPlayerWidgets, sender: &ComponentSender<VideoPlayer>) {
     for menu in [&widgets.audio_menu, &widgets.subtitle_menu] {
         let Some(popover) = menu.popover() else {
@@ -1951,124 +1898,5 @@ fn wire_popover_handlers(widgets: &VideoPlayerWidgets, sender: &ComponentSender<
         popover.connect_closed(move |_| {
             sender_hide.input(VideoPlayerMsg::PopoverVisibilityChanged(false));
         });
-    }
-}
-
-fn track_ui_signature(tracks: &[MediaTrack], subtitles_enabled: bool) -> String {
-    let mut parts: Vec<String> = tracks
-        .iter()
-        .map(|t| format!("{}:{}:{}", t.stream_id, t.selected as u8, t.label.as_str()))
-        .collect();
-    parts.push(format!("subs:{subtitles_enabled}"));
-    parts.join("|")
-}
-
-fn rebuild_track_popovers(
-    widgets: &VideoPlayerWidgets,
-    tracks: &[MediaTrack],
-    media: Option<&PlaybackPipeline>,
-    sender: &ComponentSender<VideoPlayer>,
-    signature: &mut String,
-) {
-    let subtitles_enabled = media.is_some_and(PlaybackPipeline::subtitles_enabled);
-    let sig = track_ui_signature(tracks, subtitles_enabled);
-    if sig == *signature {
-        return;
-    }
-    *signature = sig;
-
-    while let Some(child) = widgets.audio_tracks_box.first_child() {
-        widgets.audio_tracks_box.remove(&child);
-    }
-    while let Some(child) = widgets.subtitle_tracks_box.first_child() {
-        widgets.subtitle_tracks_box.remove(&child);
-    }
-
-    let audio_tracks: Vec<_> = tracks
-        .iter()
-        .filter(|t| t.kind == TrackKind::Audio)
-        .collect();
-    if audio_tracks.is_empty() {
-        let label = gtk::Label::new(Some("No audio tracks"));
-        label.add_css_class("dim-label");
-        widgets.audio_tracks_box.append(&label);
-    } else {
-        let mut first_btn: Option<gtk::CheckButton> = None;
-        for track in audio_tracks {
-            let btn = gtk::CheckButton::builder()
-                .label(&track.label)
-                .active(track.selected)
-                .build();
-            if let Some(ref group) = first_btn {
-                btn.set_group(Some(group));
-            } else {
-                first_btn = Some(btn.clone());
-            }
-            let id = track.stream_id.clone();
-            let sender = sender.clone();
-            btn.connect_toggled(move |b| {
-                if b.is_active() {
-                    sender.input(VideoPlayerMsg::SelectAudio(id.clone()));
-                }
-            });
-            widgets.audio_tracks_box.append(&btn);
-        }
-    }
-
-    let off_btn = gtk::CheckButton::builder()
-        .label("Off")
-        .active(!subtitles_enabled)
-        .build();
-    let first_sub = Some(off_btn.clone());
-    let sender_off = sender.clone();
-    off_btn.connect_toggled(move |b| {
-        if b.is_active() {
-            sender_off.input(VideoPlayerMsg::SelectSubtitle(None));
-        }
-    });
-    widgets.subtitle_tracks_box.append(&off_btn);
-
-    let subtitle_tracks: Vec<_> = tracks
-        .iter()
-        .filter(|t| t.kind == TrackKind::Subtitle)
-        .collect();
-    for track in subtitle_tracks {
-        let btn = gtk::CheckButton::builder()
-            .label(&track.label)
-            .active(subtitles_enabled && track.selected)
-            .build();
-        if let Some(ref group) = first_sub {
-            btn.set_group(Some(group));
-        }
-        let id = track.stream_id.clone();
-        let sender = sender.clone();
-        btn.connect_toggled(move |b| {
-            if b.is_active() {
-                sender.input(VideoPlayerMsg::SelectSubtitle(Some(id.clone())));
-            }
-        });
-        widgets.subtitle_tracks_box.append(&btn);
-    }
-
-    let load_btn = gtk::Button::builder()
-        .label("Load subtitle file…")
-        .css_classes(["flat"])
-        .build();
-    let sender_load = sender.clone();
-    load_btn.connect_clicked(move |_| {
-        sender_load.input(VideoPlayerMsg::LoadSubtitleFile);
-    });
-    widgets.subtitle_tracks_box.append(&load_btn);
-}
-
-fn volume_icon(muted: bool, volume: f64) -> &'static str {
-    if muted || volume <= 0.001 {
-        "audio-volume-muted-symbolic"
-    } else if volume < 0.34 {
-        "audio-volume-low-symbolic"
-    } else if volume < 0.67 {
-        "audio-volume-medium-symbolic"
-    } else {
-        "audio-volume-high-symbolic"
     }
 }
