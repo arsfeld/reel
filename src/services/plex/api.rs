@@ -76,12 +76,12 @@ impl PlexClient {
                 Err(e) => return Err(e.into()),
             }
         }
-        Err(last_err.map(PlexError::from).unwrap_or_else(|| {
-            PlexError::Server {
+        Err(last_err
+            .map(PlexError::from)
+            .unwrap_or_else(|| PlexError::Server {
                 status: 0,
                 message: "request failed".into(),
-            }
-        }))
+            }))
     }
 
     /// Test the connection to the Plex server.
@@ -216,7 +216,7 @@ impl PlexClient {
             "{}/:/timeline?ratingKey={}&key=/library/metadata/{}&state={}&time={}&duration={}&identifier=com.plexapp.plugins.library",
             self.base_url, rating_key, rating_key, state, time_ms, duration_ms
         );
-        let resp = self.request(&url).await?;
+        self.request(&url).await?;
         Ok(())
     }
 
@@ -226,7 +226,7 @@ impl PlexClient {
             "{}/:/scrobble?key={}&identifier=com.plexapp.plugins.library",
             self.base_url, rating_key
         );
-        let resp = self.request(&url).await?;
+        self.request(&url).await?;
         Ok(())
     }
 
@@ -236,7 +236,7 @@ impl PlexClient {
             "{}/:/unscrobble?key={}&identifier=com.plexapp.plugins.library",
             self.base_url, rating_key
         );
-        let resp = self.request(&url).await?;
+        self.request(&url).await?;
         Ok(())
     }
 
