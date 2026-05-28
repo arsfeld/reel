@@ -6,6 +6,7 @@
 //! [`queue`], snapshot/top-up in [`snapshot`], and prune selection in [`prune`].
 
 pub mod queue;
+pub mod snapshot;
 
 use crate::models::download::DownloadState;
 
