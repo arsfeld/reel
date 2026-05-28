@@ -268,6 +268,23 @@ impl PlaybackPipeline {
             .unwrap_or(0)
     }
 
+    /// Fraction (0.0..=1.0) of the stream cached on disk, from a
+    /// `GST_QUERY_BUFFERING` range query in percent format. `downloadbuffer`
+    /// fills sequentially from the start, so this is how far the read-ahead has
+    /// cached ahead of the playhead. Returns 0.0 when the query is unsupported
+    /// (local files, or a queue2 stream that reports no range), so the seek bar
+    /// simply shows no buffered region.
+    pub(crate) fn buffered_fraction(&self) -> f64 {
+        // Buffering ranges in percent format run 0..=GST_FORMAT_PERCENT_MAX.
+        const PERCENT_MAX: f64 = 1_000_000.0;
+        let mut query = gst::query::Buffering::new(gst::Format::Percent);
+        if !self.pipeline.query(&mut query) {
+            return 0.0;
+        }
+        let (_start, stop, _estimated_total) = query.range();
+        (stop.value() as f64 / PERCENT_MAX).clamp(0.0, 1.0)
+    }
+
     pub(crate) fn position_us(&self) -> i64 {
         self.pipeline
             .query_position::<gst::ClockTime>()
