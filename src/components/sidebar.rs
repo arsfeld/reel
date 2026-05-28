@@ -588,7 +588,15 @@ mod tests {
 
     #[test]
     fn not_loaded_shows_loading() {
-        let rows = derive_rows(Some("My Plex"), "plex", "srv", &[], &HashSet::new(), false, false);
+        let rows = derive_rows(
+            Some("My Plex"),
+            "plex",
+            "srv",
+            &[],
+            &HashSet::new(),
+            false,
+            false,
+        );
         assert_eq!(
             rows,
             vec![
@@ -603,7 +611,15 @@ mod tests {
 
     #[test]
     fn loaded_but_empty_shows_no_libraries() {
-        let rows = derive_rows(Some("My Plex"), "plex", "srv", &[], &HashSet::new(), false, true);
+        let rows = derive_rows(
+            Some("My Plex"),
+            "plex",
+            "srv",
+            &[],
+            &HashSet::new(),
+            false,
+            true,
+        );
         assert_eq!(
             rows,
             vec![
@@ -622,7 +638,15 @@ mod tests {
             section("1", "Movies", LibraryType::Movie),
             section("2", "4K Movies", LibraryType::Movie),
         ];
-        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &HashSet::new(), false, true);
+        let rows = derive_rows(
+            Some("S"),
+            "plex",
+            "srv",
+            &libs,
+            &HashSet::new(),
+            false,
+            true,
+        );
         // Home, header, 2 libraries, collections.
         assert_eq!(rows.len(), 5);
         assert!(matches!(rows[2], SidebarRow::Library { ref title, .. } if title == "Movies"));
@@ -636,7 +660,7 @@ mod tests {
             section("2", "Home Videos", LibraryType::Movie),
         ];
         let h = hidden(&["plex:srv:2"]);
-        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false);
+        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false, true);
         let lib_titles: Vec<_> = rows
             .iter()
             .filter_map(|r| match r {
@@ -654,7 +678,7 @@ mod tests {
             section("2", "Home Videos", LibraryType::Movie),
         ];
         let h = hidden(&["plex:srv:2"]);
-        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, true);
+        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, true, true);
         let libs_in_rows: Vec<_> = rows
             .iter()
             .filter_map(|r| match r {
@@ -670,7 +694,7 @@ mod tests {
         let libs = vec![section("1", "Movies", LibraryType::Movie)];
         // Hide the library and Collections.
         let h = hidden(&["plex:srv:1", "plex:srv:__collections__"]);
-        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false);
+        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false, true);
         assert_eq!(
             rows,
             vec![
@@ -687,7 +711,7 @@ mod tests {
     fn collections_can_be_hidden_independently() {
         let libs = vec![section("1", "Movies", LibraryType::Movie)];
         let h = hidden(&["plex:srv:__collections__"]);
-        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false);
+        let rows = derive_rows(Some("S"), "plex", "srv", &libs, &h, false, true);
         assert!(
             !rows
                 .iter()
