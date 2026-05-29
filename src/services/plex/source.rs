@@ -32,18 +32,6 @@ impl PlexSource {
             libraries_cache: OnceLock::new(),
         }
     }
-
-    /// Stop a transcode session (R14). Exposed as an inherent method (not on the
-    /// `MediaSource` trait) because session lifecycle is Plex-specific and the
-    /// App holds a concrete `PlexSource`.
-    pub async fn stop_transcode(&self, session: &str) -> Result<(), SourceError> {
-        Ok(self.client.stop_transcode(session).await?)
-    }
-
-    /// Keep a transcode session alive (R15). Fired on a timer by U10.
-    pub async fn ping_transcode(&self, session: &str) -> Result<(), SourceError> {
-        Ok(self.client.ping_transcode(session).await?)
-    }
 }
 
 impl From<PlexError> for SourceError {
@@ -146,6 +134,16 @@ impl MediaSource for PlexSource {
         // Delegates to the transcode client (U5), which reads `is_remote` from
         // the PlexClient (U2) to apply the default cap on Auto/remote.
         Ok(self.client.resolve_decision(req).await?)
+    }
+
+    /// Stop a transcode session (R14/U10).
+    async fn stop_transcode(&self, session: &str) -> Result<(), SourceError> {
+        Ok(self.client.stop_transcode(session).await?)
+    }
+
+    /// Keep a transcode session alive (R15/U10). Fired on a timer.
+    async fn ping_transcode(&self, session: &str) -> Result<(), SourceError> {
+        Ok(self.client.ping_transcode(session).await?)
     }
 
     fn artwork_url(&self, path: &str, width: u32, height: u32) -> String {

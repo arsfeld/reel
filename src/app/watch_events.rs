@@ -20,7 +20,6 @@ use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::download::{PendingSync, SyncKind};
 use crate::models::watch::WatchProgress;
 use crate::services::media_source::MediaSource;
-use crate::services::plex::source::PlexSource;
 use crate::services::watch_state::WatchStateEvent;
 
 use super::App;
@@ -51,7 +50,7 @@ pub fn resume_position(
 pub fn dispatch_watch_events(
     db: &Option<Database>,
     events: Vec<WatchStateEvent>,
-    source: &Option<Arc<PlexSource>>,
+    source: &Option<Arc<dyn MediaSource>>,
     media_id: Option<&str>,
     sender: &ComponentSender<App>,
 ) {
@@ -92,7 +91,7 @@ pub fn dispatch_watch_events(
                         }
                     });
                 }
-                // Fire-and-forget Plex scrobble; queue offline on failure.
+                // Fire-and-forget scrobble to the owning server; queue offline on failure.
                 if !rating_key.is_empty()
                     && let Some(source) = source.clone()
                 {
@@ -102,7 +101,7 @@ pub fn dispatch_watch_events(
                         match source.scrobble(&rating_key).await {
                             Ok(()) => AppCmd::Noop,
                             Err(e) => {
-                                warn!("Plex scrobble failed (queuing offline): {e}");
+                                warn!("Scrobble failed (queuing offline): {e}");
                                 AppCmd::QueueOfflineSync(PendingSync {
                                     id: None,
                                     media_item_id: media_id,
@@ -135,7 +134,7 @@ pub fn dispatch_watch_events(
                         {
                             Ok(()) => AppCmd::Noop,
                             Err(e) => {
-                                warn!("Plex timeline report failed (queuing offline): {e}");
+                                warn!("Timeline report failed (queuing offline): {e}");
                                 match media_id {
                                     Some(media_item_id) => AppCmd::QueueOfflineSync(PendingSync {
                                         id: None,
@@ -191,16 +190,32 @@ pub fn flush_pending_sync(app: &App, sender: &ComponentSender<App>) {
             return;
         }
     };
-    let Some(source) = app.active_source.clone() else {
+
+    // Pair each pending report with the source that owns its media item — pending
+    // rows are keyed by `media_item_id`, which embeds the owning source — so the
+    // multi-source registry can route the replay to the right server. Items whose
+    // owning source isn't currently registered are left queued for a later flush.
+    let mut jobs: Vec<(PendingSync, Arc<dyn MediaSource>)> = Vec::new();
+    for p in pending {
+        let owning = db
+            .with(|conn| {
+                crate::db::media_repo::MediaRepo::new(conn)
+                    .find_by_id(&p.media_item_id)
+                    .ok()
+                    .flatten()
+            })
+            .and_then(|item| app.sources.for_item(&item));
+        if let Some(source) = owning {
+            jobs.push((p, source));
+        }
+    }
+    if jobs.is_empty() {
         return;
-    };
-    info!(
-        "Flushing {} queued offline progress report(s)",
-        pending.len()
-    );
+    }
+    info!("Flushing {} queued offline progress report(s)", jobs.len());
     sender.oneshot_command(async move {
         let mut flushed = Vec::new();
-        for p in pending {
+        for (p, source) in jobs {
             let Some(id) = p.id else { continue };
             let result = match p.kind {
                 SyncKind::Scrobble => source.scrobble(&p.rating_key).await,

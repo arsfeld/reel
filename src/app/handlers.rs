@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Instant;
 
 use adw::prelude::*;
@@ -7,11 +6,8 @@ use adw::prelude::*;
 use relm4::prelude::*;
 use tracing::{debug, info};
 
-use crate::components::home::HomeViewMsg;
 use crate::components::library::LibraryViewMsg;
 use crate::components::player::video_player::{VideoPlayerMsg, VideoPlayerOutput};
-use crate::components::sidebar::SidebarMsg;
-use crate::config;
 use crate::db::downloads_repo::DownloadsRepo;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::download::DownloadState;
@@ -19,11 +15,7 @@ use crate::models::media::{MediaItem, SourceType};
 use crate::models::source::{Source, SourceConfig};
 use crate::navigation::CurrentView;
 use crate::player::PlayState;
-use crate::services::artwork::ArtworkCache;
-use crate::services::media_source::MediaSource;
 use crate::services::mpris;
-use crate::services::plex::api::PlexClient;
-use crate::services::plex::source::PlexSource;
 use crate::services::watch_state::PlaybackState;
 
 use super::App;
@@ -50,7 +42,7 @@ pub fn handle_video_output(
             if let Some(ref item) = app.now_playing {
                 let meta = mpris::metadata_from_media_item(item, duration_secs, None);
                 let _ = app.mpris.metadata_tx.send(meta);
-                let rating_key = if item.source_type == SourceType::Plex {
+                let rating_key = if item.source_type.reports_watch_state() {
                     Some(item.external_id.as_str())
                 } else {
                     None
@@ -71,7 +63,7 @@ pub fn handle_video_output(
             if let Some(ref item) = app.now_playing
                 && !app.watch_tracker.is_active()
             {
-                let rating_key = if item.source_type == SourceType::Plex {
+                let rating_key = if item.source_type.reports_watch_state() {
                     Some(item.external_id.as_str())
                 } else {
                     None
@@ -82,13 +74,16 @@ pub fn handle_video_output(
             let events = app
                 .watch_tracker
                 .process_position(position_secs, Instant::now());
-            dispatch_watch_events(
-                &app.db,
-                events,
-                &app.active_source,
-                app.now_playing.as_ref().map(|i| i.id.as_str()),
-                sender,
-            );
+            {
+                let src = app.now_playing_source();
+                dispatch_watch_events(
+                    &app.db,
+                    events,
+                    &src,
+                    app.now_playing.as_ref().map(|i| i.id.as_str()),
+                    sender,
+                );
+            }
         }
         VideoPlayerOutput::StateChanged(state) => {
             let _ = app.mpris.status_tx.send(state);
@@ -103,13 +98,16 @@ pub fn handle_video_output(
                         app.last_position,
                         Instant::now(),
                     );
-                    dispatch_watch_events(
-                        &app.db,
-                        events,
-                        &app.active_source,
-                        app.now_playing.as_ref().map(|i| i.id.as_str()),
-                        sender,
-                    );
+                    {
+                        let src = app.now_playing_source();
+                        dispatch_watch_events(
+                            &app.db,
+                            events,
+                            &src,
+                            app.now_playing.as_ref().map(|i| i.id.as_str()),
+                            sender,
+                        );
+                    }
                 }
                 PlayState::Paused | PlayState::Stopped => {
                     app.screensaver.uninhibit(root);
@@ -118,13 +116,16 @@ pub fn handle_video_output(
                         app.last_position,
                         Instant::now(),
                     );
-                    dispatch_watch_events(
-                        &app.db,
-                        events,
-                        &app.active_source,
-                        app.now_playing.as_ref().map(|i| i.id.as_str()),
-                        sender,
-                    );
+                    {
+                        let src = app.now_playing_source();
+                        dispatch_watch_events(
+                            &app.db,
+                            events,
+                            &src,
+                            app.now_playing.as_ref().map(|i| i.id.as_str()),
+                            sender,
+                        );
+                    }
                 }
             }
         }
@@ -136,13 +137,16 @@ pub fn handle_video_output(
             let _ = app.mpris.metadata_tx.send(mpris::MprisMetadata::default());
             let _ = app.mpris.position_tx.send(0);
             let events = app.watch_tracker.stop(app.last_position);
-            dispatch_watch_events(
-                &app.db,
-                events,
-                &app.active_source,
-                app.now_playing.as_ref().map(|i| i.id.as_str()),
-                sender,
-            );
+            {
+                let src = app.now_playing_source();
+                dispatch_watch_events(
+                    &app.db,
+                    events,
+                    &src,
+                    app.now_playing.as_ref().map(|i| i.id.as_str()),
+                    sender,
+                );
+            }
             app.now_playing = None;
             let watch_data = load_watch_data(&app.db);
             app.library_view
@@ -233,7 +237,7 @@ fn resolve_playback_at(
     force_transcode: bool,
     sender: &ComponentSender<App>,
 ) {
-    let (Some(item), Some(source)) = (app.now_playing.clone(), app.active_source.clone()) else {
+    let (Some(item), Some(source)) = (app.now_playing.clone(), app.now_playing_source()) else {
         return;
     };
     if item.source_type != SourceType::Plex || item.file_path.is_none() {
@@ -349,13 +353,15 @@ pub fn handle_play_media(
     // source decides (transcode/direct stream). This is the single Play choke
     // point (R12/R13).
     let local_url = local_redirect(app, media_item.as_ref());
+    // R11: a quality override applies only to the current title. Stop any prior
+    // transcode session + keepalive BEFORE switching `now_playing`, so the stop
+    // resolves the *outgoing* item's source — switching titles never orphans a
+    // session (U10/R14).
+    stop_active_session(app, sender);
     app.now_playing = media_item.clone();
     app.last_position = 0.0;
     app.current_view = CurrentView::Player;
-    // R11: a quality override applies only to the current title. Reset the
-    // session-only state on every new title, stopping any prior transcode
-    // session + keepalive first so switching titles never orphans one (U10/R14).
-    stop_active_session(app, sender);
+    // Reset the remaining session-only state on every new title.
     app.current_quality = crate::models::playback::QualitySelection::Auto;
     app.current_audio_stream_id = None;
     app.current_subtitle_stream_id = None;
@@ -379,10 +385,11 @@ pub fn handle_play_media(
         sender,
     );
 
-    // Fetch skip-intro / skip-credits markers from Plex.
+    // Fetch skip-intro / skip-credits markers from the owning server.
+    // skip_markers degrades to NotSupported for sources without them.
     if let Some(ref item) = media_item
-        && item.source_type == SourceType::Plex
-        && let Some(source) = app.active_source.clone()
+        && item.source_type.reports_watch_state()
+        && let Some(source) = app.sources.for_item(item)
     {
         let rating_key = item.external_id.clone();
         let duration_secs = item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0);
@@ -432,7 +439,7 @@ fn begin_initial_playback(
     // PlaybackResolved. Non-Plex sources keep the direct URL.
     let plex_item =
         media_item.filter(|i| i.source_type == SourceType::Plex && i.file_path.is_some());
-    let (Some(item), Some(source)) = (plex_item, app.active_source.clone()) else {
+    let (Some(item), Some(source)) = (plex_item, app.now_playing_source()) else {
         app.video_player.emit(VideoPlayerMsg::SetUrl {
             url: Some(url),
             resume_secs,
@@ -506,9 +513,10 @@ pub(super) fn stop_active_session(app: &mut App, sender: &ComponentSender<App>) 
 }
 
 /// Stop a transcode session in the background (fire-and-forget, bounded retry in
-/// the client). No-op for a non-Plex source or an empty session.
+/// the client). Resolves the now-playing item's source; a no-op for a non-Plex
+/// source (default trait impl) or when no source is resolvable.
 fn stop_session_async(app: &App, session: String, sender: &ComponentSender<App>) {
-    if let Some(source) = app.active_source.clone() {
+    if let Some(source) = app.now_playing_source() {
         sender.oneshot_command(async move {
             if let Err(e) = source.stop_transcode(&session).await {
                 debug!("stop_transcode({session}) failed: {e}");
@@ -638,32 +646,44 @@ pub fn handle_playback_resolve_failed(
     }
 }
 
-/// Handle ConnectionSaved: persist the source and wire it to all views.
+/// Handle ConnectionSaved: persist the source and wire it to all views. The
+/// fields are the connection-dialog message payload threaded through verbatim
+/// (`is_remote` is U2's connection-type classification, applied to the Plex
+/// client for the default cap).
+#[allow(clippy::too_many_arguments)]
 pub fn handle_connection_saved(
     app: &mut App,
     url: String,
     token: String,
     name: String,
+    source_type: SourceType,
+    user_id: Option<String>,
     is_remote: bool,
     sender: &ComponentSender<App>,
 ) {
-    info!("Plex connection saved: {} ({})", name, url);
+    info!(
+        "Connection saved: {} ({}) [{}]",
+        name,
+        url,
+        source_type.as_str()
+    );
     app.connection_dialog = None;
 
-    // Save to database
-    if let Some(db) = &app.db {
-        let source = Source {
-            id: Source::make_id(&url),
-            source_type: SourceType::Plex,
-            name: name.clone(),
-            config: SourceConfig {
-                url: url.clone(),
-                token: token.clone(),
-            },
-            enabled: true,
-            last_synced_at: None,
-        };
+    let source = Source {
+        id: Source::make_id(source_type, &url),
+        source_type,
+        name: name.clone(),
+        config: SourceConfig {
+            url: url.clone(),
+            token,
+            user_id,
+        },
+        enabled: true,
+        last_synced_at: None,
+    };
 
+    // Persist (id-scoped upsert: delete-then-insert the *same* id, never others).
+    if let Some(db) = &app.db {
         db.with(|conn| {
             let mut repo = crate::db::source_repo::SourceRepo::new(conn);
             let _ = repo.delete(&source.id);
@@ -673,54 +693,19 @@ pub fn handle_connection_saved(
         });
     }
 
-    let client = PlexClient::new(&url, &token).with_remote(is_remote);
-    let source = Arc::new(PlexSource::new(client, name.clone()));
-    let artwork_cache = Arc::new(ArtworkCache::new(config::artwork_dir()));
-
-    app.active_source = Some(source.clone());
-    app.source_url = Some(url.clone());
-
-    // Feed the sidebar tree: source identity, current visibility, and (async)
-    // the source's libraries.
-    app.sidebar.emit(SidebarMsg::SetSource {
-        name: name.clone(),
-        source_type: "plex".to_string(),
-        source_id: url.clone(),
-    });
-    app.sidebar.emit(SidebarMsg::SetVisibility(
-        app.settings.library_visibility.hidden.clone(),
-    ));
-    {
-        // The PlexClient absorbs cold-start connection retries, so a single
-        // fetch here is enough once the connection is established.
-        let src = source.clone();
-        sender.oneshot_command(async move {
-            AppCmd::LibrariesLoaded(src.libraries().await.unwrap_or_default())
-        });
+    // Build the source via the factory and wire it into every view. `is_remote`
+    // (U2) is applied to the Plex client for the default bitrate cap (R6).
+    if let Some(built) = super::source_factory::build_source(&source, is_remote) {
+        // The downloads view needs the freshly-connected source too.
+        app.downloads_view
+            .emit(crate::components::downloads::DownloadsViewMsg::SetSource(
+                built.clone(),
+                app.artwork_cache.clone(),
+            ));
+        app.wire_active_source(source_type, url, built, sender);
     }
 
-    app.home_view.emit(HomeViewMsg::SetSource(
-        source.clone(),
-        artwork_cache.clone(),
-    ));
-    app.library_view.emit(LibraryViewMsg::SetSource(
-        source.clone(),
-        artwork_cache.clone(),
-    ));
-    app.library_view.emit(LibraryViewMsg::SetSavedUiState(
-        app.settings.library.clone(),
-    ));
-    app.movie_detail.emit(
-        crate::components::detail::movie_detail::MovieDetailMsg::SetSource(
-            source.clone(),
-            artwork_cache.clone(),
-        ),
-    );
-    app.show_detail.emit(
-        crate::components::detail::show_detail::ShowDetailMsg::SetSource(source, artwork_cache),
-    );
-
-    // Send watch data to library view
+    // Send watch data to library view.
     let watch_data = load_watch_data(&app.db);
     app.library_view
         .emit(LibraryViewMsg::SetWatchData(watch_data));

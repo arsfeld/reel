@@ -14,15 +14,23 @@ pub fn retain_visible_items(items: Vec<MediaItem>, hidden: &HashSet<String>) -> 
     }
     items
         .into_iter()
-        .filter(|item| match &item.library_section_id {
-            Some(section_key) => !hidden.contains(&LibrarySection::visibility_key_for(
-                item.source_type.as_str(),
-                &item.source_id,
-                section_key,
-            )),
-            None => true,
-        })
+        .filter(|item| is_item_visible(item, hidden))
         .collect()
+}
+
+/// Whether a single item's library is visible against the hidden-key set. An
+/// item with no known section is treated as visible (best-effort for sources
+/// that omit the section). Shared by [`retain_visible_items`] and callers that
+/// filter `(item, _)` pairs without allocating a throwaway Vec per item.
+pub fn is_item_visible(item: &MediaItem, hidden: &HashSet<String>) -> bool {
+    match &item.library_section_id {
+        Some(section_key) => !hidden.contains(&LibrarySection::visibility_key_for(
+            item.source_type.as_str(),
+            &item.source_id,
+            section_key,
+        )),
+        None => true,
+    }
 }
 
 #[cfg(test)]
